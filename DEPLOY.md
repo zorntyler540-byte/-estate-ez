@@ -124,3 +124,20 @@ Same as local: edit code → commit → push → the host rebuilds/redeploys. Ru
 - **Fly.io**, **Render**, **Google Cloud Run**, **a single VPS + Docker Compose** — same two images and the same env ideas; only the clicking differs.
 
 If you tell me which host you picked, we can narrow this to exact clicks for that product only.
+
+---
+
+## Troubleshooting
+
+### `Attribute "app" not found in module "main"`
+
+The repo has a **legacy** `main.py` at the **root** (old CLI photo scanner). It is **not** the FastAPI app. Railpack/Nixpacks often defaults to `uvicorn main:app`, which hits that file and crashes.
+
+**Fix (pick one):**
+
+1. **Preferred:** In the service **Settings**, set the builder to **Dockerfile** and **Dockerfile path** `infra/docker/Dockerfile.api`.  
+2. **Or** use automatic build: a **`Procfile`** at the repo root tells Railway to run `uvicorn app.main:app` from the `backend/` folder (this repo includes one). Redeploy after pulling latest `main`.
+
+### Deploy still shows `python@3.x` instead of Docker
+
+You are not using the Docker image. Switch the service to the **Dockerfile** builder and set `infra/docker/Dockerfile.api` (see §3).
