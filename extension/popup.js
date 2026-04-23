@@ -147,11 +147,12 @@ async function fetchPhotoBlob(apiBase, token, lotId, photoId) {
   const blob = await res.blob();
   const ab = await blob.arrayBuffer();
   const bytes = new Uint8Array(ab);
+  // Avoid String.fromCharCode(... hugeUint8Array): spread size can exceed engine limits and throw.
   let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    const part = bytes.subarray(i, i + chunk);
-    binary += String.fromCharCode(...part);
+  const step = 8192;
+  for (let i = 0; i < bytes.length; i += step) {
+    const slice = bytes.subarray(i, Math.min(i + step, bytes.length));
+    binary += String.fromCharCode.apply(null, slice);
   }
   return { type: blob.type || "image/jpeg", dataBase64: btoa(binary) };
 }
