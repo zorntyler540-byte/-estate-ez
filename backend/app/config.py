@@ -55,7 +55,8 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
     gemini_api_version: str = Field(default="v1beta", alias="GEMINI_API_VERSION")
     skip_tape_verify: bool = Field(default=False, alias="SKIP_TAPE_VERIFY")
-    gemini_parallelism: int = Field(default=15, ge=1, le=32, alias="GEMINI_PARALLELISM")
+    # Default is conservative: many parallel Gemini calls decode large JPEGs in RAM and trigger OOM on small hosts (e.g. Railway). Override with GEMINI_PARALLELISM=12–15 on a beefy machine.
+    gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
     gemini_image_max_edge: int = Field(default=1920, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     tape_focus_enabled: bool = Field(default=True, alias="TAPE_FOCUS_ENABLED")
