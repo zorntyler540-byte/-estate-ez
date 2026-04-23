@@ -2,56 +2,90 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+import bcrypt
+from fastapi import Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
 from app.models import User
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+http_bearer_optional = HTTPBearer(auto_error=False)
+
+CREDENTIALS_EXCEPTION = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid authentication credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    raw = password.encode("utf-8")
+    if len(raw) > 72:
+        raise ValueError("password exceeds bcrypt limit of 72 bytes")
+    return bcrypt.hashpw(raw, bcrypt.gensalt(rounds=12)).decode("ascii")
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return pwd_context.verify(password, hashed)
+    raw = password.encode("utf-8")
+    if len(raw) > 72:
+        return False
+    try:
+        return bcrypt.checkpw(raw, hashed.encode("ascii"))
+    except (ValueError, OSError):
+        return False
 
 
-def create_access_token(user_id: str, account_id: str, role: str, minutes: int = 60 * 24) -> str:
+def create_access_token(user_id: str, account_id: str, role: str, minutes: int | None = None) -> str:
+    ttl = minutes if minutes is not None else settings.access_token_expire_minutes
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "account_id": account_id,
         "role": role,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=minutes)).timestamp()),
+        "exp": int((now + timedelta(minutes=ttl)).timestamp()),
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    cred_exc = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid authentication credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+def user_from_access_token(token: str, db: Session) -> User:
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=["HS256"],
+            options={"require_sub": True, "verify_aud": False},
+        )
         user_id = payload.get("sub")
         account_id = payload.get("account_id")
         if not user_id or not account_id:
-            raise cred_exc
+            raise CREDENTIALS_EXCEPTION
     except JWTError as exc:
-        raise cred_exc from exc
+        raise CREDENTIALS_EXCEPTION from exc
     user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
     if not user:
-        raise cred_exc
+        raise CREDENTIALS_EXCEPTION
     return user
+
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    return user_from_access_token(token, db)
+
+
+def get_current_user_sse(
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer_optional),
+    access_token: str | None = Query(
+        None,
+        description="Same JWT as Authorization Bearer; required for browser EventSource (no header support).",
+    ),
+) -> User:
+    token = (credentials.credentials if credentials else None) or (access_token or "").strip()
+    if not token:
+        raise CREDENTIALS_EXCEPTION
+    return user_from_access_token(token, db)
 

@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+from io import BytesIO
+from pathlib import Path
+
+
+def thumbnail_jpeg_bytes(src: Path, max_px: int) -> bytes:
+    """Resize image to fit within max_px square; output JPEG bytes."""
+    from PIL import Image
+
+    with Image.open(src) as im:
+        if im.mode in ("RGBA", "P"):
+            rgba = im.convert("RGBA")
+            background = Image.new("RGB", rgba.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.split()[3])
+            im_rgb = background
+        elif im.mode != "RGB":
+            im_rgb = im.convert("RGB")
+        else:
+            im_rgb = im
+        im_rgb.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
+        buf = BytesIO()
+        im_rgb.save(buf, format="JPEG", quality=86, optimize=True)
+        return buf.getvalue()

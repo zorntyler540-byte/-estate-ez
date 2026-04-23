@@ -1,8 +1,51 @@
+# Secrets and local env (never commit real secrets)
 .env
-**/.env
-inventory.db
+.env.local
+.env.production
+.env.development.local
+.env.test.local
+.env.production.local
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.Python
 .venv/
+venv/
+ENV/
+
+# Node / Next
 node_modules/
 .next/
+out/
+*.tsbuildinfo
+
+# Local databases (contain credentials and customer data)
+*.db
+app.db
+
+# Runtime uploads and working data
+backend/data/
+data/
+
+# Estate / catalog images (sensitive + large — do not commit)
+Images/
+
+# Keys and certs
+*.pem
+*.key
+*.p12
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+
+# Logs
+*.log

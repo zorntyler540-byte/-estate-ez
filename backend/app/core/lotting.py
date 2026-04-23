@@ -28,6 +28,54 @@ def sku_digits(value: Any) -> str:
     return re.sub(r"\D", "", str(value or "").strip())
 
 
+def folder_token_as_inherited_sku(folder_batch_key: str | None) -> str | None:
+    """
+    When the first path segment under a job upload looks like a lot folder (035, 006, 1420), use it as SKU digits.
+
+    Only 2–6 plain digits are accepted (no ``Lot-`` prefix, etc.).
+    """
+    if folder_batch_key is None:
+        return None
+    t = str(folder_batch_key).strip()
+    if not t:
+        return None
+    if re.fullmatch(r"\d{2,6}", t):
+        return t
+    return None
+
+
+def payload_suggests_sku_review(payload: dict[str, Any]) -> bool:
+    """True when the model omitted a tape SKU or was unconfident — worth human verification after the job."""
+    conf = str(payload.get("SkuConfidence") or payload.get("sku_read_confidence") or "").strip().lower()
+    raw = payload.get("SKU")
+    sku_clean = sku_digits(raw) if raw not in (None, "") else None
+    if not sku_clean:
+        return True
+    return conf in ("low", "unsure")
+
+
+def normalize_tape_sku_input(raw: str | None) -> str | None:
+    """
+    Prefer digits after the last ``#`` (purple-tape convention). Take the first 2–6 digit run after ``#``,
+    or the leading 2–6 digit run when there is no ``#``, without concatenating unrelated long strings.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.lower() in ("null", "none", ""):
+        return None
+    if "#" in s:
+        tail = s.rsplit("#", 1)[-1]
+        m = re.search(r"(\d{2,6})", tail)
+        d = m.group(1) if m else re.sub(r"\D", "", tail)
+    else:
+        d = re.sub(r"\D", "", s)
+        m = re.match(r"^(\d{2,6})", d)
+        if m:
+            d = m.group(1)
+    return d or None
+
+
 def merge_unique_case_insensitive(base: list[str], incoming: list[str]) -> tuple[list[str], list[str]]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -80,33 +128,68 @@ class LotOutput:
     condition: str = ""
     starting_price: float | None = None
     photo_count: int = 1
+    sku_needs_review: bool = False
 
     @classmethod
     def from_model(cls, payload: dict[str, Any]) -> "LotOutput":
+        # Accept canonical ``inventory_table_entry_to_lot_payload`` keys *or* raw REST/SDK JSON
+        # (snake_case) when ``_analyze_photo_rest_from_bytes`` returns ``coerced`` without validation.
         price_raw = payload.get("StartingPrice")
+        if price_raw is None:
+            price_raw = payload.get("starting_price_usd")
         price = None
         if price_raw is not None and str(price_raw).strip():
             try:
                 price = float(str(price_raw).replace("$", "").strip())
             except ValueError:
                 price = None
+        raw_sku = payload.get("SKU")
+        if raw_sku is None:
+            raw_sku = payload.get("sku")
+        sku_normalized = normalize_tape_sku_input(
+            str(raw_sku).strip() if raw_sku is not None and str(raw_sku).strip() else None
+        )
+        title = (
+            str(
+                payload.get("AuctionTitle")
+                or payload.get("Title")
+                or payload.get("item_name")
+                or ""
+            ).strip()
+        )
         return cls(
-            sku=sku_digits(payload.get("SKU")) or None,
-            auction_title=str(payload.get("AuctionTitle") or payload.get("Title") or "").strip(),
+            sku=sku_normalized or None,
+            auction_title=title,
             professional_description=str(
-                payload.get("ProfessionalDescription") or payload.get("Description") or ""
+                payload.get("ProfessionalDescription")
+                or payload.get("Description")
+                or payload.get("professional_description")
+                or ""
             ).strip(),
-            specification_lines=as_str_list(payload.get("SpecificationLines")),
-            brands=as_str_list(payload.get("Brands")),
-            labels_and_tags=as_str_list(payload.get("LabelsAndTags")),
-            condition=str(payload.get("Condition") or "").strip(),
+            specification_lines=as_str_list(
+                payload.get("SpecificationLines") or payload.get("specification_lines")
+            ),
+            brands=as_str_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
+            labels_and_tags=as_str_list(
+                payload.get("LabelsAndTags") or payload.get("labels_and_tags")
+            ),
+            condition=str(
+                payload.get("Condition") or payload.get("condition_notes") or ""
+            ).strip(),
             starting_price=price,
+            sku_needs_review=payload_suggests_sku_review(payload),
         )
 
     def merge_detail(self, detail_payload: dict[str, Any]) -> None:
-        detail_brands = as_str_list(detail_payload.get("Brands"))
-        detail_labels = as_str_list(detail_payload.get("LabelsAndTags"))
-        detail_specs = as_str_list(detail_payload.get("SpecificationLines"))
+        detail_brands = as_str_list(
+            detail_payload.get("Brands") or detail_payload.get("brand") or detail_payload.get("brands")
+        )
+        detail_labels = as_str_list(
+            detail_payload.get("LabelsAndTags") or detail_payload.get("labels_and_tags")
+        )
+        detail_specs = as_str_list(
+            detail_payload.get("SpecificationLines") or detail_payload.get("specification_lines")
+        )
 
         self.brands, added_brands = merge_unique_case_insensitive(self.brands, detail_brands)
         self.labels_and_tags, added_labels = merge_unique_case_insensitive(
@@ -126,4 +209,6 @@ class LotOutput:
             self.brands, self.professional_description
         )
         self.photo_count += 1
+        if payload_suggests_sku_review(detail_payload):
+            self.sku_needs_review = True
 

@@ -1,11 +1,22 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
+import { LotThumbnail } from "../../../components/LotThumbnail";
 import { apiFetch } from "../../../lib/api";
+
+type LotPhoto = {
+  id: string;
+  lot_id: string;
+  original_name: string;
+  created_at: string;
+};
 
 type Lot = {
   id: string;
+  sale_id: string;
   sku: string | null;
   auction_title: string;
   professional_description: string;
@@ -14,13 +25,20 @@ type Lot = {
   labels_and_tags: string[];
   starting_price: number | null;
   condition_text: string;
+  is_completed: boolean;
   photo_count: number;
+  has_thumbnail: boolean;
+  sku_needs_review: boolean;
+  many_photos_review: boolean;
 };
 
 export default function LotDetailPage() {
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const [token, setToken] = useState("");
   const [lot, setLot] = useState<Lot | null>(null);
+  const [catalogPhotos, setCatalogPhotos] = useState<LotPhoto[]>([]);
+  const [photosError, setPhotosError] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -28,9 +46,30 @@ export default function LotDetailPage() {
     const t = localStorage.getItem("token") || "";
     setToken(t);
     if (!t || !params.id) return;
-    apiFetch(`/lots/${params.id}`, t)
-      .then((d) => setLot(d))
-      .catch((e) => setError(e instanceof Error ? e.message : "Load failed"));
+    let cancelled = false;
+    setPhotosError("");
+    void (async () => {
+      try {
+        const d = await apiFetch(`/lots/${params.id}`, t);
+        if (cancelled) return;
+        setLot(d);
+        try {
+          const photos = (await apiFetch(`/lots/${params.id}/photos`, t)) as LotPhoto[];
+          if (cancelled) return;
+          setCatalogPhotos(Array.isArray(photos) ? photos : []);
+        } catch {
+          if (!cancelled) {
+            setCatalogPhotos([]);
+            setPhotosError("Could not load the photo list for this lot.");
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [params.id]);
 
   async function save() {
@@ -41,13 +80,15 @@ export default function LotDetailPage() {
       const updated = await apiFetch(`/lots/${lot.id}`, token, {
         method: "PATCH",
         body: JSON.stringify({
+          sku: lot.sku,
           auction_title: lot.auction_title,
           professional_description: lot.professional_description,
           specification_lines: lot.specification_lines,
           brands: lot.brands,
           labels_and_tags: lot.labels_and_tags,
           starting_price: lot.starting_price,
-          condition_text: lot.condition_text
+          condition_text: lot.condition_text,
+          is_completed: lot.is_completed
         })
       });
       setLot(updated);
@@ -58,61 +99,262 @@ export default function LotDetailPage() {
     }
   }
 
-  if (!token) return <p>Please login first.</p>;
-  if (!lot) return <p>Loading lot...</p>;
+  async function removeLot() {
+    if (!lot) return;
+    if (!window.confirm("Delete this lot permanently?")) return;
+    setError("");
+    try {
+      await apiFetch(`/lots/${lot.id}`, token, { method: "DELETE" });
+      router.replace("/dashboard");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  if (!token) {
+    return (
+      <main className="ct-shell">
+        <div className="ct-panel">
+          <p style={{ margin: 0 }}>Please sign in first.</p>
+        </div>
+      </main>
+    );
+  }
+  if (!lot) {
+    return (
+      <main className="ct-shell">
+        <div className="ct-panel">
+          <p style={{ margin: 0 }}>Loading lot…</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
-    <main>
-      <h1>Lot {lot.sku || "(no SKU)"}</h1>
-      <label>Auction Title</label>
-      <input
-        style={{ width: "100%", marginBottom: 8 }}
-        value={lot.auction_title}
-        onChange={(e) => setLot({ ...lot, auction_title: e.target.value })}
-      />
-      <label>Professional Description</label>
-      <textarea
-        style={{ width: "100%", minHeight: 160, marginBottom: 8 }}
-        value={lot.professional_description}
-        onChange={(e) => setLot({ ...lot, professional_description: e.target.value })}
-      />
-      <label>Specification Lines (one per line)</label>
-      <textarea
-        style={{ width: "100%", minHeight: 120, marginBottom: 8 }}
-        value={lot.specification_lines.join("\n")}
-        onChange={(e) => setLot({ ...lot, specification_lines: e.target.value.split("\n").filter(Boolean) })}
-      />
-      <label>Brands (comma separated)</label>
-      <input
-        style={{ width: "100%", marginBottom: 8 }}
-        value={lot.brands.join(", ")}
-        onChange={(e) => setLot({ ...lot, brands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-      />
-      <label>Sizes / Tags (comma separated)</label>
-      <input
-        style={{ width: "100%", marginBottom: 8 }}
-        value={lot.labels_and_tags.join(", ")}
-        onChange={(e) =>
-          setLot({ ...lot, labels_and_tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
-        }
-      />
-      <label>Starting Price</label>
-      <input
-        style={{ width: "100%", marginBottom: 8 }}
-        type="number"
-        value={lot.starting_price ?? ""}
-        onChange={(e) => setLot({ ...lot, starting_price: e.target.value ? Number(e.target.value) : null })}
-      />
-      <label>Condition</label>
-      <input
-        style={{ width: "100%", marginBottom: 8 }}
-        value={lot.condition_text}
-        onChange={(e) => setLot({ ...lot, condition_text: e.target.value })}
-      />
-      <button onClick={save} disabled={saving}>
-        {saving ? "Saving..." : "Save"}
-      </button>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+    <main className="ct-shell" style={{ maxWidth: 960 }}>
+      <p style={{ margin: "0 0 0.75rem" }}>
+        <Link href="/dashboard">← Back to dashboard</Link>
+      </p>
+      <header className="ct-page-header" style={{ borderBottom: "none", paddingBottom: 0, marginBottom: "0.5rem" }}>
+        <h1 className="ct-page-title">Lot {lot.sku || "(no SKU)"}</h1>
+      </header>
+      {lot.sku_needs_review ? (
+        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+          <strong>SKU review.</strong> The model was unsure or did not read purple-tape digits clearly. Confirm the
+          handwritten lot number below matches your photos before posting with the extension.
+        </div>
+      ) : null}
+      {lot.many_photos_review ? (
+        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+          <strong>Photo count looks unusual</strong> for this sale — this listing has many more images than your other
+          lots. Check that photos from a different lot were not merged here (wrong tape SKU early in the job can cause
+          that). Re-upload as separate jobs if needed.
+        </div>
+      ) : null}
+      <section className="ct-card ct-card--padded" style={{ marginBottom: "1rem" }}>
+        <h2 className="ct-section-title" style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>
+          Catalog photos
+          {catalogPhotos.length ? (
+            <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
+              ({catalogPhotos.length})
+            </span>
+          ) : null}
+        </h2>
+        <p className="ct-muted" style={{ margin: "0 0 1rem", fontSize: "0.88rem", maxWidth: "40rem" }}>
+          Same order as{" "}
+          <strong style={{ color: "var(--ct-text-muted)" }}>Upload lot photos</strong> in the browser extension —
+          first row left‑to‑right, then the next row.
+        </p>
+        {photosError ? (
+          <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
+            {photosError}
+          </div>
+        ) : null}
+        {catalogPhotos.length === 0 && !photosError ? (
+          <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
+            <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={400} />
+            <p className="ct-lot-hero-note" style={{ margin: 0 }}>
+              No linked photos yet. Thumbnail shows the first image only when the API reports one; run a catalog job
+              to attach frames to this lot.
+            </p>
+          </div>
+        ) : (
+          <div
+            className="ct-lot-photo-grid"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+              gap: "0.75rem"
+            }}
+          >
+            {catalogPhotos.map((p, index) => (
+              <figure key={p.id} style={{ margin: 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                <div style={{ position: "relative" }}>
+                  <span
+                    className="ct-muted"
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      left: 6,
+                      zIndex: 1,
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      background: "rgba(12, 15, 18, 0.82)",
+                      color: "var(--ct-primary)",
+                      padding: "0.12rem 0.4rem",
+                      borderRadius: 6,
+                      border: "1px solid var(--ct-border)"
+                    }}
+                  >
+                    {index + 1}
+                  </span>
+                  <LotPhotoThumb
+                    lotId={lot.id}
+                    photoId={p.id}
+                    token={token}
+                    label={p.original_name}
+                    maxPx={360}
+                    minHeight={120}
+                  />
+                </div>
+                <figcaption
+                  className="ct-muted"
+                  style={{
+                    fontSize: "0.72rem",
+                    lineHeight: 1.35,
+                    wordBreak: "break-word",
+                    margin: 0
+                  }}
+                  title={p.original_name}
+                >
+                  {p.original_name}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
+      </section>
+      <div className="ct-card ct-card--padded ct-stack">
+        <div>
+          <label className="ct-label" htmlFor="lot-sku">
+            Estate lot SKU (tape digits)
+          </label>
+          <input
+            id="lot-sku"
+            className="ct-input"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="e.g. 034"
+            value={lot.sku ?? ""}
+            onChange={(e) => setLot({ ...lot, sku: e.target.value.trim() || null })}
+          />
+          <p className="ct-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+            Save after correcting. This clears the “review SKU” highlight on the dashboard.
+          </p>
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="auction-title">
+            Auction title
+          </label>
+          <input
+            id="auction-title"
+            className="ct-input"
+            value={lot.auction_title}
+            onChange={(e) => setLot({ ...lot, auction_title: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="pro-desc">
+            Professional description
+          </label>
+          <textarea
+            id="pro-desc"
+            className="ct-textarea"
+            style={{ minHeight: 160 }}
+            value={lot.professional_description}
+            onChange={(e) => setLot({ ...lot, professional_description: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="spec-lines">
+            Specification lines (one per line)
+          </label>
+          <textarea
+            id="spec-lines"
+            className="ct-textarea"
+            value={lot.specification_lines.join("\n")}
+            onChange={(e) => setLot({ ...lot, specification_lines: e.target.value.split("\n").filter(Boolean) })}
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="brands">
+            Brands (comma separated)
+          </label>
+          <input
+            id="brands"
+            className="ct-input"
+            value={lot.brands.join(", ")}
+            onChange={(e) => setLot({ ...lot, brands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="tags">
+            Sizes / tags (comma separated)
+          </label>
+          <input
+            id="tags"
+            className="ct-input"
+            value={lot.labels_and_tags.join(", ")}
+            onChange={(e) =>
+              setLot({ ...lot, labels_and_tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
+            }
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="price">
+            Starting price
+          </label>
+          <input
+            id="price"
+            className="ct-input"
+            type="number"
+            value={lot.starting_price ?? ""}
+            onChange={(e) => setLot({ ...lot, starting_price: e.target.value ? Number(e.target.value) : null })}
+          />
+        </div>
+        <div>
+          <label className="ct-label" htmlFor="condition">
+            Condition
+          </label>
+          <input
+            id="condition"
+            className="ct-input"
+            value={lot.condition_text}
+            onChange={(e) => setLot({ ...lot, condition_text: e.target.value })}
+          />
+        </div>
+        <div className="ct-form-actions">
+          <label className="ct-row" style={{ gap: "0.45rem" }}>
+            <input
+              type="checkbox"
+              checked={lot.is_completed}
+              onChange={(e) => setLot({ ...lot, is_completed: e.target.checked })}
+            />
+            <span className="ct-muted" style={{ fontSize: "0.9rem" }}>
+              Mark this lot as completed
+            </span>
+          </label>
+        </div>
+        <div className="ct-form-actions">
+          <button type="button" className="ct-btn ct-btn--primary" onClick={() => void save()} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button type="button" className="ct-btn ct-btn--danger" onClick={() => void removeLot()}>
+            Delete lot
+          </button>
+        </div>
+        {error ? <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>{error}</div> : null}
+      </div>
     </main>
   );
 }

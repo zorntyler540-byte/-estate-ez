@@ -1,0 +1,14 @@
+.git
+.cursor
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend/node_modules
+frontend/.next
+.env
+backend/.env
+*.db
+app.db
+backend/app.db
+backend/data
+Images
