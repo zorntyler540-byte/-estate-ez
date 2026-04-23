@@ -10,9 +10,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    default = sa.text("false") if bind.dialect.name == "postgresql" else sa.text("0")
     op.add_column(
         "processing_jobs",
-        sa.Column("inherit_sku_from_subfolder", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("inherit_sku_from_subfolder", sa.Boolean(), nullable=False, server_default=default),
     )
 
 

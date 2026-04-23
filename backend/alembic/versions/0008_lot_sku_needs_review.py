@@ -10,9 +10,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    default = sa.text("false") if bind.dialect.name == "postgresql" else sa.text("0")
     op.add_column(
         "lots",
-        sa.Column("sku_needs_review", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("sku_needs_review", sa.Boolean(), nullable=False, server_default=default),
     )
 
 

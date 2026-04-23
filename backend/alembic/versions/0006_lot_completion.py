@@ -22,7 +22,8 @@ def upgrade() -> None:
     insp = inspect(bind)
     cols = {c["name"] for c in insp.get_columns("lots")}
     if "is_completed" not in cols:
-        op.add_column("lots", sa.Column("is_completed", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+        default = sa.text("false") if bind.dialect.name == "postgresql" else sa.text("0")
+        op.add_column("lots", sa.Column("is_completed", sa.Boolean(), nullable=False, server_default=default))
     if "completed_at" not in cols:
         op.add_column("lots", sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True))
 
