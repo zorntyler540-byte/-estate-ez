@@ -1,30 +1,27 @@
 const STORAGE_KEYS = {
-  apiBase: "estateEzApiBase",
   token: "estateEzToken",
-  activity: "estateEzActivity"
+  activity: "estateEzActivity",
+  loginEmail: "estateEzLoginEmail"
 };
+
+const API_BASE = "https://caringtransitions-ai-production.up.railway.app";
 
 const lotBrowser = {
   lots: [],
   currentLotId: ""
 };
 
-async function loadSettings() {
-  const data = await chrome.storage.local.get([STORAGE_KEYS.apiBase, STORAGE_KEYS.token]);
-  document.getElementById("apiBase").value =
-    data[STORAGE_KEYS.apiBase] || "http://localhost:8000";
-  document.getElementById("token").value = data[STORAGE_KEYS.token] || "";
+function isAuthFailureMessage(message) {
+  const m = String(message || "").toLowerCase();
+  return (
+    m.includes("invalid authentication") ||
+    m.includes("401") ||
+    m.includes("unauthorized")
+  );
 }
 
-async function saveSettings() {
-  const apiBase = document.getElementById("apiBase").value.trim().replace(/\/$/, "");
-  const token = document.getElementById("token").value.trim();
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.apiBase]: apiBase,
-    [STORAGE_KEYS.token]: token
-  });
-  const status = document.getElementById("status");
-  status.textContent = "Settings saved.";
+async function clearSession() {
+  await chrome.storage.local.remove([STORAGE_KEYS.token]);
 }
 
 async function appendActivity(line) {
@@ -271,28 +268,111 @@ function buildDescription(lot) {
 document.addEventListener("DOMContentLoaded", () => {
   const status = document.getElementById("status");
   const preview = document.getElementById("preview");
+  const loginEmailEl = document.getElementById("loginEmail");
+  const loginPasswordEl = document.getElementById("loginPassword");
+  const loginBtn = document.getElementById("loginBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const authState = document.getElementById("authState");
+  const actionButtonIds = ["previewBtn", "fillBtn", "uploadBtn", "prevLotBtn", "nextLotBtn"];
+  let authToken = "";
 
-  async function readCreds(requireSaveMessage) {
-    const apiBase = document.getElementById("apiBase").value.trim().replace(/\/$/, "");
-    const token = document.getElementById("token").value.trim();
-    if (!apiBase || !token) {
-      status.textContent = requireSaveMessage ? "Set API base and token, then Save settings." : "Set API base and token first.";
-      return null;
+  function setActionButtonsEnabled(enabled) {
+    for (const id of actionButtonIds) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.disabled = !enabled;
     }
-    return { apiBase, token };
   }
 
-  void loadSettings();
+  function renderAuthState() {
+    const signedIn = Boolean(authToken);
+    loginPasswordEl.style.display = signedIn ? "none" : "block";
+    loginBtn.style.display = signedIn ? "none" : "block";
+    logoutBtn.style.display = signedIn ? "block" : "none";
+    const email = loginEmailEl.value.trim();
+    authState.textContent = signedIn
+      ? `Signed in${email ? ` as ${email}` : ""}.`
+      : "Not signed in.";
+    setActionButtonsEnabled(signedIn);
+    if (!signedIn) {
+      setCurrentLotUI(null, "");
+    }
+  }
+
+  async function readCreds(requireSaveMessage) {
+    if (!authToken) {
+      status.textContent = requireSaveMessage
+        ? "Please sign in first."
+        : "Sign in first.";
+      return null;
+    }
+    return { apiBase: API_BASE, token: authToken };
+  }
+
+  void (async () => {
+    const data = await chrome.storage.local.get([STORAGE_KEYS.token, STORAGE_KEYS.loginEmail]);
+    authToken = String(data[STORAGE_KEYS.token] || "");
+    loginEmailEl.value = String(data[STORAGE_KEYS.loginEmail] || "");
+    renderAuthState();
+  })();
   void loadActivity();
 
-  document.getElementById("saveBtn").addEventListener("click", async () => {
+  loginBtn.addEventListener("click", async () => {
+    const email = loginEmailEl.value.trim().toLowerCase();
+    const password = loginPasswordEl.value;
+    if (!email || !password) {
+      status.textContent = "Enter email and password.";
+      return;
+    }
+    status.textContent = "Signing in…";
     try {
-      await saveSettings();
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Login failed (${res.status})`);
+      }
+      const out = await res.json();
+      const token = String(out?.access_token || "");
+      if (!token) throw new Error("Login failed: token missing.");
+      authToken = token;
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.token]: token,
+        [STORAGE_KEYS.loginEmail]: email
+      });
+      loginPasswordEl.value = "";
+      renderAuthState();
+      status.textContent = "Signed in.";
     } catch (e) {
       console.error(e);
-      status.textContent = e instanceof Error ? e.message : "Save failed.";
+      status.textContent = e instanceof Error ? e.message : "Sign in failed.";
     }
   });
+
+  logoutBtn.addEventListener("click", async () => {
+    authToken = "";
+    await clearSession();
+    renderAuthState();
+    status.textContent = "Signed out.";
+    preview.textContent = "";
+    lotBrowser.lots = [];
+    lotBrowser.currentLotId = "";
+  });
+
+  function handleActionError(err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (isAuthFailureMessage(msg)) {
+      void clearSession();
+      authToken = "";
+      renderAuthState();
+      status.textContent = "Session expired. Please sign in again.";
+      return;
+    }
+    status.textContent = msg;
+  }
 
   document.getElementById("fillBtn").addEventListener("click", async () => {
     status.textContent = "Working…";
@@ -328,7 +408,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       console.error(err);
-      status.textContent = err instanceof Error ? err.message : String(err);
+      handleActionError(err);
     }
   });
 
@@ -400,7 +480,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       console.error(err);
-      status.textContent = err instanceof Error ? err.message : String(err);
+      handleActionError(err);
     }
   });
 
@@ -434,7 +514,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await appendActivity(`Previewed lot ${lot.sku || lot.id}`);
     } catch (err) {
       console.error(err);
-      status.textContent = err instanceof Error ? err.message : String(err);
+      handleActionError(err);
     }
   });
 
@@ -450,7 +530,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected previous lot: ${lot?.sku || lot?.id || "-"}`;
     } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
+      handleActionError(err);
     }
   });
 
@@ -466,7 +546,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected next lot: ${lot?.sku || lot?.id || "-"}`;
     } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
+      handleActionError(err);
     }
   });
 });
