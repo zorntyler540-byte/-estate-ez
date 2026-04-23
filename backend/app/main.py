@@ -565,6 +565,28 @@ def list_jobs(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[JobOut]:
+    # If the API process restarted/OOM-killed, in-memory worker threads are gone while DB rows may still say
+    # "processing". Reconcile those stale rows so UI actions (delete/purge) do not remain blocked forever.
+    stale_rows = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == current.account_id,
+            ProcessingJob.user_id == current.id,
+            ProcessingJob.status == JobStatus.processing,
+        )
+        .all()
+    )
+    changed = False
+    for row in stale_rows:
+        if not job_tasks.is_job_running(row.id):
+            row.status = JobStatus.failed
+            if not row.error_message:
+                row.error_message = "Job interrupted after server restart. Re-run to continue."
+            row.cancel_requested = False
+            changed = True
+    if changed:
+        db.commit()
+
     q = db.query(ProcessingJob).filter(
         ProcessingJob.account_id == current.account_id, ProcessingJob.user_id == current.id
     )

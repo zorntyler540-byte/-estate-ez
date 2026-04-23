@@ -10,6 +10,12 @@ _job_cancels: dict[str, threading.Event] = {}
 _job_cancels_lock = threading.Lock()
 
 
+def is_job_running(job_id: str) -> bool:
+    """Return true when this API process currently tracks a live background job thread."""
+    with _job_cancels_lock:
+        return job_id in _job_cancels
+
+
 def request_cancel(job_id: str) -> bool:
     with _job_cancels_lock:
         ev = _job_cancels.get(job_id)
