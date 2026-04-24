@@ -20,6 +20,22 @@ def as_str_list(value: Any) -> list[str]:
     return [s] if s else []
 
 
+def _placeholder_value(value: str) -> bool:
+    token = str(value or "").strip().strip(".,;:!?- ").lower()
+    return bool(token) and _UNBRANDED_RE.fullmatch(token) is not None
+
+
+def _line_has_placeholder_value(line: str) -> bool:
+    s = clean_listing_text(line)
+    if not s:
+        return True
+    if ":" in s:
+        rhs = s.split(":", 1)[1].strip()
+        if rhs and _placeholder_value(rhs):
+            return True
+    return _placeholder_value(s)
+
+
 def clean_listing_text(raw: str) -> str:
     """
     Normalize model-generated prose into plain listing text:
@@ -53,6 +69,54 @@ def normalize_brand_list(value: Any) -> list[str]:
         seen.add(key)
         out.append(clean)
     return out
+
+
+def normalize_listing_lines(value: Any) -> list[str]:
+    """Drop placeholder rows such as 'Unknown' or 'Brand: Unknown'."""
+    lines = as_str_list(value)
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        clean = clean_listing_text(line)
+        if not clean or _line_has_placeholder_value(clean):
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+    return out
+
+
+def sanitize_description_unknowns(text: str) -> str:
+    """Remove placeholder brand notes and placeholder clauses from prose."""
+    s = clean_listing_text(text)
+    if not s:
+        return s
+    pattern = re.compile(r"(?i)\bnoted brands?:\s*([^.]*)\.")
+    while True:
+        m = pattern.search(s)
+        if not m:
+            break
+        raw_list = m.group(1)
+        parts = [clean_listing_text(p) for p in raw_list.split(",")]
+        kept = [p for p in parts if p and not _placeholder_value(p)]
+        replacement = ""
+        if kept:
+            label = "Noted brand" if len(kept) == 1 else "Noted brands"
+            replacement = f"{label}: {', '.join(kept)}."
+        s = f"{s[:m.start()]}{replacement}{s[m.end():]}"
+        s = clean_listing_text(s)
+    # Remove generic placeholder clauses that leak into prose.
+    s = re.sub(r"(?i)\bnoted brand:\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
+    s = re.sub(r"(?i)\bbrand(?:\(s\))?\s*(?:is|are|:)?\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
+    s = re.sub(r"(?i)\b(?:unknown|unbranded|unmarked|none|n/?a|null)\s+brand\b\.?", "", s)
+    s = re.sub(r"(?i)\b(?:unknown|unbranded|unmarked|none|n/?a|null)\b(?=\s*(?:,|/|;|\.|$))", "", s)
+    # Normalize punctuation/spacing after removals.
+    s = re.sub(r"\s*([,;/])\s*", r"\1 ", s)
+    s = re.sub(r"\s+\.", ".", s)
+    s = re.sub(r"\s{2,}", " ", s).strip(" ,;/")
+    return s
 
 
 def _gender_evidence_blob(payload: dict[str, Any]) -> str:
@@ -191,15 +255,16 @@ def brand_appears_in_prose(brand: str, prose: str) -> bool:
 
 
 def weave_brands_into_description(brands: list[str], description: str) -> str:
-    missing = [b for b in brands if b and not brand_appears_in_prose(b, description)]
+    valid_brands = normalize_brand_list(brands)
+    base = sanitize_description_unknowns(description)
+    missing = [b for b in valid_brands if b and not brand_appears_in_prose(b, base)]
     if not missing:
-        return clean_listing_text(description)
+        return base
     # Plain text for CT Seller: avoid markdown-heavy prefixes like "**Brand** -".
     if len(missing) == 1:
         suffix = f" Noted brand: {missing[0]}."
     else:
         suffix = f" Noted brands: {', '.join(missing)}."
-    base = clean_listing_text(description)
     if not base:
         return suffix.strip()
     return f"{base}{suffix}"
@@ -249,7 +314,7 @@ class LotOutput:
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
-            professional_description=clean_listing_text(
+            professional_description=sanitize_description_unknowns(
                 str(
                 payload.get("ProfessionalDescription")
                 or payload.get("Description")
@@ -257,11 +322,11 @@ class LotOutput:
                 or ""
                 )
             ),
-            specification_lines=as_str_list(
+            specification_lines=normalize_listing_lines(
                 payload.get("SpecificationLines") or payload.get("specification_lines")
             ),
             brands=normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
-            labels_and_tags=as_str_list(
+            labels_and_tags=normalize_listing_lines(
                 payload.get("LabelsAndTags") or payload.get("labels_and_tags")
             ),
             condition=str(
@@ -272,13 +337,13 @@ class LotOutput:
         )
 
     def merge_detail(self, detail_payload: dict[str, Any]) -> None:
-        detail_brands = as_str_list(
+        detail_brands = normalize_brand_list(
             detail_payload.get("Brands") or detail_payload.get("brand") or detail_payload.get("brands")
         )
-        detail_labels = as_str_list(
+        detail_labels = normalize_listing_lines(
             detail_payload.get("LabelsAndTags") or detail_payload.get("labels_and_tags")
         )
-        detail_specs = as_str_list(
+        detail_specs = normalize_listing_lines(
             detail_payload.get("SpecificationLines") or detail_payload.get("specification_lines")
         )
 

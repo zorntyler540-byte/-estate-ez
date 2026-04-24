@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -23,6 +24,42 @@ from app.services.category_inference import infer_ct_category
 from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+
+
+_TITLE_WORD_RE = re.compile(r"[a-z0-9]+", re.I)
+_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "the",
+    "with",
+    "for",
+    "of",
+    "set",
+    "lot",
+    "item",
+    "estate",
+    "vintage",
+}
+
+
+def _title_tokens(title: str) -> set[str]:
+    raw = {t.lower() for t in _TITLE_WORD_RE.findall(title or "")}
+    return {t for t in raw if len(t) > 2 and t not in _TITLE_STOPWORDS}
+
+
+def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
+    """
+    Heuristic continuity check to avoid accidental lot splits in bulk uploads.
+    Returns true when title/brand overlap strongly suggests same physical item.
+    """
+    current_tokens = _title_tokens(current_lot.auction_title)
+    candidate_tokens = _title_tokens(candidate.auction_title)
+    token_overlap = bool(current_tokens and candidate_tokens and (current_tokens & candidate_tokens))
+    current_brands = {b.lower() for b in current_lot.brands if b}
+    candidate_brands = {b.lower() for b in candidate.brands if b}
+    brand_overlap = bool(current_brands and candidate_brands and (current_brands & candidate_brands))
+    return token_overlap or brand_overlap
 
 
 def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> None:
@@ -369,6 +406,39 @@ def process_job(
         if sku_ok:
             lot_candidate.sku = sku_digits(lot_candidate.sku)
             lot_candidate.sku_needs_review = False
+            if current_lot is not None:
+                current_digits = sku_digits(current_lot.sku) if current_lot.sku else ""
+                candidate_digits = sku_digits(lot_candidate.sku) if lot_candidate.sku else ""
+                # Do not split on repeated reads of the same lot tape across adjacent frames.
+                if current_digits and candidate_digits and current_digits == candidate_digits:
+                    current_lot.merge_detail(payload)
+                    row = Photo(
+                        account_id=job.account_id,
+                        user_id=job.user_id,
+                        lot_id=None,
+                        original_name=photo_path.name,
+                        storage_path=str(photo_path.resolve()),
+                    )
+                    db.add(row)
+                    db.flush()
+                    pending_photo_ids.append(row.id)
+                    db.commit()
+                    continue
+                # Guard against one-frame false-positive sku flips when content appears continuous.
+                if _likely_same_item(current_lot, lot_candidate):
+                    current_lot.merge_detail(payload)
+                    row = Photo(
+                        account_id=job.account_id,
+                        user_id=job.user_id,
+                        lot_id=None,
+                        original_name=photo_path.name,
+                        storage_path=str(photo_path.resolve()),
+                    )
+                    db.add(row)
+                    db.flush()
+                    pending_photo_ids.append(row.id)
+                    db.commit()
+                    continue
             if current_lot is not None:
                 _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)
                 persisted = _save_lot(db, job.account_id, job.user_id, current_lot, job.sale_id)

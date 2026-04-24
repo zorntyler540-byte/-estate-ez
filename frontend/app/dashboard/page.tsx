@@ -207,6 +207,7 @@ export default function DashboardPage() {
   /** One loading row per catalog photo while the active job runs (SSE). */
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
+  const [showCreateOneLot, setShowCreateOneLot] = useState(false);
   folderPickRef.current = folderPick;
   selectedSaleIdRef.current = selectedSaleId;
 
@@ -221,6 +222,18 @@ export default function DashboardPage() {
   useEffect(() => {
     setSaleZipExport(null);
   }, [selectedSaleId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => {
+      const narrow = window.matchMedia("(max-width: 900px)").matches;
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      setShowCreateOneLot(narrow || coarse);
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   useEffect(() => {
     if (!token || !saleZipExport?.id) return;
@@ -1094,11 +1107,11 @@ export default function DashboardPage() {
           <strong>Choose folder</strong> opens your system folder picker (it may not show photo thumbnails there —
           that is normal). After you confirm, you will see previews and counts here, then upload to the server — the
           job <strong>starts automatically</strong> and the table updates live from the SSE feed (spinner row while
-          Gemini runs). For phone workflows, use <strong>Choose photos (phone)</strong> to pick images from camera
-          roll/files and process right away.{" "}
+          Gemini runs). Use <strong>Choose photos</strong> to pick image files with visible previews in most desktop
+          and mobile pickers.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
-          each becomes its own row.           Use <strong>Create one lot…</strong> when every photo is the same listing (angles / details) and you want{" "}
+          each becomes its own row. Use <strong>Create one lot…</strong> on mobile when every photo is the same listing (angles / details) and you want{" "}
           <strong>one SKU and one row</strong>. On your phone (HTTPS), that opens an in-page camera so you can{" "}
           <strong>Snap</strong> many photos before <strong>Done</strong>; if the camera cannot start, the file picker
           is used instead. <strong>Server path</strong> is for folders already on the machine running the API (no
@@ -1145,6 +1158,9 @@ export default function DashboardPage() {
         >
           Choose photo folder…
         </button>
+        <span className="ct-muted" style={{ marginLeft: "0.6rem", fontSize: "0.8rem" }}>
+          Folder dialogs may not show image thumbnails on some systems.
+        </span>
         <button
           type="button"
           className="ct-btn"
@@ -1156,18 +1172,20 @@ export default function DashboardPage() {
           }}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
-          Choose photos (phone)…
+          Choose photos…
         </button>
-        <button
-          type="button"
-          className="ct-btn"
-          style={{ marginLeft: "0.6rem" }}
-          title="All selected images become one catalog row with one SKU"
-          onClick={() => void openCreateOneLotFlow()}
-          disabled={uploading || !selectedSaleId || selectedSaleClosed}
-        >
-          Create one lot…
-        </button>
+        {showCreateOneLot ? (
+          <button
+            type="button"
+            className="ct-btn"
+            style={{ marginLeft: "0.6rem" }}
+            title="All selected images become one catalog row with one SKU"
+            onClick={() => void openCreateOneLotFlow()}
+            disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          >
+            Create one lot…
+          </button>
+        ) : null}
         {folderPick && (
           <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
             {folderPick.singleLotMode ? (
