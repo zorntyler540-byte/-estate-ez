@@ -53,7 +53,7 @@ from app.services.serialization import (
     photo_count_outlier_by_lot_id,
     sale_lot_photo_counts,
 )
-from app.services.suggestion_email import send_suggestion_email, smtp_configured
+from app.services.suggestion_email import save_suggestion_local, send_suggestion_email, smtp_configured
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
@@ -165,15 +165,7 @@ def me(current: User = Depends(get_current_user)) -> UserSummary:
 
 @app.post("/feedback/suggestions")
 def submit_suggestion(payload: SuggestionIn, current: User = Depends(get_current_user)) -> dict[str, str]:
-    """Email product suggestions to the configured inbox (requires SMTP_* in settings)."""
-    if not smtp_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Email delivery is not configured on the server. "
-                "An administrator must set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD."
-            ),
-        )
+    """Send product suggestions to inbox, or persist locally when SMTP is unavailable."""
     subject = f"[CaringTransitions] Suggestion from {current.email}"
     body = (
         f"User email: {current.email}\n"
@@ -183,6 +175,24 @@ def submit_suggestion(payload: SuggestionIn, current: User = Depends(get_current
         f"--- Message ---\n\n"
         f"{payload.message.strip()}\n"
     )
+    if not smtp_configured():
+        try:
+            save_suggestion_local(
+                {
+                    "subject": subject,
+                    "user_email": current.email,
+                    "user_id": current.id,
+                    "account_id": current.account_id,
+                    "role": current.role,
+                    "message": payload.message.strip(),
+                }
+            )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Suggestion could not be saved locally: {exc}",
+            ) from exc
+        return {"status": "saved_local"}
     try:
         send_suggestion_email(subject=subject, body=body)
     except (OSError, ValueError, smtplib.SMTPException) as exc:

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 import smtplib
+from datetime import datetime, timezone
 from email.message import EmailMessage
+from pathlib import Path
 
 from app.config import settings
+
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+_SUGGESTION_FALLBACK_PATH = _BACKEND_DIR / "runtime" / "suggestions.jsonl"
 
 
 def smtp_configured() -> bool:
@@ -42,3 +49,18 @@ def send_suggestion_email(*, subject: str, body: str) -> None:
             server.ehlo()
             server.login(user, password)
             server.send_message(msg)
+
+
+def save_suggestion_local(record: dict[str, str]) -> Path:
+    """
+    Fallback sink when SMTP is unavailable.
+    Appends one JSON object per line for easy review/audit.
+    """
+    _SUGGESTION_FALLBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        **record,
+    }
+    with _SUGGESTION_FALLBACK_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    return _SUGGESTION_FALLBACK_PATH

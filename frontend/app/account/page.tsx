@@ -30,7 +30,7 @@ export default function AccountPage() {
   const [suggestionText, setSuggestionText] = useState("");
   const [suggestionBusy, setSuggestionBusy] = useState(false);
   const [suggestionError, setSuggestionError] = useState("");
-  const [suggestionSent, setSuggestionSent] = useState(false);
+  const [suggestionSentState, setSuggestionSentState] = useState<"" | "sent" | "saved_local">("");
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -65,14 +65,14 @@ export default function AccountPage() {
     if (!t || !msg) return;
     setSuggestionBusy(true);
     setSuggestionError("");
-    setSuggestionSent(false);
+    setSuggestionSentState("");
     try {
-      await apiFetch("/feedback/suggestions", t, {
+      const res = (await apiFetch("/feedback/suggestions", t, {
         method: "POST",
         body: JSON.stringify({ message: msg })
-      });
+      })) as { status?: string };
       setSuggestionText("");
-      setSuggestionSent(true);
+      setSuggestionSentState(res?.status === "saved_local" ? "saved_local" : "sent");
     } catch (e) {
       setSuggestionError(e instanceof Error ? e.message : "Could not send");
     } finally {
@@ -157,9 +157,11 @@ export default function AccountPage() {
           Ideas for the app, auction workflow, or anything else you would like us to consider. Your account email is
           included automatically with the message.
         </p>
-        {suggestionSent ? (
+        {suggestionSentState ? (
           <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
-            Thanks — your note was sent.
+            {suggestionSentState === "saved_local"
+              ? "Thanks — your note was saved on this server (email is not configured yet)."
+              : "Thanks — your note was sent."}
           </div>
         ) : null}
         {suggestionError ? (
@@ -177,7 +179,7 @@ export default function AccountPage() {
           value={suggestionText}
           onChange={(e) => {
             setSuggestionText(e.target.value);
-            setSuggestionSent(false);
+            setSuggestionSentState("");
           }}
           placeholder="Describe what you would like to see improved or added…"
           disabled={suggestionBusy}
