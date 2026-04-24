@@ -1215,7 +1215,7 @@ export default function DashboardPage() {
           Lots ({lots.length})
         </h2>
         <span className="ct-muted">
-          {lots.filter((l) => l.is_completed).length} completed / {lots.filter((l) => !l.is_completed).length} open
+          {lots.filter((l) => l.is_completed).length} completed / {lots.filter((l) => !l.is_completed).length} not done
         </span>
         <button type="button" className="ct-btn ct-btn--danger" onClick={() => void purgeAll()} disabled={busyProcessing}>
           Clear all lots & jobs
@@ -1326,7 +1326,7 @@ export default function DashboardPage() {
                   onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
                 />
                 <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-                  {lot.is_completed ? "Done" : "Open"}
+                  {lot.is_completed ? "Done" : "Not done"}
                 </span>
               </label>
               <button
@@ -1351,7 +1351,7 @@ export default function DashboardPage() {
             <th>Auction Title</th>
             <th>Price</th>
             <th>Condition</th>
-            <th>Done</th>
+            <th>Status</th>
             <th>Photos</th>
             <th>Details</th>
             <th>Delete</th>
@@ -1451,7 +1451,7 @@ export default function DashboardPage() {
                     onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
                   />
                   <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
-                    {lot.is_completed ? "Done" : "Open"}
+                    {lot.is_completed ? "Done" : "Not done"}
                   </span>
                 </label>
               </td>
