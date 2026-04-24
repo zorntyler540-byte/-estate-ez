@@ -121,6 +121,8 @@ export default function DashboardPage() {
   const photosInputRef = useRef<HTMLInputElement>(null);
   /** Next file-picker result: normal batch vs one combined lot. */
   const uploadPickModeRef = useRef<"batch" | "single_lot">("batch");
+  /** True after "Create one lot" until multi-file pick, upload, clear, or picker cancel. Used to chain camera opens on mobile. */
+  const singleLotCaptureChainingRef = useRef(false);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   const inventoryFirstLoad = useRef(true);
   const [token, setToken] = useState<string>("");
@@ -416,6 +418,7 @@ export default function DashboardPage() {
   }, []);
 
   function clearFolderPick() {
+    singleLotCaptureChainingRef.current = false;
     setFolderPick((prev) => {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       return null;
@@ -423,22 +426,72 @@ export default function DashboardPage() {
   }
 
   function onFolderInputChange(list: FileList | null) {
-    if (!list?.length) return;
+    if (!list?.length) {
+      if (singleLotCaptureChainingRef.current) {
+        singleLotCaptureChainingRef.current = false;
+      }
+      return;
+    }
     const pickMode = uploadPickModeRef.current;
     uploadPickModeRef.current = "batch";
     const all = Array.from(list);
     const imageFiles = all.filter(isCatalogImageFile);
+    if (!imageFiles.length) {
+      if (folderInputRef.current) folderInputRef.current.value = "";
+      if (photosInputRef.current) photosInputRef.current.value = "";
+      return;
+    }
     const skippedCount = all.length - imageFiles.length;
     const label = folderLabelFromFile(all[0]!);
-    const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
-    const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
     const singleLotMode = pickMode === "single_lot";
+    if (singleLotMode && imageFiles.length > 1) {
+      singleLotCaptureChainingRef.current = false;
+    }
+    const chainAnotherCamera =
+      singleLotMode &&
+      singleLotCaptureChainingRef.current &&
+      imageFiles.length === 1;
+
     setFolderPick((prev) => {
+      const appendSingleLot = Boolean(singleLotMode && prev?.singleLotMode);
+      if (appendSingleLot) {
+        const merged = [...prev!.imageFiles, ...imageFiles];
+        const mergedSkipped = prev!.skippedCount + skippedCount;
+        if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
+        const forThumbs = merged.slice(0, PREVIEW_THUMB_MAX);
+        const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+        return {
+          folderLabel:
+            merged.length === 1
+              ? folderLabelFromFile(merged[0]!)
+              : `One lot (${merged.length} photos)`,
+          imageFiles: merged,
+          thumbUrls,
+          skippedCount: mergedSkipped,
+          singleLotMode: true
+        };
+      }
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-      return { folderLabel: label, imageFiles, thumbUrls, skippedCount, singleLotMode };
+      const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
+      const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+      return {
+        folderLabel: label,
+        imageFiles,
+        thumbUrls,
+        skippedCount,
+        singleLotMode
+      };
     });
     if (folderInputRef.current) folderInputRef.current.value = "";
     if (photosInputRef.current) photosInputRef.current.value = "";
+
+    if (chainAnotherCamera) {
+      window.setTimeout(() => {
+        if (!singleLotCaptureChainingRef.current) return;
+        uploadPickModeRef.current = "single_lot";
+        photosInputRef.current?.click();
+      }, 280);
+    }
   }
 
   async function enqueueJob() {
@@ -848,6 +901,7 @@ export default function DashboardPage() {
           type="button"
           className="ct-btn ct-btn--primary"
           onClick={() => {
+            singleLotCaptureChainingRef.current = false;
             uploadPickModeRef.current = "batch";
             folderInputRef.current?.click();
           }}
@@ -860,6 +914,7 @@ export default function DashboardPage() {
           className="ct-btn"
           style={{ marginLeft: "0.6rem" }}
           onClick={() => {
+            singleLotCaptureChainingRef.current = false;
             uploadPickModeRef.current = "batch";
             photosInputRef.current?.click();
           }}
@@ -873,6 +928,7 @@ export default function DashboardPage() {
           style={{ marginLeft: "0.6rem" }}
           title="All selected images become one catalog row with one SKU"
           onClick={() => {
+            singleLotCaptureChainingRef.current = true;
             uploadPickModeRef.current = "single_lot";
             photosInputRef.current?.click();
           }}
@@ -904,7 +960,7 @@ export default function DashboardPage() {
               <div className="ct-thumb-strip">
                 {folderPick.thumbUrls.map((url, i) => (
                   <img
-                    key={`${i}-${folderPick.imageFiles[i]?.name ?? ""}`}
+                    key={`${url}`}
                     src={url}
                     alt=""
                     title={folderPick.imageFiles[i]?.name ?? ""}
