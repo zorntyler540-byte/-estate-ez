@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
 import json
 import queue
+import re
 import shutil
 import smtplib
 import mimetypes
+import tempfile
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
@@ -428,6 +432,71 @@ def download_lot_photo(
         media_type=media_type or "application/octet-stream",
         filename=row.original_name,
     )
+
+
+def _zip_entry_basename(original_name: str, index: int, used: set[str]) -> str:
+    """Stable, collision-free name inside the archive (no path components)."""
+    base = Path(original_name.replace("\\", "/")).name
+    base = re.sub(r"[^\w.\-]+", "_", base).strip("._") or "photo"
+    if len(base) > 180:
+        stem, suf = Path(base).stem[:120], Path(base).suffix
+        base = f"{stem}{suf}"
+    name = f"{index:02d}_{base}"
+    if name not in used:
+        used.add(name)
+        return name
+    for n in range(2, 10_000):
+        alt = f"{index:02d}_{n}_{base}"
+        if alt not in used:
+            used.add(alt)
+            return alt
+    return f"{index:02d}_{base}"
+
+
+@app.get("/lots/{lot_id}/photos/zip")
+def download_lot_photos_zip(
+    lot_id: str,
+    background_tasks: BackgroundTasks,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Original catalog image files for one lot, as a single ZIP (order matches ``GET …/photos``)."""
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id, Photo.user_id == current.id)
+        .order_by(Photo.created_at.asc())
+        .all()
+    )
+    if not photos:
+        raise HTTPException(status_code=404, detail="No photos linked to this lot")
+    fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    used: set[str] = set()
+    written = 0
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for i, ph in enumerate(photos):
+                src = Path(ph.storage_path).resolve()
+                if not src.is_file():
+                    continue
+                arc = _zip_entry_basename(ph.original_name, i + 1, used)
+                zf.write(src, arcname=arc)
+                written += 1
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+    if written == 0:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail="Photo files missing on disk")
+
+    sku_slug = re.sub(r"[^\w\-]+", "_", (lot.sku or lot.id)[:48]).strip("_") or "lot"
+    download_name = f"lot-{sku_slug}-photos.zip"
+
+    background_tasks.add_task(lambda p=str(tmp_path): Path(p).unlink(missing_ok=True))
+    return FileResponse(tmp_path, media_type="application/zip", filename=download_name)
 
 
 @app.patch("/lots/{lot_id}", response_model=LotOut)

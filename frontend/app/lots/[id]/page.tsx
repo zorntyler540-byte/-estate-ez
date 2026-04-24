@@ -45,6 +45,7 @@ export default function LotDetailPage() {
   const [viewerUrl, setViewerUrl] = useState<string>("");
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
+  const [zipDownloading, setZipDownloading] = useState(false);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -117,6 +118,37 @@ export default function LotDetailPage() {
       setViewerUrl("");
     } finally {
       setViewerLoading(false);
+    }
+  }
+
+  async function downloadLotPhotosZip() {
+    if (!lot || !token) return;
+    setError("");
+    setZipDownloading(true);
+    try {
+      const res = await fetch(`${API_BASE}/lots/${encodeURIComponent(lot.id)}/photos/zip`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const sku = (lot.sku || lot.id).replace(/[^\w-]+/g, "_").slice(0, 48) || "lot";
+      const fileName = `lot-${sku}-photos.zip`;
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not download ZIP");
+    } finally {
+      setZipDownloading(false);
     }
   }
 
@@ -226,11 +258,24 @@ export default function LotDetailPage() {
             </span>
           ) : null}
         </h2>
-        <p className="ct-muted" style={{ margin: "0 0 1rem", fontSize: "0.88rem", maxWidth: "40rem" }}>
+        <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem", maxWidth: "40rem" }}>
           Same order as{" "}
           <strong style={{ color: "var(--ct-text-muted)" }}>Upload lot photos</strong> in the browser extension —
-          first row left‑to‑right, then the next row.
+          first row left‑to‑right, then the next row. Use <strong>Download all photos (ZIP)</strong> for originals in
+          catalog order (for clients or backups).
         </p>
+        {catalogPhotos.length > 0 ? (
+          <div style={{ marginBottom: "1rem" }}>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={zipDownloading}
+              onClick={() => void downloadLotPhotosZip()}
+            >
+              {zipDownloading ? "Preparing ZIP…" : "Download all photos (ZIP)"}
+            </button>
+          </div>
+        ) : null}
         {photosError ? (
           <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
             {photosError}
