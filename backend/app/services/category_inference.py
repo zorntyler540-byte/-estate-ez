@@ -47,7 +47,9 @@ def infer_ct_category(lot: LotOutput) -> tuple[str | None, str | None]:
     for category, keywords in _RULES:
         score = 0
         for kw in keywords:
-            if kw in hay:
+            # Use token-aware matching so short keywords do not match inside unrelated words
+            # (e.g. "tie" should not match "light").
+            if re.search(r"\b" + re.escape(kw) + r"\b", hay):
                 score += len(kw)
         if score > best_score:
             best_category = category

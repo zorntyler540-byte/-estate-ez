@@ -4,6 +4,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+_MENS_IN_TITLE_RE = re.compile(r"\bmen(?:'|’)?s\b", re.I)
+_WOMENS_IN_TITLE_RE = re.compile(r"\bwomen(?:'|’)?s\b", re.I)
+_MENS_EVIDENCE_RE = re.compile(r"\b(men(?:'|’)?s|male|boy(?:'|’)?s|boys)\b", re.I)
+_WOMENS_EVIDENCE_RE = re.compile(r"\b(women(?:'|’)?s|female|ladies|girl(?:'|’)?s|girls)\b", re.I)
+_UNBRANDED_RE = re.compile(r"^(?:unmarked|unbranded|unknown|none|n/?a|null)$", re.I)
+
 
 def as_str_list(value: Any) -> list[str]:
     if value is None:
@@ -12,6 +18,85 @@ def as_str_list(value: Any) -> list[str]:
         return [str(x).strip() for x in value if x is not None and str(x).strip()]
     s = str(value).strip()
     return [s] if s else []
+
+
+def clean_listing_text(raw: str) -> str:
+    """
+    Normalize model-generated prose into plain listing text:
+    - strip markdown emphasis/backticks,
+    - collapse whitespace,
+    - trim noisy leading punctuation.
+    """
+    s = str(raw or "")
+    # Remove markdown emphasis/code markers while preserving text.
+    s = s.replace("**", "").replace("__", "").replace("`", "")
+    # Normalize multiline bullets into a sentence-like flow for CT Seller.
+    s = re.sub(r"\s*[\r\n]+\s*", " ", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    s = s.lstrip("-:;,. ").strip()
+    return s
+
+
+def normalize_brand_list(value: Any) -> list[str]:
+    brands = as_str_list(value)
+    out: list[str] = []
+    seen: set[str] = set()
+    for b in brands:
+        clean = clean_listing_text(b)
+        if not clean:
+            continue
+        if _UNBRANDED_RE.fullmatch(clean):
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+    return out
+
+
+def _gender_evidence_blob(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "ProfessionalDescription",
+        "Description",
+        "professional_description",
+        "Condition",
+        "condition_notes",
+        "AuctionTitle",
+        "Title",
+        "item_name",
+    ):
+        val = payload.get(key)
+        if val is not None:
+            parts.append(str(val))
+    for key in ("SpecificationLines", "specification_lines", "LabelsAndTags", "labels_and_tags"):
+        vals = payload.get(key)
+        if isinstance(vals, list):
+            parts.extend(str(x) for x in vals if x is not None)
+        elif vals is not None:
+            parts.append(str(vals))
+    return " ".join(parts)
+
+
+def _sanitize_gendered_title(title: str, payload: dict[str, Any]) -> str:
+    """
+    Avoid incorrect gender labels in auction titles when evidence is weak.
+    If "men's" or "women's" appears in title but not in the broader model evidence,
+    remove only the gender token and keep the rest of the title.
+    """
+    out = title.strip()
+    if not out:
+        return out
+    blob = _gender_evidence_blob(payload)
+    has_mens_evidence = _MENS_EVIDENCE_RE.search(blob) is not None
+    has_womens_evidence = _WOMENS_EVIDENCE_RE.search(blob) is not None
+    if _MENS_IN_TITLE_RE.search(out) and not has_mens_evidence:
+        out = _MENS_IN_TITLE_RE.sub("", out)
+    if _WOMENS_IN_TITLE_RE.search(out) and not has_womens_evidence:
+        out = _WOMENS_IN_TITLE_RE.sub("", out)
+    out = re.sub(r"\s{2,}", " ", out).strip(" -,:")
+    return out
 
 
 def tape_sku_opens_new_lot(sku: Any) -> bool:
@@ -108,13 +193,16 @@ def brand_appears_in_prose(brand: str, prose: str) -> bool:
 def weave_brands_into_description(brands: list[str], description: str) -> str:
     missing = [b for b in brands if b and not brand_appears_in_prose(b, description)]
     if not missing:
-        return description
+        return clean_listing_text(description)
+    # Plain text for CT Seller: avoid markdown-heavy prefixes like "**Brand** -".
     if len(missing) == 1:
-        prefix = f"**{missing[0]}** - "
+        suffix = f" Noted brand: {missing[0]}."
     else:
-        bolded = ", ".join(f"**{m}**" for m in missing[:-1])
-        prefix = f"{bolded}, and **{missing[-1]}** - "
-    return (prefix + description).strip()
+        suffix = f" Noted brands: {', '.join(missing)}."
+    base = clean_listing_text(description)
+    if not base:
+        return suffix.strip()
+    return f"{base}{suffix}"
 
 
 @dataclass
@@ -157,19 +245,22 @@ class LotOutput:
                 or ""
             ).strip()
         )
+        title = _sanitize_gendered_title(title, payload)
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
-            professional_description=str(
+            professional_description=clean_listing_text(
+                str(
                 payload.get("ProfessionalDescription")
                 or payload.get("Description")
                 or payload.get("professional_description")
                 or ""
-            ).strip(),
+                )
+            ),
             specification_lines=as_str_list(
                 payload.get("SpecificationLines") or payload.get("specification_lines")
             ),
-            brands=as_str_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
+            brands=normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
             labels_and_tags=as_str_list(
                 payload.get("LabelsAndTags") or payload.get("labels_and_tags")
             ),
