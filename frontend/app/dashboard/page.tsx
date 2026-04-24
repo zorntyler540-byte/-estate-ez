@@ -96,7 +96,7 @@ function folderLabelFromFile(f: File): string {
   const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
   const parts = rel.split("/").filter(Boolean);
   if (parts.length >= 2) return parts[0] ?? "Folder";
-  return "Folder";
+  return "Selected photos";
 }
 
 function revokeObjectUrls(urls: string[]) {
@@ -115,6 +115,7 @@ type FolderPickPreview = {
 export default function DashboardPage() {
   const router = useRouter();
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const photosInputRef = useRef<HTMLInputElement>(null);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   const inventoryFirstLoad = useRef(true);
   const [token, setToken] = useState<string>("");
@@ -795,7 +796,8 @@ export default function DashboardPage() {
           <strong>Choose folder</strong> opens your system folder picker (it may not show photo thumbnails there —
           that is normal). After you confirm, you will see previews and counts here, then upload to the server — the
           job <strong>starts automatically</strong> and the table updates live from the SSE feed (spinner row while
-          Gemini runs).{" "}
+          Gemini runs). For phone workflows, use <strong>Choose photos (phone)</strong> to pick images from camera
+          roll/files and process right away.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
           each becomes its own row.           <strong>Server path</strong> is for folders already on the machine running the
@@ -818,7 +820,16 @@ export default function DashboardPage() {
           type="file"
           multiple
           style={{ display: "none" }}
+          accept="image/*,.heic,.heif"
           {...({ webkitdirectory: "" } as Record<string, unknown>)}
+          onChange={(e) => onFolderInputChange(e.target.files)}
+        />
+        <input
+          ref={photosInputRef}
+          type="file"
+          multiple
+          style={{ display: "none" }}
+          accept="image/*,.heic,.heif"
           onChange={(e) => onFolderInputChange(e.target.files)}
         />
         <button
@@ -828,6 +839,15 @@ export default function DashboardPage() {
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
           Choose photo folder…
+        </button>
+        <button
+          type="button"
+          className="ct-btn"
+          style={{ marginLeft: "0.6rem" }}
+          onClick={() => photosInputRef.current?.click()}
+          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+        >
+          Choose photos (phone)…
         </button>
         {folderPick && (
           <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
