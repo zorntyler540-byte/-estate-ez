@@ -42,6 +42,8 @@ from app.schemas import (
     SuggestionIn,
     SuggestionSavedOut,
     TokenResponse,
+    TeamMemberCreate,
+    TeamMemberOut,
     UserSummary,
     LotPhotoOut,
     SaleZipExportOut,
@@ -70,12 +72,17 @@ app = FastAPI(title=settings.app_name)
 def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
     row = (
         db.query(Sale)
-        .filter(Sale.id == sale_id, Sale.account_id == current.account_id, Sale.user_id == current.id)
+        .filter(Sale.id == sale_id, Sale.account_id == current.account_id)
         .first()
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sale not found")
     return row
+
+
+def _require_owner(current: User) -> None:
+    if (current.role or "").strip().lower() != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
 
 
 def _require_open_sale(row: Sale) -> None:
@@ -169,6 +176,48 @@ def me(current: User = Depends(get_current_user)) -> UserSummary:
     return UserSummary(id=current.id, account_id=current.account_id, email=current.email, role=current.role)
 
 
+@app.get("/team/members", response_model=list[TeamMemberOut])
+def list_team_members(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[TeamMemberOut]:
+    _require_owner(current)
+    rows = (
+        db.query(User)
+        .filter(User.account_id == current.account_id)
+        .order_by(User.created_at.asc())
+        .all()
+    )
+    return [TeamMemberOut(id=r.id, email=r.email, role=r.role, created_at=r.created_at) for r in rows]
+
+
+@app.post("/team/members", response_model=TeamMemberOut, status_code=status.HTTP_201_CREATED)
+def create_team_member(
+    payload: TeamMemberCreate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeamMemberOut:
+    _require_owner(current)
+    email = payload.email.lower().strip()
+    existing = db.query(User).filter(User.email == email).first()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="Email already exists")
+    try:
+        pw_hash = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    role = payload.role.strip().lower()
+    if role not in ("owner", "catalogger"):
+        raise HTTPException(status_code=400, detail="Role must be owner or catalogger")
+    row = User(
+        account_id=current.account_id,
+        email=email,
+        password_hash=pw_hash,
+        role=role,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return TeamMemberOut(id=row.id, email=row.email, role=row.role, created_at=row.created_at)
+
+
 @app.post("/feedback/suggestions")
 def submit_suggestion(payload: SuggestionIn, current: User = Depends(get_current_user)) -> dict[str, str]:
     """Send product suggestions to inbox, or persist locally when SMTP is unavailable."""
@@ -225,7 +274,7 @@ def list_saved_suggestions(
 def list_sales(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[SaleOut]:
     rows = (
         db.query(Sale)
-        .filter(Sale.account_id == current.account_id, Sale.user_id == current.id)
+        .filter(Sale.account_id == current.account_id)
         .order_by(Sale.created_at.asc())
         .all()
     )
@@ -271,6 +320,7 @@ def update_sale(
     if payload.name is not None:
         row.name = payload.name.strip()
     if payload.is_closed is not None:
+        _require_owner(current)
         row.closed_at = datetime.now(timezone.utc) if payload.is_closed else None
     db.commit()
     db.refresh(row)
@@ -290,6 +340,7 @@ def delete_sale(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
+    _require_owner(current)
     row = _sale_for_user(sale_id, current, db)
     lot_n = db.query(Lot).filter(Lot.sale_id == row.id).count()
     job_n = db.query(ProcessingJob).filter(ProcessingJob.sale_id == row.id).count()
@@ -309,13 +360,13 @@ def list_lots(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[LotOut]:
-    q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.user_id == current.id)
+    q = db.query(Lot).filter(Lot.account_id == current.account_id)
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
     rows = q.order_by(Lot.created_at.desc()).all()
     lot_ids = [r.id for r in rows]
-    thumb_ids = lot_ids_with_linked_photos(db, current.account_id, current.id, lot_ids)
+    thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     counts = [r.photo_count for r in rows]
     return [
         lot_to_schema(
@@ -336,7 +387,7 @@ def lot_thumbnail(
 ) -> Response:
     """First catalog photo for the lot, resized (JPEG). Requires Bearer auth (not usable as bare img src cross-origin)."""
     max_px = min(800, max(64, int(max_px)))
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     ph = (
@@ -344,7 +395,6 @@ def lot_thumbnail(
         .filter(
             Photo.lot_id == lot_id,
             Photo.account_id == current.account_id,
-            Photo.user_id == current.id,
         )
         .order_by(Photo.created_at.asc())
         .first()
@@ -369,11 +419,11 @@ def lot_thumbnail(
 
 @app.get("/lots/{lot_id}", response_model=LotOut)
 def get_lot(lot_id: str, current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> LotOut:
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
-    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, current.id, [lot_id])
-    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id, current.id)
+    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, [lot_id])
+    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
     return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
 
@@ -382,12 +432,12 @@ def get_lot(lot_id: str, current: User = Depends(get_current_user), db: Session 
 def list_lot_photos(
     lot_id: str, current: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[LotPhotoOut]:
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     photos = (
         db.query(Photo)
-        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id, Photo.user_id == current.id)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
         .order_by(Photo.created_at.asc())
         .all()
     )
@@ -406,7 +456,7 @@ def lot_photo_thumbnail(
 ) -> Response:
     """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos`` and extension upload sequence."""
     max_px = min(800, max(64, int(max_px)))
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     ph = (
@@ -415,7 +465,6 @@ def lot_photo_thumbnail(
             Photo.id == photo_id,
             Photo.lot_id == lot_id,
             Photo.account_id == current.account_id,
-            Photo.user_id == current.id,
         )
         .first()
     )
@@ -447,7 +496,6 @@ def download_lot_photo(
             Photo.id == photo_id,
             Photo.lot_id == lot_id,
             Photo.account_id == current.account_id,
-            Photo.user_id == current.id,
         )
         .first()
     )
@@ -491,12 +539,12 @@ def download_lot_photos_zip(
     db: Session = Depends(get_db),
 ) -> FileResponse:
     """Original catalog image files for one lot, as a single ZIP (order matches ``GET …/photos``)."""
-    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
     photos = (
         db.query(Photo)
-        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id, Photo.user_id == current.id)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
         .order_by(Photo.created_at.asc())
         .all()
     )
@@ -536,7 +584,7 @@ def update_lot(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LotOut:
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
 
@@ -563,8 +611,8 @@ def update_lot(
         row.sku_needs_review = False
     db.commit()
     db.refresh(row)
-    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, current.id, [lot_id])
-    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id, current.id)
+    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, [lot_id])
+    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
     return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
 
@@ -575,13 +623,12 @@ def delete_lot(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id, Lot.user_id == current.id).first()
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     db.query(Photo).filter(
         Photo.lot_id == lot_id,
         Photo.account_id == current.account_id,
-        Photo.user_id == current.id,
     ).delete()
     db.delete(row)
     db.commit()
@@ -594,21 +641,21 @@ def purge_all_lots(
     db: Session = Depends(get_db),
 ) -> Response:
     """Remove this user's lots, photos, jobs, and uploaded batch folders under their account (dev reset)."""
+    _require_owner(current)
     aid = current.account_id
-    uid = current.id
     upload_folders = [
         j.input_folder
         for j in db.query(ProcessingJob)
-        .filter(ProcessingJob.account_id == aid, ProcessingJob.user_id == uid)
+        .filter(ProcessingJob.account_id == aid)
         .all()
     ]
-    for ex in db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid, SalePhotoZipExport.user_id == uid).all():
+    for ex in db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid).all():
         if ex.zip_path:
             Path(ex.zip_path).unlink(missing_ok=True)
-    db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid, SalePhotoZipExport.user_id == uid).delete()
-    db.query(Photo).filter(Photo.account_id == aid, Photo.user_id == uid).delete()
-    db.query(Lot).filter(Lot.account_id == aid, Lot.user_id == uid).delete()
-    db.query(ProcessingJob).filter(ProcessingJob.account_id == aid, ProcessingJob.user_id == uid).delete()
+    db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid).delete()
+    db.query(Photo).filter(Photo.account_id == aid).delete()
+    db.query(Lot).filter(Lot.account_id == aid).delete()
+    db.query(ProcessingJob).filter(ProcessingJob.account_id == aid).delete()
     db.commit()
     for folder in upload_folders:
         _safe_remove_upload_batch_folder(aid, folder)
@@ -684,7 +731,6 @@ def list_jobs(
         db.query(ProcessingJob)
         .filter(
             ProcessingJob.account_id == current.account_id,
-            ProcessingJob.user_id == current.id,
             ProcessingJob.status == JobStatus.processing,
         )
         .all()
@@ -700,9 +746,7 @@ def list_jobs(
     if changed:
         db.commit()
 
-    q = db.query(ProcessingJob).filter(
-        ProcessingJob.account_id == current.account_id, ProcessingJob.user_id == current.id
-    )
+    q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(ProcessingJob.sale_id == sale_id)
@@ -717,7 +761,6 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         .filter(
             ProcessingJob.id == job_id,
             ProcessingJob.account_id == current.account_id,
-            ProcessingJob.user_id == current.id,
         )
         .first()
     )
@@ -745,7 +788,6 @@ def cancel_job(job_id: str, current: User = Depends(get_current_user), db: Sessi
         .filter(
             ProcessingJob.id == job_id,
             ProcessingJob.account_id == current.account_id,
-            ProcessingJob.user_id == current.id,
         )
         .first()
     )
@@ -773,7 +815,6 @@ def delete_job(
         .filter(
             ProcessingJob.id == job_id,
             ProcessingJob.account_id == current.account_id,
-            ProcessingJob.user_id == current.id,
         )
         .first()
     )
@@ -831,7 +872,6 @@ async def job_events_sse(
         .filter(
             ProcessingJob.id == job_id,
             ProcessingJob.account_id == current.account_id,
-            ProcessingJob.user_id == current.id,
         )
         .first()
     )
@@ -890,7 +930,7 @@ def _markdown_for_lots(rows: list[Lot]) -> str:
 
 
 def _lots_for_export(db: Session, current: User, sale_id: str | None) -> list[Lot]:
-    q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.user_id == current.id)
+    q = db.query(Lot).filter(Lot.account_id == current.account_id)
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
@@ -915,7 +955,7 @@ def export_json(
 ) -> list[LotOut]:
     rows = _lots_for_export(db, current, sale_id)
     lot_ids = [r.id for r in rows]
-    thumb_ids = lot_ids_with_linked_photos(db, current.account_id, current.id, lot_ids)
+    thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     many_map = photo_count_outlier_by_lot_id(rows)
     return [
         lot_to_schema(r, has_thumbnail=r.id in thumb_ids, many_photos_review=many_map.get(r.id, False))
@@ -1013,12 +1053,12 @@ def start_sale_photos_zip_export(
 ) -> SaleZipExportOut:
     """Queue a background ZIP of all catalog photos for lots in this sale (600–3000+ images)."""
     sale = _sale_for_user(sale_id, current, db)
-    cleanup_expired_sale_zip_exports(db, current.account_id, current.id)
+    cleanup_expired_sale_zip_exports(db, current.account_id)
     in_progress = (
         db.query(SalePhotoZipExport)
         .filter(
             SalePhotoZipExport.sale_id == sale.id,
-            SalePhotoZipExport.user_id == current.id,
+            SalePhotoZipExport.account_id == current.account_id,
             SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
         )
         .order_by(SalePhotoZipExport.created_at.desc())
@@ -1031,7 +1071,7 @@ def start_sale_photos_zip_export(
             return _sale_zip_export_out(in_progress)
 
     n = int(
-        count_sale_catalog_photos(db, sale.id, current.account_id, current.id)
+        count_sale_catalog_photos(db, sale.id, current.account_id)
     )
     if n <= 0:
         raise HTTPException(status_code=400, detail="No catalog photos in this sale to export.")
@@ -1067,7 +1107,6 @@ def get_sale_photos_zip_export(
         .filter(
             SalePhotoZipExport.id == export_id,
             SalePhotoZipExport.account_id == current.account_id,
-            SalePhotoZipExport.user_id == current.id,
         )
         .first()
     )
@@ -1089,7 +1128,6 @@ def download_sale_photos_zip_export(
         .filter(
             SalePhotoZipExport.id == export_id,
             SalePhotoZipExport.account_id == current.account_id,
-            SalePhotoZipExport.user_id == current.id,
         )
         .first()
     )

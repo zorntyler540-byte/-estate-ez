@@ -19,6 +19,13 @@ type SavedSuggestion = {
   message?: string;
 };
 
+type TeamMember = {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+};
+
 function isAuthFailureMessage(message: string): boolean {
   const m = message.toLowerCase();
   return (
@@ -41,6 +48,13 @@ export default function AccountPage() {
   const [savedSuggestions, setSavedSuggestions] = useState<SavedSuggestion[]>([]);
   const [savedLoading, setSavedLoading] = useState(false);
   const [savedError, setSavedError] = useState("");
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState("");
+  const [newMemberEmail, setNewMemberEmail] = useState("");
+  const [newMemberPassword, setNewMemberPassword] = useState("");
+  const [newMemberRole, setNewMemberRole] = useState<"catalogger" | "owner">("catalogger");
+  const [newMemberBusy, setNewMemberBusy] = useState(false);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -107,6 +121,50 @@ export default function AccountPage() {
   useEffect(() => {
     if (!token || !me || me.role.toLowerCase() !== "owner") return;
     void refreshSavedSuggestions();
+  }, [token, me?.id]);
+
+  async function refreshTeamMembers() {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    setTeamLoading(true);
+    setTeamError("");
+    try {
+      const rows = (await apiFetch("/team/members", token)) as TeamMember[];
+      setTeamMembers(rows);
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not load team members");
+    } finally {
+      setTeamLoading(false);
+    }
+  }
+
+  async function addTeamMember() {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    if (!newMemberEmail.trim() || !newMemberPassword.trim()) return;
+    setNewMemberBusy(true);
+    setTeamError("");
+    try {
+      await apiFetch("/team/members", token, {
+        method: "POST",
+        body: JSON.stringify({
+          email: newMemberEmail.trim(),
+          password: newMemberPassword,
+          role: newMemberRole
+        })
+      });
+      setNewMemberEmail("");
+      setNewMemberPassword("");
+      setNewMemberRole("catalogger");
+      await refreshTeamMembers();
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not add team member");
+    } finally {
+      setNewMemberBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    void refreshTeamMembers();
   }, [token, me?.id]);
 
   if (!token) {
@@ -226,6 +284,72 @@ export default function AccountPage() {
           {suggestionBusy ? "Sending…" : "Send to team"}
         </button>
       </section>
+      {me?.role?.toLowerCase() === "owner" ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Team cataloggers
+          </h2>
+          <p className="ct-muted" style={{ marginTop: "0.4rem" }}>
+            Add authorized account users who can sign in and work this account inventory.
+          </p>
+          {teamError ? <div className="ct-banner ct-banner--error">{teamError}</div> : null}
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <input
+              className="ct-input"
+              style={{ maxWidth: 300, width: "100%" }}
+              placeholder="catalogger@email.com"
+              value={newMemberEmail}
+              onChange={(e) => setNewMemberEmail(e.target.value)}
+              autoComplete="off"
+            />
+            <input
+              className="ct-input"
+              style={{ maxWidth: 260, width: "100%" }}
+              type="password"
+              placeholder="Temporary password (min 8)"
+              value={newMemberPassword}
+              onChange={(e) => setNewMemberPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <select
+              className="ct-input"
+              style={{ maxWidth: 150 }}
+              value={newMemberRole}
+              onChange={(e) => setNewMemberRole((e.target.value as "catalogger" | "owner") || "catalogger")}
+            >
+              <option value="catalogger">catalogger</option>
+              <option value="owner">owner</option>
+            </select>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              disabled={newMemberBusy || !newMemberEmail.trim() || newMemberPassword.trim().length < 8}
+              onClick={() => void addTeamMember()}
+            >
+              {newMemberBusy ? "Adding…" : "Add team member"}
+            </button>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void refreshTeamMembers()} disabled={teamLoading}>
+              {teamLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          {teamMembers.length === 0 ? (
+            <p className="ct-muted" style={{ marginBottom: 0 }}>
+              No team members yet.
+            </p>
+          ) : (
+            <div className="ct-stack">
+              {teamMembers.map((m) => (
+                <div key={m.id} className="ct-card ct-card--padded">
+                  <p style={{ margin: 0, fontWeight: 600 }}>{m.email}</p>
+                  <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.86rem" }}>
+                    Role: {m.role} · Added {new Date(m.created_at).toLocaleString()}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
       {me?.role?.toLowerCase() === "owner" ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>

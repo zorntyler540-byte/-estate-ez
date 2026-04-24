@@ -9,11 +9,11 @@ from app.models import Lot, Photo
 from app.schemas import LotOut
 
 
-def sale_lot_photo_counts(db: Session, sale_id: str, account_id: str, user_id: str) -> list[int]:
+def sale_lot_photo_counts(db: Session, sale_id: str, account_id: str) -> list[int]:
     return [
         c[0]
         for c in db.query(Lot.photo_count)
-        .filter(Lot.sale_id == sale_id, Lot.account_id == account_id, Lot.user_id == user_id)
+        .filter(Lot.sale_id == sale_id, Lot.account_id == account_id)
         .all()
     ]
 
@@ -47,7 +47,7 @@ def photo_count_is_sale_outlier(photo_count: int, all_counts: list[int]) -> bool
     return top >= second + 8
 
 
-def lot_ids_with_linked_photos(db: Session, account_id: str, user_id: str, lot_ids: list[str]) -> set[str]:
+def lot_ids_with_linked_photos(db: Session, account_id: str, lot_ids: list[str]) -> set[str]:
     if not lot_ids:
         return set()
     stmt = (
@@ -55,7 +55,6 @@ def lot_ids_with_linked_photos(db: Session, account_id: str, user_id: str, lot_i
         .where(
             Photo.lot_id.in_(lot_ids),
             Photo.account_id == account_id,
-            Photo.user_id == user_id,
         )
         .distinct()
     )

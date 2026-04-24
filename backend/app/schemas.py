@@ -32,6 +32,19 @@ class UserSummary(BaseModel):
     role: str
 
 
+class TeamMemberCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    role: str = Field(default="catalogger", pattern="^(owner|catalogger)$")
+
+
+class TeamMemberOut(BaseModel):
+    id: str
+    email: EmailStr
+    role: str
+    created_at: datetime
+
+
 class SuggestionIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
 

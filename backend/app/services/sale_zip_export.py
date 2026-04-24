@@ -20,16 +20,14 @@ def export_dir_for_account(account_id: str) -> Path:
     return d
 
 
-def count_sale_catalog_photos(db: Session, sale_id: str, account_id: str, user_id: str) -> int:
+def count_sale_catalog_photos(db: Session, sale_id: str, account_id: str) -> int:
     return (
         db.query(func.count(Photo.id))
         .join(Lot, Photo.lot_id == Lot.id)
         .filter(
             Lot.sale_id == sale_id,
             Lot.account_id == account_id,
-            Lot.user_id == user_id,
             Photo.account_id == account_id,
-            Photo.user_id == user_id,
         )
         .scalar()
         or 0
@@ -80,13 +78,12 @@ def _arc_base(original_name: str, photo_index: int, used: set[str]) -> str:
     return name
 
 
-def cleanup_expired_sale_zip_exports(db: Session, account_id: str, user_id: str) -> None:
+def cleanup_expired_sale_zip_exports(db: Session, account_id: str) -> None:
     now = datetime.now(timezone.utc)
     rows = (
         db.query(SalePhotoZipExport)
         .filter(
             SalePhotoZipExport.account_id == account_id,
-            SalePhotoZipExport.user_id == user_id,
             SalePhotoZipExport.status == JobStatus.completed,
             SalePhotoZipExport.expires_at.isnot(None),
             SalePhotoZipExport.expires_at < now,
@@ -117,7 +114,6 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
             .filter(
                 Lot.sale_id == row.sale_id,
                 Lot.account_id == row.account_id,
-                Lot.user_id == row.user_id,
             )
             .order_by(Lot.created_at.asc())
             .all()
@@ -133,7 +129,6 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                     .filter(
                         Photo.lot_id == lot.id,
                         Photo.account_id == row.account_id,
-                        Photo.user_id == row.user_id,
                     )
                     .order_by(Photo.created_at.asc())
                     .all()
