@@ -166,7 +166,9 @@ export default function DashboardPage() {
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
   const [lotCameraStream, setLotCameraStream] = useState<MediaStream | null>(null);
   const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
+  const [lotCameraSnapThumbUrls, setLotCameraSnapThumbUrls] = useState<string[]>([]);
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
+  const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   const inventoryFirstLoad = useRef(true);
   const [token, setToken] = useState<string>("");
   const [sales, setSales] = useState<Sale[]>([]);
@@ -472,6 +474,20 @@ export default function DashboardPage() {
       el.srcObject = null;
     };
   }, [lotCameraStream]);
+
+  useEffect(() => {
+    const urls = lotCameraSnaps.map((f) => URL.createObjectURL(f));
+    setLotCameraSnapThumbUrls(urls);
+    return () => {
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [lotCameraSnaps]);
+
+  useEffect(() => {
+    const strip = lotCameraStripRef.current;
+    if (!strip || !lotCameraSnapThumbUrls.length) return;
+    strip.scrollLeft = strip.scrollWidth;
+  }, [lotCameraSnapThumbUrls.length]);
 
   function clearFolderPick() {
     singleLotCaptureChainingRef.current = false;
@@ -1324,14 +1340,15 @@ export default function DashboardPage() {
             background: "rgba(0,0,0,0.82)",
             display: "flex",
             flexDirection: "column",
-            justifyContent: "flex-end",
             padding: "12px",
-            paddingBottom: "max(12px, env(safe-area-inset-bottom))"
+            paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+            boxSizing: "border-box"
           }}
         >
+          <div style={{ flex: 1, minHeight: 0 }} aria-hidden />
           <div
             className="ct-card ct-card--padded"
-            style={{ maxWidth: 520, width: "100%", margin: "0 auto", boxSizing: "border-box" }}
+            style={{ maxWidth: 520, width: "100%", margin: "0 auto", boxSizing: "border-box", flexShrink: 0 }}
           >
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
@@ -1375,6 +1392,48 @@ export default function DashboardPage() {
               </button>
             </div>
           </div>
+          {lotCameraSnapThumbUrls.length > 0 ? (
+            <div style={{ marginTop: 10, flexShrink: 0, width: "100%", maxWidth: 520, marginLeft: "auto", marginRight: "auto" }}>
+              <p
+                className="ct-muted"
+                style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
+              >
+                Captured (scroll sideways)
+              </p>
+              <div
+                ref={lotCameraStripRef}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  overflowX: "auto",
+                  overflowY: "hidden",
+                  padding: "6px 2px 4px",
+                  WebkitOverflowScrolling: "touch",
+                  scrollSnapType: "x proximity"
+                }}
+              >
+                {lotCameraSnapThumbUrls.map((url, i) => (
+                  <img
+                    key={url}
+                    src={url}
+                    alt=""
+                    aria-hidden
+                    width={56}
+                    height={56}
+                    style={{
+                      flex: "0 0 auto",
+                      width: 56,
+                      height: 56,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      border: "1px solid rgba(255,255,255,0.25)",
+                      scrollSnapAlign: "start"
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
