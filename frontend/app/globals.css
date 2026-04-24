@@ -441,6 +441,46 @@ a.ct-btn:hover {
   box-shadow: inset 3px 0 0 0 rgba(251, 191, 36, 0.85);
 }
 
+/* Dashboard lots: stacked cards on narrow screens (photo count + details without horizontal table scroll). */
+.ct-dashboard-lots-mobile {
+  display: none;
+}
+
+.ct-dashboard-table-desktop {
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .ct-dashboard-lots-mobile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .ct-dashboard-table-desktop {
+    display: none;
+  }
+
+  .ct-lot-mobile-card {
+    touch-action: manipulation;
+  }
+
+  .ct-lot-mobile-card .ct-btn {
+    min-height: 44px;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .ct-lot-mobile-card--pending-queued {
+    background: var(--ct-pending-queued-bg);
+  }
+
+  .ct-lot-mobile-card--pending-done {
+    background: var(--ct-pending-done-bg);
+  }
+}
+
 .ct-sku-cell {
   font-weight: 600;
 }

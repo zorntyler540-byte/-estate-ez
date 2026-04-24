@@ -82,6 +82,14 @@ export default function LotDetailPage() {
     };
   }, [viewerUrl]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !lot) return;
+    if (window.location.hash !== "#listing-details") return;
+    requestAnimationFrame(() => {
+      document.getElementById("listing-details")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [lot?.id]);
+
   async function loadViewerPhoto(index: number) {
     if (!lot || !token) return;
     const photo = catalogPhotos[index];
@@ -304,7 +312,10 @@ export default function LotDetailPage() {
           </div>
         )}
       </section>
-      <div className="ct-card ct-card--padded ct-stack">
+      <div id="listing-details" className="ct-card ct-card--padded ct-stack" style={{ scrollMarginTop: "0.75rem" }}>
+        <h2 className="ct-section-title" style={{ margin: "0 0 0.65rem", fontSize: "1.05rem" }}>
+          Listing details
+        </h2>
         <div>
           <label className="ct-label" htmlFor="lot-sku">
             Estate lot SKU (tape digits)

@@ -1221,7 +1221,128 @@ export default function DashboardPage() {
           Clear all lots & jobs
         </button>
       </div>
-      <div className="ct-table-wrap">
+      <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
+        {photoPendingSlots.map((slot) => (
+          <div
+            key={slot.id}
+            className={`ct-lot-mobile-card ct-card ct-card--padded${
+              slot.status === "queued" ? " ct-lot-mobile-card--pending-queued" : " ct-lot-mobile-card--pending-done"
+            }`}
+          >
+            <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center" }}>
+              <div style={{ width: 40, flexShrink: 0, textAlign: "center" }}>
+                {slot.status === "queued" ? (
+                  <svg width={22} height={22} viewBox="0 0 24 24" aria-hidden>
+                    <circle cx="12" cy="12" r="9" fill="none" stroke="rgba(253, 230, 138, 0.35)" strokeWidth="3" />
+                    <path
+                      d="M12 3 A9 9 0 0 1 21 12"
+                      fill="none"
+                      stroke="#fbbf24"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                    >
+                      <animateTransform
+                        attributeName="transform"
+                        type="rotate"
+                        from="0 12 12"
+                        to="360 12 12"
+                        dur="0.75s"
+                        repeatCount="indefinite"
+                      />
+                    </path>
+                  </svg>
+                ) : (
+                  <span style={{ color: "var(--ct-success)", fontWeight: 700 }} aria-hidden>
+                    ✓
+                  </span>
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>
+                  Photo {slot.index + 1} / {slot.total}
+                </div>
+                {slot.fileName ? (
+                  <div className="ct-muted" style={{ fontSize: "0.8rem", wordBreak: "break-word", marginTop: 4 }}>
+                    {slot.fileName}
+                  </div>
+                ) : null}
+                <div className="ct-muted" style={{ fontSize: "0.82rem", marginTop: 6 }}>
+                  {slot.status === "queued" ? "Waiting for Gemini…" : null}
+                  {slot.previewTitle ? (
+                    <span>
+                      {" "}
+                      — <em>{slot.previewTitle}</em>
+                    </span>
+                  ) : null}
+                  {slot.status !== "queued" && inInventoryPhase ? " · Assigning to catalog…" : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+        {lots.map((lot) => (
+          <div
+            key={`m-${lot.id}`}
+            className={`ct-lot-mobile-card ct-card ct-card--padded${lot.many_photos_review ? " ct-lot-mobile-card--warn" : ""}`}
+          >
+            <div className="ct-row ct-row--gap-lg" style={{ alignItems: "flex-start" }}>
+              <div style={{ flexShrink: 0 }}>
+                <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  className={lot.sku_needs_review || !lot.sku ? "ct-sku-cell ct-sku-cell--review" : "ct-sku-cell"}
+                  style={{ fontSize: "0.95rem" }}
+                >
+                  <span className={lot.sku_needs_review || !lot.sku ? "ct-sku-pill" : undefined}>{lot.sku || "—"}</span>
+                </div>
+                <div style={{ fontWeight: 600, marginTop: 6, lineHeight: 1.35 }}>{lot.auction_title || "—"}</div>
+                <div className="ct-muted" style={{ marginTop: "0.5rem", fontSize: "0.88rem", lineHeight: 1.4 }}>
+                  <strong style={{ color: "var(--ct-text)" }}>{lot.photo_count}</strong>{" "}
+                  photo{lot.photo_count === 1 ? "" : "s"}
+                  {lot.starting_price != null ? (
+                    <>
+                      {" "}
+                      · Starting <strong style={{ color: "var(--ct-text)" }}>${lot.starting_price}</strong>
+                    </>
+                  ) : null}
+                  {lot.condition_text ? (
+                    <>
+                      {" "}
+                      · <span title={lot.condition_text}>{lot.condition_text}</span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.85rem", flexWrap: "wrap", alignItems: "center" }}>
+              <Link href={`/lots/${lot.id}#listing-details`} className="ct-btn ct-btn--primary">
+                Details
+              </Link>
+              <label className="ct-row" style={{ gap: "0.45rem", alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={lot.is_completed}
+                  onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
+                />
+                <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
+                  {lot.is_completed ? "Done" : "Open"}
+                </span>
+              </label>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() => void deleteLotRow(lot.id)}
+                disabled={busyProcessing}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="ct-dashboard-table-desktop ct-table-wrap">
         <table className="ct-table">
         <thead>
           <tr>
@@ -1232,7 +1353,7 @@ export default function DashboardPage() {
             <th>Condition</th>
             <th>Done</th>
             <th>Photos</th>
-            <th>Edit</th>
+            <th>Details</th>
             <th>Delete</th>
           </tr>
         </thead>
@@ -1336,7 +1457,7 @@ export default function DashboardPage() {
               </td>
               <td>{lot.photo_count}</td>
               <td>
-                <Link href={`/lots/${lot.id}`}>Open</Link>
+                <Link href={`/lots/${lot.id}#listing-details`}>Details</Link>
               </td>
               <td>
                 <button
