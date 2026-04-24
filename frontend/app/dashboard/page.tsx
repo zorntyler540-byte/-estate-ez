@@ -72,6 +72,7 @@ type Job = {
   error_message?: string;
   inherit_sku_from_subfolder?: boolean;
   single_lot_mode?: boolean;
+  single_lot_manual_sku?: string | null;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -187,6 +188,8 @@ export default function DashboardPage() {
   const [inheritSkuFromSubfolder, setInheritSkuFromSubfolder] = useState(false);
   const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
+  /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
+  const [singleLotManualSku, setSingleLotManualSku] = useState("");
   /** One loading row per catalog photo while the active job runs (SSE). */
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
@@ -491,6 +494,7 @@ export default function DashboardPage() {
 
   function clearFolderPick() {
     singleLotCaptureChainingRef.current = false;
+    setSingleLotManualSku("");
     setFolderPick((prev) => {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       return null;
@@ -667,6 +671,9 @@ export default function DashboardPage() {
       form.append("sale_id", selectedSaleId);
       form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
       form.append("single_lot_mode", folderPick.singleLotMode ? "true" : "false");
+      if (folderPick.singleLotMode && singleLotManualSku.trim()) {
+        form.append("single_lot_manual_sku", singleLotManualSku.trim());
+      }
       for (const file of folderPick.imageFiles) {
         const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
         form.append("files", file, rel);
@@ -1069,10 +1076,24 @@ export default function DashboardPage() {
         {folderPick && (
           <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
             {folderPick.singleLotMode ? (
-              <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem" }}>
-                <strong>One-lot mode:</strong> after upload, every photo is merged into a single catalog lot (tape reads
-                on later frames will not start a new row).
-              </p>
+              <div style={{ marginBottom: "0.65rem" }}>
+                <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
+                  <strong>One-lot mode:</strong> after upload, every photo is merged into a single catalog lot (tape
+                  reads on later frames will not start a new row).
+                </p>
+                <label className="ct-muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                  SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
+                  <input
+                    className="ct-input"
+                    style={{ width: "100%", maxWidth: 360, marginTop: 6, display: "block" }}
+                    value={singleLotManualSku}
+                    onChange={(e) => setSingleLotManualSku(e.target.value)}
+                    placeholder="e.g. 035 or Lot #042"
+                    autoComplete="off"
+                    enterKeyHint="done"
+                  />
+                </label>
+              </div>
             ) : null}
             <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem" }}>
               <strong>
@@ -1160,6 +1181,11 @@ export default function DashboardPage() {
             {job.single_lot_mode ? (
               <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
                 1 lot
+              </span>
+            ) : null}
+            {job.single_lot_manual_sku ? (
+              <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Manual SKU on this job">
+                SKU:{job.single_lot_manual_sku}
               </span>
             ) : null}
             {job.status === "queued" && (
@@ -1354,6 +1380,18 @@ export default function DashboardPage() {
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload.
             </p>
+            <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
+              SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
+              <input
+                className="ct-input"
+                style={{ width: "100%", marginTop: 6, boxSizing: "border-box" }}
+                value={singleLotManualSku}
+                onChange={(e) => setSingleLotManualSku(e.target.value)}
+                placeholder="e.g. 035 or Lot #042"
+                autoComplete="off"
+                enterKeyHint="done"
+              />
+            </label>
             {!lotCameraStream ? (
               <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
             ) : (

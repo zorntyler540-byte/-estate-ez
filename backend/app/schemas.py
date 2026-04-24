@@ -95,6 +95,7 @@ class CreateJobRequest(BaseModel):
     sale_id: str
     inherit_sku_from_subfolder: bool = False
     single_lot_mode: bool = False
+    single_lot_manual_sku: str | None = None
 
 
 class JobOut(BaseModel):
@@ -108,6 +109,7 @@ class JobOut(BaseModel):
     created_at: datetime
     inherit_sku_from_subfolder: bool = False
     single_lot_mode: bool = False
+    single_lot_manual_sku: str | None = None
 
 
 class LotPhotoOut(BaseModel):

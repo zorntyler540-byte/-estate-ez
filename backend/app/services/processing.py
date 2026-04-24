@@ -12,6 +12,7 @@ from app.core.gemini import analyze_path_with_retries, analyze_photos_parallel_a
 from app.core.lotting import (
     LotOutput,
     folder_token_as_inherited_sku,
+    normalize_tape_sku_input,
     sku_digits,
     tape_sku_opens_new_lot,
 )
@@ -22,6 +23,26 @@ from app.services.category_inference import infer_ct_category
 from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+
+
+def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> None:
+    """When the job was created with optional tape/SKU digits, force that SKU on the merged lot."""
+    if not lot or not bool(getattr(job, "single_lot_mode", False)):
+        return
+    raw = getattr(job, "single_lot_manual_sku", None)
+    if not raw:
+        return
+    s = str(raw).strip()
+    if not s:
+        return
+    normalized = normalize_tape_sku_input(s) or sku_digits(s) or None
+    if not normalized:
+        return
+    digits = sku_digits(normalized)
+    if len(digits) < 2 or len(digits) > 12:
+        return
+    lot.sku = digits
+    lot.sku_needs_review = False
 
 
 def _apply_inherit_sku_from_subfolder_name(
@@ -403,6 +424,7 @@ def process_job(
 
     if current_lot is not None:
         _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)
+        _apply_single_lot_manual_sku(job, current_lot)
         current_lot, pending_photo_ids, finalized = _finalize_open_lot(
             db, job.account_id, job.user_id, current_lot, pending_photo_ids, job.sale_id
         )

@@ -83,6 +83,7 @@ def _job_out(job: ProcessingJob) -> JobOut:
         created_at=job.created_at,
         inherit_sku_from_subfolder=bool(job.inherit_sku_from_subfolder),
         single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
+        single_lot_manual_sku=job.single_lot_manual_sku,
     )
 
 
@@ -519,12 +520,14 @@ async def create_job_from_upload(
     files: list[UploadFile] = File(),
     inherit_sku_from_subfolder: bool = Form(False),
     single_lot_mode: bool = Form(False),
+    single_lot_manual_sku: str = Form(""),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     sale = _sale_for_user(sale_id, current, db)
     _require_open_sale(sale)
     dest = new_batch_dir(current.account_id)
     await save_uploaded_files(dest, files)
+    _manual_sku = (single_lot_manual_sku or "").strip() or None
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
@@ -533,6 +536,7 @@ async def create_job_from_upload(
         input_folder=str(dest),
         inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
         single_lot_mode=bool(single_lot_mode),
+        single_lot_manual_sku=_manual_sku,
     )
     db.add(job)
     db.commit()
@@ -548,6 +552,7 @@ def create_job(
 ) -> JobOut:
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
+    _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
@@ -556,6 +561,7 @@ def create_job(
         input_folder=payload.input_folder,
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
         single_lot_mode=bool(payload.single_lot_mode),
+        single_lot_manual_sku=_manual_sku,
     )
     db.add(job)
     db.commit()
