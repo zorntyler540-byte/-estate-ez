@@ -115,6 +115,41 @@ type FolderPickPreview = {
   singleLotMode?: boolean;
 };
 
+/** Merge or replace staged files for one-lot uploads (picker + inline camera). */
+function applySingleLotFilesToStaging(
+  prev: FolderPickPreview | null,
+  incoming: File[],
+  extraSkipped: number
+): FolderPickPreview {
+  const appendSingleLot = Boolean(prev?.singleLotMode);
+  if (appendSingleLot) {
+    const merged = [...prev!.imageFiles, ...incoming];
+    const mergedSkipped = prev!.skippedCount + extraSkipped;
+    if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
+    const forThumbs = merged.slice(0, PREVIEW_THUMB_MAX);
+    const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+    return {
+      folderLabel:
+        merged.length === 1 ? folderLabelFromFile(merged[0]!) : `One lot (${merged.length} photos)`,
+      imageFiles: merged,
+      thumbUrls,
+      skippedCount: mergedSkipped,
+      singleLotMode: true
+    };
+  }
+  if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+  const forThumbs = incoming.slice(0, PREVIEW_THUMB_MAX);
+  const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+  return {
+    folderLabel:
+      incoming.length === 1 ? folderLabelFromFile(incoming[0]!) : `One lot (${incoming.length} photos)`,
+    imageFiles: incoming,
+    thumbUrls,
+    skippedCount: extraSkipped,
+    singleLotMode: true
+  };
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -124,6 +159,14 @@ export default function DashboardPage() {
   /** True after "Create one lot" until multi-file pick, upload, clear, or picker cancel. Used to chain camera opens on mobile. */
   const singleLotCaptureChainingRef = useRef(false);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
+  /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
+  const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const lotCameraStreamRef = useRef<MediaStream | null>(null);
+  const lotCameraSnapsRef = useRef<File[]>([]);
+  const [lotCameraOpen, setLotCameraOpen] = useState(false);
+  const [lotCameraStream, setLotCameraStream] = useState<MediaStream | null>(null);
+  const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
+  const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   const inventoryFirstLoad = useRef(true);
   const [token, setToken] = useState<string>("");
   const [sales, setSales] = useState<Sale[]>([]);
@@ -414,8 +457,21 @@ export default function DashboardPage() {
     return () => {
       const p = folderPickRef.current;
       if (p?.thumbUrls.length) revokeObjectUrls(p.thumbUrls);
+      lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+      lotCameraStreamRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const el = lotCameraVideoRef.current;
+    const s = lotCameraStream;
+    if (!el || !s) return;
+    el.srcObject = s;
+    void el.play().catch(() => {});
+    return () => {
+      el.srcObject = null;
+    };
+  }, [lotCameraStream]);
 
   function clearFolderPick() {
     singleLotCaptureChainingRef.current = false;
@@ -423,6 +479,80 @@ export default function DashboardPage() {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       return null;
     });
+  }
+
+  function stopLotCameraTracks() {
+    lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+    lotCameraStreamRef.current = null;
+    setLotCameraStream(null);
+    setLotCameraOpen(false);
+    setLotCameraPreviewReady(false);
+  }
+
+  function cancelLotCameraSession() {
+    lotCameraSnapsRef.current = [];
+    setLotCameraSnaps([]);
+    stopLotCameraTracks();
+  }
+
+  function finishLotCameraSession() {
+    const files = [...lotCameraSnapsRef.current];
+    lotCameraSnapsRef.current = [];
+    setLotCameraSnaps([]);
+    stopLotCameraTracks();
+    if (!files.length) return;
+    setFolderPick((prev) => applySingleLotFilesToStaging(prev, files, 0));
+  }
+
+  function snapLotPhoto() {
+    const v = lotCameraVideoRef.current;
+    if (!v || v.readyState < 2 || v.videoWidth < 2) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(v, 0, 0);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
+        lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
+        setLotCameraSnaps([...lotCameraSnapsRef.current]);
+      },
+      "image/jpeg",
+      0.88
+    );
+  }
+
+  async function openCreateOneLotFlow() {
+    if (typeof window === "undefined") return;
+    const md = navigator.mediaDevices;
+    if (window.isSecureContext && md?.getUserMedia) {
+      setLotCameraSnaps([]);
+      lotCameraSnapsRef.current = [];
+      setLotCameraPreviewReady(false);
+      setLotCameraOpen(true);
+      try {
+        const stream = await md.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+        lotCameraStreamRef.current = stream;
+        setLotCameraStream(stream);
+      } catch {
+        lotCameraStreamRef.current = null;
+        setLotCameraStream(null);
+        setLotCameraOpen(false);
+        singleLotCaptureChainingRef.current = true;
+        uploadPickModeRef.current = "single_lot";
+        photosInputRef.current?.click();
+      }
+      return;
+    }
+    singleLotCaptureChainingRef.current = true;
+    uploadPickModeRef.current = "single_lot";
+    photosInputRef.current?.click();
   }
 
   function onFolderInputChange(list: FileList | null) {
@@ -452,36 +582,22 @@ export default function DashboardPage() {
       singleLotCaptureChainingRef.current &&
       imageFiles.length === 1;
 
-    setFolderPick((prev) => {
-      const appendSingleLot = Boolean(singleLotMode && prev?.singleLotMode);
-      if (appendSingleLot) {
-        const merged = [...prev!.imageFiles, ...imageFiles];
-        const mergedSkipped = prev!.skippedCount + skippedCount;
-        if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
-        const forThumbs = merged.slice(0, PREVIEW_THUMB_MAX);
+    if (singleLotMode) {
+      setFolderPick((prev) => applySingleLotFilesToStaging(prev, imageFiles, skippedCount));
+    } else {
+      setFolderPick((prev) => {
+        if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+        const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
         const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
         return {
-          folderLabel:
-            merged.length === 1
-              ? folderLabelFromFile(merged[0]!)
-              : `One lot (${merged.length} photos)`,
-          imageFiles: merged,
+          folderLabel: label,
+          imageFiles,
           thumbUrls,
-          skippedCount: mergedSkipped,
-          singleLotMode: true
+          skippedCount,
+          singleLotMode
         };
-      }
-      if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-      const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
-      const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
-      return {
-        folderLabel: label,
-        imageFiles,
-        thumbUrls,
-        skippedCount,
-        singleLotMode
-      };
-    });
+      });
+    }
     if (folderInputRef.current) folderInputRef.current.value = "";
     if (photosInputRef.current) photosInputRef.current.value = "";
 
@@ -864,9 +980,11 @@ export default function DashboardPage() {
           roll/files and process right away.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
-          each becomes its own row. Use <strong>Create one lot…</strong> when every photo is the same listing (angles
-          / details) and you want <strong>one SKU and one row</strong>. <strong>Server path</strong> is for folders
-          already on the machine running the API (no upload).
+          each becomes its own row.           Use <strong>Create one lot…</strong> when every photo is the same listing (angles / details) and you want{" "}
+          <strong>one SKU and one row</strong>. On your phone (HTTPS), that opens an in-page camera so you can{" "}
+          <strong>Snap</strong> many photos before <strong>Done</strong>; if the camera cannot start, the file picker
+          is used instead. <strong>Server path</strong> is for folders already on the machine running the API (no
+          upload).
         </p>
         <label className="ct-row" style={{ gap: "0.5rem", marginBottom: "0.75rem", alignItems: "flex-start" }}>
           <input
@@ -927,11 +1045,7 @@ export default function DashboardPage() {
           className="ct-btn"
           style={{ marginLeft: "0.6rem" }}
           title="All selected images become one catalog row with one SKU"
-          onClick={() => {
-            singleLotCaptureChainingRef.current = true;
-            uploadPickModeRef.current = "single_lot";
-            photosInputRef.current?.click();
-          }}
+          onClick={() => void openCreateOneLotFlow()}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
           Create one lot…
@@ -1197,6 +1311,72 @@ export default function DashboardPage() {
         </tbody>
         </table>
       </div>
+
+      {lotCameraOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Snap photos for one lot"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(0,0,0,0.82)",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "flex-end",
+            padding: "12px",
+            paddingBottom: "max(12px, env(safe-area-inset-bottom))"
+          }}
+        >
+          <div
+            className="ct-card ct-card--padded"
+            style={{ maxWidth: 520, width: "100%", margin: "0 auto", boxSizing: "border-box" }}
+          >
+            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+              Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
+              upload.
+            </p>
+            {!lotCameraStream ? (
+              <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
+            ) : (
+              <video
+                ref={lotCameraVideoRef}
+                autoPlay
+                playsInline
+                muted
+                onLoadedData={() => setLotCameraPreviewReady(true)}
+                style={{
+                  width: "100%",
+                  maxHeight: "min(52vh, 420px)",
+                  borderRadius: 8,
+                  objectFit: "cover",
+                  background: "#111"
+                }}
+              />
+            )}
+            <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
+              <strong>{lotCameraSnaps.length}</strong> photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
+            </p>
+            <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.75rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => snapLotPhoto()}
+                disabled={!lotCameraStream || !lotCameraPreviewReady}
+              >
+                Snap photo
+              </button>
+              <button type="button" className="ct-btn" onClick={() => finishLotCameraSession()}>
+                Done
+              </button>
+              <button type="button" className="ct-btn ct-btn--ghost" onClick={() => cancelLotCameraSession()}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <h2 className="ct-section-title">Exports</h2>
       <div className="ct-card ct-card--padded ct-exports">
