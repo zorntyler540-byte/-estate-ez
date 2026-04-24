@@ -104,7 +104,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
             .all()
         )
         written = 0
-        with zipfile.ZipFile(zip_final, "w", compression=zipfile.ZIP_STORE) as zf:
+        with zipfile.ZipFile(zip_final, "w", compression=zipfile.ZIP_STORED) as zf:
             for li, lot in enumerate(lots, start=1):
                 folder = _lot_folder_slug(lot, li)
                 used_names: set[str] = set()
