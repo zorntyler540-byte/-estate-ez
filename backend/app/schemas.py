@@ -118,3 +118,15 @@ class LotPhotoOut(BaseModel):
     original_name: str
     created_at: datetime
 
+
+class SaleZipExportOut(BaseModel):
+    id: str
+    sale_id: str
+    status: str
+    total_photos_expected: int
+    photo_files_written: int
+    error_message: str | None
+    expires_at: datetime | None
+    created_at: datetime
+    ready: bool = False
+

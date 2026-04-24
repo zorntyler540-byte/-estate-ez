@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Database, FileSpreadsheet, FileText } from "lucide-react";
+import { Archive, Database, FileSpreadsheet, FileText } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
@@ -73,6 +73,18 @@ type Job = {
   inherit_sku_from_subfolder?: boolean;
   single_lot_mode?: boolean;
   single_lot_manual_sku?: string | null;
+};
+
+type SaleZipExport = {
+  id: string;
+  sale_id: string;
+  status: string;
+  total_photos_expected: number;
+  photo_files_written: number;
+  error_message?: string | null;
+  expires_at?: string | null;
+  created_at: string;
+  ready: boolean;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -187,6 +199,8 @@ export default function DashboardPage() {
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
   const [inheritSkuFromSubfolder, setInheritSkuFromSubfolder] = useState(false);
   const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
+  const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
+  const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
   /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
   const [singleLotManualSku, setSingleLotManualSku] = useState("");
@@ -203,6 +217,37 @@ export default function DashboardPage() {
   );
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+
+  useEffect(() => {
+    setSaleZipExport(null);
+  }, [selectedSaleId]);
+
+  useEffect(() => {
+    if (!token || !saleZipExport?.id) return;
+    if (saleZipExport.status !== "queued" && saleZipExport.status !== "processing") return;
+    const id = saleZipExport.id;
+    let cancelled = false;
+    let intervalId: number | undefined;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const row = (await apiFetch(`/exports/sale-photos-zip/${encodeURIComponent(id)}`, token)) as SaleZipExport;
+        if (!cancelled) setSaleZipExport(row);
+        if (row.ready || row.status === "failed") {
+          cancelled = true;
+          if (intervalId !== undefined) window.clearInterval(intervalId);
+        }
+      } catch {
+        /* keep last row; user can refresh */
+      }
+    };
+    intervalId = window.setInterval(() => void tick(), 2500);
+    void tick();
+    return () => {
+      cancelled = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [token, saleZipExport?.id]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -885,6 +930,56 @@ export default function DashboardPage() {
       setError(e instanceof Error ? e.message : "Could not export");
     } finally {
       setExporting("");
+    }
+  }
+
+  async function startSalePhotosZipExport() {
+    if (!token || !selectedSaleId) return;
+    setError("");
+    setSaleZipBusy(true);
+    try {
+      const row = (await apiFetch(
+        `/exports/sale-photos-zip?sale_id=${encodeURIComponent(selectedSaleId)}`,
+        token,
+        { method: "POST" }
+      )) as SaleZipExport;
+      setSaleZipExport(row);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start photo ZIP export");
+    } finally {
+      setSaleZipBusy(false);
+    }
+  }
+
+  async function downloadSaleZipExport() {
+    if (!token || !saleZipExport?.id || !saleZipExport.ready) return;
+    setError("");
+    try {
+      const res = await fetch(
+        `${API_BASE}/exports/sale-photos-zip/${encodeURIComponent(saleZipExport.id)}/download`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store"
+        }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const saleName = sales.find((s) => s.id === selectedSaleId)?.name?.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+      const base = saleName || selectedSaleId || "sale";
+      const fileName = `sale-${base}-photos.zip`;
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not download ZIP");
     }
   }
 
@@ -1630,6 +1725,46 @@ export default function DashboardPage() {
             {exporting === "csv" ? "Downloading..." : "CTBids CSV"}
           </button>
         </div>
+        <hr style={{ border: 0, borderTop: "1px solid var(--ct-border)", margin: "1.1rem 0" }} />
+        <p className="ct-muted" style={{ fontSize: "0.88rem", marginBottom: "0.65rem", maxWidth: "44rem" }}>
+          <strong>All catalog photos for this sale</strong> — one ZIP of originals, <strong>one folder per lot</strong>{" "}
+          (600–3000+ images can take several minutes). Leave this tab open; progress updates every few seconds, then
+          use <strong>Download ZIP</strong>. Per-lot ZIPs stay on each lot’s Details page.
+        </p>
+        <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            className="ct-export-btn"
+            onClick={() => void startSalePhotosZipExport()}
+            disabled={
+              !selectedSaleId ||
+              selectedSaleClosed ||
+              saleZipBusy ||
+              busyProcessing ||
+              saleZipExport?.status === "queued" ||
+              saleZipExport?.status === "processing"
+            }
+          >
+            <Archive size={16} aria-hidden />
+            {saleZipBusy ? "Starting…" : "Prepare sale photos (ZIP)"}
+          </button>
+          {saleZipExport?.ready ? (
+            <button type="button" className="ct-btn ct-btn--primary" onClick={() => void downloadSaleZipExport()}>
+              Download ZIP
+            </button>
+          ) : null}
+        </div>
+        {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
+          <p className="ct-muted" style={{ fontSize: "0.85rem", marginTop: "0.55rem" }}>
+            Building… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+            <strong>{saleZipExport.total_photos_expected}</strong> files in archive
+          </p>
+        ) : null}
+        {saleZipExport?.status === "failed" ? (
+          <p style={{ color: "var(--ct-error)", fontSize: "0.85rem", marginTop: "0.55rem" }}>
+            {saleZipExport.error_message || "Export failed"}
+          </p>
+        ) : null}
       </div>
     </main>
   );

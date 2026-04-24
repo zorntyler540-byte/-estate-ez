@@ -26,7 +26,8 @@ from app.auth import create_access_token, get_current_user, get_current_user_sse
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db
-from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, User
+from app import export_tasks, job_tasks
+from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
     HealthResponse,
@@ -42,8 +43,8 @@ from app.schemas import (
     TokenResponse,
     UserSummary,
     LotPhotoOut,
+    SaleZipExportOut,
 )
-from app import job_tasks
 from app.services import job_events
 from app.services.serialization import (
     lot_ids_with_linked_photos,
@@ -53,6 +54,7 @@ from app.services.serialization import (
     sale_lot_photo_counts,
 )
 from app.services.suggestion_email import send_suggestion_email, smtp_configured
+from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 
@@ -572,6 +574,10 @@ def purge_all_lots(
         .filter(ProcessingJob.account_id == aid, ProcessingJob.user_id == uid)
         .all()
     ]
+    for ex in db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid, SalePhotoZipExport.user_id == uid).all():
+        if ex.zip_path:
+            Path(ex.zip_path).unlink(missing_ok=True)
+    db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid, SalePhotoZipExport.user_id == uid).delete()
     db.query(Photo).filter(Photo.account_id == aid, Photo.user_id == uid).delete()
     db.query(Lot).filter(Lot.account_id == aid, Lot.user_id == uid).delete()
     db.query(ProcessingJob).filter(ProcessingJob.account_id == aid, ProcessingJob.user_id == uid).delete()
@@ -928,4 +934,143 @@ def export_csv(
             ]
         )
     return Response(stream.getvalue(), media_type="text/csv")
+
+
+def _sale_zip_export_out(row: SalePhotoZipExport) -> SaleZipExportOut:
+    ready = bool(
+        row.status == JobStatus.completed
+        and row.zip_path
+        and Path(row.zip_path).is_file()
+    )
+    return SaleZipExportOut(
+        id=row.id,
+        sale_id=row.sale_id,
+        status=row.status.value,
+        total_photos_expected=int(row.total_photos_expected),
+        photo_files_written=int(row.photo_files_written),
+        error_message=row.error_message,
+        expires_at=row.expires_at,
+        created_at=row.created_at,
+        ready=ready,
+    )
+
+
+def _reconcile_stale_sale_zip_export(db: Session, row: SalePhotoZipExport) -> None:
+    now = datetime.now(timezone.utc)
+    if export_tasks.is_sale_zip_export_running(row.id):
+        return
+    if row.status == JobStatus.queued:
+        created = row.created_at
+        if created and (now - created).total_seconds() > 180:
+            row.status = JobStatus.failed
+            row.error_message = row.error_message or "Export never started; try again."
+            db.commit()
+        return
+    if row.status != JobStatus.processing:
+        return
+    if not row.updated_at:
+        return
+    if (now - row.updated_at).total_seconds() > 1200:
+        row.status = JobStatus.failed
+        if not row.error_message:
+            row.error_message = "Export stopped unexpectedly (server restart or crash). Start again."
+        db.commit()
+
+
+@app.post("/exports/sale-photos-zip", response_model=SaleZipExportOut)
+def start_sale_photos_zip_export(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleZipExportOut:
+    """Queue a background ZIP of all catalog photos for lots in this sale (600–3000+ images)."""
+    sale = _sale_for_user(sale_id, current, db)
+    cleanup_expired_sale_zip_exports(db, current.account_id, current.id)
+    in_progress = (
+        db.query(SalePhotoZipExport)
+        .filter(
+            SalePhotoZipExport.sale_id == sale.id,
+            SalePhotoZipExport.user_id == current.id,
+            SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
+        )
+        .order_by(SalePhotoZipExport.created_at.desc())
+        .first()
+    )
+    if in_progress is not None:
+        _reconcile_stale_sale_zip_export(db, in_progress)
+        db.refresh(in_progress)
+        if in_progress.status in (JobStatus.queued, JobStatus.processing):
+            return _sale_zip_export_out(in_progress)
+
+    n = int(
+        count_sale_catalog_photos(db, sale.id, current.account_id, current.id)
+    )
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="No catalog photos in this sale to export.")
+    row = SalePhotoZipExport(
+        account_id=current.account_id,
+        user_id=current.id,
+        sale_id=sale.id,
+        status=JobStatus.queued,
+        total_photos_expected=n,
+        photo_files_written=0,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    try:
+        export_tasks.start_sale_zip_export(row.id, current.account_id)
+    except RuntimeError:
+        row.status = JobStatus.failed
+        row.error_message = "Another export thread conflict; try again."
+        db.commit()
+        db.refresh(row)
+    return _sale_zip_export_out(row)
+
+
+@app.get("/exports/sale-photos-zip/{export_id}", response_model=SaleZipExportOut)
+def get_sale_photos_zip_export(
+    export_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleZipExportOut:
+    row = (
+        db.query(SalePhotoZipExport)
+        .filter(
+            SalePhotoZipExport.id == export_id,
+            SalePhotoZipExport.account_id == current.account_id,
+            SalePhotoZipExport.user_id == current.id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Export not found")
+    _reconcile_stale_sale_zip_export(db, row)
+    db.refresh(row)
+    return _sale_zip_export_out(row)
+
+
+@app.get("/exports/sale-photos-zip/{export_id}/download")
+def download_sale_photos_zip_export(
+    export_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    row = (
+        db.query(SalePhotoZipExport)
+        .filter(
+            SalePhotoZipExport.id == export_id,
+            SalePhotoZipExport.account_id == current.account_id,
+            SalePhotoZipExport.user_id == current.id,
+        )
+        .first()
+    )
+    if row is None or row.status != JobStatus.completed or not row.zip_path:
+        raise HTTPException(status_code=404, detail="ZIP not ready or export not found")
+    p = Path(row.zip_path)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="ZIP file missing on disk")
+    sale = db.query(Sale).filter(Sale.id == row.sale_id).first()
+    slug = re.sub(r"[^\w\-]+", "_", (sale.name if sale else "sale")[:60]).strip("_") or "sale"
+    return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-photos.zip")
 
