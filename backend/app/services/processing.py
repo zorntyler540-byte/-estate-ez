@@ -272,6 +272,7 @@ def process_job(
 
     _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
 
+    single_lot_mode = bool(getattr(job, "single_lot_mode", False))
     prev_batch_key: str | None = None
     for i, (photo_path, payload) in enumerate(zip(photos, payloads)):
         _emit_job(
@@ -291,7 +292,11 @@ def process_job(
             _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
             return
         batch_key = _subfolder_batch_key(folder, photo_path)
-        if prev_batch_key is not None and batch_key != prev_batch_key:
+        if (
+            not single_lot_mode
+            and prev_batch_key is not None
+            and batch_key != prev_batch_key
+        ):
             _apply_inherit_sku_from_subfolder_name(job, current_lot, prev_batch_key)
             current_lot, pending_photo_ids, finalized = _finalize_open_lot(
                 db, job.account_id, job.user_id, current_lot, pending_photo_ids, job.sale_id
@@ -324,6 +329,21 @@ def process_job(
             if verified is not True:
                 lot_candidate.sku = None
                 sku_ok = False
+
+        if single_lot_mode and current_lot is not None:
+            current_lot.merge_detail(payload)
+            row = Photo(
+                account_id=job.account_id,
+                user_id=job.user_id,
+                lot_id=None,
+                original_name=photo_path.name,
+                storage_path=str(photo_path.resolve()),
+            )
+            db.add(row)
+            db.flush()
+            pending_photo_ids.append(row.id)
+            db.commit()
+            continue
 
         if sku_ok:
             lot_candidate.sku = sku_digits(lot_candidate.sku)

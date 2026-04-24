@@ -106,6 +106,7 @@ class ProcessingJob(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     input_folder: Mapped[str] = mapped_column(String(600), nullable=False)
     inherit_sku_from_subfolder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    single_lot_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

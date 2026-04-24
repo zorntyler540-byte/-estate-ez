@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 # revision id must fit alembic_version.version_num (VARCHAR(32) on Postgres default).
-revision = "0009_inherit_sku_subfolder"
+revision = "0009_job_inherit_sku_from_subfolder"
 down_revision = "0008_lot_sku_needs_review"
 branch_labels = None
 depends_on = None

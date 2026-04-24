@@ -82,6 +82,7 @@ def _job_out(job: ProcessingJob) -> JobOut:
         error_message=job.error_message,
         created_at=job.created_at,
         inherit_sku_from_subfolder=bool(job.inherit_sku_from_subfolder),
+        single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
     )
 
 
@@ -517,6 +518,7 @@ async def create_job_from_upload(
     sale_id: str = Form(),
     files: list[UploadFile] = File(),
     inherit_sku_from_subfolder: bool = Form(False),
+    single_lot_mode: bool = Form(False),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     sale = _sale_for_user(sale_id, current, db)
@@ -530,6 +532,7 @@ async def create_job_from_upload(
         status=JobStatus.queued,
         input_folder=str(dest),
         inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
+        single_lot_mode=bool(single_lot_mode),
     )
     db.add(job)
     db.commit()
@@ -552,6 +555,7 @@ def create_job(
         status=JobStatus.queued,
         input_folder=payload.input_folder,
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
+        single_lot_mode=bool(payload.single_lot_mode),
     )
     db.add(job)
     db.commit()

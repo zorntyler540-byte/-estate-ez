@@ -71,6 +71,7 @@ type Job = {
   created_at: string;
   error_message?: string;
   inherit_sku_from_subfolder?: boolean;
+  single_lot_mode?: boolean;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -110,12 +111,16 @@ type FolderPickPreview = {
   imageFiles: File[];
   thumbUrls: string[];
   skippedCount: number;
+  /** When true, this upload is processed as one catalog lot (one SKU row) for every photo. */
+  singleLotMode?: boolean;
 };
 
 export default function DashboardPage() {
   const router = useRouter();
   const folderInputRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
+  /** Next file-picker result: normal batch vs one combined lot. */
+  const uploadPickModeRef = useRef<"batch" | "single_lot">("batch");
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   const inventoryFirstLoad = useRef(true);
   const [token, setToken] = useState<string>("");
@@ -419,17 +424,21 @@ export default function DashboardPage() {
 
   function onFolderInputChange(list: FileList | null) {
     if (!list?.length) return;
+    const pickMode = uploadPickModeRef.current;
+    uploadPickModeRef.current = "batch";
     const all = Array.from(list);
     const imageFiles = all.filter(isCatalogImageFile);
     const skippedCount = all.length - imageFiles.length;
     const label = folderLabelFromFile(all[0]!);
     const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
     const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+    const singleLotMode = pickMode === "single_lot";
     setFolderPick((prev) => {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-      return { folderLabel: label, imageFiles, thumbUrls, skippedCount };
+      return { folderLabel: label, imageFiles, thumbUrls, skippedCount, singleLotMode };
     });
     if (folderInputRef.current) folderInputRef.current.value = "";
+    if (photosInputRef.current) photosInputRef.current.value = "";
   }
 
   async function enqueueJob() {
@@ -444,7 +453,8 @@ export default function DashboardPage() {
         body: JSON.stringify({
           input_folder: folder,
           sale_id: selectedSaleId,
-          inherit_sku_from_subfolder: inheritSkuFromSubfolder
+          inherit_sku_from_subfolder: inheritSkuFromSubfolder,
+          single_lot_mode: false
         })
       });
       setJobs((prev) => [created, ...prev]);
@@ -471,6 +481,7 @@ export default function DashboardPage() {
       const form = new FormData();
       form.append("sale_id", selectedSaleId);
       form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
+      form.append("single_lot_mode", folderPick.singleLotMode ? "true" : "false");
       for (const file of folderPick.imageFiles) {
         const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
         form.append("files", file, rel);
@@ -800,8 +811,9 @@ export default function DashboardPage() {
           roll/files and process right away.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
-          each becomes its own row.           <strong>Server path</strong> is for folders already on the machine running the
-          API (no upload).
+          each becomes its own row. Use <strong>Create one lot…</strong> when every photo is the same listing (angles
+          / details) and you want <strong>one SKU and one row</strong>. <strong>Server path</strong> is for folders
+          already on the machine running the API (no upload).
         </p>
         <label className="ct-row" style={{ gap: "0.5rem", marginBottom: "0.75rem", alignItems: "flex-start" }}>
           <input
@@ -835,7 +847,10 @@ export default function DashboardPage() {
         <button
           type="button"
           className="ct-btn ct-btn--primary"
-          onClick={() => folderInputRef.current?.click()}
+          onClick={() => {
+            uploadPickModeRef.current = "batch";
+            folderInputRef.current?.click();
+          }}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
           Choose photo folder…
@@ -844,13 +859,35 @@ export default function DashboardPage() {
           type="button"
           className="ct-btn"
           style={{ marginLeft: "0.6rem" }}
-          onClick={() => photosInputRef.current?.click()}
+          onClick={() => {
+            uploadPickModeRef.current = "batch";
+            photosInputRef.current?.click();
+          }}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
           Choose photos (phone)…
         </button>
+        <button
+          type="button"
+          className="ct-btn"
+          style={{ marginLeft: "0.6rem" }}
+          title="All selected images become one catalog row with one SKU"
+          onClick={() => {
+            uploadPickModeRef.current = "single_lot";
+            photosInputRef.current?.click();
+          }}
+          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+        >
+          Create one lot…
+        </button>
         {folderPick && (
           <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
+            {folderPick.singleLotMode ? (
+              <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem" }}>
+                <strong>One-lot mode:</strong> after upload, every photo is merged into a single catalog lot (tape reads
+                on later frames will not start a new row).
+              </p>
+            ) : null}
             <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem" }}>
               <strong>
                 {folderPick.imageFiles.length
@@ -889,7 +926,11 @@ export default function DashboardPage() {
                 onClick={() => void uploadStagedFolder()}
                 disabled={uploading || !folderPick.imageFiles.length || !selectedSaleId || selectedSaleClosed}
               >
-                {uploading ? "Uploading…" : `Upload ${folderPick.imageFiles.length} photo(s) to server`}
+                {uploading
+                  ? "Uploading…"
+                  : folderPick.singleLotMode
+                    ? `Upload ${folderPick.imageFiles.length} photo(s) as one lot`
+                    : `Upload ${folderPick.imageFiles.length} photo(s) to server`}
               </button>
               <button type="button" className="ct-btn" onClick={clearFolderPick} disabled={uploading}>
                 Clear selection
@@ -928,6 +969,11 @@ export default function DashboardPage() {
             {job.inherit_sku_from_subfolder ? (
               <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Lot SKUs taken from digit folder names">
                 SKU←folders
+              </span>
+            ) : null}
+            {job.single_lot_mode ? (
+              <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
+                1 lot
               </span>
             ) : null}
             {job.status === "queued" && (
