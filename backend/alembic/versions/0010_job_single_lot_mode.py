@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 revision = "0010_job_single_lot_mode"
-down_revision = "0009_job_inherit_sku_from_subfolder"
+down_revision = "0009_inherit_sku_subfolder"
 branch_labels = None
 depends_on = None
 
