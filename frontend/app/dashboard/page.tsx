@@ -1727,8 +1727,9 @@ export default function DashboardPage() {
         </div>
         <hr style={{ border: 0, borderTop: "1px solid var(--ct-border)", margin: "1.1rem 0" }} />
         <p className="ct-muted" style={{ fontSize: "0.88rem", marginBottom: "0.65rem", maxWidth: "44rem" }}>
-          <strong>All catalog photos for this sale</strong> — one ZIP of originals, <strong>one folder per lot</strong>{" "}
-          (600–3000+ images can take several minutes). Leave this tab open; progress updates every few seconds, then
+          <strong>All catalog photos for this sale</strong> — one ZIP of originals, <strong>one folder per lot SKU</strong>{" "}
+          (e.g. <code>lot-045</code>; lots without a SKU use <code>lot-no-sku-…</code>). Large sales (600–3000+ images)
+          can take several minutes. Leave this tab open; progress updates every few seconds, then
           use <strong>Download ZIP</strong>. Per-lot ZIPs stay on each lot’s Details page.
         </p>
         <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>

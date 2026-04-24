@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.lotting import normalize_tape_sku_input, sku_digits
 from app.models import JobStatus, Lot, Photo, SalePhotoZipExport
 
 EXPORT_ROOT = Path("data") / "exports"
@@ -35,12 +36,30 @@ def count_sale_catalog_photos(db: Session, sale_id: str, account_id: str, user_i
     )
 
 
-def _lot_folder_slug(lot: Lot, lot_index: int) -> str:
-    sku = (lot.sku or "").strip()
-    sku_part = re.sub(r"[^\w\-]+", "_", sku[:40]).strip("_") if sku else ""
-    if not sku_part:
-        sku_part = lot.id.replace("-", "")[:8]
-    return f"lot-{lot_index:04d}-{sku_part}"
+def _lot_folder_name(lot: Lot, used_folders: set[str]) -> str:
+    """
+    One ZIP folder per lot, named from the estate tape / lot SKU (not a sale-wide sequence).
+    Duplicate SKUs in one sale get ``lot-045-2``, etc.
+    """
+    raw = (lot.sku or "").strip()
+    if raw:
+        digits = normalize_tape_sku_input(raw) or sku_digits(raw) or None
+        if digits:
+            candidate = f"lot-{digits}"
+        else:
+            slug = re.sub(r"[^\w.\-]+", "_", raw[:40]).strip("._")
+            candidate = f"lot-{slug}" if slug else f"lot-no-sku-{lot.id.replace('-', '')[:8]}"
+    else:
+        candidate = f"lot-no-sku-{lot.id.replace('-', '')[:8]}"
+    if candidate not in used_folders:
+        used_folders.add(candidate)
+        return candidate
+    for n in range(2, 10000):
+        alt = f"{candidate}-{n}"
+        if alt not in used_folders:
+            used_folders.add(alt)
+            return alt
+    return f"{candidate}-{lot.id.replace('-', '')[:8]}"
 
 
 def _arc_base(original_name: str, photo_index: int, used: set[str]) -> str:
@@ -104,9 +123,10 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
             .all()
         )
         written = 0
+        used_folders: set[str] = set()
         with zipfile.ZipFile(zip_final, "w", compression=zipfile.ZIP_STORED) as zf:
-            for li, lot in enumerate(lots, start=1):
-                folder = _lot_folder_slug(lot, li)
+            for lot in lots:
+                folder = _lot_folder_name(lot, used_folders)
                 used_names: set[str] = set()
                 photos = (
                     db.query(Photo)
