@@ -36,6 +36,16 @@ class SuggestionIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
 
 
+class SuggestionSavedOut(BaseModel):
+    saved_at: str
+    subject: str = ""
+    user_email: str = ""
+    user_id: str = ""
+    account_id: str = ""
+    role: str = ""
+    message: str = ""
+
+
 class SaleOut(BaseModel):
     id: str
     account_id: str

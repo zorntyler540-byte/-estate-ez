@@ -64,3 +64,24 @@ def save_suggestion_local(record: dict[str, str]) -> Path:
     with _SUGGESTION_FALLBACK_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=True) + "\n")
     return _SUGGESTION_FALLBACK_PATH
+
+
+def read_recent_saved_suggestions(limit: int = 50) -> list[dict[str, str]]:
+    """Read most recent locally-saved suggestions from JSONL fallback store."""
+    n = max(1, min(int(limit), 200))
+    if not _SUGGESTION_FALLBACK_PATH.is_file():
+        return []
+    rows: list[dict[str, str]] = []
+    with _SUGGESTION_FALLBACK_PATH.open("r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                obj = json.loads(s)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append({str(k): str(v) for k, v in obj.items() if v is not None})
+    rows.reverse()
+    return rows[:n]

@@ -40,6 +40,7 @@ from app.schemas import (
     SaleOut,
     SaleUpdate,
     SuggestionIn,
+    SuggestionSavedOut,
     TokenResponse,
     UserSummary,
     LotPhotoOut,
@@ -53,7 +54,12 @@ from app.services.serialization import (
     photo_count_outlier_by_lot_id,
     sale_lot_photo_counts,
 )
-from app.services.suggestion_email import save_suggestion_local, send_suggestion_email, smtp_configured
+from app.services.suggestion_email import (
+    read_recent_saved_suggestions,
+    save_suggestion_local,
+    send_suggestion_email,
+    smtp_configured,
+)
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
@@ -201,6 +207,18 @@ def submit_suggestion(payload: SuggestionIn, current: User = Depends(get_current
             detail=f"Could not send email: {exc}",
         ) from exc
     return {"status": "sent"}
+
+
+@app.get("/feedback/suggestions/saved", response_model=list[SuggestionSavedOut])
+def list_saved_suggestions(
+    limit: int = Query(50, ge=1, le=200),
+    current: User = Depends(get_current_user),
+) -> list[SuggestionSavedOut]:
+    """Owner-only view of local fallback suggestions for pilot workflow."""
+    if (current.role or "").strip().lower() != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
+    rows = read_recent_saved_suggestions(limit=limit)
+    return [SuggestionSavedOut(**r) for r in rows]
 
 
 @app.get("/sales", response_model=list[SaleOut])

@@ -12,6 +12,13 @@ type Me = {
   role: string;
 };
 
+type SavedSuggestion = {
+  saved_at: string;
+  subject?: string;
+  user_email?: string;
+  message?: string;
+};
+
 function isAuthFailureMessage(message: string): boolean {
   const m = message.toLowerCase();
   return (
@@ -31,6 +38,9 @@ export default function AccountPage() {
   const [suggestionBusy, setSuggestionBusy] = useState(false);
   const [suggestionError, setSuggestionError] = useState("");
   const [suggestionSentState, setSuggestionSentState] = useState<"" | "sent" | "saved_local">("");
+  const [savedSuggestions, setSavedSuggestions] = useState<SavedSuggestion[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedError, setSavedError] = useState("");
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -79,6 +89,25 @@ export default function AccountPage() {
       setSuggestionBusy(false);
     }
   }
+
+  async function refreshSavedSuggestions() {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    setSavedLoading(true);
+    setSavedError("");
+    try {
+      const rows = (await apiFetch("/feedback/suggestions/saved?limit=25", token)) as SavedSuggestion[];
+      setSavedSuggestions(rows);
+    } catch (e) {
+      setSavedError(e instanceof Error ? e.message : "Could not load saved suggestions");
+    } finally {
+      setSavedLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    void refreshSavedSuggestions();
+  }, [token, me?.id]);
 
   if (!token) {
     return (
@@ -188,11 +217,47 @@ export default function AccountPage() {
           type="button"
           className="ct-btn ct-btn--primary"
           disabled={suggestionBusy || !suggestionText.trim()}
-          onClick={() => void submitSuggestion()}
+          onClick={() =>
+            void submitSuggestion().then(() => {
+              if (me?.role?.toLowerCase() === "owner") void refreshSavedSuggestions();
+            })
+          }
         >
           {suggestionBusy ? "Sending…" : "Send to team"}
         </button>
       </section>
+      {me?.role?.toLowerCase() === "owner" ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h2 className="ct-section-title" style={{ margin: 0 }}>
+              Recent saved suggestions
+            </h2>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void refreshSavedSuggestions()} disabled={savedLoading}>
+              {savedLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          <p className="ct-muted" style={{ marginTop: "0.45rem" }}>
+            Shows fallback entries saved on the server when email delivery is unavailable.
+          </p>
+          {savedError ? <div className="ct-banner ct-banner--error">{savedError}</div> : null}
+          {savedSuggestions.length === 0 ? (
+            <p className="ct-muted" style={{ marginBottom: 0 }}>
+              No saved suggestions yet.
+            </p>
+          ) : (
+            <div className="ct-stack">
+              {savedSuggestions.map((row, i) => (
+                <div key={`${row.saved_at}-${i}`} className="ct-card ct-card--padded">
+                  <p className="ct-muted" style={{ margin: 0, fontSize: "0.8rem" }}>
+                    {new Date(row.saved_at).toLocaleString()} · {row.user_email || "Unknown user"}
+                  </p>
+                  <p style={{ margin: "0.45rem 0 0", whiteSpace: "pre-wrap" }}>{row.message || ""}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
     </main>
   );
 }
