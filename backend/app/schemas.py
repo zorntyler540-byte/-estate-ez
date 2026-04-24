@@ -45,6 +45,15 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(min_length=8, max_length=72)
+
+
+class PasswordResetIn(BaseModel):
+    new_password: str = Field(min_length=8, max_length=72)
+
+
 class SuggestionIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
 

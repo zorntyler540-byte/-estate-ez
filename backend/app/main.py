@@ -35,6 +35,8 @@ from app.schemas import (
     LoginRequest,
     LotOut,
     LotUpdate,
+    PasswordChangeIn,
+    PasswordResetIn,
     RegisterRequest,
     SaleCreate,
     SaleOut,
@@ -176,6 +178,27 @@ def me(current: User = Depends(get_current_user)) -> UserSummary:
     return UserSummary(id=current.id, account_id=current.account_id, email=current.email, role=current.role)
 
 
+@app.patch("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_own_password(
+    payload: PasswordChangeIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different")
+    row = db.query(User).filter(User.id == current.id, User.account_id == current.account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not verify_password(payload.current_password, row.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    try:
+        row.password_hash = hash_password(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get("/team/members", response_model=list[TeamMemberOut])
 def list_team_members(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[TeamMemberOut]:
     _require_owner(current)
@@ -216,6 +239,27 @@ def create_team_member(
     db.commit()
     db.refresh(row)
     return TeamMemberOut(id=row.id, email=row.email, role=row.role, created_at=row.created_at)
+
+
+@app.post("/team/members/{member_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_team_member_password(
+    member_id: str,
+    payload: PasswordResetIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_owner(current)
+    if member_id == current.id:
+        raise HTTPException(status_code=400, detail="Use /auth/password to change your own password")
+    row = db.query(User).filter(User.id == member_id, User.account_id == current.account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Team member not found")
+    try:
+        row.password_hash = hash_password(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/feedback/suggestions")

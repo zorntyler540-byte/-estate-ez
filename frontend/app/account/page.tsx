@@ -55,6 +55,13 @@ export default function AccountPage() {
   const [newMemberPassword, setNewMemberPassword] = useState("");
   const [newMemberRole, setNewMemberRole] = useState<"catalogger" | "owner">("catalogger");
   const [newMemberBusy, setNewMemberBusy] = useState(false);
+  const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
+  const [resetBusyId, setResetBusyId] = useState("");
+  const [selfCurrentPassword, setSelfCurrentPassword] = useState("");
+  const [selfNewPassword, setSelfNewPassword] = useState("");
+  const [selfPasswordBusy, setSelfPasswordBusy] = useState(false);
+  const [selfPasswordMsg, setSelfPasswordMsg] = useState("");
+  const [selfPasswordErr, setSelfPasswordErr] = useState("");
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -162,6 +169,48 @@ export default function AccountPage() {
     }
   }
 
+  async function resetMemberPassword(memberId: string) {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    const next = (resetPasswords[memberId] || "").trim();
+    if (next.length < 8) return;
+    setResetBusyId(memberId);
+    setTeamError("");
+    try {
+      await apiFetch(`/team/members/${memberId}/reset-password`, token, {
+        method: "POST",
+        body: JSON.stringify({ new_password: next })
+      });
+      setResetPasswords((prev) => ({ ...prev, [memberId]: "" }));
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not reset password");
+    } finally {
+      setResetBusyId("");
+    }
+  }
+
+  async function changeOwnPassword() {
+    if (!token) return;
+    const current = selfCurrentPassword;
+    const next = selfNewPassword.trim();
+    if (!current || next.length < 8) return;
+    setSelfPasswordBusy(true);
+    setSelfPasswordErr("");
+    setSelfPasswordMsg("");
+    try {
+      await apiFetch("/auth/password", token, {
+        method: "PATCH",
+        body: JSON.stringify({ current_password: current, new_password: next })
+      });
+      setSelfCurrentPassword("");
+      setSelfNewPassword("");
+      setSelfPasswordMsg("Password updated.");
+    } catch (e) {
+      setSelfPasswordErr(e instanceof Error ? e.message : "Could not update password");
+    } finally {
+      setSelfPasswordBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!token || !me || me.role.toLowerCase() !== "owner") return;
     void refreshTeamMembers();
@@ -235,6 +284,49 @@ export default function AccountPage() {
           </p>
         )}
       </div>
+      <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+        <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+          Password
+        </h2>
+        {selfPasswordMsg ? <div className="ct-banner ct-banner--success">{selfPasswordMsg}</div> : null}
+        {selfPasswordErr ? <div className="ct-banner ct-banner--error">{selfPasswordErr}</div> : null}
+        <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap" }}>
+          <input
+            className="ct-input"
+            style={{ maxWidth: 240, width: "100%" }}
+            type="password"
+            placeholder="Current password"
+            value={selfCurrentPassword}
+            onChange={(e) => {
+              setSelfCurrentPassword(e.target.value);
+              setSelfPasswordErr("");
+              setSelfPasswordMsg("");
+            }}
+            autoComplete="current-password"
+          />
+          <input
+            className="ct-input"
+            style={{ maxWidth: 260, width: "100%" }}
+            type="password"
+            placeholder="New password (min 8)"
+            value={selfNewPassword}
+            onChange={(e) => {
+              setSelfNewPassword(e.target.value);
+              setSelfPasswordErr("");
+              setSelfPasswordMsg("");
+            }}
+            autoComplete="new-password"
+          />
+          <button
+            type="button"
+            className="ct-btn ct-btn--primary"
+            disabled={selfPasswordBusy || !selfCurrentPassword || selfNewPassword.trim().length < 8}
+            onClick={() => void changeOwnPassword()}
+          >
+            {selfPasswordBusy ? "Updating…" : "Update password"}
+          </button>
+        </div>
+      </section>
 
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
@@ -344,6 +436,25 @@ export default function AccountPage() {
                   <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.86rem" }}>
                     Role: {m.role} · Added {new Date(m.created_at).toLocaleString()}
                   </p>
+                  <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.55rem", flexWrap: "wrap" }}>
+                    <input
+                      className="ct-input"
+                      style={{ maxWidth: 260, width: "100%" }}
+                      type="password"
+                      placeholder="Reset password (min 8)"
+                      value={resetPasswords[m.id] || ""}
+                      onChange={(e) => setResetPasswords((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost"
+                      disabled={resetBusyId === m.id || (resetPasswords[m.id] || "").trim().length < 8}
+                      onClick={() => void resetMemberPassword(m.id)}
+                    >
+                      {resetBusyId === m.id ? "Resetting…" : "Reset password"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
