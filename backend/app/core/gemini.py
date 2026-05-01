@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import base64
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +19,32 @@ from app.services.image_preprocess import prepare_gemini_image_file
 
 TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 TRANSIENT_GENAI_CODES = frozenset({408, 429, 502, 503, 504})
+
+_tape_verify_executor: ThreadPoolExecutor | None = None
+
+
+def _tape_verify_executor() -> ThreadPoolExecutor:
+    global _tape_verify_executor
+    if _tape_verify_executor is None:
+        _tape_verify_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tape_verify")
+    return _tape_verify_executor
+
+
+def _shutdown_tape_verify_executor() -> None:
+    global _tape_verify_executor
+    if _tape_verify_executor is not None:
+        _tape_verify_executor.shutdown(wait=False, cancel_futures=False)
+        _tape_verify_executor = None
+
+
+atexit.register(_shutdown_tape_verify_executor)
+
+
+def _tape_verify_prompt_extra() -> str:
+    extra = (settings.tape_verify_prompt_suffix or "").strip()
+    if not extra:
+        return ""
+    return f"\n\nAdditional instructions:\n{extra}"
 
 # --- google-genai structured row: manifest table + estate catalog extensions ---
 
@@ -67,6 +95,15 @@ class InventoryTableEntry(BaseModel):
         default=None,
         validation_alias=AliasChoices("starting_price_usd", "StartingPrice"),
     )
+    lot_boundary_blank_page: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("lot_boundary_blank_page", "lotBoundaryBlankPage"),
+        description=(
+            "True when the frame is mainly a blank white or off-white paper/card used as a studio divider BETWEEN "
+            "lots (no sellable product, no purple tape). False for merchandise, tape-only markers, porcelain, "
+            "labels, or bright glare on an object."
+        ),
+    )
 
 
 class TapeSkuAudit(BaseModel):
@@ -105,6 +142,10 @@ SYSTEM_INSTRUCTION = (
     "Set sku_read_confidence to low or unsure when the tape read is not crisp. "
     "Use condition_notes for numbers not on purple/lavender tape. "
     "After a valid tape sku, later angles of the same item usually have sku null until new tape digits appear. "
+    "Photographers sometimes insert a blank white or off-white paper sheet between lots: when the frame is "
+    "primarily that divider (no product, no tape), set lot_boundary_blank_page true, sku null, and a short "
+    "item_name like 'Blank lot separator'. Purple/lavender tape with handwritten lot digits still marks a new "
+    "lot via sku as before. "
     "Output must match the JSON schema only — dense factual fields, no prose or banter."
 )
 
@@ -136,6 +177,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "strokes.\n"
         "- If there is no qualifying tape lot number, set sku to null.\n"
         "- Same physical lot: additional angles usually have sku null until new purple-tape digits appear.\n"
+        "- lot_boundary_blank_page: true ONLY when the photo is mostly a blank white/off-white divider page/sheet "
+        "between lots (no merchandise, no purple tape). false for product shots, tape-only frames, or white that is "
+        "porcelain/label/fabric. When true, set sku null and item_name to something like 'Blank lot separator'.\n"
         "- item_name must never be empty when the main product is visible: use a short title (e.g. 'Black HDMI DVD player') "
         "or at minimum 'Estate lot' plus digits if sku is set.\n"
         "- labels_and_tags: sizes, fits, care tags only (not long prose).\n"
@@ -173,6 +217,11 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
     }
     if row.sku_read_confidence is not None:
         out["SkuConfidence"] = row.sku_read_confidence
+    if row.lot_boundary_blank_page:
+        out["lot_boundary_blank_page"] = True
+        out["SKU"] = None
+        out["AuctionTitle"] = "Blank lot separator (page)"
+        out["ProfessionalDescription"] = "Separator frame between catalog lots; not a listed item."
     return out
 
 
@@ -347,7 +396,8 @@ def _analyze_photo_rest_from_bytes(
         )
     prompt = _user_prompt(manifest_tag=manifest_tag) + focus_note + (
         "\nReturn JSON with keys: manifest_id, item_name, brand, material, condition_notes, era, "
-        "sku, sku_read_confidence, professional_description, specification_lines, labels_and_tags, starting_price_usd."
+        "sku, sku_read_confidence, professional_description, specification_lines, labels_and_tags, "
+        "starting_price_usd, lot_boundary_blank_page (boolean)."
     )
     parts: list[dict[str, Any]] = [
         {"text": prompt},
@@ -507,6 +557,7 @@ def _verify_tape_sku_sdk(photo_path: Path, claimed_digits: str) -> bool | None:
         "False for digits only on paper, tags, sticky notes, printed labels, OEM text, or on the product body. "
         f"Claimed digits are {claimed_digits!r}; lot_digits_on_tape must match when that handwritten-on-tape marker "
         "is visible. Respond JSON only."
+        + _tape_verify_prompt_extra()
     )
     image_bytes, mime = prepare_gemini_image_file(photo_path, max_edge=4096, quality=92)
     contents = [
@@ -548,7 +599,7 @@ def _verify_tape_sku_sdk(photo_path: Path, claimed_digits: str) -> bool | None:
     return None
 
 
-def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
+def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None:
     sdk = _verify_tape_sku_sdk(photo_path, claimed_digits)
     if sdk is not None:
         return sdk
@@ -559,6 +610,7 @@ def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
         "match the claim — curved side or top rim of a roll counts if handwriting is on tape. "
         "False when matching digits are only on paper, tags, printed labels, or on the product body. "
         f"Claimed lot digits are {claimed_digits!r}. Respond JSON only."
+        + _tape_verify_prompt_extra()
     )
     hi_bytes, hi_mime = prepare_gemini_image_file(photo_path, max_edge=4096, quality=92)
     img_b64 = base64.b64encode(hi_bytes).decode("utf-8")
@@ -596,3 +648,18 @@ def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
         return False
     tape_digits = re.sub(r"\D", "", str(audit.lot_digits_on_tape or ""))
     return bool(tape_digits) and int(tape_digits) == int(claimed_digits)
+
+
+def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
+    """
+    Second-pass audit when the catalog model claims a tape SKU.
+
+    Runs in a worker thread with a wall-clock cap so a hung ``google-genai`` request cannot block
+    the job inventory loop indefinitely.
+    """
+    timeout = float(settings.tape_verify_total_timeout_seconds)
+    fut = _tape_verify_executor().submit(_verify_tape_sku_inner, photo_path, claimed_digits)
+    try:
+        return fut.result(timeout=timeout)
+    except TimeoutError:
+        return None

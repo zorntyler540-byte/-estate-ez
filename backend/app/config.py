@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     tape_focus_enabled: bool = Field(default=True, alias="TAPE_FOCUS_ENABLED")
     last_known_sku_fallback: bool = Field(default=True, alias="LAST_KNOWN_SKU_FALLBACK")
+    # Wall time for one tape-SKU audit (SDK + REST fallback); avoids wedging the job worker on a hung client.
+    tape_verify_total_timeout_seconds: float = Field(
+        default=120.0, ge=30.0, le=600.0, alias="TAPE_VERIFY_TOTAL_TIMEOUT_SECONDS"
+    )
+    # Appended to both tape audit prompts (after the fixed instructions). Newlines allowed.
+    tape_verify_prompt_suffix: str = Field(default="", alias="TAPE_VERIFY_PROMPT_SUFFIX")
 
     # Comma-separated browser origins allowed to call the API (production Next URL). Dev localhost always included.
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")

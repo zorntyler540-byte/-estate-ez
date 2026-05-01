@@ -14,6 +14,7 @@ from app.core.lotting import (
     LotOutput,
     folder_token_as_inherited_sku,
     normalize_tape_sku_input,
+    payload_lot_boundary_blank_page,
     sku_digits,
     tape_sku_opens_new_lot,
 )
@@ -107,6 +108,8 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
     last: str | None = None
     for p in payloads:
         if not p or not isinstance(p, dict):
+            continue
+        if payload_lot_boundary_blank_page(p):
             continue
         conf = str(p.get("SkuConfidence") or p.get("sku_read_confidence") or "").strip().lower()
         raw = p.get("SKU")
@@ -381,8 +384,26 @@ def process_job(
                 db.commit()
             continue
         lot_candidate = LotOutput.from_model(payload)
+        if lot_candidate.lot_boundary_blank_page:
+            if single_lot_mode:
+                continue
+            if current_lot is not None:
+                _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)
+                current_lot, pending_photo_ids, finalized = _finalize_open_lot(
+                    db, job.account_id, job.user_id, current_lot, pending_photo_ids, job.sale_id
+                )
+                db.commit()
+                if finalized is not None:
+                    _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(finalized)})
+            current_lot = None
+            current_lot_folder_batch_key = None
+            continue
+
         sku_ok = tape_sku_opens_new_lot(lot_candidate.sku)
-        if sku_ok and not settings.skip_tape_verify and lot_candidate.sku:
+        # One-lot (mobile) jobs merge every frame; tape-split verification only adds latency and can
+        # mis-trigger on retail packaging digits. The SDK verify path also has no hard timeout and
+        # has wedged workers in production when the API never returns.
+        if sku_ok and not settings.skip_tape_verify and lot_candidate.sku and not single_lot_mode:
             verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
             if verified is not True:
                 lot_candidate.sku = None

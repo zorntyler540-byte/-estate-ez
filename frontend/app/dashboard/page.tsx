@@ -208,10 +208,15 @@ export default function DashboardPage() {
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
   const [showCreateOneLot, setShowCreateOneLot] = useState(false);
+  /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
+  const [jobSseSession, setJobSseSession] = useState(0);
+  const sseRetryAfterErrorRef = useRef(0);
   folderPickRef.current = folderPick;
   selectedSaleIdRef.current = selectedSaleId;
 
   const busyProcessing = jobs.some((j) => j.status === "processing");
+  const busyProcessingRef = useRef(false);
+  busyProcessingRef.current = busyProcessing;
   const processingJobId = useMemo(
     () => jobs.find((j) => j.status === "processing")?.id ?? null,
     [jobs]
@@ -340,10 +345,23 @@ export default function DashboardPage() {
   }, [token, selectedSaleId, router]);
 
   useEffect(() => {
+    const bumpSse = () => {
+      if (document.visibilityState !== "visible" || !busyProcessingRef.current) return;
+      setJobSseSession((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", bumpSse);
+    return () => document.removeEventListener("visibilitychange", bumpSse);
+  }, []);
+
+  useEffect(() => {
     if (!token || loading || !processingJobId) return;
 
     const url = `${API_BASE}/jobs/${processingJobId}/events?access_token=${encodeURIComponent(token)}`;
+    sseRetryAfterErrorRef.current = 0;
     const es = new EventSource(url);
+    es.onopen = () => {
+      sseRetryAfterErrorRef.current = 0;
+    };
 
     const refreshJobsAndLots = () => {
       const sid = selectedSaleIdRef.current;
@@ -462,15 +480,20 @@ export default function DashboardPage() {
         /* ignore */
       }
     };
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     es.onerror = () => {
       es.close();
+      if (sseRetryAfterErrorRef.current >= 12) return;
+      sseRetryAfterErrorRef.current += 1;
+      reconnectTimer = setTimeout(() => setJobSseSession((n) => n + 1), 1800);
     };
     return () => {
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       es.close();
       // Intentionally do not clear photoPendingSlots here: React Strict Mode remounts this effect
       // before the worker finishes, and the server replays recent SSE payloads on reconnect.
     };
-  }, [token, loading, processingJobId]);
+  }, [token, loading, processingJobId, jobSseSession]);
 
   useEffect(() => {
     if (!processingJobId) {
@@ -482,9 +505,11 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || loading || !busyProcessing) return;
 
-    const pollMs = 15000;
+    /** Keep syncing while the phone is locked or Safari is in the background (field use). Slightly slower when hidden to save radio. */
+    const pollMs = () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden" ? 45000 : 12000;
+
     const tick = async () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
         const sid = selectedSaleIdRef.current;
         if (!sid) return;
@@ -505,9 +530,11 @@ export default function DashboardPage() {
     };
 
     void tick();
-    const id = setInterval(() => void tick(), pollMs);
+    let id = setInterval(() => void tick(), pollMs());
     const onVis = () => {
-      if (document.visibilityState === "visible") void tick();
+      void tick();
+      clearInterval(id);
+      id = setInterval(() => void tick(), pollMs());
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -1095,7 +1122,8 @@ export default function DashboardPage() {
           <strong>A job is running.</strong> The lots table shows one <strong>Processing…</strong> row per photo in
           the batch; each slot updates when Gemini finishes that frame, then new catalog rows appear above as{" "}
           <code>lot_ready</code> events arrive. Use <strong>Cancel</strong> on the job row to stop after the current
-          image. Job status also refreshes periodically as a fallback (paused when the tab is hidden).
+          image. Job status also refreshes in the background (slower while the tab is hidden); reopening the tab
+          reconnects the live feed.
         </div>
       )}
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
@@ -1111,7 +1139,9 @@ export default function DashboardPage() {
           and mobile pickers.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
-          each becomes its own row. Use <strong>Create one lot…</strong> on mobile when every photo is the same listing (angles / details) and you want{" "}
+          each becomes its own row. For <strong>one flat folder</strong>, purple tape still marks new lots; a{" "}
+          <strong>blank white divider page</strong> between groups is detected as a lot boundary (that frame is not
+          stored as a product photo). Use <strong>Create one lot…</strong> on mobile when every photo is the same listing (angles / details) and you want{" "}
           <strong>one SKU and one row</strong>. On your phone (HTTPS), that opens an in-page camera so you can{" "}
           <strong>Snap</strong> many photos before <strong>Done</strong>; if the camera cannot start, the file picker
           is used instead. <strong>Server path</strong> is for folders already on the machine running the API (no
