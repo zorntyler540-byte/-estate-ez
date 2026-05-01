@@ -20,24 +20,24 @@ from app.services.image_preprocess import prepare_gemini_image_file
 TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 TRANSIENT_GENAI_CODES = frozenset({408, 429, 502, 503, 504})
 
-_tape_verify_executor: ThreadPoolExecutor | None = None
+_tape_verify_pool: ThreadPoolExecutor | None = None
 
 
-def _tape_verify_executor() -> ThreadPoolExecutor:
-    global _tape_verify_executor
-    if _tape_verify_executor is None:
-        _tape_verify_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tape_verify")
-    return _tape_verify_executor
+def _get_tape_verify_pool() -> ThreadPoolExecutor:
+    global _tape_verify_pool
+    if _tape_verify_pool is None:
+        _tape_verify_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tape_verify")
+    return _tape_verify_pool
 
 
-def _shutdown_tape_verify_executor() -> None:
-    global _tape_verify_executor
-    if _tape_verify_executor is not None:
-        _tape_verify_executor.shutdown(wait=False, cancel_futures=False)
-        _tape_verify_executor = None
+def _shutdown_tape_verify_pool() -> None:
+    global _tape_verify_pool
+    if _tape_verify_pool is not None:
+        _tape_verify_pool.shutdown(wait=False, cancel_futures=False)
+        _tape_verify_pool = None
 
 
-atexit.register(_shutdown_tape_verify_executor)
+atexit.register(_shutdown_tape_verify_pool)
 
 
 def _tape_verify_prompt_extra() -> str:
@@ -658,7 +658,7 @@ def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
     the job inventory loop indefinitely.
     """
     timeout = float(settings.tape_verify_total_timeout_seconds)
-    fut = _tape_verify_executor().submit(_verify_tape_sku_inner, photo_path, claimed_digits)
+    fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_digits)
     try:
         return fut.result(timeout=timeout)
     except TimeoutError:
