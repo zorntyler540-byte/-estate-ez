@@ -27,7 +27,9 @@ def thumbnail_jpeg_bytes(src: Path, max_px: int) -> bytes:
             im_rgb = im.convert("RGB")
         else:
             im_rgb = im
-        im_rgb.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
+        # Bilinear is much faster than LANCZOS for large→small dashboard thumbs; quality is fine at listing sizes.
+        resample = Image.Resampling.BILINEAR if max_px <= 512 else Image.Resampling.LANCZOS
+        im_rgb.thumbnail((max_px, max_px), resample)
         buf = BytesIO()
         im_rgb.save(buf, format="JPEG", quality=86, optimize=True)
         return buf.getvalue()

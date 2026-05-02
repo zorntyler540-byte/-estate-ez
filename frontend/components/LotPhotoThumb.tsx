@@ -40,7 +40,7 @@ export function LotPhotoThumb({ lotId, photoId, token, label, maxPx = 280, minHe
           `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            cache: "no-store",
+            cache: "default",
             signal: ac.signal
           }
         );

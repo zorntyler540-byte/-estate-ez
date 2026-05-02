@@ -23,7 +23,15 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sse_starlette import EventSourceResponse
 
-from app.auth import create_access_token, get_current_user, get_current_user_sse, hash_password, verify_password
+from app.auth import (
+    create_access_token,
+    get_current_user,
+    get_current_user_sse,
+    hash_password,
+    oauth2_scheme,
+    user_from_access_token,
+    verify_password,
+)
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
@@ -491,26 +499,29 @@ def list_lots(
 def lot_thumbnail(
     lot_id: str,
     max_px: int = 220,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
 ) -> Response:
     """First catalog photo for the lot, resized (JPEG). Requires Bearer auth (not usable as bare img src cross-origin)."""
     max_px = min(800, max(64, int(max_px)))
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Lot not found")
-    ph = (
-        db.query(Photo)
-        .filter(
-            Photo.lot_id == lot_id,
-            Photo.account_id == current.account_id,
+    # Short-lived session only: ``thumbnail_jpeg_bytes`` can be slow on large originals — do not hold a pool
+    # connection during Pillow work (concurrent dashboard thumbs exhausted QueuePool in production logs).
+    with SessionLocal() as db:
+        user = user_from_access_token(token, db)
+        row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lot not found")
+        ph = (
+            db.query(Photo)
+            .filter(
+                Photo.lot_id == lot_id,
+                Photo.account_id == user.account_id,
+            )
+            .order_by(Photo.created_at.asc())
+            .first()
         )
-        .order_by(Photo.created_at.asc())
-        .first()
-    )
-    if not ph:
-        raise HTTPException(status_code=404, detail="No image linked to this lot")
-    src = Path(ph.storage_path).resolve()
+        if not ph:
+            raise HTTPException(status_code=404, detail="No image linked to this lot")
+        src = Path(ph.storage_path).resolve()
     if not src.is_file():
         raise HTTPException(status_code=404, detail="Image file missing on disk")
     try:
@@ -522,7 +533,7 @@ def lot_thumbnail(
     return Response(
         content=body,
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=300"},
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 
@@ -670,27 +681,28 @@ def lot_photo_thumbnail(
     lot_id: str,
     photo_id: str,
     max_px: int = 320,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
 ) -> Response:
     """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos`` and extension upload sequence."""
     # Cap high enough for CT Seller / marketplace re-uploads; still bounded to limit abuse.
     max_px = min(2048, max(64, int(max_px)))
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Lot not found")
-    ph = (
-        db.query(Photo)
-        .filter(
-            Photo.id == photo_id,
-            Photo.lot_id == lot_id,
-            Photo.account_id == current.account_id,
+    with SessionLocal() as db:
+        user = user_from_access_token(token, db)
+        row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lot not found")
+        ph = (
+            db.query(Photo)
+            .filter(
+                Photo.id == photo_id,
+                Photo.lot_id == lot_id,
+                Photo.account_id == user.account_id,
+            )
+            .first()
         )
-        .first()
-    )
-    if not ph:
-        raise HTTPException(status_code=404, detail="Photo not found")
-    src = Path(ph.storage_path).resolve()
+        if not ph:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        src = Path(ph.storage_path).resolve()
     if not src.is_file():
         raise HTTPException(status_code=404, detail="Image file missing on disk")
     try:
@@ -702,7 +714,7 @@ def lot_photo_thumbnail(
     return Response(
         content=body,
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=300"},
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 
