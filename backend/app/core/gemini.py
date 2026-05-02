@@ -546,18 +546,8 @@ def analyze_photo(photo_path: Path, *, manifest_tag: str = "") -> dict[str, Any]
     return analyze_path_with_retries(photo_path, manifest_tag=manifest_tag)
 
 
-def _verify_tape_sku_sdk(photo_path: Path, claimed_digits: str) -> bool | None:
-    try:
-        from google.genai import errors as genai_errors  # noqa: PLC0415
-        from google.genai import types as genai_types  # noqa: PLC0415
-    except ImportError:
-        return None
-
-    client = _get_genai_client()
-    if client is None:
-        return None
-
-    prompt = (
+def _tape_verify_prompt(claimed_digits: str) -> str:
+    return (
         "Strict visual audit. Return JSON keys new_lot_from_tape (boolean) and lot_digits_on_tape (string or null). "
         "Set new_lot_from_tape true ONLY when HANDWRITTEN lot digits are visible on PURPLE or LAVENDER ADHESIVE "
         "TAPE (strip or roll) separate from the retail product — including CURVED SIDE or TOP RIM of a tape roll. "
@@ -566,60 +556,39 @@ def _verify_tape_sku_sdk(photo_path: Path, claimed_digits: str) -> bool | None:
         "is visible. Respond JSON only."
         + _tape_verify_prompt_extra()
     )
-    image_bytes, mime = prepare_gemini_image_file(photo_path, max_edge=4096, quality=92)
-    contents = [
-        prompt,
-        genai_types.Part(inline_data=genai_types.Blob(mime_type=mime, data=image_bytes)),
-    ]
-    config = genai_types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=TapeSkuAudit,
-    )
 
-    backoff = 4.0
-    for _ in range(8):
-        try:
-            response = client.models.generate_content(
-                model=settings.gemini_model,
-                contents=contents,
-                config=config,
-            )
-            parsed = response.parsed
-            if isinstance(parsed, TapeSkuAudit):
-                audit = parsed
-            elif parsed is not None:
-                audit = TapeSkuAudit.model_validate(parsed)
-            else:
-                return None
-            if audit.new_lot_from_tape is not True:
-                return False
-            tape_digits = re.sub(r"\D", "", str(audit.lot_digits_on_tape or ""))
-            return bool(tape_digits) and int(tape_digits) == int(claimed_digits)
-        except genai_errors.APIError as exc:
-            if getattr(exc, "code", None) in TRANSIENT_GENAI_CODES:
-                time.sleep(min(backoff, 120))
-                backoff = min(backoff * 2, 120)
-                continue
+
+def _generate_content_tape_verify(payload: dict[str, Any]) -> str | None:
+    """
+    Same endpoint as ``_generate_content`` but uses explicit (connect, read) timeouts so a hung TLS/socket
+    cannot block the inventory worker indefinitely (the old SDK path had no reliable per-call timeout).
+
+    Single POST (no 429 sleep loop): catalog merge must never wait minutes inside one verify call.
+    """
+    headers = {"Content-Type": "application/json", "x-goog-api-key": settings.google_api_key}
+    connect = float(settings.tape_verify_http_connect_seconds)
+    read = float(settings.tape_verify_http_read_seconds)
+    timeout = (connect, read)
+    try:
+        response = requests.post(_model_url(), headers=headers, json=payload, timeout=timeout)
+        if response.status_code in TRANSIENT_HTTP:
             return None
-        except (ValueError, TypeError):
-            return None
-    return None
+        response.raise_for_status()
+        body = response.json()
+        return body["candidates"][0]["content"]["parts"][0]["text"]
+    except requests.Timeout:
+        return None
+    except (requests.RequestException, KeyError, IndexError, ValueError):
+        return None
 
 
 def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None:
-    sdk = _verify_tape_sku_sdk(photo_path, claimed_digits)
-    if sdk is not None:
-        return sdk
-
-    prompt = (
-        "Strict visual audit. Return JSON keys new_lot_from_tape (boolean) and lot_digits_on_tape (string or null). "
-        "True ONLY when HANDWRITTEN lot digits on PURPLE or LAVENDER ADHESIVE TAPE (near the item or on a roll) "
-        "match the claim — curved side or top rim of a roll counts if handwriting is on tape. "
-        "False when matching digits are only on paper, tags, printed labels, or on the product body. "
-        f"Claimed lot digits are {claimed_digits!r}. Respond JSON only."
-        + _tape_verify_prompt_extra()
+    prompt = _tape_verify_prompt(claimed_digits)
+    hi_bytes, hi_mime = prepare_gemini_image_file(
+        photo_path,
+        max_edge=min(2560, max(settings.gemini_image_max_edge, 1536)),
+        quality=min(92, max(settings.gemini_jpeg_quality, 82)),
     )
-    hi_bytes, hi_mime = prepare_gemini_image_file(photo_path, max_edge=4096, quality=92)
     img_b64 = base64.b64encode(hi_bytes).decode("utf-8")
     payload = {
         "contents": [
@@ -632,7 +601,7 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None
         ],
         "generationConfig": {"response_mime_type": "application/json"},
     }
-    text = _generate_content(payload, timeout=90)
+    text = _generate_content_tape_verify(payload)
     if text is None:
         return None
     try:
@@ -661,8 +630,8 @@ def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
     """
     Second-pass audit when the catalog model claims a tape SKU.
 
-    Runs in a worker thread with a wall-clock cap so a hung ``google-genai`` request cannot block
-    the job inventory loop indefinitely.
+    Uses REST ``generateContent`` with bounded connect/read timeouts (not the SDK client, which can
+    hang without a socket deadline). Still wrapped in a thread plus ``fut.result`` as a backstop.
     """
     timeout = float(settings.tape_verify_total_timeout_seconds)
     fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_digits)

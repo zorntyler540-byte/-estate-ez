@@ -61,9 +61,16 @@ class Settings(BaseSettings):
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     tape_focus_enabled: bool = Field(default=True, alias="TAPE_FOCUS_ENABLED")
     last_known_sku_fallback: bool = Field(default=True, alias="LAST_KNOWN_SKU_FALLBACK")
-    # Wall time for one tape-SKU audit (SDK + REST fallback); avoids wedging the job worker on a hung client.
+    # Outer wall time for one tape-SKU audit thread (should exceed HTTP connect+read below).
     tape_verify_total_timeout_seconds: float = Field(
         default=120.0, ge=30.0, le=600.0, alias="TAPE_VERIFY_TOTAL_TIMEOUT_SECONDS"
+    )
+    # Tape verify uses REST ``generateContent`` only (bounded); connect/read timeouts prevent hung sockets.
+    tape_verify_http_connect_seconds: float = Field(
+        default=20.0, ge=5.0, le=120.0, alias="TAPE_VERIFY_HTTP_CONNECT_SECONDS"
+    )
+    tape_verify_http_read_seconds: float = Field(
+        default=75.0, ge=15.0, le=300.0, alias="TAPE_VERIFY_HTTP_READ_SECONDS"
     )
     # Appended to both tape audit prompts (after the fixed instructions). Newlines allowed.
     tape_verify_prompt_suffix: str = Field(default="", alias="TAPE_VERIFY_PROMPT_SUFFIX")
