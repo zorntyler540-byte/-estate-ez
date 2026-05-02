@@ -409,6 +409,26 @@ function buildDescription(lot) {
   return sections.join("\n\n").trim();
 }
 
+/** Full preview block for the side panel — must stay in sync whenever the selected lot changes. */
+function formatLotPreviewText(lot) {
+  if (!lot) return "";
+  const computedDescription = buildDescription(lot);
+  const rawDescription =
+    lot.description || lot.auction_description || lot.ai_description || "";
+  const shownDescription = computedDescription || rawDescription || "-";
+  return [
+    `SKU: ${lot.sku || "-"}`,
+    `Title: ${lot.auction_title || "-"}`,
+    `Category: ${lot.ct_category || "-"}`,
+    `Condition: ${lot.condition_text || "-"}`,
+    `Price: ${lot.starting_price ?? "-"}`,
+    `Photos linked: ${lot.photo_count ?? 0}`,
+    "",
+    "Description:",
+    shownDescription
+  ].join("\n");
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const status = document.getElementById("status");
   const preview = document.getElementById("preview");
@@ -473,15 +493,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (cid) {
         lotBrowser.currentLotId = cid;
         const cachedStatus = String(data[SESSION_UI_KEYS.lastStatus] || "").trim();
-        const cachedPreview = String(data[SESSION_UI_KEYS.lastPreviewText] || "");
         const cachedThumb = String(data[SESSION_UI_KEYS.lastThumbDataUrl] || "").trim();
         if (cachedStatus) status.textContent = cachedStatus;
-        preview.textContent = cachedPreview;
         try {
           const lots = await fetchLots(API_BASE, authToken);
           lotBrowser.lots = lots;
           const lot = lots.find((l) => l?.id === cid);
           if (lot) {
+            preview.textContent = formatLotPreviewText(lot);
             setCurrentLotUI(lot, cachedThumb.startsWith("data:") ? cachedThumb : "");
             void refreshCurrentLotCard(API_BASE, authToken, lot);
           } else {
@@ -571,6 +590,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const { apiBase, token } = creds;
       const lot = await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       await refreshCurrentLotCard(apiBase, token, lot);
+      preview.textContent = formatLotPreviewText(lot);
       const step = await getActiveTabStep();
       if (step !== "detail") {
         status.textContent = `You are on "${step}" step. Go to Detail (Step 1) first.`;
@@ -610,6 +630,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const { apiBase, token } = creds;
       const lot = await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       await refreshCurrentLotCard(apiBase, token, lot);
+      preview.textContent = formatLotPreviewText(lot);
       const step = await getActiveTabStep();
       if (step !== "media") {
         status.textContent = `You are on "${step}" step. Go to Media (Step 3) first.`;
@@ -657,6 +678,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const nextLot = refreshed[idx];
             lotBrowser.currentLotId = nextLot?.id || "";
             nextLabel = nextLot?.sku || nextLot?.id || "";
+            preview.textContent = formatLotPreviewText(nextLot);
             await refreshCurrentLotCard(apiBase, token, nextLot);
           }
         } catch (_err) {
@@ -687,24 +709,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const { apiBase, token } = creds;
       const lot = await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       await refreshCurrentLotCard(apiBase, token, lot);
-      const computedDescription = buildDescription(lot);
-      const rawDescription =
-        lot.description ||
-        lot.auction_description ||
-        lot.ai_description ||
-        "";
-      const shownDescription = computedDescription || rawDescription || "-";
-      preview.textContent = [
-        `SKU: ${lot.sku || "-"}`,
-        `Title: ${lot.auction_title || "-"}`,
-        `Category: ${lot.ct_category || "-"}`,
-        `Condition: ${lot.condition_text || "-"}`,
-        `Price: ${lot.starting_price ?? "-"}`,
-        `Photos linked: ${lot.photo_count ?? 0}`,
-        "",
-        "Description:",
-        shownDescription
-      ].join("\n");
+      preview.textContent = formatLotPreviewText(lot);
       status.textContent = "Preview ready.";
       void persistLotSession();
       await appendActivity(`Previewed lot ${lot.sku || lot.id}`);
@@ -723,6 +728,7 @@ document.addEventListener("DOMContentLoaded", () => {
         await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       }
       const lot = moveCurrentLot(-1);
+      preview.textContent = formatLotPreviewText(lot);
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected previous lot: ${lot?.sku || lot?.id || "-"}`;
       void persistLotSession();
@@ -740,6 +746,7 @@ document.addEventListener("DOMContentLoaded", () => {
         await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       }
       const lot = moveCurrentLot(1);
+      preview.textContent = formatLotPreviewText(lot);
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected next lot: ${lot?.sku || lot?.id || "-"}`;
       void persistLotSession();
