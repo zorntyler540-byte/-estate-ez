@@ -402,10 +402,24 @@ def process_job(
             continue
 
         sku_ok = tape_sku_opens_new_lot(lot_candidate.sku)
+        # ``last_known_sku_fallback`` can copy the tape SKU onto detail frames that never showed tape
+        # in Gemini. Re-running tape verify on those frames is redundant (we already trust the open
+        # lot's marking) and can stall for minutes when the audit model waits on a frame with no tape.
+        continuation_same_tape = (
+            current_lot is not None
+            and bool(lot_candidate.sku)
+            and tape_sku_same_marking(current_lot.sku, lot_candidate.sku)
+        )
         # One-lot (mobile) jobs merge every frame; tape-split verification only adds latency and can
         # mis-trigger on retail packaging digits. The SDK verify path also has no hard timeout and
         # has wedged workers in production when the API never returns.
-        if sku_ok and not settings.skip_tape_verify and lot_candidate.sku and not single_lot_mode:
+        if (
+            sku_ok
+            and not continuation_same_tape
+            and not settings.skip_tape_verify
+            and lot_candidate.sku
+            and not single_lot_mode
+        ):
             verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
             if verified is not True:
                 lot_candidate.sku = None
