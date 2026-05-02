@@ -172,16 +172,18 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-/** Strip markdown-style bullets so Quill does not turn each line into a spaced-out list item. */
+/** Strip markdown-style bullets from API text before we add our own ``- `` prefix for display. */
 function specLinePlainForQuill(item) {
   return String(item || "")
     .trim()
     .replace(/^\s*[-•*·◇►]+\s*/, "");
 }
 
+/** Quill often drops ``<br>`` inside one ``<p>``; tight ``<p>`` per row keeps line breaks without list margins. */
+const CT_DESC_P = ' style="margin:0;padding:0;line-height:1.35"';
+
 /**
- * Plain text for textareas + Quill-safe HTML (one <p> per block, <br> only inside specs — no ``- `` prefix
- * in HTML so CT Seller / Quill does not apply list-item margins between rows).
+ * Plain text for textareas + Quill HTML: narrative in one block; each spec on its own tight ``<p>`` with a leading hyphen.
  * @returns {{ plain: string, html: string }}
  */
 function buildDescriptionPayload(lot) {
@@ -215,18 +217,20 @@ function buildDescriptionPayload(lot) {
   if (brands.length) plainSections.push(`Brands: ${brands.join(", ")}`);
   const plain = plainSections.join("\n").trim();
 
-  const pTight = ' style="margin:0;line-height:1.35"';
   const htmlParts = [];
   if (body) {
-    htmlParts.push(`<p${pTight}>${escapeHtml(body)}</p>`);
+    htmlParts.push(`<p${CT_DESC_P}>${escapeHtml(body)}</p>`);
   }
   if (specItems.length) {
-    const specLines = specItems.map(specLinePlainForQuill).filter(Boolean);
-    const specInner = ["Key Details:", ...specLines].map(escapeHtml).join("<br>");
-    htmlParts.push(`<p${pTight}>${specInner}</p>`);
+    htmlParts.push(`<p${CT_DESC_P}>Key Details:</p>`);
+    for (const raw of specItems) {
+      const line = specLinePlainForQuill(raw);
+      if (!line) continue;
+      htmlParts.push(`<p${CT_DESC_P}>- ${escapeHtml(line)}</p>`);
+    }
   }
   if (brands.length) {
-    htmlParts.push(`<p${pTight}>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
+    htmlParts.push(`<p${CT_DESC_P}>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
   }
   const html = htmlParts.join("");
 
@@ -657,10 +661,10 @@ async function fillDescriptionViaQuillModal(plain, html, warnings) {
           ? html
           : plain
               .split("\n")
-              .map((ln) => specLinePlainForQuill(ln))
+              .map((ln) => ln.trim())
               .filter((ln) => ln.length)
-              .map((ln) => escapeHtml(ln))
-              .join("<br>");
+              .map((ln) => `<p${CT_DESC_P}>${escapeHtml(ln)}</p>`)
+              .join("");
       editor.innerHTML = inner;
       editor.dispatchEvent(new Event("input", { bubbles: true }));
       editor.dispatchEvent(new Event("blur", { bubbles: true }));
