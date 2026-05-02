@@ -149,6 +149,13 @@ class LotPhotoOut(BaseModel):
     lot_id: str
     original_name: str
     created_at: datetime
+    sort_order: int = 0
+
+
+class ReorderLotPhotosIn(BaseModel):
+    """Every catalog photo id for this lot exactly once, in desired display order (left-to-right, then rows)."""
+
+    photo_ids: list[str] = Field(min_length=1, max_length=500)
 
 
 class TransferPhotosIn(BaseModel):

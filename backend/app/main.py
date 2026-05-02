@@ -61,6 +61,7 @@ from app.schemas import (
     UserSummary,
     LotAiRegenerateIn,
     LotPhotoOut,
+    ReorderLotPhotosIn,
     SaleZipExportOut,
     SplitPhotosToNewLotIn,
     SplitPhotosToNewLotOut,
@@ -81,6 +82,7 @@ from app.services.suggestion_email import (
     send_suggestion_email,
     smtp_configured,
 )
+from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
@@ -521,7 +523,7 @@ def lot_thumbnail(
                 Photo.lot_id == lot_id,
                 Photo.account_id == user.account_id,
             )
-            .order_by(Photo.created_at.asc())
+            .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
             .first()
         )
         if not ph:
@@ -563,11 +565,72 @@ def list_lot_photos(
     photos = (
         db.query(Photo)
         .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
-        .order_by(Photo.created_at.asc())
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
     return [
-        LotPhotoOut(id=p.id, lot_id=lot_id, original_name=p.original_name, created_at=p.created_at) for p in photos
+        LotPhotoOut(
+            id=p.id,
+            lot_id=lot_id,
+            original_name=p.original_name,
+            created_at=p.created_at,
+            sort_order=p.sort_order,
+        )
+        for p in photos
+    ]
+
+
+@app.patch("/lots/{lot_id}/photos/reorder", response_model=list[LotPhotoOut])
+def reorder_lot_photos(
+    lot_id: str,
+    body: ReorderLotPhotosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[LotPhotoOut]:
+    """Set display order for all catalog photos on this lot (must list each id exactly once)."""
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    existing = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    existing_ids = [p.id for p in existing]
+    want = list(dict.fromkeys(body.photo_ids))
+    if len(want) != len(existing_ids) or set(want) != set(existing_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="photo_ids must list every catalog photo on this lot exactly once, with no extras.",
+        )
+    for i, pid in enumerate(want):
+        db.execute(
+            update(Photo)
+            .where(
+                Photo.id == pid,
+                Photo.lot_id == lot_id,
+                Photo.account_id == current.account_id,
+            )
+            .values(sort_order=i)
+        )
+    db.commit()
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    return [
+        LotPhotoOut(
+            id=p.id,
+            lot_id=lot_id,
+            original_name=p.original_name,
+            created_at=p.created_at,
+            sort_order=p.sort_order,
+        )
+        for p in photos
     ]
 
 
@@ -590,6 +653,13 @@ def transfer_photos_to_lot(
     ids = list(dict.fromkeys(body.photo_ids))  # stable dedupe
     touched_lots: set[str] = {target_lot_id}
     moved = 0
+    mx = (
+        db.query(func.max(Photo.sort_order))
+        .filter(Photo.lot_id == target_lot_id, Photo.account_id == current.account_id)
+        .scalar()
+    )
+    base = (int(mx) if mx is not None else -1) + 1
+    slot = 0
     for pid in ids:
         ph = db.query(Photo).filter(Photo.id == pid, Photo.account_id == current.account_id).first()
         if not ph:
@@ -609,6 +679,8 @@ def transfer_photos_to_lot(
         touched_lots.add(ph.lot_id)
         ph.lot_id = target_lot_id
         ph.user_id = current.id
+        ph.sort_order = base + slot
+        slot += 1
         moved += 1
 
     if moved == 0:
@@ -618,6 +690,7 @@ def transfer_photos_to_lot(
         )
 
     for lid in touched_lots:
+        renormalize_photo_sort_orders(db, lid, current.account_id)
         _reconcile_lot_photo_count(db, lid, current.account_id)
     db.commit()
 
@@ -698,10 +771,12 @@ def split_selected_photos_into_new_lot(
     db.add(new_lot)
     db.flush()
 
-    for ph in photos_to_move:
+    for i, ph in enumerate(photos_to_move):
         ph.lot_id = new_lot.id
         ph.user_id = current.id
+        ph.sort_order = i
 
+    renormalize_photo_sort_orders(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, new_lot.id, current.account_id)
     db.commit()
@@ -764,6 +839,7 @@ def merge_lot_into_target(
         .values(lot_id=target.id, user_id=current.id)
     )
     db.delete(source)
+    renormalize_photo_sort_orders(db, target.id, current.account_id)
     _reconcile_lot_photo_count(db, target.id, current.account_id)
     db.commit()
     db.refresh(target)
@@ -871,7 +947,7 @@ def download_lot_photos_zip(
     photos = (
         db.query(Photo)
         .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
-        .order_by(Photo.created_at.asc())
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
     if not photos:

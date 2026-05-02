@@ -392,7 +392,12 @@ def _finalize_open_lot(
 def _assign_photos_to_lot(db: Session, lot_id: str, photo_ids: list[str]) -> None:
     if not photo_ids:
         return
-    db.execute(update(Photo).where(Photo.id.in_(photo_ids)).values(lot_id=lot_id))
+    mx = db.query(func.max(Photo.sort_order)).filter(Photo.lot_id == lot_id).scalar()
+    base = (int(mx) if mx is not None else -1) + 1
+    for i, pid in enumerate(photo_ids):
+        db.execute(
+            update(Photo).where(Photo.id == pid).values(lot_id=lot_id, sort_order=base + i)
+        )
 
 
 def _cancel_signaled(
@@ -943,7 +948,7 @@ def run_lot_ai_regenerate_and_save(
         order = {pid: j for j, pid in enumerate(ids)}
         photos.sort(key=lambda p: (order.get(p.id, 999), p.created_at.timestamp()))
     else:
-        photos = q.order_by(Photo.created_at.asc()).all()
+        photos = q.order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc()).all()
 
     if len(photos) > LOT_AI_REGENERATE_MAX_PHOTOS:
         raise ValueError(f"At most {LOT_AI_REGENERATE_MAX_PHOTOS} photos per AI regenerate request.")

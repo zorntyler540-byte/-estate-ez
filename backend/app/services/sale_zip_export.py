@@ -130,7 +130,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                         Photo.lot_id == lot.id,
                         Photo.account_id == row.account_id,
                     )
-                    .order_by(Photo.created_at.asc())
+                    .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
                     .all()
                 )
                 for pi, ph in enumerate(photos, start=1):

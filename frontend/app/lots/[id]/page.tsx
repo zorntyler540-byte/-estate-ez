@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { API_BASE, apiFetch } from "../../../lib/api";
@@ -12,6 +12,7 @@ type LotPhoto = {
   lot_id: string;
   original_name: string;
   created_at: string;
+  sort_order?: number;
 };
 
 type Lot = {
@@ -71,6 +72,9 @@ export default function LotDetailPage() {
   const [splitNewLotTitle, setSplitNewLotTitle] = useState("");
   const [aiRegenerating, setAiRegenerating] = useState(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
+  const [reorderBusy, setReorderBusy] = useState(false);
+  const lastPhotoSelectAnchorRef = useRef<number | null>(null);
+  const dragPhotoIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -154,6 +158,7 @@ export default function LotDetailPage() {
     setMergeSourceId("");
     setOrganizeMsg("");
     setSplitNewLotTitle("");
+    lastPhotoSelectAnchorRef.current = null;
   }, [params.id]);
 
   useEffect(() => {
@@ -336,12 +341,59 @@ export default function LotDetailPage() {
     });
   }
 
+  function handlePhotoCheckboxClick(index: number, photoId: string, e: React.MouseEvent<HTMLInputElement>) {
+    if (e.shiftKey && lastPhotoSelectAnchorRef.current !== null) {
+      const a = lastPhotoSelectAnchorRef.current;
+      const lo = Math.min(a, index);
+      const hi = Math.max(a, index);
+      const rangeIds = catalogPhotos.slice(lo, hi + 1).map((p) => p.id);
+      setSelectedPhotoIds(new Set(rangeIds));
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      togglePhotoSelect(photoId);
+      lastPhotoSelectAnchorRef.current = index;
+      return;
+    }
+    togglePhotoSelect(photoId);
+    lastPhotoSelectAnchorRef.current = index;
+  }
+
+  async function persistCatalogPhotoOrder(orderedIds: string[]) {
+    if (!lot || !token) return;
+    setReorderBusy(true);
+    setError("");
+    try {
+      await apiFetch(`/lots/${encodeURIComponent(lot.id)}/photos/reorder`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ photo_ids: orderedIds })
+      });
+      await refetchLotAndPhotos();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save photo order");
+    } finally {
+      setReorderBusy(false);
+    }
+  }
+
+  function applyPhotoReorder(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    const ids = catalogPhotos.map((p) => p.id);
+    if (fromIndex >= ids.length || toIndex >= ids.length) return;
+    const next = [...ids];
+    const [removed] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, removed);
+    void persistCatalogPhotoOrder(next);
+  }
+
   function selectAllCatalogPhotos() {
     setSelectedPhotoIds(new Set(catalogPhotos.map((p) => p.id)));
+    lastPhotoSelectAnchorRef.current = catalogPhotos.length > 0 ? catalogPhotos.length - 1 : null;
   }
 
   function clearPhotoSelection() {
     setSelectedPhotoIds(new Set());
+    lastPhotoSelectAnchorRef.current = null;
   }
 
   async function refetchLotAndPhotos() {
@@ -534,11 +586,13 @@ export default function LotDetailPage() {
             </span>
           ) : null}
         </h2>
-        <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem", maxWidth: "40rem" }}>
+        <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem", maxWidth: "44rem" }}>
           Same order as{" "}
           <strong style={{ color: "var(--ct-text-muted)" }}>Upload lot photos</strong> in the browser extension —
-          first row left‑to‑right, then the next row. Use <strong>Download all photos (ZIP)</strong> for originals in
-          catalog order (for clients or backups).
+          first row left‑to‑right, then the next row. <strong>Drag</strong> a thumbnail here to change that order
+          (saved for ZIP, extension upload, and AI). <strong>Shift+click</strong> a checkbox to select a range;{" "}
+          <strong>Ctrl/Cmd+click</strong> to add or remove one photo. Use <strong>Download all photos (ZIP)</strong> for
+          originals in catalog order (for clients or backups).
         </p>
         {catalogPhotos.length > 0 ? (
           <div style={{ marginBottom: "1rem" }}>
@@ -579,7 +633,7 @@ export default function LotDetailPage() {
               <button
                 type="button"
                 className="ct-btn ct-btn--ghost"
-                disabled={organizeBusy || catalogPhotos.length === 0}
+                disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
                 onClick={selectAllCatalogPhotos}
               >
                 Select all photos
@@ -587,7 +641,7 @@ export default function LotDetailPage() {
               <button
                 type="button"
                 className="ct-btn ct-btn--ghost"
-                disabled={organizeBusy || selectedPhotoIds.size === 0}
+                disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
                 onClick={clearPhotoSelection}
               >
                 Clear selection
@@ -605,7 +659,7 @@ export default function LotDetailPage() {
                   placeholder='e.g. "SA004 — orange pair"'
                   value={splitNewLotTitle}
                   onChange={(e) => setSplitNewLotTitle(e.target.value)}
-                  disabled={organizeBusy}
+                  disabled={organizeBusy || reorderBusy}
                   autoComplete="off"
                 />
               </label>
@@ -616,7 +670,7 @@ export default function LotDetailPage() {
                 style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
                 value={transferTargetId}
                 onChange={(e) => setTransferTargetId(e.target.value)}
-                disabled={organizeBusy}
+                disabled={organizeBusy || reorderBusy}
               >
                 <option value="">— Destination —</option>
                 <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
@@ -634,6 +688,7 @@ export default function LotDetailPage() {
                 className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
                 disabled={
                   organizeBusy ||
+                  reorderBusy ||
                   selectedPhotoIds.size === 0 ||
                   !transferTargetId ||
                   (transferTargetId === TRANSFER_DEST_NEW_LOT
@@ -642,7 +697,7 @@ export default function LotDetailPage() {
                 }
                 onClick={() => void applyPhotoDestination()}
               >
-                {organizeBusy
+                {organizeBusy || reorderBusy
                   ? "Working…"
                   : transferTargetId === TRANSFER_DEST_NEW_LOT
                     ? "Create new lot"
@@ -676,7 +731,7 @@ export default function LotDetailPage() {
                 style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
                 value={mergeSourceId}
                 onChange={(e) => setMergeSourceId(e.target.value)}
-                disabled={organizeBusy}
+                disabled={organizeBusy || reorderBusy}
               >
                 <option value="">— Lot to absorb —</option>
                 {saleLots
@@ -691,10 +746,10 @@ export default function LotDetailPage() {
               <button
                 type="button"
                 className="ct-btn"
-                disabled={organizeBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
+                disabled={organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
                 onClick={() => void mergeSourceIntoThisLot()}
               >
-                {organizeBusy ? "Working…" : "Merge into this lot"}
+                {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
               </button>
             </div>
             <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
@@ -702,7 +757,7 @@ export default function LotDetailPage() {
                 type="checkbox"
                 checked={mergePreferSourceSku}
                 onChange={(e) => setMergePreferSourceSku(e.target.checked)}
-                disabled={organizeBusy}
+                disabled={organizeBusy || reorderBusy}
               />
               <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
                 Prefer the absorbed lot&apos;s tape SKU (overwrites this lot&apos;s SKU when the other has one)
@@ -733,7 +788,38 @@ export default function LotDetailPage() {
             }}
           >
             {catalogPhotos.map((p, index) => (
-              <figure key={p.id} style={{ margin: 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+              <figure
+                key={p.id}
+                draggable={!organizeBusy && !reorderBusy}
+                onDragStart={(e) => {
+                  dragPhotoIdRef.current = p.id;
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", p.id);
+                }}
+                onDragEnd={() => {
+                  dragPhotoIdRef.current = null;
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromId = e.dataTransfer.getData("text/plain") || dragPhotoIdRef.current;
+                  dragPhotoIdRef.current = null;
+                  if (!fromId) return;
+                  const fromIndex = catalogPhotos.findIndex((x) => x.id === fromId);
+                  if (fromIndex < 0) return;
+                  applyPhotoReorder(fromIndex, index);
+                }}
+                style={{
+                  margin: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.35rem",
+                  cursor: organizeBusy || reorderBusy ? "default" : "grab"
+                }}
+              >
                 <div style={{ position: "relative" }}>
                   <span
                     className="ct-muted"
@@ -755,11 +841,15 @@ export default function LotDetailPage() {
                   </span>
                   <input
                     type="checkbox"
-                    title="Select for move"
+                    title="Select for move (Shift+click range, Ctrl/Cmd+click toggle)"
                     checked={selectedPhotoIds.has(p.id)}
-                    onChange={() => togglePhotoSelect(p.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    disabled={organizeBusy}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (organizeBusy || reorderBusy) return;
+                      handlePhotoCheckboxClick(index, p.id, e);
+                    }}
+                    disabled={organizeBusy || reorderBusy}
                     style={{
                       position: "absolute",
                       top: 6,
