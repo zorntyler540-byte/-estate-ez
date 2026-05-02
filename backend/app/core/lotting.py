@@ -88,28 +88,60 @@ def normalize_listing_lines(value: Any) -> list[str]:
     return out
 
 
+_LEADING_SPEC_BULLET_RE = re.compile(r"^[\s•\-\*·◇►]+")
+_MEASUREMENT_HINT_RE = re.compile(
+    r"\d|inch|inches|\bin\.|\bcm\b|\bmm\b|\bft\b|\bfeet\b|ruler|measuring\s*tape|yardstick|"
+    r"mil ruler|quarter\s*inch|dimensions?|height|width|depth|diameter|circumf|\boz\b|\blbs?\b|\bkg\b",
+    re.I,
+)
+
+
+def _spec_line_comparison_key(line: str) -> str:
+    """Normalize for duplicate detection (bullet style and spacing should not create repeats)."""
+    s = clean_listing_text(line)
+    s = _LEADING_SPEC_BULLET_RE.sub("", s)
+    # Collapse parentheticals that are only style notes so "(see photo)" variants dedupe together.
+    s = re.sub(r"\([^)]{0,120}\)", " ", s)
+    s = s.lower()
+    s = s.replace("×", "x")
+    s = re.sub(r"\s+", " ", s).strip(" .;:,-")
+    return s
+
+
+def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
+    """
+    Drop repeated spec bullets across merged photo frames.
+
+    Uses a stronger normalization than plain lower() so ``- Foo`` and ``• Foo`` collapse once.
+    Lines that look like **measurements or ruler context** (digits, units, ``ruler``, etc.) only dedupe
+    when the normalized key matches exactly, so different per-item sizes stay separate.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in lines:
+        line = clean_listing_text(raw)
+        if not line or _line_has_placeholder_value(line):
+            continue
+        key = _spec_line_comparison_key(line)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+    return out
+
+
 def sanitize_description_unknowns(text: str) -> str:
     """Remove placeholder brand notes and placeholder clauses from prose."""
     s = clean_listing_text(text)
     if not s:
         return s
-    pattern = re.compile(r"(?i)\bnoted brands?:\s*([^.]*)\.")
-    for _ in range(500):
-        m = pattern.search(s)
-        if not m:
+    # Remove "Noted brand(s): …" tails — maker/region belongs in structured ``brands[]`` / specs, not prose.
+    for _ in range(100):
+        new_s = re.sub(r"(?i)\s*,?\s*noted brands?:\s*[^.!?]+(?:[.!?]|$)", "", s)
+        new_s = clean_listing_text(new_s)
+        if new_s == s:
             break
-        raw_list = m.group(1)
-        parts = [clean_listing_text(p) for p in raw_list.split(",")]
-        kept = [p for p in parts if p and not _placeholder_value(p)]
-        replacement = ""
-        if kept:
-            label = "Noted brand" if len(kept) == 1 else "Noted brands"
-            replacement = f"{label}: {', '.join(kept)}."
-        s = f"{s[:m.start()]}{replacement}{s[m.end():]}"
-        s = clean_listing_text(s)
-    else:
-        # Pathological model prose: avoid unbounded loop.
-        s = clean_listing_text(s)
+        s = new_s
     # Remove generic placeholder clauses that leak into prose.
     s = re.sub(r"(?i)\bnoted brand:\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
     s = re.sub(r"(?i)\bbrand(?:\(s\))?\s*(?:is|are|:)?\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
@@ -303,19 +335,14 @@ def brand_appears_in_prose(brand: str, prose: str) -> bool:
 
 
 def weave_brands_into_description(brands: list[str], description: str) -> str:
-    valid_brands = normalize_brand_list(brands)
-    base = sanitize_description_unknowns(description)
-    missing = [b for b in valid_brands if b and not brand_appears_in_prose(b, base)]
-    if not missing:
-        return base
-    # Plain text for CT Seller: avoid markdown-heavy prefixes like "**Brand** -".
-    if len(missing) == 1:
-        suffix = f" Noted brand: {missing[0]}."
-    else:
-        suffix = f" Noted brands: {', '.join(missing)}."
-    if not base:
-        return suffix.strip()
-    return f"{base}{suffix}"
+    """
+    Keep listing prose clean for CT Seller / dashboard.
+
+    Brands and makers are carried in ``brands[]`` and optional spec lines; do **not** append
+    ``Noted brand:`` sentences to ``professional_description`` (users found them noisy / duplicative).
+    """
+    _ = brands  # merge_detail still passes merged brands; structured field remains authoritative.
+    return sanitize_description_unknowns(description)
 
 
 @dataclass
@@ -376,8 +403,10 @@ class LotOutput:
                     )
                 )
             ),
-            specification_lines=normalize_listing_lines(
-                payload.get("SpecificationLines") or payload.get("specification_lines")
+            specification_lines=dedupe_specification_lines_preserve_order(
+                normalize_listing_lines(
+                    payload.get("SpecificationLines") or payload.get("specification_lines")
+                )
             ),
             brands=normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
             labels_and_tags=normalize_listing_lines(
@@ -411,6 +440,7 @@ class LotOutput:
         self.specification_lines, _ = merge_unique_case_insensitive(
             self.specification_lines, detail_specs
         )
+        self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
 
         if added_labels:
             for lab in added_labels:

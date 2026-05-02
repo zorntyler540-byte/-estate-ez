@@ -197,8 +197,13 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- item_name must never be empty when the main product is visible: use a short title (e.g. 'Black HDMI DVD player') "
         "or at minimum 'Estate lot' plus digits if sku is set.\n"
         "- labels_and_tags: sizes, fits, care tags only (not long prose).\n"
-        "- professional_description: include visible brands with **bold** at first mention.\n"
-        "- Use specification_lines for measurable specs; include Model line there if identifiable.\n"
+        "- professional_description: include visible brands with **bold** at first mention. "
+        "Do not end the description with a separate ``Noted brand:`` / ``Noted brands:`` sentence — "
+        "put maker, country, or region in ``brand`` and/or a ``specification_lines`` row (e.g. ``Origin: Czechoslovakia``) "
+        "instead of duplicating that tail in prose.\n"
+        "- Use specification_lines for measurable specs; include Model line there if identifiable. "
+        "When a ruler, yardstick, or scale appears, add one clear measurement line for that item (dimensions, "
+        "length, etc.). Do not repeat the same spec bullet across angles of the same lot — one line per distinct fact.\n"
         "- starting_price_usd: numeric USD estimate if reasonable, else null.\n"
     )
 
