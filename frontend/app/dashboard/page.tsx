@@ -207,6 +207,12 @@ export default function DashboardPage() {
   /** One loading row per catalog photo while the active job runs (SSE). */
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
+  /** Server-reported position in the post-Gemini catalog merge loop (SSE ``inventory_step``). */
+  const [catalogStepProgress, setCatalogStepProgress] = useState<{
+    index: number;
+    total: number;
+    fileName: string;
+  } | null>(null);
   const [showCreateOneLot, setShowCreateOneLot] = useState(false);
   /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
   const [jobSseSession, setJobSseSession] = useState(0);
@@ -223,6 +229,13 @@ export default function DashboardPage() {
   );
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+
+  const geminiAnalyzedCount = useMemo(() => {
+    if (!photoPendingSlots.length) return { done: 0, total: 0 };
+    const total = photoPendingSlots.length;
+    const done = photoPendingSlots.filter((s) => s.status === "analyzed").length;
+    return { done, total };
+  }, [photoPendingSlots]);
 
   useEffect(() => {
     setSaleZipExport(null);
@@ -402,6 +415,7 @@ export default function DashboardPage() {
           const n = msg.total_photos;
           const jid = processingJobId;
           setInInventoryPhase(false);
+          setCatalogStepProgress(null);
           setPhotoPendingSlots(() =>
             Array.from({ length: n }, (_, i) => ({
               id: `${jid}-slot-${i}`,
@@ -458,6 +472,19 @@ export default function DashboardPage() {
         if (msg.type === "batch_phase" && msg.phase === "inventory" && (!msg.job_id || msg.job_id === processingJobId)) {
           setInInventoryPhase(true);
         }
+        if (
+          msg.type === "inventory_step" &&
+          typeof msg.index === "number" &&
+          typeof msg.total === "number" &&
+          processingJobId &&
+          (!msg.job_id || msg.job_id === processingJobId)
+        ) {
+          setCatalogStepProgress({
+            index: msg.index,
+            total: msg.total,
+            fileName: typeof msg.file_name === "string" ? msg.file_name : ""
+          });
+        }
         if (msg.type === "lot_ready" && msg.lot?.id && (!msg.job_id || msg.job_id === processingJobId)) {
           const row = normalizeStreamedLot(msg.lot);
           if (row.sale_id && row.sale_id !== selectedSaleIdRef.current) {
@@ -474,6 +501,7 @@ export default function DashboardPage() {
         if (msg.type === "status" && (msg.status === "completed" || msg.status === "failed")) {
           setPhotoPendingSlots([]);
           setInInventoryPhase(false);
+          setCatalogStepProgress(null);
           refreshJobsAndLots();
         }
       } catch {
@@ -499,6 +527,7 @@ export default function DashboardPage() {
     if (!processingJobId) {
       setPhotoPendingSlots([]);
       setInInventoryPhase(false);
+      setCatalogStepProgress(null);
     }
   }, [processingJobId]);
 
@@ -1124,6 +1153,33 @@ export default function DashboardPage() {
           <code>lot_ready</code> events arrive. Use <strong>Cancel</strong> on the job row to stop after the current
           image. Job status also refreshes in the background (slower while the tab is hidden); reopening the tab
           reconnects the live feed.
+          {geminiAnalyzedCount.total > 0 && !inInventoryPhase ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
+              <strong>Gemini pass:</strong> {geminiAnalyzedCount.done} / {geminiAnalyzedCount.total} photos analyzed
+              {geminiAnalyzedCount.done < geminiAnalyzedCount.total
+                ? " — counters should advance every few seconds while the API is healthy."
+                : " — finished; merging into catalog next."}
+            </p>
+          ) : null}
+          {inInventoryPhase ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
+              <strong>Catalog merge:</strong>{" "}
+              {catalogStepProgress ? (
+                <>
+                  photo {catalogStepProgress.index + 1} of {catalogStepProgress.total}
+                  {catalogStepProgress.fileName ? (
+                    <>
+                      {" "}
+                      — <code style={{ fontSize: "0.88em" }}>{catalogStepProgress.fileName}</code>
+                    </>
+                  ) : null}
+                  . If this number stalls for several minutes, check API logs or cancel and retry.
+                </>
+              ) : (
+                <>starting (waiting for first frame from server)…</>
+              )}
+            </p>
+          ) : null}
         </div>
       )}
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
