@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -400,15 +401,47 @@ def delete_sale(
 
 @app.get("/lots", response_model=list[LotOut])
 def list_lots(
+    response: Response,
     sale_id: str | None = Query(None, description="When set, only lots for this sale."),
+    sort: str = Query(
+        "created_desc",
+        description="created_desc (default), created_asc (oldest first), or sku_asc.",
+    ),
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=500,
+        description="When set, return at most this many rows after offset; response includes X-Total-Count.",
+    ),
+    offset: int = Query(0, ge=0, le=100_000),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[LotOut]:
+    sort_key = (sort or "created_desc").strip().lower()
+    if sort_key not in ("created_desc", "created_asc", "sku_asc"):
+        raise HTTPException(status_code=400, detail="sort must be created_desc, created_asc, or sku_asc")
+
     q = db.query(Lot).filter(Lot.account_id == current.account_id)
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
-    rows = q.order_by(Lot.created_at.desc()).all()
+
+    if sort_key == "created_asc":
+        q = q.order_by(Lot.created_at.asc())
+    elif sort_key == "sku_asc":
+        q = q.order_by(nullslast(Lot.sku.asc()), Lot.created_at.asc())
+    else:
+        q = q.order_by(Lot.created_at.desc())
+
+    if limit is not None:
+        total_stmt = select(func.count()).select_from(Lot).where(Lot.account_id == current.account_id)
+        if sale_id is not None:
+            total_stmt = total_stmt.where(Lot.sale_id == sale_id)
+        total = int(db.scalar(total_stmt) or 0)
+        response.headers["X-Total-Count"] = str(total)
+        rows = q.offset(offset).limit(limit).all()
+    else:
+        rows = q.all()
     lot_ids = [r.id for r in rows]
     thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     counts = [r.photo_count for r in rows]

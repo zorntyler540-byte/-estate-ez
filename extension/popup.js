@@ -19,6 +19,11 @@ const MAX_THUMB_STORAGE_CHARS = 480_000;
 /** JPEG long edge for extension → CT Seller (avoids multi‑MB originals that time out behind Railway). */
 const EXTENSION_UPLOAD_THUMB_MAX = 1600;
 
+/** Align with dashboard / CT Seller walk order (oldest lot first). API must support ``sort`` (newer backends). */
+const EXTENSION_LOTS_SORT = "created_asc";
+/** Page size when API returns ``X-Total-Count`` (paginated ``limit``/``offset``). */
+const EXTENSION_LOTS_PAGE_SIZE = 200;
+
 const API_BASE = "https://caringtransitions-ai-production.up.railway.app";
 
 const lotBrowser = {
@@ -111,37 +116,71 @@ async function fetchWithRetry(url, init, attempts = 3) {
   throw lastErr;
 }
 
+function _lotsQueryParams(saleId, offset, pageSize) {
+  const p = new URLSearchParams();
+  p.set("sort", EXTENSION_LOTS_SORT);
+  p.set("limit", String(pageSize));
+  p.set("offset", String(offset));
+  if (saleId) p.set("sale_id", saleId);
+  return p.toString();
+}
+
 async function fetchLots(apiBase, token) {
-  let url = `${apiBase}/lots`;
   const sid = String(lotBrowser.preferredSaleId || "").trim();
-  if (sid) {
-    url += `?sale_id=${encodeURIComponent(sid)}`;
-  }
-  let res = await fetchWithRetry(url, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `API ${res.status}`);
-  }
-  let lots = await res.json();
-  if ((!Array.isArray(lots) || lots.length === 0) && sid) {
-    lotBrowser.preferredSaleId = "";
-    await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
-    url = `${apiBase}/lots`;
-    res = await fetchWithRetry(url, {
+
+  async function fetchOnce(queryString) {
+    const url = `${apiBase}/lots?${queryString}`;
+    const res = await fetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || `API ${res.status}`);
     }
-    lots = await res.json();
+    const lots = await res.json();
+    const totalHdr = res.headers.get("X-Total-Count");
+    const total = totalHdr != null && totalHdr !== "" ? parseInt(totalHdr, 10) : NaN;
+    return { lots: Array.isArray(lots) ? lots : [], total };
   }
-  if (!Array.isArray(lots) || lots.length === 0) {
+
+  let merged = [];
+  let offset = 0;
+  for (;;) {
+    const { lots, total } = await fetchOnce(_lotsQueryParams(sid, offset, EXTENSION_LOTS_PAGE_SIZE));
+    if (!Number.isFinite(total)) {
+      merged = lots;
+      break;
+    }
+    merged.push(...lots);
+    if (lots.length === 0 || merged.length >= total || lots.length < EXTENSION_LOTS_PAGE_SIZE) {
+      break;
+    }
+    offset += EXTENSION_LOTS_PAGE_SIZE;
+  }
+
+  if ((!merged.length || !Array.isArray(merged)) && sid) {
+    lotBrowser.preferredSaleId = "";
+    await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
+    merged = [];
+    offset = 0;
+    for (;;) {
+      const { lots, total } = await fetchOnce(_lotsQueryParams("", offset, EXTENSION_LOTS_PAGE_SIZE));
+      if (!Number.isFinite(total)) {
+        merged = lots;
+        break;
+      }
+      merged.push(...lots);
+      if (lots.length === 0 || merged.length >= total || lots.length < EXTENSION_LOTS_PAGE_SIZE) {
+        break;
+      }
+      offset += EXTENSION_LOTS_PAGE_SIZE;
+    }
+  }
+
+  if (!Array.isArray(merged) || merged.length === 0) {
     throw new Error("No lots returned — create or select inventory in the Estate app first.");
   }
-  return lots;
+  return merged;
 }
 
 function firstOpenIndex(lots) {

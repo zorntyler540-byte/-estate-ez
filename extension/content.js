@@ -54,6 +54,12 @@ function setReactFriendlyValue(el, value) {
   return true;
 }
 
+/** Step tabs must not treat ``51`` / ``103`` as step ``1`` / ``3`` (substring ``includes`` on digits). */
+function isolatedStepDigit(text, digit) {
+  const d = String(digit);
+  return new RegExp(`(?:^|[^0-9])${d}(?:[^0-9]|$)`).test(text);
+}
+
 function detectCtSellerStep() {
   const stepNodes = Array.from(document.querySelectorAll("button, a, div, span"));
   let best = { step: "unknown", score: 0 };
@@ -63,9 +69,12 @@ function detectCtSellerStep() {
     const cls = normalizeText(node.className || "");
     const activeHint = cls.includes("active") || cls.includes("current") || cls.includes("selected");
     const bonus = activeHint ? 3 : 0;
-    if (t.includes("1") && t.includes("detail") && bonus + 1 > best.score) best = { step: "detail", score: bonus + 1 };
-    if (t.includes("2") && t.includes("setting") && bonus + 1 > best.score) best = { step: "settings", score: bonus + 1 };
-    if (t.includes("3") && t.includes("media") && bonus + 1 > best.score) best = { step: "media", score: bonus + 1 };
+    const d1 = isolatedStepDigit(t, "1") || /\bstep\s*1\b/i.test(t);
+    const d2 = isolatedStepDigit(t, "2") || /\bstep\s*2\b/i.test(t);
+    const d3 = isolatedStepDigit(t, "3") || /\bstep\s*3\b/i.test(t);
+    if (d1 && t.includes("detail") && bonus + 1 > best.score) best = { step: "detail", score: bonus + 1 };
+    if (d2 && t.includes("setting") && bonus + 1 > best.score) best = { step: "settings", score: bonus + 1 };
+    if (d3 && t.includes("media") && bonus + 1 > best.score) best = { step: "media", score: bonus + 1 };
   }
   if (best.step !== "unknown") return best.step;
   const pageText = normalizeText(document.body?.innerText || "");
