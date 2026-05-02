@@ -810,8 +810,14 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != JobStatus.queued:
-        raise HTTPException(status_code=409, detail="Job must be queued to run")
+    if job.status == JobStatus.failed:
+        job.status = JobStatus.queued
+        job.error_message = None
+        job.cancel_requested = False
+        db.commit()
+        db.refresh(job)
+    elif job.status != JobStatus.queued:
+        raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
     try:
         job_tasks.start_job_in_background(job.id, current.account_id)
     except RuntimeError as exc:

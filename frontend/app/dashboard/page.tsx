@@ -1331,9 +1331,14 @@ export default function DashboardPage() {
                 SKU:{job.single_lot_manual_sku}
               </span>
             ) : null}
-            {job.status === "queued" && (
-              <button type="button" className="ct-btn ct-btn--primary" onClick={() => void runJob(job.id)} disabled={busyProcessing}>
-                Run now
+            {(job.status === "queued" || job.status === "failed") && (
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => void runJob(job.id)}
+                disabled={busyProcessing}
+              >
+                {job.status === "failed" ? "Run again" : "Run now"}
               </button>
             )}
             {job.status === "processing" && (
