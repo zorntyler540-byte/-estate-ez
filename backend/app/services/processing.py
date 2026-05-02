@@ -28,6 +28,10 @@ from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 
+# Set by ``_apply_last_known_sku_fallback`` when SKU was copied from a prior frame (not read on this image).
+# Must not open lots or run tape verify — otherwise stale digits + new lot SKU causes spurious verify stalls.
+_CT_SKU_INJECTED_FALLBACK_KEY = "_ct_sku_injected_fallback"
+
 
 _TITLE_WORD_RE = re.compile(r"[a-z0-9]+", re.I)
 _TITLE_STOPWORDS = {
@@ -100,10 +104,16 @@ def _apply_inherit_sku_from_subfolder_name(
 def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
     """
     Walk photos in file order: when this frame has no sku digits at all, reuse the last
-    high/medium-confidence tape sku from an earlier frame in the same job.
+    tape sku from an earlier frame in the same job.
 
     Never overwrites sku digits already returned for a frame — clothing lots often have a correct
     tape read (e.g. 034) marked low/unsure on a wide shot; an earlier misread (e.g. 006) must not replace it.
+
+    Injected rows are tagged with ``_CT_SKU_INJECTED_FALLBACK_KEY`` so the inventory pass does not
+    treat them as a fresh tape read (avoids spurious tape-verify API calls and lot splits).
+
+    ``last`` still advances on low/unsure when the explicit digits change, so a new lot tape (e.g.
+    SA013) is not followed by empty frames that keep reusing the previous lot's digits (e.g. 001).
     """
     if not settings.last_known_sku_fallback:
         return
@@ -118,9 +128,16 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
         sku_clean = sku_digits(raw) if raw not in (None, "") else None
         if not sku_clean and last:
             p["SKU"] = last
+            p[_CT_SKU_INJECTED_FALLBACK_KEY] = True
         sku_after = sku_digits(p.get("SKU")) if p.get("SKU") not in (None, "") else None
-        if sku_after and conf not in ("low", "unsure"):
-            last = sku_after
+        if sku_after:
+            # Always advance on high/medium confidence.
+            if conf not in ("low", "unsure"):
+                last = sku_after
+            # Low/unsure but digits changed: still advance ``last`` so the chain does not keep an
+            # older lot's digits after the model clearly moved to a new tape (e.g. SA001 → SA013).
+            elif last is None or sku_after != last:
+                last = sku_after
 
 
 def _subfolder_batch_key(job_folder: Path, photo_path: Path) -> str:
@@ -386,6 +403,10 @@ def process_job(
                 db.commit()
             continue
         lot_candidate = LotOutput.from_model(payload)
+        if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
+            # Injected SKU is for display/continuity only — not a new tape read on this frame.
+            lot_candidate.sku = None
+            lot_candidate.sku_needs_review = False
         if lot_candidate.lot_boundary_blank_page:
             if single_lot_mode:
                 continue
