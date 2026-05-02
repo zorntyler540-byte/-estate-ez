@@ -26,6 +26,7 @@ from sqlalchemy import update
 
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
+from app.services.image_preprocess import normalize_job_folder_image
 from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
@@ -421,10 +422,21 @@ def process_job(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    photos = sorted(
+    raw_photos = sorted(
         [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
         key=lambda p: str(p).lower(),
     )
+    # Folder jobs may point at originals (server path) or pre-compressed uploads; normalize only when
+    # EXIF orientation / HEIC still require it so catalog pixels are upright without re-saving every JPEG.
+    seen_paths: set[str] = set()
+    photos: list[Path] = []
+    for p in raw_photos:
+        np = normalize_job_folder_image(folder, p)
+        key = str(np.resolve())
+        if key not in seen_paths:
+            seen_paths.add(key)
+            photos.append(np)
+    photos = sorted(photos, key=lambda p: str(p).lower())
     if not photos:
         job.status = JobStatus.failed
         job.error_message = "No supported images found in that folder (JPEG, PNG, WebP, HEIC)"

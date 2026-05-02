@@ -88,3 +88,67 @@ def compress_upload_bytes_if_image(
         return bytes_to_gemini_jpeg(data, max_edge=max_edge, quality=quality), raw_name
     except Exception:
         return data, raw_name
+
+
+def image_bytes_need_orientation_reencode(data: bytes, filename: str) -> bool:
+    """
+    True when re-encoding would apply EXIF orientation or HEIC→JPEG — avoids double-compressing
+    already-upright catalog bytes from a prior successful upload.
+    """
+    ext = Path((filename or "").replace("\\", "/").lstrip("/")).suffix.lower()
+    if ext in (".heic", ".heif"):
+        return True
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as im:
+            exif = im.getexif()
+            if not exif:
+                return False
+            ori = exif.get(274)
+            if ori is None:
+                return False
+            return int(ori) != 1
+    except Exception:
+        return True
+
+
+def normalize_job_folder_image(job_folder: Path, photo_path: Path) -> Path:
+    """
+    For images in a job input folder (browser folder upload or server path), rewrite files that still
+    rely on EXIF orientation (or HEIC) so ``Photo.storage_path`` pixels match upright display.
+
+    Returns the path to use for processing (may change when ``.heic`` becomes ``.jpg``).
+    """
+    job_folder = job_folder.resolve()
+    photo_path = photo_path.resolve()
+    try:
+        rel = photo_path.relative_to(job_folder)
+    except ValueError:
+        return photo_path
+    rel_key = rel.as_posix()
+    try:
+        body = photo_path.read_bytes()
+    except OSError:
+        return photo_path
+    if not image_bytes_need_orientation_reencode(body, rel_key):
+        return photo_path
+    try:
+        out_body, stor_name = compress_upload_bytes_if_image(body, rel_key)
+    except (ValueError, OSError):
+        return photo_path
+    except Exception:
+        return photo_path
+    out_rel = Path(stor_name.replace("\\", "/").lstrip("/"))
+    target = (job_folder / out_rel).resolve()
+    try:
+        target.relative_to(job_folder)
+    except ValueError:
+        return photo_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.resolve() != photo_path.resolve() and photo_path.exists():
+        photo_path.unlink(missing_ok=True)
+    target.write_bytes(out_body)
+    return target
