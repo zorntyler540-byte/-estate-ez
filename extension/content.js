@@ -172,8 +172,16 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+/** Strip markdown-style bullets so Quill does not turn each line into a spaced-out list item. */
+function specLinePlainForQuill(item) {
+  return String(item || "")
+    .trim()
+    .replace(/^\s*[-•*·◇►]+\s*/, "");
+}
+
 /**
- * Plain text for textareas + Quill-safe HTML (one <p> for Key Details so bullets are <br>-separated, not double-spaced blocks).
+ * Plain text for textareas + Quill-safe HTML (one <p> per block, <br> only inside specs — no ``- `` prefix
+ * in HTML so CT Seller / Quill does not apply list-item margins between rows).
  * @returns {{ plain: string, html: string }}
  */
 function buildDescriptionPayload(lot) {
@@ -207,13 +215,19 @@ function buildDescriptionPayload(lot) {
   if (brands.length) plainSections.push(`Brands: ${brands.join(", ")}`);
   const plain = plainSections.join("\n").trim();
 
+  const pTight = ' style="margin:0;line-height:1.35"';
   const htmlParts = [];
-  if (body) htmlParts.push(`<p>${escapeHtml(body)}</p>`);
-  if (specItems.length) {
-    const specInner = ["Key Details:", ...specItems.map((item) => `- ${item}`)].map(escapeHtml).join("<br>");
-    htmlParts.push(`<p>${specInner}</p>`);
+  if (body) {
+    htmlParts.push(`<p${pTight}>${escapeHtml(body)}</p>`);
   }
-  if (brands.length) htmlParts.push(`<p>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
+  if (specItems.length) {
+    const specLines = specItems.map(specLinePlainForQuill).filter(Boolean);
+    const specInner = ["Key Details:", ...specLines].map(escapeHtml).join("<br>");
+    htmlParts.push(`<p${pTight}>${specInner}</p>`);
+  }
+  if (brands.length) {
+    htmlParts.push(`<p${pTight}>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
+  }
   const html = htmlParts.join("");
 
   return { plain, html };
@@ -642,10 +656,11 @@ async function fillDescriptionViaQuillModal(plain, html, warnings) {
         html && html.length
           ? html
           : plain
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/\n/g, "<br>");
+              .split("\n")
+              .map((ln) => specLinePlainForQuill(ln))
+              .filter((ln) => ln.length)
+              .map((ln) => escapeHtml(ln))
+              .join("<br>");
       editor.innerHTML = inner;
       editor.dispatchEvent(new Event("input", { bubbles: true }));
       editor.dispatchEvent(new Event("blur", { bubbles: true }));
