@@ -9,6 +9,9 @@ import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
+/** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
+const UPLOAD_FILE_CHUNK = 200;
+
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("token") || "";
@@ -229,6 +232,8 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  /** Shown during multi-request folder uploads (large batches). */
+  const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
   const [inheritSkuFromSubfolder, setInheritSkuFromSubfolder] = useState(false);
   const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
@@ -857,22 +862,55 @@ export default function DashboardPage() {
       return;
     }
     setError("");
+    setUploadProgress("");
+    const files = folderPick.imageFiles;
+    const total = files.length;
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("sale_id", selectedSaleId);
-      form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
-      form.append("single_lot_mode", folderPick.singleLotMode ? "true" : "false");
-      if (folderPick.singleLotMode && singleLotManualSku.trim()) {
-        form.append("single_lot_manual_sku", singleLotManualSku.trim());
+      const buildFormForSlice = (slice: File[]) => {
+        const form = new FormData();
+        form.append("sale_id", selectedSaleId);
+        form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
+        form.append("single_lot_mode", folderPick.singleLotMode ? "true" : "false");
+        if (folderPick.singleLotMode && singleLotManualSku.trim()) {
+          form.append("single_lot_manual_sku", singleLotManualSku.trim());
+        }
+        for (const file of slice) {
+          const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+          form.append("files", file, rel);
+        }
+        return form;
+      };
+
+      let created: Job;
+      if (total <= UPLOAD_FILE_CHUNK) {
+        created = (await apiUploadFiles("/jobs/upload", token, buildFormForSlice(files))) as Job;
+      } else {
+        const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
+        setUploadProgress(`Uploading batch 1/${batchCount} (${Math.min(UPLOAD_FILE_CHUNK, total)} of ${total} files)…`);
+        const first = files.slice(0, UPLOAD_FILE_CHUNK);
+        created = (await apiUploadFiles("/jobs/upload", token, buildFormForSlice(first))) as Job;
+        let uploaded = first.length;
+        let batchIndex = 2;
+        while (uploaded < total) {
+          const slice = files.slice(uploaded, uploaded + UPLOAD_FILE_CHUNK);
+          setUploadProgress(
+            `Uploading batch ${batchIndex}/${batchCount} (${slice.length} files, ${uploaded + slice.length}/${total} total)…`
+          );
+          const form = new FormData();
+          for (const file of slice) {
+            const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+            form.append("files", file, rel);
+          }
+          created = (await apiUploadFiles(`/jobs/${created.id}/upload-files`, token, form)) as Job;
+          uploaded += slice.length;
+          batchIndex += 1;
+        }
+        setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
-      for (const file of folderPick.imageFiles) {
-        const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-        form.append("files", file, rel);
-      }
-      const created = (await apiUploadFiles("/jobs/upload", token, form)) as Job;
       setJobs((prev) => [created, ...prev]);
       clearFolderPick();
+      setUploadProgress("");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
@@ -893,6 +931,7 @@ export default function DashboardPage() {
       setError(msg);
     } finally {
       setUploading(false);
+      setUploadProgress("");
     }
   }
 
@@ -1261,6 +1300,11 @@ export default function DashboardPage() {
         </div>
       )}
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
+      {uploadProgress ? (
+        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.5rem" }}>
+          {uploadProgress}
+        </div>
+      ) : null}
       <div style={{ marginBottom: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Run photo processing job
@@ -1269,7 +1313,8 @@ export default function DashboardPage() {
           <strong>Choose folder</strong> opens your system folder picker (it may not show photo thumbnails there —
           that is normal). After you confirm, you will see previews and counts here, then upload to the server — the
           job <strong>starts automatically</strong> and the table updates live from the SSE feed (spinner row while
-          Gemini runs). Use <strong>Choose photos</strong> to pick image files with visible previews in most desktop
+          Gemini runs). Folders with <strong>more than 200 images</strong> upload in multiple requests into the{" "}
+          <strong>same</strong> job (avoids browser/proxy limits). Use <strong>Choose photos</strong> to pick image files with visible previews in most desktop
           and mobile pickers.{" "}
           For <strong>several different items without lot tape on every group</strong>, put each item in its own
           subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so

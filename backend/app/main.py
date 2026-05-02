@@ -739,6 +739,46 @@ async def create_job_from_upload(
     return _job_out(job)
 
 
+def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
+    """Resolve ``job.input_folder`` under this account's upload root, or raise."""
+    root = (UPLOAD_ROOT / account_id).resolve()
+    folder = Path(job.input_folder).resolve()
+    try:
+        folder.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid job upload path") from exc
+    if not folder.is_dir():
+        raise HTTPException(status_code=400, detail="Job upload folder is missing")
+    return folder
+
+
+@app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
+async def append_files_to_queued_job(
+    job_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    files: list[UploadFile] = File(),
+) -> JobOut:
+    """Append more images to a **queued** browser-upload job (same folder as the first ``/jobs/upload``)."""
+    job = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == current.account_id)
+        .first()
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.queued:
+        raise HTTPException(
+            status_code=409,
+            detail="Job must be queued to add files (wait if it is still processing, or cancel first).",
+        )
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    dest = _queued_job_upload_folder(current.account_id, job)
+    await save_uploaded_files(dest, files)
+    return _job_out(job)
+
+
 @app.post("/jobs", response_model=JobOut)
 def create_job(
     payload: CreateJobRequest,
