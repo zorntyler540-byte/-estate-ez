@@ -1478,7 +1478,20 @@ export default function DashboardPage() {
                       — <em>{slot.previewTitle}</em>
                     </span>
                   ) : null}
-                  {slot.status !== "queued" && inInventoryPhase ? " · Assigning to catalog…" : null}
+                  {slot.status !== "queued" && inInventoryPhase ? (
+                    <span>
+                      {" · "}
+                      {!catalogStepProgress
+                        ? "Catalog merge: starting…"
+                        : slot.index < catalogStepProgress.index
+                          ? "Catalog merge: done"
+                          : slot.index > catalogStepProgress.index
+                            ? "Catalog merge: waiting"
+                            : `Catalog merge: now ${catalogStepProgress.index + 1}/${catalogStepProgress.total}${
+                                catalogStepProgress.fileName ? ` · ${catalogStepProgress.fileName}` : ""
+                              }`}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1614,7 +1627,18 @@ export default function DashboardPage() {
                       </span>
                     ) : null}
                     {inInventoryPhase ? (
-                      <span style={{ color: "var(--ct-text-subtle)" }}> · Assigning to catalog…</span>
+                      <span style={{ color: "var(--ct-text-subtle)" }}>
+                        {" · "}
+                        {!catalogStepProgress
+                          ? "Catalog merge: starting…"
+                          : slot.index < catalogStepProgress.index
+                            ? "Catalog merge: done"
+                            : slot.index > catalogStepProgress.index
+                              ? "Catalog merge: waiting"
+                              : `Catalog merge: now ${catalogStepProgress.index + 1}/${catalogStepProgress.total}${
+                                  catalogStepProgress.fileName ? ` · ${catalogStepProgress.fileName}` : ""
+                                }`}
+                      </span>
                     ) : null}
                   </>
                 )}
