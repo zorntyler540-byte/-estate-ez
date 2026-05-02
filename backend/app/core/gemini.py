@@ -225,6 +225,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "do not restate spongeware, spatterware, floral medallions, or glaze mottling in multiple pattern rows. "
         "If Pattern or Motif already names the ware or glaze look, do **not** add a separate Style line that only "
         "repeats that same ware type.\n"
+        "- Use **at most one** ``Finish:`` (or ``Glaze:`` / lustre sheen) row unless two values clearly describe "
+        "different surfaces (e.g. interior vs exterior); do not restate iridescent / lustre / gloss in multiple "
+        "finish lines.\n"
         "- starting_price_usd: numeric USD estimate if reasonable, else null.\n"
     )
 

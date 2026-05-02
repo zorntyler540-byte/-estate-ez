@@ -183,6 +183,18 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "silhouette": "spec__form",
     "set size": "spec__quantity",
     "pieces in set": "spec__quantity",
+    "set count": "spec__quantity",
+    # Surface sheen / glaze wording — model often emits many Finish lines across angles.
+    "finish": "spec__finish",
+    "finishes": "spec__finish",
+    "surface finish": "spec__finish",
+    "glaze finish": "spec__finish",
+    "finish type": "spec__finish",
+    "sheen": "spec__finish",
+    "luster": "spec__finish",
+    "lustre": "spec__finish",
+    "glaze": "spec__finish",
+    "gloss": "spec__finish",
 }
 
 
