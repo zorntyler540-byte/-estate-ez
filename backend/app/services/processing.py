@@ -705,6 +705,7 @@ def process_job(
             continue
 
         current_lot.merge_detail(payload)
+        _emit_job_debug(job, f"job={job.id} merged_detail i={i + 1} file={photo_path.name}")
         row = Photo(
             account_id=job.account_id,
             user_id=job.user_id,
@@ -716,6 +717,7 @@ def process_job(
         db.flush()
         pending_photo_ids.append(row.id)
         db.commit()
+        _emit_job_debug(job, f"job={job.id} committed i={i + 1} file={photo_path.name}")
 
     if current_lot is not None:
         _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)

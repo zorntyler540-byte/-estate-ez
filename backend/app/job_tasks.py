@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 import threading
+import traceback
 
 from app.db import SessionLocal
 from app.models import JobStatus, ProcessingJob
+from app.services import job_events
 from app.services.processing import process_job
+
+_LOG = logging.getLogger(__name__)
 
 _job_cancels: dict[str, threading.Event] = {}
 _job_cancels_lock = threading.Lock()
@@ -40,7 +45,28 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
             )
             if job is None or job.status != JobStatus.queued:
                 return
-            process_job(db, job, cancel_event=cancel_ev)
+            try:
+                process_job(db, job, cancel_event=cancel_ev)
+            except Exception as exc:
+                tb = traceback.format_exc()
+                _LOG.error("process_job crashed job_id=%s\n%s", job_id, tb)
+                try:
+                    job.status = JobStatus.failed
+                    job.error_message = (f"{type(exc).__name__}: {exc}")[:4000]
+                    job.cancel_requested = False
+                    db.commit()
+                    job_events.publish(
+                        job.user_id,
+                        job.id,
+                        {
+                            "type": "status",
+                            "status": "failed",
+                            "error_message": job.error_message,
+                            "job_id": job.id,
+                        },
+                    )
+                except Exception:
+                    _LOG.exception("failed to persist job failure state job_id=%s", job_id)
     finally:
         _unregister(job_id)
 
