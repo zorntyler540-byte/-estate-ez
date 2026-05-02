@@ -185,7 +185,8 @@ const CT_DESC_P = ' style="margin:0;padding:0;line-height:1.35"';
 const CT_DESC_BODY_BEFORE_DETAILS = ' style="margin:0 0 1.35em 0;padding:0;line-height:1.35"';
 
 /**
- * Plain text for textareas + Quill HTML: narrative in one block; each spec on its own tight ``<p>`` with a leading hyphen.
+ * Plain text for textareas + Quill HTML: one blank line under prose when Key Details follows; ``Key Details:`` then
+ * hyphen bullets on tight single-spaced lines (one ``<p>`` + ``<br>`` so Quill does not add space under the heading).
  * @returns {{ plain: string, html: string }}
  */
 function buildDescriptionPayload(lot) {
@@ -228,12 +229,12 @@ function buildDescriptionPayload(lot) {
     htmlParts.push(`<p${bodyStyle}>${escapeHtml(body)}</p>`);
   }
   if (specItems.length) {
-    htmlParts.push(`<p${CT_DESC_P}>Key Details:</p>`);
-    for (const raw of specItems) {
-      const line = specLinePlainForQuill(raw);
-      if (!line) continue;
-      htmlParts.push(`<p${CT_DESC_P}>- ${escapeHtml(line)}</p>`);
-    }
+    const bullets = specItems
+      .map(specLinePlainForQuill)
+      .filter(Boolean)
+      .map((line) => `- ${escapeHtml(line)}`)
+      .join("<br>");
+    htmlParts.push(`<p${CT_DESC_P}>Key Details:<br>${bullets}</p>`);
   }
   if (brands.length) {
     htmlParts.push(`<p${CT_DESC_P}>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
