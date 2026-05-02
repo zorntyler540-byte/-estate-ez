@@ -147,8 +147,9 @@ SYSTEM_INSTRUCTION = (
     "After a valid tape sku, later angles of the same item usually have sku null until new tape digits appear. "
     "Photographers sometimes insert a blank white or off-white paper sheet between lots: when the frame is "
     "primarily that divider (no product, no tape), set lot_boundary_blank_page true, sku null, and a short "
-    "item_name like 'Blank lot separator'. Purple/lavender tape with handwritten lot digits still marks a new "
-    "lot via sku as before. "
+    "item_name like 'Blank lot separator'. The next photo after a divider starts a NEW lot — read sku only from "
+    "tape visible on that frame (do not carry sku forward from before the divider). Purple/lavender tape with "
+    "handwritten lot digits still marks a new lot via sku as before. "
     "Output must match the JSON schema only — dense factual fields, no prose or banter."
 )
 
@@ -183,7 +184,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- Same physical lot: additional angles usually have sku null until new purple-tape digits appear.\n"
         "- lot_boundary_blank_page: true ONLY when the photo is mostly a blank white/off-white divider page/sheet "
         "between lots (no merchandise, no purple tape). false for product shots, tape-only frames, or white that is "
-        "porcelain/label/fabric. When true, set sku null and item_name to something like 'Blank lot separator'.\n"
+        "porcelain/label/fabric. When true, set sku null and item_name to something like 'Blank lot separator'. "
+        "The frame after a divider is the new lot's main catalog shot — put sku on that frame when tape is visible; "
+        "do not leave sku null there just because earlier lots had sku null on detail angles.\n"
         "- item_name must never be empty when the main product is visible: use a short title (e.g. 'Black HDMI DVD player') "
         "or at minimum 'Estate lot' plus digits if sku is set.\n"
         "- labels_and_tags: sizes, fits, care tags only (not long prose).\n"

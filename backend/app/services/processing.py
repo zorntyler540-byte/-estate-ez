@@ -114,6 +114,10 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
 
     ``last`` still advances on low/unsure when the explicit digits change, so a new lot tape (e.g.
     SA013) is not followed by empty frames that keep reusing the previous lot's digits (e.g. 001).
+
+    A blank divider page ends the prior lot in the inventory pass; ``last`` must reset here so the
+    next frame (typically the hero shot with tape) is not filled with the previous lot's SKU when
+    Gemini leaves ``SKU`` empty on that frame.
     """
     if not settings.last_known_sku_fallback:
         return
@@ -122,6 +126,7 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
         if not p or not isinstance(p, dict):
             continue
         if payload_lot_boundary_blank_page(p):
+            last = None
             continue
         conf = str(p.get("SkuConfidence") or p.get("sku_read_confidence") or "").strip().lower()
         raw = p.get("SKU")
