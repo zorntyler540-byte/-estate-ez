@@ -164,7 +164,19 @@ function pickBestField(keywords, minScore = 4) {
   return best;
 }
 
-function buildDescription(lot) {
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Plain text for textareas + Quill-safe HTML (one <p> for Key Details so bullets are <br>-separated, not double-spaced blocks).
+ * @returns {{ plain: string, html: string }}
+ */
+function buildDescriptionPayload(lot) {
   const body = String(lot?.professional_description || "").replace(/\s+/g, " ").trim();
   const rawSpecs = Array.isArray(lot?.specification_lines) ? lot.specification_lines : [];
   const specItems = [];
@@ -187,14 +199,26 @@ function buildDescription(lot) {
 
   const brands = Array.isArray(lot?.brands) ? lot.brands.map((x) => String(x || "").trim()).filter(Boolean) : [];
 
-  const sections = [];
-  if (body) sections.push(body);
+  const plainSections = [];
+  if (body) plainSections.push(body);
   if (specItems.length) {
-    sections.push(["Key Details:", ...specItems.map((item) => `- ${item}`)].join("\n"));
+    plainSections.push(["Key Details:", ...specItems.map((item) => `- ${item}`)].join("\n"));
   }
-  if (brands.length) sections.push(`Brands: ${brands.join(", ")}`);
-  return sections.join("\n\n").trim();
+  if (brands.length) plainSections.push(`Brands: ${brands.join(", ")}`);
+  const plain = plainSections.join("\n").trim();
+
+  const htmlParts = [];
+  if (body) htmlParts.push(`<p>${escapeHtml(body)}</p>`);
+  if (specItems.length) {
+    const specInner = ["Key Details:", ...specItems.map((item) => `- ${item}`)].map(escapeHtml).join("<br>");
+    htmlParts.push(`<p>${specInner}</p>`);
+  }
+  if (brands.length) htmlParts.push(`<p>${escapeHtml(`Brands: ${brands.join(", ")}`)}</p>`);
+  const html = htmlParts.join("");
+
+  return { plain, html };
 }
+
 
 const CATEGORY_RULES = [
   { category: "Handbags & Wallets", keywords: ["handbag", "purse", "wallet", "crossbody", "tote", "satchel", "clutch"] },
@@ -400,8 +424,8 @@ function mapCategoryCandidates(category) {
   return m[c] || [category];
 }
 
-function tryFillDescriptionRich(description, warnings) {
-  if (!description) return false;
+function tryFillDescriptionRich(plain, html, warnings) {
+  if (!plain) return false;
   const descriptionContainer =
     findFormFieldContainerByLabel("Description") ||
     document.querySelector("textarea[name='description'], textarea#description")?.closest("div");
@@ -420,7 +444,14 @@ function tryFillDescriptionRich(description, warnings) {
   const rich = document.querySelector("[contenteditable='true']");
   if (rich) {
     rich.focus();
-    rich.textContent = description;
+    const isQuill =
+      rich.classList.contains("ql-editor") ||
+      !!rich.closest(".ql-container, .ql-snow, .ql-toolbar");
+    if (isQuill && html) {
+      rich.innerHTML = html;
+    } else {
+      rich.textContent = plain;
+    }
     rich.dispatchEvent(new Event("input", { bubbles: true }));
     rich.dispatchEvent(new Event("blur", { bubbles: true }));
     return true;
@@ -437,7 +468,7 @@ function tryFillDescriptionRich(description, warnings) {
         /* ignore */
       }
     }
-    if (setReactFriendlyValue(descInput, description)) {
+    if (setReactFriendlyValue(descInput, plain)) {
       return true;
     }
   }
@@ -455,7 +486,7 @@ function tryFillDescriptionRich(description, warnings) {
     const b = blob(t);
     return b.includes("description") || b.includes("detail");
   });
-  if (bestTextarea && setReactFriendlyValue(bestTextarea, description)) {
+  if (bestTextarea && setReactFriendlyValue(bestTextarea, plain)) {
     return true;
   }
   warnings.push("no rich description editor");
@@ -570,8 +601,8 @@ function openDescriptionEditorFromForm() {
   return clickOpen(globalEdit);
 }
 
-async function fillDescriptionViaQuillModal(description, warnings) {
-  if (!description) return false;
+async function fillDescriptionViaQuillModal(plain, html, warnings) {
+  if (!plain) return false;
   // Ensure the modal is opened from the form first.
   const opened = openDescriptionEditorFromForm();
   if (!opened) {
@@ -607,11 +638,15 @@ async function fillDescriptionViaQuillModal(description, warnings) {
     );
     if (editor) {
       editor.focus();
-      const escaped = description
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-      editor.innerHTML = escaped.replace(/\n/g, "<br>");
+      const inner =
+        html && html.length
+          ? html
+          : plain
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\n/g, "<br>");
+      editor.innerHTML = inner;
       editor.dispatchEvent(new Event("input", { bubbles: true }));
       editor.dispatchEvent(new Event("blur", { bubbles: true }));
 
@@ -650,7 +685,7 @@ async function fillFromLot(lot) {
   const warnings = [];
 
   const title = lot.auction_title || "";
-  const description = buildDescription(lot);
+  const { plain: description, html: descriptionHtml } = buildDescriptionPayload(lot);
   const sku = lot.sku || "";
   const price = lot.starting_price != null ? String(lot.starting_price) : "";
   const condition = lot.condition_text || "";
@@ -716,7 +751,10 @@ async function fillFromLot(lot) {
   }
 
   if (description && !filled.includes("description")) {
-    if (tryFillDescriptionRich(description, warnings) || (await fillDescriptionViaQuillModal(description, warnings))) {
+    if (
+      tryFillDescriptionRich(description, descriptionHtml, warnings) ||
+      (await fillDescriptionViaQuillModal(description, descriptionHtml, warnings))
+    ) {
       filled.push("description");
     } else {
       warnings.push("no description field");

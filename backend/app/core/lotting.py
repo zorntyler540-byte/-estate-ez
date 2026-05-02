@@ -142,6 +142,25 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "accent colour": "spec__trim_dec",
     "decoration": "spec__trim_dec",
     "surface": "spec__trim_dec",
+    # Decorative / surface description: model often emits many near-duplicate rows across angles.
+    "pattern": "spec__pattern",
+    "patterns": "spec__pattern",
+    "surface pattern": "spec__pattern",
+    "repeat pattern": "spec__pattern",
+    "primary pattern": "spec__pattern",
+    "motif": "spec__pattern",
+    "motifs": "spec__pattern",
+    "design": "spec__pattern",
+    "surface design": "spec__pattern",
+    "visual design": "spec__pattern",
+    "decor pattern": "spec__pattern",
+    "decorative pattern": "spec__pattern",
+    "spatter pattern": "spec__pattern",
+    "sponge pattern": "spec__pattern",
+    "shape": "spec__form",
+    "silhouette": "spec__form",
+    "set size": "spec__quantity",
+    "pieces in set": "spec__quantity",
 }
 
 

@@ -421,7 +421,8 @@ function buildDescription(lot) {
     sections.push(["Key Details:", ...specItems.map((item) => `- ${item}`)].join("\n"));
   }
   if (brands.length) sections.push(`Brands: ${brands.join(", ")}`);
-  return sections.join("\n\n").trim();
+  // Single newlines between blocks (matches extension content script plain text).
+  return sections.join("\n").trim();
 }
 
 /** Full preview block for the side panel — must stay in sync whenever the selected lot changes. */

@@ -218,6 +218,11 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "length, etc.). Across extra angles of the **same** lot, do not add another line for the same category "
         "when the fact is unchanged (one combined Style / Material / Base / Era / Color / Form / Type row per lot, "
         "or append only genuinely new facts like a second dimension or a new mark).\n"
+        "- specification_lines: never repeat the same decorative fact under several labels. Use **at most one** "
+        "line among Pattern / Motif / Design / Surface pattern (pick the clearest label and merge wording); "
+        "do not restate spongeware, spatterware, floral medallions, or glaze mottling in multiple pattern rows. "
+        "If Pattern or Motif already names the ware or glaze look, do **not** add a separate Style line that only "
+        "repeats that same ware type.\n"
         "- starting_price_usd: numeric USD estimate if reasonable, else null.\n"
     )
 
