@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Estate-Ez Link",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Connects Estate-Ez AI to CT Seller.",
-  "permissions": ["activeTab", "scripting", "storage"],
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
@@ -11,8 +11,14 @@
     "https://*.railway.app/*",
     "https://*.ctbids.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "action": {
-    "default_popup": "popup.html"
+    "default_title": "Estate-Ez — open side panel"
   },
   "content_scripts": [
     {

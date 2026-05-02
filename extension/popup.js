@@ -6,6 +6,16 @@ const STORAGE_KEYS = {
   saleId: "ct_extension_sale_id"
 };
 
+/** Persisted when the side panel / popup would close so reopening restores CT workflow. */
+const SESSION_UI_KEYS = {
+  currentLotId: "estateEzUiCurrentLotId",
+  lastStatus: "estateEzUiStatus",
+  lastPreviewText: "estateEzUiPreview",
+  lastThumbDataUrl: "estateEzUiThumb"
+};
+
+const MAX_THUMB_STORAGE_CHARS = 480_000;
+
 /** JPEG long edge for extension → CT Seller (avoids multi‑MB originals that time out behind Railway). */
 const EXTENSION_UPLOAD_THUMB_MAX = 1600;
 
@@ -27,7 +37,33 @@ function isAuthFailureMessage(message) {
 }
 
 async function clearSession() {
-  await chrome.storage.local.remove([STORAGE_KEYS.token]);
+  await chrome.storage.local
+    .remove([STORAGE_KEYS.token, ...Object.values(SESSION_UI_KEYS)])
+    .catch(() => {});
+}
+
+async function persistLotSession() {
+  try {
+    const status = document.getElementById("status");
+    const preview = document.getElementById("preview");
+    const thumbEl = document.getElementById("currentLotThumb");
+    let thumb = thumbEl?.src?.startsWith("data:") ? thumbEl.src : "";
+    if (thumb.length > MAX_THUMB_STORAGE_CHARS) thumb = "";
+    await chrome.storage.local.set({
+      [SESSION_UI_KEYS.currentLotId]: lotBrowser.currentLotId,
+      [SESSION_UI_KEYS.lastStatus]: status ? status.textContent : "",
+      [SESSION_UI_KEYS.lastPreviewText]: preview ? preview.textContent : "",
+      [SESSION_UI_KEYS.lastThumbDataUrl]: thumb
+    });
+  } catch {
+    /* storage quota / private mode */
+  }
+}
+
+async function clearLotUiSession() {
+  lotBrowser.lots = [];
+  lotBrowser.currentLotId = "";
+  await chrome.storage.local.remove(Object.values(SESSION_UI_KEYS)).catch(() => {});
 }
 
 async function appendActivity(line) {
@@ -133,6 +169,7 @@ async function resolveCurrentLot(apiBase, token, { preferNextOpen = true } = {})
     lotBrowser.preferredSaleId = saleId;
     void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
   }
+  void persistLotSession();
   return selected;
 }
 
@@ -218,6 +255,12 @@ function setCurrentLotUI(lot, thumbDataUrl = "") {
   const meta = document.getElementById("currentLotMeta");
   const img = document.getElementById("currentLotThumb");
   if (!meta || !img) return;
+  if (!lot) {
+    meta.textContent = "Not loaded yet.";
+    img.removeAttribute("src");
+    img.style.display = "none";
+    return;
+  }
   const sku = lot?.sku || lot?.id || "-";
   const title = lot?.auction_title || "(untitled)";
   const photoCount = lot?.photo_count ?? 0;
@@ -245,6 +288,8 @@ async function refreshCurrentLotCard(apiBase, token, lot) {
     setCurrentLotUI(lot, dataUrl);
   } catch (_err) {
     // Keep metadata visible even if thumbnail cannot load.
+  } finally {
+    void persistLotSession();
   }
 }
 
@@ -373,14 +418,47 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await chrome.storage.local.get([
       STORAGE_KEYS.token,
       STORAGE_KEYS.loginEmail,
-      STORAGE_KEYS.saleId
+      STORAGE_KEYS.saleId,
+      SESSION_UI_KEYS.currentLotId,
+      SESSION_UI_KEYS.lastStatus,
+      SESSION_UI_KEYS.lastPreviewText,
+      SESSION_UI_KEYS.lastThumbDataUrl
     ]);
     authToken = String(data[STORAGE_KEYS.token] || "");
     loginEmailEl.value = String(data[STORAGE_KEYS.loginEmail] || "");
     lotBrowser.preferredSaleId = String(data[STORAGE_KEYS.saleId] || "").trim();
     renderAuthState();
+
+    if (authToken) {
+      const cid = String(data[SESSION_UI_KEYS.currentLotId] || "").trim();
+      if (cid) {
+        lotBrowser.currentLotId = cid;
+        const cachedStatus = String(data[SESSION_UI_KEYS.lastStatus] || "").trim();
+        const cachedPreview = String(data[SESSION_UI_KEYS.lastPreviewText] || "");
+        const cachedThumb = String(data[SESSION_UI_KEYS.lastThumbDataUrl] || "").trim();
+        if (cachedStatus) status.textContent = cachedStatus;
+        preview.textContent = cachedPreview;
+        try {
+          const lots = await fetchLots(API_BASE, authToken);
+          lotBrowser.lots = lots;
+          const lot = lots.find((l) => l?.id === cid);
+          if (lot) {
+            setCurrentLotUI(lot, cachedThumb.startsWith("data:") ? cachedThumb : "");
+            void refreshCurrentLotCard(API_BASE, authToken, lot);
+          } else {
+            status.textContent = "Previous lot no longer in list — click Preview current lot.";
+            await chrome.storage.local.remove(Object.values(SESSION_UI_KEYS)).catch(() => {});
+            lotBrowser.currentLotId = "";
+          }
+        } catch {
+          status.textContent = "Could not reload lots — click Preview when online.";
+          lotBrowser.currentLotId = "";
+        }
+      }
+    }
+
+    void loadActivity();
   })();
-  void loadActivity();
 
   loginBtn.addEventListener("click", async () => {
     const email = loginEmailEl.value.trim().toLowerCase();
@@ -427,6 +505,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderAuthState();
     status.textContent = "Signed out.";
     preview.textContent = "";
+    setCurrentLotUI(null, "");
   });
 
   function handleActionError(err) {
@@ -434,8 +513,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isAuthFailureMessage(msg)) {
       void clearSession();
       authToken = "";
+      lotBrowser.lots = [];
+      lotBrowser.currentLotId = "";
       renderAuthState();
       status.textContent = "Session expired. Please sign in again.";
+      preview.textContent = "";
+      setCurrentLotUI(null, "");
       return;
     }
     status.textContent = msg;
@@ -468,6 +551,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ? ` Warnings: ${reply.warnings.join(" | ")}`
           : "";
         status.textContent = `Filled: ${filled}.${warnings}`;
+        void persistLotSession();
         await appendActivity(`Autofill lot ${lot.sku || lot.id}: ${filled}`);
       } else {
         status.textContent = "Message sent; no fill report.";
@@ -516,9 +600,11 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       if (reply?.ok) {
         status.textContent = `Queued ${reply.count || payloadFiles.length} image(s). Waiting for page Save click…`;
+        void persistLotSession();
         const saveClicked = await waitForSaveClick(lot.id, 60000);
         if (!saveClicked) {
           status.textContent = "Photos queued. Click Save on CT Seller first, then re-run upload if needed. Lot not advanced.";
+          void persistLotSession();
           await appendActivity(`Save not detected for lot ${lot.sku || lot.id}; not marked completed`);
           return;
         }
@@ -540,6 +626,7 @@ document.addEventListener("DOMContentLoaded", () => {
         status.textContent = nextLabel
           ? `Saved + completed lot. Next lot: ${nextLabel}`
           : "Saved + completed lot.";
+        void persistLotSession();
         await appendActivity(`Uploaded ${reply.count || payloadFiles.length} photos for lot ${lot.sku || lot.id}`);
         await appendActivity(`Detected CT Seller Save click for lot ${lot.sku || lot.id}`);
         await appendActivity(`Marked lot ${lot.sku || lot.id} completed`);
@@ -580,6 +667,7 @@ document.addEventListener("DOMContentLoaded", () => {
         shownDescription
       ].join("\n");
       status.textContent = "Preview ready.";
+      void persistLotSession();
       await appendActivity(`Previewed lot ${lot.sku || lot.id}`);
     } catch (err) {
       console.error(err);
@@ -598,6 +686,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const lot = moveCurrentLot(-1);
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected previous lot: ${lot?.sku || lot?.id || "-"}`;
+      void persistLotSession();
     } catch (err) {
       handleActionError(err);
     }
@@ -614,6 +703,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const lot = moveCurrentLot(1);
       await refreshCurrentLotCard(apiBase, token, lot);
       status.textContent = `Selected next lot: ${lot?.sku || lot?.id || "-"}`;
+      void persistLotSession();
     } catch (err) {
       handleActionError(err);
     }
