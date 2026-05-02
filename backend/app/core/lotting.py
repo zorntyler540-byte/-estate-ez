@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -8,7 +9,10 @@ _MENS_IN_TITLE_RE = re.compile(r"\bmen(?:'|’)?s\b", re.I)
 _WOMENS_IN_TITLE_RE = re.compile(r"\bwomen(?:'|’)?s\b", re.I)
 _MENS_EVIDENCE_RE = re.compile(r"\b(men(?:'|’)?s|male|boy(?:'|’)?s|boys)\b", re.I)
 _WOMENS_EVIDENCE_RE = re.compile(r"\b(women(?:'|’)?s|female|ladies|girl(?:'|’)?s|girls)\b", re.I)
-_UNBRANDED_RE = re.compile(r"^(?:unmarked|unbranded|unknown|none|n/?a|null)$", re.I)
+_UNBRANDED_RE = re.compile(
+    r"^(?:unmarked|unbranded|unknown|unidentified|not\s+identified|unknown\s+maker|none|n/?a|null)$",
+    re.I,
+)
 
 
 def as_str_list(value: Any) -> list[str]:
@@ -80,6 +84,8 @@ def normalize_listing_lines(value: Any) -> list[str]:
         clean = clean_listing_text(line)
         if not clean or _line_has_placeholder_value(clean):
             continue
+        if re.match(r"(?i)^noted brands?\s*:", clean):
+            continue
         key = clean.lower()
         if key in seen:
             continue
@@ -108,6 +114,92 @@ def _spec_line_comparison_key(line: str) -> str:
     return s
 
 
+# Left-hand labels from ``Label: value`` lines that should collapse to one row per lot when
+# Gemini emits near-duplicates across merged angles (same semantic bucket → longest value wins).
+_SPEC_LABEL_TO_CANON: dict[str, str] = {
+    "base": "spec__base",
+    "base type": "spec__base",
+    "base shape": "spec__base",
+    "style": "spec__style",
+    "form": "spec__form",
+    "type": "spec__type",
+    "era": "spec__era",
+    "material": "spec__material",
+    "color": "spec__color",
+    "colors": "spec__color",
+    "colour": "spec__color",
+    "colours": "spec__color",
+    "primary colors": "spec__color",
+    "primary colours": "spec__color",
+    "origin": "spec__origin",
+    "country of origin": "spec__origin",
+    "quantity": "spec__quantity",
+    "features": "spec__features",
+    "trim": "spec__trim_dec",
+    "accents": "spec__trim_dec",
+    "accent": "spec__trim_dec",
+    "accent color": "spec__trim_dec",
+    "accent colour": "spec__trim_dec",
+    "decoration": "spec__trim_dec",
+    "surface": "spec__trim_dec",
+}
+
+
+def _semantic_spec_bucket(line: str) -> str | None:
+    """
+    Map a spec line to a merge bucket, or None when the line should only use exact-string dedupe
+    (measurements, size tags, unknown labels, etc.).
+    """
+    if not line or _line_has_placeholder_value(line):
+        return None
+    if re.match(r"(?i)^size\s*/\s*tag", line):
+        return None
+    m = re.match(r"^([^:]+):\s*(.+)$", line.strip())
+    if not m:
+        return None
+    raw_label = m.group(1).strip()
+    if len(raw_label) > 56:
+        return None
+    label_key = re.sub(r"\s+", " ", raw_label.lower())
+    canon = _SPEC_LABEL_TO_CANON.get(label_key)
+    if canon is not None:
+        return canon
+    # Ruler / dimensions lines often contain digits — do not treat ``Era: 1950s``-style rows as measurements.
+    if _MEASUREMENT_HINT_RE.search(line):
+        return None
+    return None
+
+
+def _collapse_semantic_spec_lines(lines: list[str]) -> list[str]:
+    """
+    After exact dedupe: for common ``Label:`` prefixes (Style, Material, Base, …), keep a single line
+    per merged-photo burst — earliest position in the list, **longest** text among duplicates (most detail).
+    """
+    members: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for i, line in enumerate(lines):
+        b = _semantic_spec_bucket(line)
+        if b is not None:
+            members[b].append((i, line))
+
+    first_idx: dict[str, int] = {}
+    winner: dict[str, str] = {}
+    for b, pairs in members.items():
+        first_idx[b] = min(i for i, _ in pairs)
+        # Prefer longer value; tie-breaker keeps the earlier line so merge stays stable.
+        winner[b] = max(pairs, key=lambda p: (len(p[1]), -p[0]))[1]
+
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        b = _semantic_spec_bucket(line)
+        if b is None:
+            out.append(line)
+            continue
+        if i == first_idx[b]:
+            out.append(winner[b])
+        # else: skip duplicate bucket member
+    return out
+
+
 def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     """
     Drop repeated spec bullets across merged photo frames.
@@ -115,9 +207,10 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     Uses a stronger normalization than plain lower() so ``- Foo`` and ``• Foo`` collapse once.
     Lines that look like **measurements or ruler context** (digits, units, ``ruler``, etc.) only dedupe
     when the normalized key matches exactly, so different per-item sizes stay separate.
+    Then collapses noisy repeated **Label:** categories (multiple ``Style:`` lines → one).
     """
     seen: set[str] = set()
-    out: list[str] = []
+    first: list[str] = []
     for raw in lines:
         line = clean_listing_text(raw)
         if not line or _line_has_placeholder_value(line):
@@ -126,8 +219,26 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(line)
-    return out
+        first.append(line)
+    return _collapse_semantic_spec_lines(first)
+
+
+def _strip_noted_brand_clauses(text: str) -> str:
+    """Remove every ``Noted brand: …`` / ``Noted brands: …`` clause (models often chain several with periods)."""
+    s = text.strip()
+    while True:
+        m = re.search(r"(?i)\bnoted brands?\s*:\s*", s)
+        if not m:
+            break
+        start = m.start()
+        rest = s[m.end() :]
+        endm = re.search(r"[.!?](?:\s+|$)", rest)
+        if endm:
+            s = (s[:start] + rest[endm.end() :]).strip()
+        else:
+            s = s[:start].strip()
+            break
+    return s
 
 
 def sanitize_description_unknowns(text: str) -> str:
@@ -135,13 +246,8 @@ def sanitize_description_unknowns(text: str) -> str:
     s = clean_listing_text(text)
     if not s:
         return s
-    # Remove "Noted brand(s): …" tails — maker/region belongs in structured ``brands[]`` / specs, not prose.
-    for _ in range(100):
-        new_s = re.sub(r"(?i)\s*,?\s*noted brands?:\s*[^.!?]+(?:[.!?]|$)", "", s)
-        new_s = clean_listing_text(new_s)
-        if new_s == s:
-            break
-        s = new_s
+    s = _strip_noted_brand_clauses(s)
+    s = clean_listing_text(s)
     # Remove generic placeholder clauses that leak into prose.
     s = re.sub(r"(?i)\bnoted brand:\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
     s = re.sub(r"(?i)\bbrand(?:\(s\))?\s*(?:is|are|:)?\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)
@@ -323,6 +429,28 @@ def merge_unique_case_insensitive(base: list[str], incoming: list[str]) -> tuple
     return merged, added
 
 
+def move_unmentioned_brands_to_specs(
+    brands: list[str],
+    professional_description: str,
+    specification_lines: list[str],
+) -> None:
+    """
+    For each known maker in ``brands[]`` that is not already named in the description or an existing spec line,
+    append one ``Brand: …`` specification row. Call after ``sanitize_description_unknowns`` so prose stays clean.
+    """
+    if not brands:
+        return
+    desc = professional_description
+    for b in brands:
+        if not b:
+            continue
+        if brand_appears_in_prose(b, desc):
+            continue
+        if any(brand_appears_in_prose(b, clean_listing_text(sl)) for sl in specification_lines):
+            continue
+        specification_lines.append(f"Brand: {b}")
+
+
 def brand_appears_in_prose(brand: str, prose: str) -> bool:
     if not brand or not prose:
         return False
@@ -341,7 +469,7 @@ def weave_brands_into_description(brands: list[str], description: str) -> str:
     Brands and makers are carried in ``brands[]`` and optional spec lines; do **not** append
     ``Noted brand:`` sentences to ``professional_description`` (users found them noisy / duplicative).
     """
-    _ = brands  # merge_detail still passes merged brands; structured field remains authoritative.
+    _ = brands
     return sanitize_description_unknowns(description)
 
 
@@ -388,36 +516,48 @@ class LotOutput:
         )
         title = _sanitize_gendered_title(title, payload)
         boundary_blank = payload_lot_boundary_blank_page(payload)
+        spec_lines = dedupe_specification_lines_preserve_order(
+            normalize_listing_lines(
+                payload.get("SpecificationLines") or payload.get("specification_lines")
+            )
+        )
+        brands = normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands"))
+        labels = normalize_listing_lines(payload.get("LabelsAndTags") or payload.get("labels_and_tags"))
+        condition = str(payload.get("Condition") or payload.get("condition_notes") or "").strip()
+        if boundary_blank:
+            return cls(
+                sku=None,
+                auction_title="Blank lot separator (page)",
+                professional_description="Separator frame between catalog lots; not a listed item.",
+                specification_lines=spec_lines,
+                brands=brands,
+                labels_and_tags=labels,
+                condition=condition,
+                starting_price=None,
+                sku_needs_review=False,
+                lot_boundary_blank_page=True,
+            )
+        prof = sanitize_description_unknowns(
+            str(
+                payload.get("ProfessionalDescription")
+                or payload.get("Description")
+                or payload.get("professional_description")
+                or ""
+            )
+        )
+        move_unmentioned_brands_to_specs(brands, prof, spec_lines)
+        spec_lines = dedupe_specification_lines_preserve_order(spec_lines)
         return cls(
-            sku=None if boundary_blank else (sku_normalized or None),
-            auction_title="Blank lot separator (page)" if boundary_blank else title,
-            professional_description=(
-                "Separator frame between catalog lots; not a listed item."
-                if boundary_blank
-                else sanitize_description_unknowns(
-                    str(
-                        payload.get("ProfessionalDescription")
-                        or payload.get("Description")
-                        or payload.get("professional_description")
-                        or ""
-                    )
-                )
-            ),
-            specification_lines=dedupe_specification_lines_preserve_order(
-                normalize_listing_lines(
-                    payload.get("SpecificationLines") or payload.get("specification_lines")
-                )
-            ),
-            brands=normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands")),
-            labels_and_tags=normalize_listing_lines(
-                payload.get("LabelsAndTags") or payload.get("labels_and_tags")
-            ),
-            condition=str(
-                payload.get("Condition") or payload.get("condition_notes") or ""
-            ).strip(),
-            starting_price=None if boundary_blank else price,
-            sku_needs_review=False if boundary_blank else payload_suggests_sku_review(payload),
-            lot_boundary_blank_page=boundary_blank,
+            sku=sku_normalized or None,
+            auction_title=title,
+            professional_description=prof,
+            specification_lines=spec_lines,
+            brands=brands,
+            labels_and_tags=labels,
+            condition=condition,
+            starting_price=price,
+            sku_needs_review=payload_suggests_sku_review(payload),
+            lot_boundary_blank_page=False,
         )
 
     def merge_detail(self, detail_payload: dict[str, Any]) -> None:
@@ -448,9 +588,9 @@ class LotOutput:
                 if extra.lower() not in {x.lower() for x in self.specification_lines}:
                     self.specification_lines.append(extra)
 
-        self.professional_description = weave_brands_into_description(
-            self.brands, self.professional_description
-        )
+        self.professional_description = sanitize_description_unknowns(self.professional_description)
+        move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
+        self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
         self.photo_count += 1
         if payload_suggests_sku_review(detail_payload):
             self.sku_needs_review = True

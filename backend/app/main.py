@@ -11,6 +11,7 @@ import shutil
 import smtplib
 import mimetypes
 import tempfile
+import uuid
 import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
@@ -59,6 +60,8 @@ from app.schemas import (
     UserSummary,
     LotPhotoOut,
     SaleZipExportOut,
+    SplitPhotosToNewLotIn,
+    SplitPhotosToNewLotOut,
     TransferPhotosIn,
     TransferPhotosOut,
 )
@@ -618,6 +621,95 @@ def transfer_photos_to_lot(
 
     updated = [_lot_out_for_id(db, current.account_id, lid) for lid in sorted(touched_lots)]
     return TransferPhotosOut(moved=moved, updated_lots=updated)
+
+
+@app.post("/lots/{source_lot_id}/photos/new-lot", response_model=SplitPhotosToNewLotOut, status_code=status.HTTP_201_CREATED)
+def split_selected_photos_into_new_lot(
+    source_lot_id: str,
+    body: SplitPhotosToNewLotIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SplitPhotosToNewLotOut:
+    """
+    Create a new empty lot in the same sale and move the selected photos off ``source_lot_id``.
+    At least one photo must remain on the source lot.
+    """
+    source = db.query(Lot).filter(Lot.id == source_lot_id, Lot.account_id == current.account_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, source.sale_id, current)
+
+    ids = list(dict.fromkeys(body.photo_ids))
+    total = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == source_lot_id, Photo.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    if total < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="This lot needs at least two catalog photos to split a subset into a new lot.",
+        )
+    if len(ids) >= total:
+        raise HTTPException(
+            status_code=400,
+            detail="Leave at least one photo on this lot — select fewer images, move extras to an existing lot instead.",
+        )
+
+    title_default = f"New lot (split from {source.sku.strip()})" if (source.sku or "").strip() else "New lot (split)"
+    new_title = ((body.auction_title or "").strip() or title_default)[:500]
+
+    photos_to_move: list[Photo] = []
+    for pid in ids:
+        ph = db.query(Photo).filter(Photo.id == pid, Photo.account_id == current.account_id).first()
+        if not ph:
+            raise HTTPException(status_code=404, detail=f"Photo not found: {pid}")
+        if ph.lot_id != source_lot_id:
+            raise HTTPException(status_code=400, detail=f"Photo {pid} is not on this lot.")
+        photos_to_move.append(ph)
+
+    new_lot = Lot(
+        id=str(uuid.uuid4()),
+        account_id=current.account_id,
+        user_id=current.id,
+        sale_id=source.sale_id,
+        sku=None,
+        auction_title=new_title,
+        professional_description="",
+        specification_lines_json=json.dumps(
+            ["Photos moved here from another listing (split). Edit SKU, title, and description."],
+            ensure_ascii=True,
+        ),
+        brands_json=json.dumps([], ensure_ascii=True),
+        labels_and_tags_json=json.dumps([], ensure_ascii=True),
+        ct_category=None,
+        ct_subcategory=None,
+        is_completed=False,
+        completed_at=None,
+        starting_price=None,
+        condition_text="",
+        photo_count=0,
+        sku_needs_review=True,
+    )
+    db.add(new_lot)
+    db.flush()
+
+    for ph in photos_to_move:
+        ph.lot_id = new_lot.id
+        ph.user_id = current.id
+
+    _reconcile_lot_photo_count(db, source_lot_id, current.account_id)
+    _reconcile_lot_photo_count(db, new_lot.id, current.account_id)
+    db.commit()
+    db.refresh(new_lot)
+    db.refresh(source)
+
+    return SplitPhotosToNewLotOut(
+        new_lot=_lot_out_for_id(db, current.account_id, new_lot.id),
+        source_lot=_lot_out_for_id(db, current.account_id, source_lot_id),
+    )
 
 
 @app.post("/lots/{target_lot_id}/merge", response_model=LotOut)

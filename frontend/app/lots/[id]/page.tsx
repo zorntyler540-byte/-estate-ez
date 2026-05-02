@@ -39,6 +39,9 @@ type SaleLotOption = {
   photo_count: number;
 };
 
+/** Destination sentinel: create a new lot with the checked photos (same API as split). */
+const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
+
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("token") || "";
@@ -65,6 +68,7 @@ export default function LotDetailPage() {
   const [mergePreferSourceSku, setMergePreferSourceSku] = useState(false);
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeMsg, setOrganizeMsg] = useState("");
+  const [splitNewLotTitle, setSplitNewLotTitle] = useState("");
 
   useEffect(() => {
     try {
@@ -147,6 +151,7 @@ export default function LotDetailPage() {
     setTransferTargetId("");
     setMergeSourceId("");
     setOrganizeMsg("");
+    setSplitNewLotTitle("");
   }, [params.id]);
 
   useEffect(() => {
@@ -331,8 +336,52 @@ export default function LotDetailPage() {
     }
   }
 
+  async function createNewLotFromSelection() {
+    if (!lot || !token || selectedPhotoIds.size === 0) return;
+    const n = selectedPhotoIds.size;
+    const remaining = catalogPhotos.length - n;
+    if (catalogPhotos.length < 2) {
+      setError("Need at least two photos on this lot to split.");
+      return;
+    }
+    if (remaining < 1) {
+      setError("Leave at least one photo on this lot — clear some checkboxes first.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Create a new listing with ${n} selected photo(s)? They will leave this lot; you can edit SKU and title on the new lot page.`
+      )
+    ) {
+      return;
+    }
+    setOrganizeBusy(true);
+    setOrganizeMsg("");
+    setError("");
+    try {
+      const out = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/photos/new-lot`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          photo_ids: Array.from(selectedPhotoIds),
+          auction_title: splitNewLotTitle.trim() || null
+        })
+      })) as { new_lot: { id: string } };
+      await refetchSaleLotsList();
+      setSelectedPhotoIds(new Set());
+      setSplitNewLotTitle("");
+      setTransferTargetId("");
+      setOrganizeMsg(`Created a new lot with ${n} photo(s). Opening it…`);
+      router.push(`/lots/${encodeURIComponent(out.new_lot.id)}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create new lot");
+    } finally {
+      setOrganizeBusy(false);
+    }
+  }
+
   async function transferSelectedPhotos() {
     if (!lot || !token || selectedPhotoIds.size === 0 || !transferTargetId) return;
+    if (transferTargetId === TRANSFER_DEST_NEW_LOT) return;
     const n = selectedPhotoIds.size;
     setOrganizeBusy(true);
     setOrganizeMsg("");
@@ -352,6 +401,15 @@ export default function LotDetailPage() {
     } finally {
       setOrganizeBusy(false);
     }
+  }
+
+  async function applyPhotoDestination() {
+    if (!lot || !token || selectedPhotoIds.size === 0 || !transferTargetId) return;
+    if (transferTargetId === TRANSFER_DEST_NEW_LOT) {
+      await createNewLotFromSelection();
+      return;
+    }
+    await transferSelectedPhotos();
   }
 
   async function mergeSourceIntoThisLot() {
@@ -468,11 +526,13 @@ export default function LotDetailPage() {
             }}
           >
             <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-              Move photos to another lot
+              Move or split selected photos
             </h3>
             <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
-              Same sale only. Select images, choose a destination listing, then move them. To combine an entire
-              listing (all photos) into this one, use <strong>Merge a whole lot</strong> below.
+              Same sale only. Check the frames to move, then choose <strong>Destination</strong>: pick another listing
+              or <strong>New listing (selected photos only)</strong> to fix a mistaken merge (e.g. two tape SKUs on
+              one row). One photo must stay on this lot. To combine a <em>whole</em> other listing into this one, use{" "}
+              <strong>Merge a whole lot</strong> below.
             </p>
             <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
               <button
@@ -495,6 +555,20 @@ export default function LotDetailPage() {
                 {selectedPhotoIds.size} selected
               </span>
             </div>
+            {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
+              <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
+                Optional title for the new listing (leave blank for a default)
+                <input
+                  className="ct-input"
+                  style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
+                  placeholder='e.g. "SA004 — orange pair"'
+                  value={splitNewLotTitle}
+                  onChange={(e) => setSplitNewLotTitle(e.target.value)}
+                  disabled={organizeBusy}
+                  autoComplete="off"
+                />
+              </label>
+            ) : null}
             <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
               <select
                 className="ct-input"
@@ -503,7 +577,8 @@ export default function LotDetailPage() {
                 onChange={(e) => setTransferTargetId(e.target.value)}
                 disabled={organizeBusy}
               >
-                <option value="">— Destination lot —</option>
+                <option value="">— Destination —</option>
+                <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
                 {saleLots
                   .filter((x) => x.id !== lot.id)
                   .map((opt) => (
@@ -515,13 +590,22 @@ export default function LotDetailPage() {
               </select>
               <button
                 type="button"
-                className="ct-btn ct-btn--primary"
+                className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
                 disabled={
-                  organizeBusy || selectedPhotoIds.size === 0 || !transferTargetId || !saleLots.some((x) => x.id === transferTargetId)
+                  organizeBusy ||
+                  selectedPhotoIds.size === 0 ||
+                  !transferTargetId ||
+                  (transferTargetId === TRANSFER_DEST_NEW_LOT
+                    ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
+                    : !saleLots.some((x) => x.id === transferTargetId))
                 }
-                onClick={() => void transferSelectedPhotos()}
+                onClick={() => void applyPhotoDestination()}
               >
-                {organizeBusy ? "Working…" : "Move selected"}
+                {organizeBusy
+                  ? "Working…"
+                  : transferTargetId === TRANSFER_DEST_NEW_LOT
+                    ? "Create new lot"
+                    : "Move selected"}
               </button>
             </div>
           </div>
@@ -541,7 +625,9 @@ export default function LotDetailPage() {
             <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
               Every photo from the other listing moves here; the other lot row is deleted. A short note is appended
               to specification lines. Optional: adopt the other lot&apos;s tape SKU if yours is blank or if you check
-              the box to prefer it.
+              the box to prefer it. To move only <em>some</em> frames into a <strong>new</strong> row (not an existing
+              lot), use <strong>Move or split selected photos</strong> above and choose <strong>New listing</strong> in
+              the destination menu.
             </p>
             <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
               <select

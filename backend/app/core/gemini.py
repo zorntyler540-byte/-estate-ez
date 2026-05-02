@@ -56,7 +56,13 @@ class InventoryTableEntry(BaseModel):
 
     manifest_id: str = ""
     item_name: str = ""
-    brand: str = ""
+    brand: str = Field(
+        default="",
+        description=(
+            "Primary maker on the product or label, plain text. Leave empty when not legibly identified — "
+            "never use Unknown, Unidentified, Unbranded, N/A, or similar placeholders."
+        ),
+    )
     material: str = ""
     condition_notes: str = ""
     era: str = ""
@@ -86,6 +92,11 @@ class InventoryTableEntry(BaseModel):
     professional_description: str = Field(
         default="",
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
+        description=(
+            "2–6 sentences of flowing prose. Name each confirmed maker in the text with **bold** at first mention. "
+            "Never write ``Noted brand:`` / ``Noted brands:`` lines or list unknown makers — omit unknowns entirely. "
+            "If a maker is confirmed but awkward in prose, leave it out here and put ``Brand: Name`` in specification_lines only."
+        ),
     )
     specification_lines: list[str] = Field(
         default_factory=list,
@@ -197,13 +208,16 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- item_name must never be empty when the main product is visible: use a short title (e.g. 'Black HDMI DVD player') "
         "or at minimum 'Estate lot' plus digits if sku is set.\n"
         "- labels_and_tags: sizes, fits, care tags only (not long prose).\n"
-        "- professional_description: include visible brands with **bold** at first mention. "
-        "Do not end the description with a separate ``Noted brand:`` / ``Noted brands:`` sentence — "
-        "put maker, country, or region in ``brand`` and/or a ``specification_lines`` row (e.g. ``Origin: Czechoslovakia``) "
-        "instead of duplicating that tail in prose.\n"
+        "- professional_description: flowing prose only; name confirmed makers with **bold** at first mention. "
+        "Never write ``Noted brand:``, ``Noted brands:``, or similar tag lines (not even at the end). "
+        "Never mention Unknown, Unidentified, Unbranded, or N/A as a maker — omit them completely. "
+        "Put ``Brand: ActualName`` in ``specification_lines`` when a maker is known but not woven into the paragraph; "
+        "use ``brand`` only for a clear primary maker (else leave ``brand`` empty).\n"
         "- Use specification_lines for measurable specs; include Model line there if identifiable. "
         "When a ruler, yardstick, or scale appears, add one clear measurement line for that item (dimensions, "
-        "length, etc.). Do not repeat the same spec bullet across angles of the same lot — one line per distinct fact.\n"
+        "length, etc.). Across extra angles of the **same** lot, do not add another line for the same category "
+        "when the fact is unchanged (one combined Style / Material / Base / Era / Color / Form / Type row per lot, "
+        "or append only genuinely new facts like a second dimension or a new mark).\n"
         "- starting_price_usd: numeric USD estimate if reasonable, else null.\n"
     )
 

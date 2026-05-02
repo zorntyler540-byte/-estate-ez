@@ -162,6 +162,22 @@ class TransferPhotosOut(BaseModel):
     updated_lots: list[LotOut]
 
 
+class SplitPhotosToNewLotIn(BaseModel):
+    """Move selected catalog photos off this lot into a newly created lot in the same sale."""
+
+    photo_ids: list[str] = Field(min_length=1, max_length=200)
+    auction_title: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional title for the new listing; defaults to a short split placeholder.",
+    )
+
+
+class SplitPhotosToNewLotOut(BaseModel):
+    new_lot: LotOut
+    source_lot: LotOut
+
+
 class MergeLotsIn(BaseModel):
     """Merge ``source_lot_id`` into this lot: all photos move here, then the source lot row is deleted."""
 
