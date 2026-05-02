@@ -227,6 +227,21 @@ function moveCurrentLot(step) {
   return lot;
 }
 
+/** ``which`` = ``"first"`` (oldest in list) or ``"last"`` (newest) — matches ``created_asc`` order from the API. */
+function moveCurrentLotToBoundary(which) {
+  if (!lotBrowser.lots.length) throw new Error("No lots loaded yet. Click Preview first.");
+  const last = lotBrowser.lots.length - 1;
+  const idx = which === "last" ? last : 0;
+  const lot = lotBrowser.lots[idx];
+  lotBrowser.currentLotId = lot?.id || "";
+  const saleId = String(lot?.sale_id || "").trim();
+  if (saleId) {
+    lotBrowser.preferredSaleId = saleId;
+    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
+  }
+  return lot;
+}
+
 async function markLotCompleted(apiBase, token, lotId) {
   const res = await fetchWithRetry(`${apiBase}/lots/${encodeURIComponent(lotId)}`, {
     method: "PATCH",
@@ -437,8 +452,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginBtn = document.getElementById("loginBtn");
   const logoutBtn = document.getElementById("logoutBtn");
   const authState = document.getElementById("authState");
-  const actionButtonIds = ["previewBtn", "fillBtn", "uploadBtn", "prevLotBtn", "nextLotBtn"];
+  const actionButtonIds = [
+    "previewBtn",
+    "fillBtn",
+    "uploadBtn",
+    "firstLotBtn",
+    "lastLotBtn",
+    "prevLotBtn",
+    "nextLotBtn"
+  ];
   let authToken = "";
+
+  async function applySelectedLotNav(apiBase, token, lot, statusText) {
+    preview.textContent = formatLotPreviewText(lot);
+    await refreshCurrentLotCard(apiBase, token, lot);
+    status.textContent = statusText;
+    void persistLotSession();
+  }
 
   function setActionButtonsEnabled(enabled) {
     for (const id of actionButtonIds) {
@@ -719,6 +749,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  document.getElementById("firstLotBtn").addEventListener("click", async () => {
+    try {
+      const creds = await readCreds(false);
+      if (!creds) return;
+      const { apiBase, token } = creds;
+      if (!lotBrowser.lots.length) {
+        await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
+      }
+      const lot = moveCurrentLotToBoundary("first");
+      await applySelectedLotNav(apiBase, token, lot, `First lot: ${lot?.sku || lot?.id || "-"}`);
+    } catch (err) {
+      handleActionError(err);
+    }
+  });
+
+  document.getElementById("lastLotBtn").addEventListener("click", async () => {
+    try {
+      const creds = await readCreds(false);
+      if (!creds) return;
+      const { apiBase, token } = creds;
+      if (!lotBrowser.lots.length) {
+        await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
+      }
+      const lot = moveCurrentLotToBoundary("last");
+      await applySelectedLotNav(apiBase, token, lot, `Last lot: ${lot?.sku || lot?.id || "-"}`);
+    } catch (err) {
+      handleActionError(err);
+    }
+  });
+
   document.getElementById("prevLotBtn").addEventListener("click", async () => {
     try {
       const creds = await readCreds(false);
@@ -728,10 +788,7 @@ document.addEventListener("DOMContentLoaded", () => {
         await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       }
       const lot = moveCurrentLot(-1);
-      preview.textContent = formatLotPreviewText(lot);
-      await refreshCurrentLotCard(apiBase, token, lot);
-      status.textContent = `Selected previous lot: ${lot?.sku || lot?.id || "-"}`;
-      void persistLotSession();
+      await applySelectedLotNav(apiBase, token, lot, `Selected previous lot: ${lot?.sku || lot?.id || "-"}`);
     } catch (err) {
       handleActionError(err);
     }
@@ -746,10 +803,7 @@ document.addEventListener("DOMContentLoaded", () => {
         await resolveCurrentLot(apiBase, token, { preferNextOpen: true });
       }
       const lot = moveCurrentLot(1);
-      preview.textContent = formatLotPreviewText(lot);
-      await refreshCurrentLotCard(apiBase, token, lot);
-      status.textContent = `Selected next lot: ${lot?.sku || lot?.id || "-"}`;
-      void persistLotSession();
+      await applySelectedLotNav(apiBase, token, lot, `Selected next lot: ${lot?.sku || lot?.id || "-"}`);
     } catch (err) {
       handleActionError(err);
     }
