@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import threading
+import time
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -32,6 +34,40 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 # Must not open lots or run tape verify — otherwise stale digits + new lot SKU causes spurious verify stalls.
 _CT_SKU_INJECTED_FALLBACK_KEY = "_ct_sku_injected_fallback"
 
+_LOG = logging.getLogger(__name__)
+
+
+def _maker_stamp_evidence_blob(lot: LotOutput, raw_payload: dict | None) -> str:
+    """All free text we can use to detect Sheffield / underside stamp false sku (includes raw Gemini keys)."""
+    parts: list[str] = [
+        lot.auction_title or "",
+        lot.professional_description or "",
+        lot.condition or "",
+    ]
+    parts.extend(str(x) for x in (lot.specification_lines or []) if x)
+    parts.extend(str(x) for x in (lot.brands or []) if x)
+    if raw_payload:
+        for key in (
+            "AuctionTitle",
+            "Title",
+            "item_name",
+            "ProfessionalDescription",
+            "Description",
+            "Condition",
+            "condition_notes",
+            "material",
+        ):
+            v = raw_payload.get(key)
+            if isinstance(v, str) and v.strip():
+                parts.append(v)
+        for key in ("SpecificationLines", "specification_lines", "LabelsAndTags", "labels_and_tags"):
+            v = raw_payload.get(key)
+            if isinstance(v, list):
+                parts.extend(str(x) for x in v if isinstance(x, str) and x.strip())
+            elif isinstance(v, str) and v.strip():
+                parts.append(v)
+    return " ".join(parts).lower()
+
 
 _TITLE_WORD_RE = re.compile(r"[a-z0-9]+", re.I)
 _TITLE_STOPWORDS = {
@@ -55,25 +91,41 @@ def _title_tokens(title: str) -> set[str]:
     return {t for t in raw if len(t) > 2 and t not in _TITLE_STOPWORDS}
 
 
-def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput) -> None:
+def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
     """
     Detail shots of silverplate often show stamped pattern numbers (e.g. 1420) on the base — not purple tape.
 
     When the model puts those digits in ``sku``, we would otherwise run tape verify and churn lot boundaries.
-    Letter+digit tape codes (SA001) are left unchanged.
+
+    Sheffield reproduction / hand-chased titles without any mention of purple tape: clear **any** sku shape,
+    since those frames are almost never the estate-tape hero shot. Other cases: digits-only plus underside hints.
     """
     if not lot.sku or lot.lot_boundary_blank_page:
+        return
+    blob = _maker_stamp_evidence_blob(lot, raw_payload)
+    tape_mentioned = any(
+        k in blob
+        for k in (
+            "purple",
+            "lavender",
+            "masking tape",
+            "painter tape",
+            "tape roll",
+            "estate tape",
+            "sku tape",
+            "lot tape",
+        )
+    )
+    sheffield_style = "sheffield" in blob and (
+        "reproduction" in blob or "hand chased" in blob or "hand-chased" in blob
+    )
+    if sheffield_style and not tape_mentioned:
+        lot.sku = None
+        lot.sku_needs_review = False
         return
     compact = re.sub(r"\s+", "", str(lot.sku).strip())
     if re.fullmatch(r"\d{2,6}", compact) is None:
         return
-    parts = [lot.auction_title, lot.professional_description, lot.condition]
-    parts.extend(lot.specification_lines or [])
-    parts.extend(lot.brands or [])
-    blob = " ".join(str(p) for p in parts if p).lower()
-    sheffield_style = "sheffield" in blob and (
-        "reproduction" in blob or "hand chased" in blob or "hand-chased" in blob
-    )
     base_markings = any(
         k in blob
         for k in (
@@ -91,7 +143,7 @@ def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput) -> None:
     silver_context = any(
         k in blob for k in ("silver", "plate", "silverplate", "silver plate", "epns", "hollowware", "holloware")
     )
-    if sheffield_style or (base_markings and silver_context):
+    if base_markings and silver_context:
         lot.sku = None
         lot.sku_needs_review = False
 
@@ -180,7 +232,7 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
         except (TypeError, ValueError, KeyError):
             _tmp_lo = None
         if _tmp_lo is not None:
-            _strip_maker_stamp_misread_as_tape_sku(_tmp_lo)
+            _strip_maker_stamp_misread_as_tape_sku(_tmp_lo, p)
             if _tmp_lo.sku is None:
                 p.pop("SKU", None)
                 p.pop(_CT_SKU_INJECTED_FALLBACK_KEY, None)
@@ -419,6 +471,14 @@ def process_job(
                 "file_name": photo_path.name,
             },
         )
+        if settings.job_debug_inventory:
+            _LOG.info(
+                "job=%s inventory enter i=%s/%s file=%s",
+                job.id,
+                i + 1,
+                total_photos,
+                photo_path.name,
+            )
         if _cancel_signaled(db, job.id, cancel_event):
             job.status = JobStatus.failed
             job.error_message = "Cancelled"
@@ -458,11 +518,28 @@ def process_job(
                 db.commit()
             continue
         lot_candidate = LotOutput.from_model(payload)
+        if settings.job_debug_inventory:
+            _LOG.info(
+                "job=%s raw payload SKU=%s SkuConf=%s title=%r",
+                job.id,
+                payload.get("SKU") or payload.get("sku"),
+                payload.get("SkuConfidence") or payload.get("sku_read_confidence"),
+                (payload.get("AuctionTitle") or payload.get("Title") or payload.get("item_name") or "")[:120],
+            )
         if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
             # Injected SKU is for display/continuity only — not a new tape read on this frame.
             lot_candidate.sku = None
             lot_candidate.sku_needs_review = False
-        _strip_maker_stamp_misread_as_tape_sku(lot_candidate)
+        _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
+        if settings.job_debug_inventory:
+            _LOG.info(
+                "job=%s after strip i=%s file=%s sku=%s blank_page=%s",
+                job.id,
+                i + 1,
+                photo_path.name,
+                lot_candidate.sku,
+                lot_candidate.lot_boundary_blank_page,
+            )
         if lot_candidate.lot_boundary_blank_page:
             if single_lot_mode:
                 continue
@@ -497,7 +574,18 @@ def process_job(
             and lot_candidate.sku
             and not single_lot_mode
         ):
+            t_verify = time.monotonic()
             verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
+            if settings.job_debug_inventory:
+                _LOG.info(
+                    "job=%s tape_verify i=%s file=%s claimed=%s result=%s ms=%.0f",
+                    job.id,
+                    i + 1,
+                    photo_path.name,
+                    sku_digits(lot_candidate.sku),
+                    verified,
+                    (time.monotonic() - t_verify) * 1000.0,
+                )
             if verified is not True:
                 lot_candidate.sku = None
                 sku_ok = False

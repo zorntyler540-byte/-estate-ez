@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     )
     # Appended to both tape audit prompts (after the fixed instructions). Newlines allowed.
     tape_verify_prompt_suffix: str = Field(default="", alias="TAPE_VERIFY_PROMPT_SUFFIX")
+    # When true, log each inventory-loop step (file, sku, tape-verify timing) at INFO for stuck-job diagnosis.
+    job_debug_inventory: bool = Field(default=False, alias="JOB_DEBUG_INVENTORY")
 
     # Comma-separated browser origins allowed to call the API (production Next URL). Dev localhost always included.
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
