@@ -181,6 +181,8 @@ function specLinePlainForQuill(item) {
 
 /** Quill often drops ``<br>`` inside one ``<p>``; tight ``<p>`` per row keeps line breaks without list margins. */
 const CT_DESC_P = ' style="margin:0;padding:0;line-height:1.35"';
+/** One blank line under prose when Key Details follows (``margin-bottom`` ≈ one line at this line-height). */
+const CT_DESC_BODY_BEFORE_DETAILS = ' style="margin:0 0 1.35em 0;padding:0;line-height:1.35"';
 
 /**
  * Plain text for textareas + Quill HTML: narrative in one block; each spec on its own tight ``<p>`` with a leading hyphen.
@@ -212,14 +214,18 @@ function buildDescriptionPayload(lot) {
   const plainSections = [];
   if (body) plainSections.push(body);
   if (specItems.length) {
+    if (plainSections.length) plainSections.push("");
     plainSections.push(["Key Details:", ...specItems.map((item) => `- ${item}`)].join("\n"));
   }
-  if (brands.length) plainSections.push(`Brands: ${brands.join(", ")}`);
+  if (brands.length) {
+    plainSections.push(`Brands: ${brands.join(", ")}`);
+  }
   const plain = plainSections.join("\n").trim();
 
   const htmlParts = [];
   if (body) {
-    htmlParts.push(`<p${CT_DESC_P}>${escapeHtml(body)}</p>`);
+    const bodyStyle = specItems.length ? CT_DESC_BODY_BEFORE_DETAILS : CT_DESC_P;
+    htmlParts.push(`<p${bodyStyle}>${escapeHtml(body)}</p>`);
   }
   if (specItems.length) {
     htmlParts.push(`<p${CT_DESC_P}>Key Details:</p>`);
