@@ -125,6 +125,86 @@ def _title_tokens(title: str) -> set[str]:
     return {t for t in raw if len(t) > 2 and t not in _TITLE_STOPWORDS}
 
 
+# Used only for merge-before-new-tape when the open lot has no SKU yet (detail before hero with tape).
+_SHARED_MATERIAL_TOKENS = frozenset(
+    {
+        "ceramic",
+        "porcelain",
+        "pottery",
+        "earthenware",
+        "stoneware",
+        "glass",
+        "crystal",
+        "wood",
+        "metal",
+        "brass",
+        "bronze",
+        "pewter",
+        "silver",
+        "chrome",
+        "plastic",
+        "resin",
+        "stone",
+        "marble",
+        "iron",
+        "steel",
+        "copper",
+        "aluminum",
+        "bamboo",
+        "wicker",
+        "rattan",
+    }
+)
+_SHARED_FORM_TOKENS = frozenset(
+    {
+        "pitcher",
+        "ewer",
+        "jug",
+        "teapot",
+        "creamer",
+        "carafe",
+        "decanter",
+        "vase",
+        "bowl",
+        "platter",
+        "plate",
+        "tray",
+        "tureen",
+        "pot",
+        "mug",
+        "cup",
+        "saucer",
+        "figurine",
+        "statue",
+        "clock",
+        "lamp",
+        "candlestick",
+        "candelabra",
+        "chair",
+        "table",
+        "desk",
+        "dresser",
+        "mirror",
+        "frame",
+        "bookcase",
+        "cabinet",
+    }
+)
+
+
+def _lot_text_blob_for_overlap(lot: LotOutput) -> str:
+    """Macro + detail frames often disagree on ``auction_title``; include prose/spec hints."""
+    specs = " ".join(lot.specification_lines[:10])
+    desc = (lot.professional_description or "")[:1200]
+    return " ".join([lot.auction_title or "", desc, specs])
+
+
+def _shared_material_and_form_tokens(ta: set[str], tb: set[str]) -> bool:
+    """True when both lots mention the same material and the same object class (e.g. ceramic + pitcher)."""
+    shared = ta & tb
+    return bool((shared & _SHARED_MATERIAL_TOKENS) and (shared & _SHARED_FORM_TOKENS))
+
+
 def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
     """
     Detail shots of silverplate often show stamped pattern numbers (e.g. 1420) on the base — not purple tape.
@@ -175,14 +255,26 @@ def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     """
     Heuristic continuity check to avoid accidental lot splits in bulk uploads.
     Returns true when title/brand overlap strongly suggests same physical item.
+
+    When the open lot has **no tape SKU yet** (detail shots before the hero frame with purple tape),
+    compare tokens from title + description + specs so a handle macro still matches the SA015
+    wide shot (e.g. both ``ceramic`` + ``pitcher``).
     """
-    current_tokens = _title_tokens(current_lot.auction_title)
-    candidate_tokens = _title_tokens(candidate.auction_title)
+    if current_lot.sku is None:
+        current_tokens = _title_tokens(_lot_text_blob_for_overlap(current_lot))
+        candidate_tokens = _title_tokens(_lot_text_blob_for_overlap(candidate))
+    else:
+        current_tokens = _title_tokens(current_lot.auction_title)
+        candidate_tokens = _title_tokens(candidate.auction_title)
     token_overlap = bool(current_tokens and candidate_tokens and (current_tokens & candidate_tokens))
     current_brands = {b.lower() for b in current_lot.brands if b}
     candidate_brands = {b.lower() for b in candidate.brands if b}
     brand_overlap = bool(current_brands and candidate_brands and (current_brands & candidate_brands))
-    return token_overlap or brand_overlap
+    if token_overlap or brand_overlap:
+        return True
+    if current_lot.sku is None and _shared_material_and_form_tokens(current_tokens, candidate_tokens):
+        return True
+    return False
 
 
 def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> None:
