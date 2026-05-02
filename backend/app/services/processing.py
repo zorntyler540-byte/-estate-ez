@@ -16,7 +16,9 @@ from app.core.lotting import (
     normalize_tape_sku_input,
     payload_lot_boundary_blank_page,
     sku_digits,
+    tape_marking_canonical,
     tape_sku_opens_new_lot,
+    tape_sku_same_marking,
 )
 from sqlalchemy import update
 
@@ -425,13 +427,11 @@ def process_job(
             continue
 
         if sku_ok:
-            lot_candidate.sku = sku_digits(lot_candidate.sku)
+            lot_candidate.sku = tape_marking_canonical(lot_candidate.sku) or lot_candidate.sku
             lot_candidate.sku_needs_review = False
             if current_lot is not None:
-                current_digits = sku_digits(current_lot.sku) if current_lot.sku else ""
-                candidate_digits = sku_digits(lot_candidate.sku) if lot_candidate.sku else ""
                 # Do not split on repeated reads of the same lot tape across adjacent frames.
-                if current_digits and candidate_digits and current_digits == candidate_digits:
+                if tape_sku_same_marking(current_lot.sku, lot_candidate.sku):
                     current_lot.merge_detail(payload)
                     row = Photo(
                         account_id=job.account_id,

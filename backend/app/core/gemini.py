@@ -14,7 +14,7 @@ import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import settings
-from app.core.lotting import normalize_tape_sku_input
+from app.core.lotting import tape_marking_canonical
 from app.services.image_preprocess import prepare_gemini_image_file
 
 TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
@@ -64,11 +64,12 @@ class InventoryTableEntry(BaseModel):
         default=None,
         validation_alias=AliasChoices("sku", "SKU"),
         description=(
-            "Handwritten lot digits on PURPLE or LAVENDER adhesive estate tape (when a second crop image is "
-            "provided, prefer reading sku from that crop). If the tape shows a # symbol, return ONLY the digit "
-            "characters written after the # (still as digits-only in this field, e.g. #015 → 015). "
-            "Do not append or invent extra digits (keep 3–4 digit lots like 015 as 015, not 0015 merged with "
-            "other numbers). null if unreadable or not on qualifying tape."
+            "Handwritten lot code on PURPLE or LAVENDER adhesive estate tape (when a second crop image is "
+            "provided, prefer reading sku from that crop). Codes may be digits-only (e.g. 015) or letters+digits "
+            "on one line (e.g. SR006, SA004, SA 003) — return that main line as written (spaces optional); "
+            "ignore a small stray digit drawn above/beside the main code if it is clearly not part of the lot id. "
+            "If the tape shows #, return digits after # unless the visible code is clearly letter+digit style. "
+            "Do not merge unrelated numbers. null if unreadable or not on qualifying tape."
         ),
     )
     sku_read_confidence: str | None = Field(
@@ -135,9 +136,11 @@ SYSTEM_INSTRUCTION = (
     "rear stickers, power bricks, and cable shots when they belong to the same catalog item. "
     "When two images are provided, image 1 is the full catalog frame; image 2 is a high-contrast crop of "
     "purple/lavender estate tape — use image 2 first to read sku. "
-    "For sku ONLY: HANDWRITTEN digits on PURPLE or LAVENDER adhesive tape near the rack or item. "
+    "For sku ONLY: HANDWRITTEN lot codes on PURPLE or LAVENDER adhesive tape near the rack or item — either "
+    "digits-only (e.g. 015) or letter+digit tape marks (e.g. SR006, SA004, SA 003). Ignore tiny stray digits "
+    "scribbled above the main code if they are not part of that line. "
     "Never use sewn-in garment tags, size tags, RN/style codes, care-label numbers, years, or ZIP codes as sku. "
-    "If a # is visible on the tape, sku must be ONLY the digits after that # (digits-only in the field). "
+    "If a # is visible on the tape, prefer digits after # unless the main readable code is clearly letter+digit. "
     "Never merge unrelated digit strings (e.g. 015 stays three characters, not five). "
     "Set sku_read_confidence to low or unsure when the tape read is not crisp. "
     "Use condition_notes for numbers not on purple/lavender tape. "
@@ -166,12 +169,13 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- item_name: short auction-style title for the item.\n"
         "- brand: primary visible brand as plain text (single string).\n"
         "- material, condition_notes, era: concise factual strings.\n"
-        "- sku: NON-NULL ONLY for HANDWRITTEN lot digits on PURPLE or LAVENDER estate tape (not the product body). "
+        "- sku: NON-NULL ONLY for HANDWRITTEN lot codes on PURPLE or LAVENDER estate tape (not the product body). "
+        "Codes may be digits-only (015) or letters plus digits on one line (SR006, SA004, SA 003). Ignore a small "
+        "stray digit above the main line if it is not part of the lot id. "
         "Ignore brand/size/care tags and label addresses — those are not the estate lot sku. "
         "If a second image is attached, it is a zoomed high-contrast tape crop — read sku from it when present. "
-        "If the tape shows #, return ONLY the digits that appear AFTER the # (field value is digits-only, e.g. "
-        "#015 → 015). Do not concatenate unrelated numbers; keep 3- or 4-digit lots without extra digits. "
-        "Otherwise sku = handwritten lot digits only. null if unreadable or not on purple/lavender tape. "
+        "If the tape shows #, return digits after # unless the readable code is clearly letter+digit style. "
+        "Do not concatenate unrelated numbers. null if unreadable or not on purple/lavender tape. "
         "Describe other numbers in condition_notes.\n"
         "- sku_read_confidence: high | medium | low | unsure — set low/unsure for wide shots, blur, or ambiguous "
         "strokes.\n"
@@ -191,7 +195,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
 
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
     """Convert validated table row to the dict shape expected by LotOutput.from_model."""
-    sku_clean = normalize_tape_sku_input(row.sku)
+    sku_clean = tape_marking_canonical(row.sku)
     title = row.item_name.strip()
     if not title:
         if sku_clean:

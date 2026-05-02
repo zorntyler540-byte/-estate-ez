@@ -163,14 +163,46 @@ def _sanitize_gendered_title(title: str, payload: dict[str, Any]) -> str:
     return out
 
 
+def tape_marking_canonical(raw: str | None) -> str | None:
+    """
+    Normalize a handwritten purple-tape lot code for storage and comparison.
+
+    Supports:
+    - Digits-only after ``#`` or plain digit runs (2–6 digits), via ``normalize_tape_sku_input``.
+    - Letter prefix + digits on tape (e.g. ``SR006``, ``SA004``, ``SA 003``) → uppercase letters + digits, no space.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.lower() in ("null", "none", "n/a", "unknown", "undefined", ""):
+        return None
+    compact = re.sub(r"\s+", "", s)
+    if "#" in compact:
+        tail = compact.rsplit("#", 1)[-1]
+        m = re.search(r"([A-Za-z]{1,4})(\d{2,6})", tail)
+        if m:
+            return f"{m.group(1).upper()}{m.group(2)}"
+        return normalize_tape_sku_input(tail)
+    m = re.match(r"^([A-Za-z]{1,4})(\d{2,6})$", compact)
+    if m:
+        return f"{m.group(1).upper()}{m.group(2)}"
+    return normalize_tape_sku_input(s)
+
+
 def tape_sku_opens_new_lot(sku: Any) -> bool:
-    if sku is None:
-        return False
-    raw = str(sku).strip()
-    if not raw or raw.lower() in ("null", "none", "n/a", "unknown", "undefined"):
-        return False
-    digits = re.sub(r"\D", "", raw)
-    return 1 <= len(digits) <= 12
+    return tape_marking_canonical(str(sku).strip() if sku is not None else None) is not None
+
+
+def tape_sku_same_marking(a: str | None, b: str | None) -> bool:
+    """True when two tape sku strings refer to the same marking (letters + digits or digits-only)."""
+    ca = tape_marking_canonical(a)
+    cb = tape_marking_canonical(b)
+    if ca is not None and cb is not None and ca == cb:
+        return True
+    da = sku_digits(a)
+    db = sku_digits(b)
+    # Same numeric tail when one frame is digits-only and another is letter+digit (e.g. 006 vs SR006).
+    return len(da) >= 2 and len(db) >= 2 and da == db
 
 
 def sku_digits(value: Any) -> str:
@@ -209,8 +241,9 @@ def payload_suggests_sku_review(payload: dict[str, Any]) -> bool:
     """True when the model omitted a tape SKU or was unconfident — worth human verification after the job."""
     conf = str(payload.get("SkuConfidence") or payload.get("sku_read_confidence") or "").strip().lower()
     raw = payload.get("SKU")
+    mark = tape_marking_canonical(str(raw).strip() if raw is not None and str(raw).strip() else None)
     sku_clean = sku_digits(raw) if raw not in (None, "") else None
-    if not sku_clean:
+    if not mark and not sku_clean:
         return True
     return conf in ("low", "unsure")
 
@@ -312,7 +345,7 @@ class LotOutput:
         raw_sku = payload.get("SKU")
         if raw_sku is None:
             raw_sku = payload.get("sku")
-        sku_normalized = normalize_tape_sku_input(
+        sku_normalized = tape_marking_canonical(
             str(raw_sku).strip() if raw_sku is not None and str(raw_sku).strip() else None
         )
         title = (
