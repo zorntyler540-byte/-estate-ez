@@ -94,7 +94,7 @@ def sanitize_description_unknowns(text: str) -> str:
     if not s:
         return s
     pattern = re.compile(r"(?i)\bnoted brands?:\s*([^.]*)\.")
-    while True:
+    for _ in range(500):
         m = pattern.search(s)
         if not m:
             break
@@ -106,6 +106,9 @@ def sanitize_description_unknowns(text: str) -> str:
             label = "Noted brand" if len(kept) == 1 else "Noted brands"
             replacement = f"{label}: {', '.join(kept)}."
         s = f"{s[:m.start()]}{replacement}{s[m.end():]}"
+        s = clean_listing_text(s)
+    else:
+        # Pathological model prose: avoid unbounded loop.
         s = clean_listing_text(s)
     # Remove generic placeholder clauses that leak into prose.
     s = re.sub(r"(?i)\bnoted brand:\s*(unknown|unbranded|unmarked|none|n/?a|null)\.?", "", s)

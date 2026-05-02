@@ -347,6 +347,25 @@ def _emit_job_debug(job: ProcessingJob, message: str) -> None:
     _emit_job(job, {"type": "job_log", "message": message})
 
 
+def _emit_inventory_tick(
+    job: ProcessingJob, *, index: int, total: int, photo_path: Path, stage: str
+) -> None:
+    """
+    Small ``data:`` SSE between slow steps so HTTP proxies (e.g. Railway edge) do not close the
+    EventSource with 502 while ``merge_detail`` / ``tape_verify`` / DB work runs without other events.
+    """
+    _emit_job(
+        job,
+        {
+            "type": "inventory_tick",
+            "index": index,
+            "total": total,
+            "file_name": photo_path.name,
+            "stage": stage,
+        },
+    )
+
+
 def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_id: str) -> Lot:
     ct_category, ct_subcategory = infer_ct_category(lot)
     row = Lot(
@@ -597,6 +616,7 @@ def process_job(
             and lot_candidate.sku
             and not single_lot_mode
         ):
+            _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="tape_verify")
             t_verify = time.monotonic()
             verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
             _emit_job_debug(
@@ -616,6 +636,7 @@ def process_job(
                 sku_ok = False
 
         if single_lot_mode and current_lot is not None:
+            _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
             current_lot.merge_detail(payload)
             row = Photo(
                 account_id=job.account_id,
@@ -636,6 +657,7 @@ def process_job(
             if current_lot is not None:
                 # Do not split on repeated reads of the same lot tape across adjacent frames.
                 if tape_sku_same_marking(current_lot.sku, lot_candidate.sku):
+                    _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
                     row = Photo(
                         account_id=job.account_id,
@@ -651,6 +673,7 @@ def process_job(
                     continue
                 # Guard against one-frame false-positive sku flips when content appears continuous.
                 if _likely_same_item(current_lot, lot_candidate):
+                    _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
                     row = Photo(
                         account_id=job.account_id,
@@ -666,6 +689,7 @@ def process_job(
                     continue
             if current_lot is not None:
                 _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)
+                _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="save_lot")
                 persisted = _save_lot(db, job.account_id, job.user_id, current_lot, job.sale_id)
                 db.flush()
                 _assign_photos_to_lot(db, persisted.id, pending_photo_ids)
@@ -704,6 +728,7 @@ def process_job(
             db.commit()
             continue
 
+        _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
         current_lot.merge_detail(payload)
         _emit_job_debug(job, f"job={job.id} merged_detail i={i + 1} file={photo_path.name}")
         row = Photo(
