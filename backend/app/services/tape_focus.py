@@ -45,6 +45,7 @@ def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
 
     try:
         with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
             rgb = im.convert("RGB")
     except Exception:
         return None

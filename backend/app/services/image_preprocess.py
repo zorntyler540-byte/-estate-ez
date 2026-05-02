@@ -19,9 +19,11 @@ def bytes_to_gemini_jpeg(
     quality: int = 82,
 ) -> bytes:
     """Decode image bytes, downscale to fit max_edge, return JPEG bytes for Gemini."""
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     with Image.open(BytesIO(data)) as im:
+        # Phone JPEGs often rely on EXIF Orientation; without this, saved catalog bytes stay sideways.
+        im = ImageOps.exif_transpose(im)
         if im.mode in ("RGBA", "P"):
             rgba = im.convert("RGBA")
             background = Image.new("RGB", rgba.size, (255, 255, 255))
