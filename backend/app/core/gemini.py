@@ -69,7 +69,10 @@ class InventoryTableEntry(BaseModel):
             "on one line (e.g. SR006, SA004, SA 003) — return that main line as written (spaces optional); "
             "ignore a small stray digit drawn above/beside the main code if it is clearly not part of the lot id. "
             "If the tape shows #, return digits after # unless the visible code is clearly letter+digit style. "
-            "Do not merge unrelated numbers. null if unreadable or not on qualifying tape."
+            "Do not merge unrelated numbers. null if unreadable or not on qualifying tape. "
+            "Never use stamped or engraved pattern / catalog numbers on the underside of silverplate or Sheffield "
+            "reproduction holloware (e.g. spaced 1 4 2 0 or 1420 near SHEFFIELD REPRODUCTION) as sku — those are "
+            "maker marks, not estate tape."
         ),
     )
     sku_read_confidence: str | None = Field(
@@ -140,6 +143,8 @@ SYSTEM_INSTRUCTION = (
     "digits-only (e.g. 015) or letter+digit tape marks (e.g. SR006, SA004, SA 003). Ignore tiny stray digits "
     "scribbled above the main code if they are not part of that line. "
     "Never use sewn-in garment tags, size tags, RN/style codes, care-label numbers, years, or ZIP codes as sku. "
+    "Never use stamped underside pattern numbers on silverplate (e.g. 1420 next to SHEFFIELD REPRODUCTION HAND CHASED) "
+    "as sku — only handwritten codes on purple/lavender adhesive tape. "
     "If a # is visible on the tape, prefer digits after # unless the main readable code is clearly letter+digit. "
     "Never merge unrelated digit strings (e.g. 015 stays three characters, not five). "
     "Set sku_read_confidence to low or unsure when the tape read is not crisp. "
@@ -174,6 +179,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "Codes may be digits-only (015) or letters plus digits on one line (SR006, SA004, SA 003). Ignore a small "
         "stray digit above the main line if it is not part of the lot id. "
         "Ignore brand/size/care tags and label addresses — those are not the estate lot sku. "
+        "Ignore stamped or engraved numbers on the metal base (Sheffield reproduction, pattern numbers like 1420) — "
+        "those are manufacturer marks, not purple-tape lot sku. "
         "If a second image is attached, it is a zoomed high-contrast tape crop — read sku from it when present. "
         "If the tape shows #, return digits after # unless the readable code is clearly letter+digit style. "
         "Do not concatenate unrelated numbers. null if unreadable or not on purple/lavender tape. "

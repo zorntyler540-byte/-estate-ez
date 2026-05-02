@@ -55,6 +55,47 @@ def _title_tokens(title: str) -> set[str]:
     return {t for t in raw if len(t) > 2 and t not in _TITLE_STOPWORDS}
 
 
+def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput) -> None:
+    """
+    Detail shots of silverplate often show stamped pattern numbers (e.g. 1420) on the base — not purple tape.
+
+    When the model puts those digits in ``sku``, we would otherwise run tape verify and churn lot boundaries.
+    Letter+digit tape codes (SA001) are left unchanged.
+    """
+    if not lot.sku or lot.lot_boundary_blank_page:
+        return
+    compact = re.sub(r"\s+", "", str(lot.sku).strip())
+    if re.fullmatch(r"\d{2,6}", compact) is None:
+        return
+    parts = [lot.auction_title, lot.professional_description, lot.condition]
+    parts.extend(lot.specification_lines or [])
+    parts.extend(lot.brands or [])
+    blob = " ".join(str(p) for p in parts if p).lower()
+    sheffield_style = "sheffield" in blob and (
+        "reproduction" in blob or "hand chased" in blob or "hand-chased" in blob
+    )
+    base_markings = any(
+        k in blob
+        for k in (
+            "underside",
+            "under side",
+            "bottom of",
+            "base stamp",
+            "hallmark",
+            "maker mark",
+            "makers mark",
+            "maker's mark",
+            "stamped on",
+        )
+    )
+    silver_context = any(
+        k in blob for k in ("silver", "plate", "silverplate", "silver plate", "epns", "hollowware", "holloware")
+    )
+    if sheffield_style or (base_markings and silver_context):
+        lot.sku = None
+        lot.sku_needs_review = False
+
+
 def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     """
     Heuristic continuity check to avoid accidental lot splits in bulk uploads.
@@ -134,6 +175,15 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
         if not sku_clean and last:
             p["SKU"] = last
             p[_CT_SKU_INJECTED_FALLBACK_KEY] = True
+        try:
+            _tmp_lo = LotOutput.from_model(p)
+        except (TypeError, ValueError, KeyError):
+            _tmp_lo = None
+        if _tmp_lo is not None:
+            _strip_maker_stamp_misread_as_tape_sku(_tmp_lo)
+            if _tmp_lo.sku is None:
+                p.pop("SKU", None)
+                p.pop(_CT_SKU_INJECTED_FALLBACK_KEY, None)
         sku_after = sku_digits(p.get("SKU")) if p.get("SKU") not in (None, "") else None
         if sku_after:
             # Always advance on high/medium confidence.
@@ -412,6 +462,7 @@ def process_job(
             # Injected SKU is for display/continuity only — not a new tape read on this frame.
             lot_candidate.sku = None
             lot_candidate.sku_needs_review = False
+        _strip_maker_stamp_misread_as_tape_sku(lot_candidate)
         if lot_candidate.lot_boundary_blank_page:
             if single_lot_mode:
                 continue
