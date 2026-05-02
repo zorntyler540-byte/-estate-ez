@@ -9,6 +9,16 @@ import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
+function readStoredToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token") || "";
+}
+
+function readStoredSaleId(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(SALE_STORAGE_KEY) || "";
+}
+
 function isAuthFailureMessage(message: string): boolean {
   const m = message.toLowerCase();
   return (
@@ -16,6 +26,25 @@ function isAuthFailureMessage(message: string): boolean {
     m.includes("401") ||
     m.includes("unauthorized")
   );
+}
+
+/** One retry helps flaky mobile / wake-from-sleep where the first ``fetch`` throws. */
+async function withNetworkRetry<T>(fn: () => Promise<T>, attempts = 2): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      const msg = e instanceof Error ? e.message : "";
+      const maybeTransient =
+        /failed to fetch|networkerror|network request failed|load failed|aborted/i.test(msg) ||
+        (e instanceof TypeError && !msg);
+      if (!maybeTransient || i === attempts - 1) throw e;
+      await new Promise((r) => setTimeout(r, 280 + i * 220));
+    }
+  }
+  throw last;
 }
 
 type Sale = {
@@ -183,9 +212,13 @@ export default function DashboardPage() {
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   const inventoryFirstLoad = useRef(true);
-  const [token, setToken] = useState<string>("");
+  const salesLoadId = useRef(0);
+  const inventoryLoadId = useRef(0);
+  const [token, setToken] = useState<string>(readStoredToken);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [selectedSaleId, setSelectedSaleId] = useState<string>("");
+  const [selectedSaleId, setSelectedSaleId] = useState<string>(readStoredSaleId);
+  /** Bumps after bfcache restore or return from lot detail so sales/lots/jobs refetch. */
+  const [dataReloadNonce, setDataReloadNonce] = useState(0);
   const selectedSaleIdRef = useRef<string>("");
   const [newSaleName, setNewSaleName] = useState("");
   const [creatingSale, setCreatingSale] = useState(false);
@@ -236,6 +269,32 @@ export default function DashboardPage() {
     const done = photoPendingSlots.filter((s) => s.status === "analyzed").length;
     return { done, total };
   }, [photoPendingSlots]);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("ct_from_lot_detail") === "1") {
+        sessionStorage.removeItem("ct_from_lot_detail");
+        setToken(localStorage.getItem("token") || "");
+        setDataReloadNonce((n) => n + 1);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      try {
+        setToken(localStorage.getItem("token") || "");
+        setDataReloadNonce((n) => n + 1);
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   useEffect(() => {
     setSaleZipExport(null);
@@ -291,8 +350,11 @@ export default function DashboardPage() {
       return;
     }
     setLoading(true);
-    void apiFetch("/sales", t)
+    const loadId = ++salesLoadId.current;
+    void withNetworkRetry(() => apiFetch("/sales", t))
       .then((sl) => {
+        if (loadId !== salesLoadId.current) return;
+        setError("");
         const arr = sl as Sale[];
         setSales(arr);
         if (!arr.length) {
@@ -310,6 +372,7 @@ export default function DashboardPage() {
         });
       })
       .catch((e) => {
+        if (loadId !== salesLoadId.current) return;
         const msg = e instanceof Error ? e.message : "Load failed";
         if (isAuthFailureMessage(msg)) {
           localStorage.removeItem("token");
@@ -320,7 +383,7 @@ export default function DashboardPage() {
         setError(msg);
         setLoading(false);
       });
-  }, [router]);
+  }, [router, dataReloadNonce]);
 
   useEffect(() => {
     if (!token || !selectedSaleId) {
@@ -331,15 +394,21 @@ export default function DashboardPage() {
       setLoading(true);
     }
     localStorage.setItem(SALE_STORAGE_KEY, selectedSaleId);
-    Promise.all([
-      apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}`, t),
-      apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
-    ])
+    const loadId = ++inventoryLoadId.current;
+    void withNetworkRetry(() =>
+      Promise.all([
+        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}`, t),
+        apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
+      ])
+    )
       .then(([lotsData, jobsData]) => {
+        if (loadId !== inventoryLoadId.current) return;
+        setError("");
         setLots(lotsData as Lot[]);
         setJobs(jobsData as Job[]);
       })
       .catch((e) => {
+        if (loadId !== inventoryLoadId.current) return;
         const msg = e instanceof Error ? e.message : "Load failed";
         if (isAuthFailureMessage(msg)) {
           localStorage.removeItem("token");
@@ -350,12 +419,13 @@ export default function DashboardPage() {
         setError(msg);
       })
       .finally(() => {
+        if (loadId !== inventoryLoadId.current) return;
         if (inventoryFirstLoad.current) {
           inventoryFirstLoad.current = false;
           setLoading(false);
         }
       });
-  }, [token, selectedSaleId, router]);
+  }, [token, selectedSaleId, router, dataReloadNonce]);
 
   useEffect(() => {
     const bumpSse = () => {

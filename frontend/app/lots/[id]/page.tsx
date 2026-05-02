@@ -32,10 +32,15 @@ type Lot = {
   many_photos_review: boolean;
 };
 
+function readStoredToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token") || "";
+}
+
 export default function LotDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
-  const [token, setToken] = useState("");
+  const [token, setToken] = useState(readStoredToken);
   const [lot, setLot] = useState<Lot | null>(null);
   const [catalogPhotos, setCatalogPhotos] = useState<LotPhoto[]>([]);
   const [photosError, setPhotosError] = useState("");
@@ -46,6 +51,21 @@ export default function LotDetailPage() {
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
   const [zipDownloading, setZipDownloading] = useState(false);
+
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem("ct_from_lot_detail");
+    } catch {
+      /* private mode */
+    }
+    return () => {
+      try {
+        sessionStorage.setItem("ct_from_lot_detail", "1");
+      } catch {
+        /* private mode / SSR */
+      }
+    };
+  }, [params.id]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
