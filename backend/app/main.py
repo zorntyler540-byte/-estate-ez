@@ -37,6 +37,7 @@ from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
 from app import export_tasks, job_tasks
+from app.services.processing import run_lot_ai_regenerate_and_save
 from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
@@ -58,6 +59,7 @@ from app.schemas import (
     TeamMemberCreate,
     TeamMemberOut,
     UserSummary,
+    LotAiRegenerateIn,
     LotPhotoOut,
     SaleZipExportOut,
     SplitPhotosToNewLotIn,
@@ -939,6 +941,37 @@ def update_lot(
     peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
     return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+
+
+@app.post("/lots/{lot_id}/ai-regenerate", response_model=LotOut)
+def regenerate_lot_with_ai(
+    lot_id: str,
+    body: LotAiRegenerateIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    """
+    Re-run catalog vision on this lot's image files (optionally a checked subset), merge like a single listing,
+    then replace AI-derived fields on the existing row. Does not move photos.
+    """
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    try:
+        run_lot_ai_regenerate_and_save(
+            db,
+            account_id=current.account_id,
+            user_id=current.id,
+            lot_id=lot_id,
+            photo_ids=body.photo_ids if body.photo_ids else None,
+            preserve_sku=body.preserve_sku,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        code = status.HTTP_503_SERVICE_UNAVAILABLE if "GOOGLE_API_KEY" in msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=msg) from exc
+    return _lot_out_for_id(db, current.account_id, lot_id)
 
 
 @app.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)

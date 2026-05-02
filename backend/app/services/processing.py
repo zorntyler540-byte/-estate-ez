@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -22,8 +23,6 @@ from app.core.lotting import (
     tape_sku_opens_new_lot,
     tape_sku_same_marking,
 )
-from sqlalchemy import update
-
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
 from app.services.image_preprocess import normalize_job_folder_image
@@ -862,4 +861,153 @@ def process_job(
     job.cancel_requested = False
     db.commit()
     _emit_job(job, {"type": "status", "status": "completed"})
+
+
+LOT_AI_REGENERATE_MAX_PHOTOS = 80
+
+
+def _sync_lot_photo_count(db: Session, lot_id: str, account_id: str) -> None:
+    r = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+    if not r:
+        return
+    n = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == lot_id, Photo.account_id == account_id)
+        .scalar()
+        or 0
+    )
+    r.photo_count = n
+
+
+def _run_photo_analysis_parallel(paths: list[Path], *, manifest_tag: str) -> list[dict | None]:
+    """Same execution strategy as ``process_job`` analysis (asyncio or thread pool)."""
+    total = len(paths)
+    try:
+        return asyncio.run(
+            analyze_photos_parallel_async(
+                paths,
+                manifest_tag=manifest_tag,
+                limit=settings.gemini_parallelism,
+                on_each=None,
+            )
+        )
+    except RuntimeError:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        cap = max(1, settings.gemini_parallelism)
+        payloads: list[dict | None] = [None] * total
+        with ThreadPoolExecutor(max_workers=cap) as pool:
+            future_to_index = {
+                pool.submit(analyze_path_with_retries, p, manifest_tag=manifest_tag): i for i, p in enumerate(paths)
+            }
+            for fut in as_completed(future_to_index):
+                i = future_to_index[fut]
+                try:
+                    payloads[i] = fut.result()
+                except Exception:
+                    payloads[i] = None
+        return payloads
+
+
+def run_lot_ai_regenerate_and_save(
+    db: Session,
+    *,
+    account_id: str,
+    user_id: str,
+    lot_id: str,
+    photo_ids: list[str] | None,
+    preserve_sku: bool,
+) -> Lot:
+    """
+    Re-run Gemini on existing catalog files for one lot (or a subset), merge frames like single-lot mode,
+    then overwrite listing fields on the existing ``Lot`` row. Does not create or delete ``Photo`` rows.
+    """
+    if not (settings.google_api_key or "").strip():
+        raise ValueError("GOOGLE_API_KEY is not configured on the server.")
+
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+    if not row:
+        raise ValueError("Lot not found")
+
+    q = db.query(Photo).filter(Photo.lot_id == lot_id, Photo.account_id == account_id)
+    if photo_ids:
+        ids = list(dict.fromkeys(photo_ids))
+        if len(ids) > LOT_AI_REGENERATE_MAX_PHOTOS:
+            raise ValueError(f"At most {LOT_AI_REGENERATE_MAX_PHOTOS} photos per AI regenerate request.")
+        photos = q.filter(Photo.id.in_(ids)).all()
+        found = {p.id for p in photos}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            raise ValueError("One or more photo ids are not on this lot.")
+        order = {pid: j for j, pid in enumerate(ids)}
+        photos.sort(key=lambda p: (order.get(p.id, 999), p.created_at.timestamp()))
+    else:
+        photos = q.order_by(Photo.created_at.asc()).all()
+
+    if len(photos) > LOT_AI_REGENERATE_MAX_PHOTOS:
+        raise ValueError(f"At most {LOT_AI_REGENERATE_MAX_PHOTOS} photos per AI regenerate request.")
+    if not photos:
+        raise ValueError("This lot has no catalog photos to analyze.")
+
+    paths: list[Path] = []
+    for ph in photos:
+        pth = Path(ph.storage_path).resolve()
+        if pth.is_file():
+            paths.append(pth)
+    if not paths:
+        raise ValueError("Image files are missing on disk for this lot.")
+
+    payloads = _run_photo_analysis_parallel(paths, manifest_tag=f"regen-{lot_id}")
+    _apply_last_known_sku_fallback(payloads)
+
+    current: LotOutput | None = None
+    for payload in payloads:
+        if not payload:
+            continue
+        try:
+            lot_candidate = LotOutput.from_model(payload)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if lot_candidate.lot_boundary_blank_page:
+            continue
+        _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
+        if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
+            lot_candidate.sku = None
+            lot_candidate.sku_needs_review = False
+        if current is None:
+            current = lot_candidate
+            continue
+        current.merge_detail(payload)
+
+    if current is None:
+        raise ValueError("AI returned no usable rows for these photos — try again or pick different frames.")
+
+    linked = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == lot_id, Photo.account_id == account_id)
+        .scalar()
+        or 0
+    )
+    current.photo_count = linked
+
+    ct_cat, ct_sub = infer_ct_category(current)
+    row.auction_title = current.auction_title
+    row.professional_description = current.professional_description
+    row.specification_lines_json = json.dumps(current.specification_lines, ensure_ascii=True)
+    row.brands_json = json.dumps(current.brands, ensure_ascii=True)
+    row.labels_and_tags_json = json.dumps(current.labels_and_tags, ensure_ascii=True)
+    row.ct_category = ct_cat
+    row.ct_subcategory = ct_sub
+    row.starting_price = current.starting_price
+    row.condition_text = current.condition
+    row.sku_needs_review = bool(current.sku_needs_review)
+    if not preserve_sku:
+        row.sku = current.sku
+    _ = user_id  # future: audit log
+    _sync_lot_photo_count(db, lot_id, account_id)
+    db.commit()
+    db.refresh(row)
+    return row
 

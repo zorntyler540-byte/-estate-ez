@@ -178,6 +178,20 @@ class SplitPhotosToNewLotOut(BaseModel):
     source_lot: LotOut
 
 
+class LotAiRegenerateIn(BaseModel):
+    """Re-run Gemini on disk files already linked to this lot and overwrite listing text (same sale)."""
+
+    photo_ids: list[str] | None = Field(
+        default=None,
+        max_length=200,
+        description="When set, only these photos (in request order) are sent to the model; when omitted, all lot photos in catalog order.",
+    )
+    preserve_sku: bool = Field(
+        default=False,
+        description="When true, keep the lot's current tape SKU and only refresh title/description/specs/etc.",
+    )
+
+
 class MergeLotsIn(BaseModel):
     """Merge ``source_lot_id`` into this lot: all photos move here, then the source lot row is deleted."""
 

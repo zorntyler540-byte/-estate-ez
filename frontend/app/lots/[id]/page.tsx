@@ -69,6 +69,8 @@ export default function LotDetailPage() {
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeMsg, setOrganizeMsg] = useState("");
   const [splitNewLotTitle, setSplitNewLotTitle] = useState("");
+  const [aiRegenerating, setAiRegenerating] = useState(false);
+  const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
 
   useEffect(() => {
     try {
@@ -245,6 +247,45 @@ export default function LotDetailPage() {
   function showNextPhoto() {
     if (viewerIndex === null || viewerIndex >= catalogPhotos.length - 1) return;
     void loadViewerPhoto(viewerIndex + 1);
+  }
+
+  async function regenerateListingWithAi() {
+    if (!lot || !token) return;
+    if (catalogPhotos.length === 0) {
+      setError("This lot has no catalog photos to send to the model.");
+      return;
+    }
+    const n = selectedPhotoIds.size > 0 ? selectedPhotoIds.size : catalogPhotos.length;
+    if (
+      !window.confirm(
+        `Run AI on ${n} photo frame(s)? Title, description, specs, and related fields will be overwritten${preserveSkuForAi ? " (tape SKU kept as on screen)" : ""}. This can take a while.`
+      )
+    ) {
+      return;
+    }
+    setAiRegenerating(true);
+    setError("");
+    try {
+      const photoIdsOrdered =
+        selectedPhotoIds.size > 0
+          ? catalogPhotos.filter((p) => selectedPhotoIds.has(p.id)).map((p) => p.id)
+          : undefined;
+      const body: { photo_ids?: string[]; preserve_sku: boolean } = {
+        preserve_sku: preserveSkuForAi
+      };
+      if (photoIdsOrdered && photoIdsOrdered.length > 0) {
+        body.photo_ids = photoIdsOrdered;
+      }
+      const updated = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/ai-regenerate`, token, {
+        method: "POST",
+        body: JSON.stringify(body)
+      })) as Lot;
+      setLot(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "AI regenerate failed");
+    } finally {
+      setAiRegenerating(false);
+    }
   }
 
   async function save() {
@@ -771,6 +812,42 @@ export default function LotDetailPage() {
         <h2 className="ct-section-title" style={{ margin: "0 0 0.65rem", fontSize: "1.05rem" }}>
           Listing details
         </h2>
+        <div
+          className="ct-stack"
+          style={{
+            marginBottom: "0.85rem",
+            padding: "0.65rem 0.75rem",
+            borderRadius: "var(--ct-radius)",
+            border: "1px solid var(--ct-border)",
+            background: "rgba(255,255,255,0.03)"
+          }}
+        >
+          <p className="ct-muted" style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.45 }}>
+            Re-run catalog vision on the images already stored for this lot. If you checked photos above, only those
+            frames are sent (in gallery order); otherwise all photos are used. Large sets can take several minutes.
+          </p>
+          <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={preserveSkuForAi}
+              onChange={(e) => setPreserveSkuForAi(e.target.checked)}
+              disabled={aiRegenerating || saving}
+            />
+            <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
+              Preserve tape SKU (only refresh title, description, specs, etc.)
+            </span>
+          </label>
+          <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              onClick={() => void regenerateListingWithAi()}
+              disabled={aiRegenerating || saving || !catalogPhotos.length}
+            >
+              {aiRegenerating ? "Running AI…" : "Regenerate listing with AI"}
+            </button>
+          </div>
+        </div>
         <div>
           <label className="ct-label" htmlFor="lot-sku">
             Estate lot SKU (tape digits)
