@@ -499,7 +499,8 @@ def lot_photo_thumbnail(
     db: Session = Depends(get_db),
 ) -> Response:
     """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos`` and extension upload sequence."""
-    max_px = min(800, max(64, int(max_px)))
+    # Cap high enough for CT Seller / marketplace re-uploads; still bounded to limit abuse.
+    max_px = min(2048, max(64, int(max_px)))
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")

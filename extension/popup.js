@@ -1,14 +1,20 @@
 const STORAGE_KEYS = {
   token: "estateEzToken",
   activity: "estateEzActivity",
-  loginEmail: "estateEzLoginEmail"
+  loginEmail: "estateEzLoginEmail",
+  /** Pin ``GET /lots`` to one sale (same as web dashboard) so the list stays fast on Railway. */
+  saleId: "ct_extension_sale_id"
 };
+
+/** JPEG long edge for extension → CT Seller (avoids multi‑MB originals that time out behind Railway). */
+const EXTENSION_UPLOAD_THUMB_MAX = 1600;
 
 const API_BASE = "https://caringtransitions-ai-production.up.railway.app";
 
 const lotBrowser = {
   lots: [],
-  currentLotId: ""
+  currentLotId: "",
+  preferredSaleId: ""
 };
 
 function isAuthFailureMessage(message) {
@@ -47,17 +53,55 @@ async function loadActivity() {
   renderActivity(data[STORAGE_KEYS.activity]);
 }
 
+async function fetchWithRetry(url, init, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 450 + i * 300));
+    try {
+      const res = await fetch(url, { ...init, cache: "no-store" });
+      if ([502, 503, 504].includes(res.status) && i < attempts - 1) {
+        await res.text().catch(() => "");
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      const transient =
+        /failed to fetch|networkerror|network request failed/i.test(lastErr.message) ||
+        (e instanceof TypeError && !lastErr.message);
+      if (!transient || i === attempts - 1) throw lastErr;
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchLots(apiBase, token) {
-  const url = `${apiBase}/lots`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
+  let url = `${apiBase}/lots`;
+  const sid = String(lotBrowser.preferredSaleId || "").trim();
+  if (sid) {
+    url += `?sale_id=${encodeURIComponent(sid)}`;
+  }
+  let res = await fetchWithRetry(url, {
+    headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `API ${res.status}`);
   }
-  const lots = await res.json();
+  let lots = await res.json();
+  if ((!Array.isArray(lots) || lots.length === 0) && sid) {
+    lotBrowser.preferredSaleId = "";
+    await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
+    url = `${apiBase}/lots`;
+    res = await fetchWithRetry(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `API ${res.status}`);
+    }
+    lots = await res.json();
+  }
   if (!Array.isArray(lots) || lots.length === 0) {
     throw new Error("No lots returned — create or select inventory in the Estate app first.");
   }
@@ -84,6 +128,11 @@ async function resolveCurrentLot(apiBase, token, { preferNextOpen = true } = {})
     selected = idx >= 0 ? lots[idx] : lots[0];
   }
   lotBrowser.currentLotId = selected?.id || "";
+  const saleId = String(selected?.sale_id || "").trim();
+  if (saleId) {
+    lotBrowser.preferredSaleId = saleId;
+    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
+  }
   return selected;
 }
 
@@ -94,11 +143,16 @@ function moveCurrentLot(step) {
   const nextIndex = Math.min(Math.max(base + step, 0), lotBrowser.lots.length - 1);
   const lot = lotBrowser.lots[nextIndex];
   lotBrowser.currentLotId = lot?.id || "";
+  const saleId = String(lot?.sale_id || "").trim();
+  if (saleId) {
+    lotBrowser.preferredSaleId = saleId;
+    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
+  }
   return lot;
 }
 
 async function markLotCompleted(apiBase, token, lotId) {
-  const res = await fetch(`${apiBase}/lots/${encodeURIComponent(lotId)}`, {
+  const res = await fetchWithRetry(`${apiBase}/lots/${encodeURIComponent(lotId)}`, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -114,9 +168,8 @@ async function markLotCompleted(apiBase, token, lotId) {
 }
 
 async function fetchLotPhotos(apiBase, token, lotId) {
-  const res = await fetch(`${apiBase}/lots/${encodeURIComponent(lotId)}/photos`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
+  const res = await fetchWithRetry(`${apiBase}/lots/${encodeURIComponent(lotId)}/photos`, {
+    headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
     const text = await res.text();
@@ -129,17 +182,18 @@ async function fetchLotPhotos(apiBase, token, lotId) {
   return list;
 }
 
-async function fetchPhotoBlob(apiBase, token, lotId, photoId) {
-  const res = await fetch(
-    `${apiBase}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/download`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store"
-    }
+/**
+ * Loads a downscaled JPEG for CT Seller upload. Full ``/download`` originals are often too large
+ * and cause Railway 502 / timeouts when many photos are fetched in sequence from the extension popup.
+ */
+async function fetchPhotoBlob(apiBase, token, lotId, photoId, originalName) {
+  const res = await fetchWithRetry(
+    `${apiBase}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${EXTENSION_UPLOAD_THUMB_MAX}`,
+    { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `Photo download API ${res.status}`);
+    throw new Error(text || `Photo API ${res.status}`);
   }
   const blob = await res.blob();
   const ab = await blob.arrayBuffer();
@@ -151,7 +205,13 @@ async function fetchPhotoBlob(apiBase, token, lotId, photoId) {
     const slice = bytes.subarray(i, Math.min(i + step, bytes.length));
     binary += String.fromCharCode.apply(null, slice);
   }
-  return { type: blob.type || "image/jpeg", dataBase64: btoa(binary) };
+  const stem = String(originalName || "photo")
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    .replace(/\.[^.]+$/i, "");
+  const safeName = (stem || "photo").replace(/[^\w.\-]+/g, "_").slice(0, 120) || "photo";
+  return { type: "image/jpeg", dataBase64: btoa(binary), fileName: `${safeName}.jpg` };
 }
 
 function setCurrentLotUI(lot, thumbDataUrl = "") {
@@ -180,7 +240,7 @@ async function refreshCurrentLotCard(apiBase, token, lot) {
     const photos = await fetchLotPhotos(apiBase, token, lot.id);
     if (!photos.length) return;
     const firstPhoto = photos[0];
-    const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, firstPhoto.id);
+    const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, firstPhoto.id, firstPhoto.original_name);
     const dataUrl = `data:${downloaded.type || "image/jpeg"};base64,${downloaded.dataBase64}`;
     setCurrentLotUI(lot, dataUrl);
   } catch (_err) {
@@ -310,9 +370,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   void (async () => {
-    const data = await chrome.storage.local.get([STORAGE_KEYS.token, STORAGE_KEYS.loginEmail]);
+    const data = await chrome.storage.local.get([
+      STORAGE_KEYS.token,
+      STORAGE_KEYS.loginEmail,
+      STORAGE_KEYS.saleId
+    ]);
     authToken = String(data[STORAGE_KEYS.token] || "");
     loginEmailEl.value = String(data[STORAGE_KEYS.loginEmail] || "");
+    lotBrowser.preferredSaleId = String(data[STORAGE_KEYS.saleId] || "").trim();
     renderAuthState();
   })();
   void loadActivity();
@@ -355,11 +420,13 @@ document.addEventListener("DOMContentLoaded", () => {
   logoutBtn.addEventListener("click", async () => {
     authToken = "";
     await clearSession();
+    lotBrowser.preferredSaleId = "";
+    lotBrowser.lots = [];
+    lotBrowser.currentLotId = "";
+    await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
     renderAuthState();
     status.textContent = "Signed out.";
     preview.textContent = "";
-    lotBrowser.lots = [];
-    lotBrowser.currentLotId = "";
   });
 
   function handleActionError(err) {
@@ -429,10 +496,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const photos = await fetchLotPhotos(apiBase, token, lot.id);
 
       const payloadFiles = [];
-      for (const p of photos) {
-        const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, p.id);
+      for (let i = 0; i < photos.length; i += 1) {
+        const p = photos[i];
+        status.textContent = `Fetching lot photos… (${i + 1}/${photos.length})`;
+        const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, p.id, p.original_name);
         payloadFiles.push({
-          name: p.original_name || `${p.id}.jpg`,
+          name: downloaded.fileName || p.original_name || `${p.id}.jpg`,
           type: downloaded.type,
           dataBase64: downloaded.dataBase64
         });
