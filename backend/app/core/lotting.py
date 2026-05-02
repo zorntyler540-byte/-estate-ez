@@ -75,6 +75,25 @@ def normalize_brand_list(value: Any) -> list[str]:
     return out
 
 
+def unwrap_dict_style_spec_line(line: str) -> str:
+    """
+    Gemini sometimes emits one-line pseudo-dicts: ``{'Form': 'Flared vase'}`` instead of ``Form: …``.
+    Normalize to ``Label: value`` so semantic spec bucketing and dedupe apply.
+    """
+    s = (line or "").strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return line
+    inner = s[1:-1].strip()
+    # Single-pair only; values must not contain the same quote delimiter used for wrapping.
+    m = re.match(r"^'([^']{1,120})'\s*:\s*'([^']*)'\s*$", inner)
+    if m:
+        return f"{m.group(1).strip()}: {m.group(2).strip()}"
+    m = re.match(r'^"([^"]{1,120})"\s*:\s*"([^"]*)"\s*$', inner)
+    if m:
+        return f"{m.group(1).strip()}: {m.group(2).strip()}"
+    return line
+
+
 def normalize_listing_lines(value: Any) -> list[str]:
     """Drop placeholder rows such as 'Unknown' or 'Brand: Unknown'."""
     lines = as_str_list(value)
@@ -82,6 +101,7 @@ def normalize_listing_lines(value: Any) -> list[str]:
     seen: set[str] = set()
     for line in lines:
         clean = clean_listing_text(line)
+        clean = clean_listing_text(unwrap_dict_style_spec_line(clean))
         if not clean or _line_has_placeholder_value(clean):
             continue
         if re.match(r"(?i)^noted brands?\s*:", clean):
@@ -131,6 +151,8 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "colours": "spec__color",
     "primary colors": "spec__color",
     "primary colours": "spec__color",
+    "color palette": "spec__color",
+    "colour palette": "spec__color",
     "origin": "spec__origin",
     "country of origin": "spec__origin",
     "quantity": "spec__quantity",
@@ -231,7 +253,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     seen: set[str] = set()
     first: list[str] = []
     for raw in lines:
-        line = clean_listing_text(raw)
+        line = clean_listing_text(unwrap_dict_style_spec_line(clean_listing_text(raw)))
         if not line or _line_has_placeholder_value(line):
             continue
         key = _spec_line_comparison_key(line)

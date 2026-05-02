@@ -218,6 +218,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "length, etc.). Across extra angles of the **same** lot, do not add another line for the same category "
         "when the fact is unchanged (one combined Style / Material / Base / Era / Color / Form / Type row per lot, "
         "or append only genuinely new facts like a second dimension or a new mark).\n"
+        "- specification_lines: each row must be plain ``Label: value`` text. Never use Python/JSON dict literals "
+        "like ``{'Form': '…'}`` — always ``Form: …`` on one line.\n"
         "- specification_lines: never repeat the same decorative fact under several labels. Use **at most one** "
         "line among Pattern / Motif / Design / Surface pattern (pick the clearest label and merge wording); "
         "do not restate spongeware, spatterware, floral medallions, or glaze mottling in multiple pattern rows. "
