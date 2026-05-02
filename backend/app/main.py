@@ -25,7 +25,7 @@ from sse_starlette import EventSourceResponse
 from app.auth import create_access_token, get_current_user, get_current_user_sse, hash_password, verify_password
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
-from app.db import Base, engine, get_db
+from app.db import Base, engine, get_db, SessionLocal
 from app import export_tasks, job_tasks
 from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
@@ -951,21 +951,23 @@ async def job_events_sse(
     job_id: str,
     request: Request,
     current: User = Depends(get_current_user_sse),
-    db: Session = Depends(get_db),
 ) -> EventSourceResponse:
     """
     Server-Sent Events for one processing job. Auth: ``Authorization: Bearer`` or query ``access_token``
     (EventSource cannot set custom headers in all browsers).
     Events are delivered only on the channel ``(user_id, job_id)`` matching the authenticated user and this job.
     """
-    job = (
-        db.query(ProcessingJob)
-        .filter(
-            ProcessingJob.id == job_id,
-            ProcessingJob.account_id == current.account_id,
+    # Short-lived session: do not use Depends(get_db) on this route — the response stays open for the whole
+    # SSE stream and would pin a QueuePool connection until disconnect (same issue as get_current_user_sse).
+    with SessionLocal() as db:
+        job = (
+            db.query(ProcessingJob)
+            .filter(
+                ProcessingJob.id == job_id,
+                ProcessingJob.account_id == current.account_id,
+            )
+            .first()
         )
-        .first()
-    )
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 

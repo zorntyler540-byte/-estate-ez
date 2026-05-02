@@ -9,7 +9,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -77,15 +77,19 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 
 def get_current_user_sse(
-    db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer_optional),
     access_token: str | None = Query(
         None,
         description="Same JWT as Authorization Bearer; required for browser EventSource (no header support).",
     ),
 ) -> User:
+    """
+    Short-lived DB session only. Do not use ``Depends(get_db)`` here: SSE requests stay open for minutes and
+    would otherwise hold a pooled connection for the entire stream (pool exhaustion).
+    """
     token = (credentials.credentials if credentials else None) or (access_token or "").strip()
     if not token:
         raise CREDENTIALS_EXCEPTION
-    return user_from_access_token(token, db)
+    with SessionLocal() as db:
+        return user_from_access_token(token, db)
 

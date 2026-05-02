@@ -94,6 +94,11 @@ class Settings(BaseSettings):
 
     # Recycle pooled DB connections periodically (seconds); helps with stale TLS routers on managed Postgres.
     db_pool_recycle: int = Field(default=280, ge=60, le=3600, alias="DB_POOL_RECYCLE")
+    # Postgres QueuePool sizing (ignored for SQLite). Defaults are higher than SQLAlchemy 5+10 to survive
+    # concurrent HTTP + background job threads; tune per replica × DB max_connections budget.
+    db_pool_size: int = Field(default=10, ge=1, le=50, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=20, ge=0, le=50, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout: int = Field(default=30, ge=5, le=120, alias="DB_POOL_TIMEOUT")
 
     # Suggestions / feedback email (requires SMTP_* for outbound delivery)
     feedback_to_email: str = Field(default="zorntyler540@gmail.com", alias="FEEDBACK_TO_EMAIL")
