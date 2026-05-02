@@ -69,6 +69,39 @@ def _maker_stamp_evidence_blob(lot: LotOutput, raw_payload: dict | None) -> str:
     return " ".join(parts).lower()
 
 
+_TAPE_PHRASES = (
+    "masking tape",
+    "painter tape",
+    "tape roll",
+    "estate tape",
+    "sku tape",
+    "lot tape",
+    "purple tape",
+    "lavender tape",
+)
+
+
+def _blob_suggests_purple_tape_language(blob: str) -> bool:
+    """True when prose likely refers to purple/lavender *estate* tape (not substrings like ``plate`` in ``silverplate``)."""
+    if re.search(r"\b(purple|lavender)\b", blob):
+        return True
+    return any(p in blob for p in _TAPE_PHRASES)
+
+
+def _auction_title_sheffield_stamp_context(lot: LotOutput) -> bool:
+    """Hero titles often include ``Sheffield`` + ``reproduction`` / ``base`` even when body blob omits a field."""
+    t = (lot.auction_title or "").lower()
+    if "sheffield" not in t:
+        return False
+    if "reproduction" in t or "hand chased" in t or "hand-chased" in t:
+        return True
+    if "silverplate" in t or "silver plate" in t:
+        return True
+    if re.search(r"\bbase\b", t):
+        return True
+    return False
+
+
 _TITLE_WORD_RE = re.compile(r"[a-z0-9]+", re.I)
 _TITLE_STOPWORDS = {
     "a",
@@ -97,29 +130,18 @@ def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | N
 
     When the model puts those digits in ``sku``, we would otherwise run tape verify and churn lot boundaries.
 
-    Sheffield reproduction / hand-chased titles without any mention of purple tape: clear **any** sku shape,
-    since those frames are almost never the estate-tape hero shot. Other cases: digits-only plus underside hints.
+    Sheffield reproduction / hand-chased / silverplate base titles: clear **any** sku unless the row text
+    uses real tape wording (word-boundary purple/lavender or phrases like ``purple tape``), not naive substring
+    checks that misfire on ``silverplate``. Other cases: digits-only plus underside hints.
     """
     if not lot.sku or lot.lot_boundary_blank_page:
         return
     blob = _maker_stamp_evidence_blob(lot, raw_payload)
-    tape_mentioned = any(
-        k in blob
-        for k in (
-            "purple",
-            "lavender",
-            "masking tape",
-            "painter tape",
-            "tape roll",
-            "estate tape",
-            "sku tape",
-            "lot tape",
-        )
-    )
     sheffield_style = "sheffield" in blob and (
         "reproduction" in blob or "hand chased" in blob or "hand-chased" in blob
     )
-    if sheffield_style and not tape_mentioned:
+    sheffield_detail = sheffield_style or _auction_title_sheffield_stamp_context(lot)
+    if sheffield_detail and not _blob_suggests_purple_tape_language(blob):
         lot.sku = None
         lot.sku_needs_review = False
         return
@@ -317,6 +339,14 @@ def _emit_job(job: ProcessingJob, payload: dict) -> None:
     job_events.publish(job.user_id, job.id, {**payload, "job_id": job.id})
 
 
+def _emit_job_debug(job: ProcessingJob, message: str) -> None:
+    """Mirror debug lines to stderr and SSE so Railway log search is optional."""
+    if not settings.job_debug_inventory:
+        return
+    _LOG.info("%s", message)
+    _emit_job(job, {"type": "job_log", "message": message})
+
+
 def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_id: str) -> Lot:
     ct_category, ct_subcategory = infer_ct_category(lot)
     row = Lot(
@@ -471,14 +501,10 @@ def process_job(
                 "file_name": photo_path.name,
             },
         )
-        if settings.job_debug_inventory:
-            _LOG.info(
-                "job=%s inventory enter i=%s/%s file=%s",
-                job.id,
-                i + 1,
-                total_photos,
-                photo_path.name,
-            )
+        _emit_job_debug(
+            job,
+            f"job={job.id} inventory enter i={i + 1}/{total_photos} file={photo_path.name}",
+        )
         if _cancel_signaled(db, job.id, cancel_event):
             job.status = JobStatus.failed
             job.error_message = "Cancelled"
@@ -518,28 +544,25 @@ def process_job(
                 db.commit()
             continue
         lot_candidate = LotOutput.from_model(payload)
-        if settings.job_debug_inventory:
-            _LOG.info(
-                "job=%s raw payload SKU=%s SkuConf=%s title=%r",
+        _emit_job_debug(
+            job,
+            "job=%s raw SKU=%s conf=%s title=%r"
+            % (
                 job.id,
                 payload.get("SKU") or payload.get("sku"),
                 payload.get("SkuConfidence") or payload.get("sku_read_confidence"),
-                (payload.get("AuctionTitle") or payload.get("Title") or payload.get("item_name") or "")[:120],
-            )
+                ((payload.get("AuctionTitle") or payload.get("Title") or payload.get("item_name") or "")[:120]),
+            ),
+        )
         if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
             # Injected SKU is for display/continuity only — not a new tape read on this frame.
             lot_candidate.sku = None
             lot_candidate.sku_needs_review = False
         _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
-        if settings.job_debug_inventory:
-            _LOG.info(
-                "job=%s after strip i=%s file=%s sku=%s blank_page=%s",
-                job.id,
-                i + 1,
-                photo_path.name,
-                lot_candidate.sku,
-                lot_candidate.lot_boundary_blank_page,
-            )
+        _emit_job_debug(
+            job,
+            f"job={job.id} after strip i={i + 1} file={photo_path.name} sku={lot_candidate.sku!r} blank={lot_candidate.lot_boundary_blank_page}",
+        )
         if lot_candidate.lot_boundary_blank_page:
             if single_lot_mode:
                 continue
@@ -576,16 +599,18 @@ def process_job(
         ):
             t_verify = time.monotonic()
             verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
-            if settings.job_debug_inventory:
-                _LOG.info(
-                    "job=%s tape_verify i=%s file=%s claimed=%s result=%s ms=%.0f",
+            _emit_job_debug(
+                job,
+                "job=%s tape_verify i=%s file=%s claimed=%s result=%s ms=%.0f"
+                % (
                     job.id,
                     i + 1,
                     photo_path.name,
                     sku_digits(lot_candidate.sku),
                     verified,
                     (time.monotonic() - t_verify) * 1000.0,
-                )
+                ),
+            )
             if verified is not True:
                 lot_candidate.sku = None
                 sku_ok = False

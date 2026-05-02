@@ -17,7 +17,7 @@ _lock = threading.Lock()
 _subscribers: dict[tuple[str, str], list[queue.Queue[str]]] = {}
 # Last N JSON lines per job so a client that connects mid-run can rebuild UI state.
 _replay: dict[tuple[str, str], deque[str]] = {}
-_MAX_REPLAY = 150
+_MAX_REPLAY = 300
 
 
 def subscribe(user_id: str, job_id: str) -> queue.Queue[str]:

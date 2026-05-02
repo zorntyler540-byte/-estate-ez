@@ -485,6 +485,14 @@ export default function DashboardPage() {
             fileName: typeof msg.file_name === "string" ? msg.file_name : ""
           });
         }
+        if (
+          msg.type === "job_log" &&
+          typeof (msg as { message?: unknown }).message === "string" &&
+          processingJobId &&
+          (!msg.job_id || msg.job_id === processingJobId)
+        ) {
+          console.info("[job]", (msg as { message: string }).message);
+        }
         if (msg.type === "lot_ready" && msg.lot?.id && (!msg.job_id || msg.job_id === processingJobId)) {
           const row = normalizeStreamedLot(msg.lot);
           if (row.sale_id && row.sale_id !== selectedSaleIdRef.current) {
