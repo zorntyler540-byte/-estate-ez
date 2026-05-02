@@ -32,6 +32,13 @@ type Lot = {
   many_photos_review: boolean;
 };
 
+type SaleLotOption = {
+  id: string;
+  sku: string | null;
+  auction_title: string;
+  photo_count: number;
+};
+
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("token") || "";
@@ -51,6 +58,13 @@ export default function LotDetailPage() {
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
   const [zipDownloading, setZipDownloading] = useState(false);
+  const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [mergeSourceId, setMergeSourceId] = useState("");
+  const [mergePreferSourceSku, setMergePreferSourceSku] = useState(false);
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [organizeMsg, setOrganizeMsg] = useState("");
 
   useEffect(() => {
     try {
@@ -95,6 +109,44 @@ export default function LotDetailPage() {
     return () => {
       cancelled = true;
     };
+  }, [params.id]);
+
+  useEffect(() => {
+    if (!token || !lot?.sale_id) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const qs = new URLSearchParams({
+          sale_id: lot.sale_id,
+          sort: "created_asc",
+          limit: "500",
+          offset: "0"
+        });
+        const rows = (await apiFetch(`/lots?${qs.toString()}`, token)) as SaleLotOption[];
+        if (!cancelled && Array.isArray(rows)) {
+          setSaleLots(
+            rows.map((r) => ({
+              id: r.id,
+              sku: r.sku ?? null,
+              auction_title: r.auction_title || "",
+              photo_count: typeof r.photo_count === "number" ? r.photo_count : 0
+            }))
+          );
+        }
+      } catch {
+        if (!cancelled) setSaleLots([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, lot?.sale_id]);
+
+  useEffect(() => {
+    setSelectedPhotoIds(new Set());
+    setTransferTargetId("");
+    setMergeSourceId("");
+    setOrganizeMsg("");
   }, [params.id]);
 
   useEffect(() => {
@@ -229,6 +281,111 @@ export default function LotDetailPage() {
     }
   }
 
+  function togglePhotoSelect(photoId: string) {
+    setSelectedPhotoIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(photoId)) next.delete(photoId);
+      else next.add(photoId);
+      return next;
+    });
+  }
+
+  function selectAllCatalogPhotos() {
+    setSelectedPhotoIds(new Set(catalogPhotos.map((p) => p.id)));
+  }
+
+  function clearPhotoSelection() {
+    setSelectedPhotoIds(new Set());
+  }
+
+  async function refetchLotAndPhotos() {
+    if (!token || !params.id) return;
+    const d = await apiFetch(`/lots/${params.id}`, token);
+    setLot(d);
+    const photos = (await apiFetch(`/lots/${params.id}/photos`, token)) as LotPhoto[];
+    setCatalogPhotos(Array.isArray(photos) ? photos : []);
+  }
+
+  async function refetchSaleLotsList() {
+    if (!token || !lot?.sale_id) return;
+    const qs = new URLSearchParams({
+      sale_id: lot.sale_id,
+      sort: "created_asc",
+      limit: "500",
+      offset: "0"
+    });
+    try {
+      const rows = (await apiFetch(`/lots?${qs.toString()}`, token)) as SaleLotOption[];
+      if (Array.isArray(rows)) {
+        setSaleLots(
+          rows.map((r) => ({
+            id: r.id,
+            sku: r.sku ?? null,
+            auction_title: r.auction_title || "",
+            photo_count: typeof r.photo_count === "number" ? r.photo_count : 0
+          }))
+        );
+      }
+    } catch {
+      setSaleLots([]);
+    }
+  }
+
+  async function transferSelectedPhotos() {
+    if (!lot || !token || selectedPhotoIds.size === 0 || !transferTargetId) return;
+    const n = selectedPhotoIds.size;
+    setOrganizeBusy(true);
+    setOrganizeMsg("");
+    setError("");
+    try {
+      await apiFetch(`/lots/${encodeURIComponent(transferTargetId)}/photos/transfer`, token, {
+        method: "POST",
+        body: JSON.stringify({ photo_ids: Array.from(selectedPhotoIds) })
+      });
+      await refetchLotAndPhotos();
+      await refetchSaleLotsList();
+      setSelectedPhotoIds(new Set());
+      setTransferTargetId("");
+      setOrganizeMsg(`Moved ${n} photo(s) to the selected lot.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transfer failed");
+    } finally {
+      setOrganizeBusy(false);
+    }
+  }
+
+  async function mergeSourceIntoThisLot() {
+    if (!lot || !token || !mergeSourceId) return;
+    if (
+      !window.confirm(
+        "Merge the selected lot into this one? All of its photos will move here and the other lot will be deleted. This cannot be undone."
+      )
+    ) {
+      return;
+    }
+    setOrganizeBusy(true);
+    setOrganizeMsg("");
+    setError("");
+    try {
+      await apiFetch(`/lots/${encodeURIComponent(lot.id)}/merge`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          source_lot_id: mergeSourceId,
+          prefer_source_sku: mergePreferSourceSku
+        })
+      });
+      setMergeSourceId("");
+      setMergePreferSourceSku(false);
+      await refetchLotAndPhotos();
+      await refetchSaleLotsList();
+      setOrganizeMsg("Lots merged. The other listing was removed; its photos are now on this lot.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Merge failed");
+    } finally {
+      setOrganizeBusy(false);
+    }
+  }
+
   if (!token) {
     return (
       <main className="ct-shell">
@@ -296,6 +453,136 @@ export default function LotDetailPage() {
             </button>
           </div>
         ) : null}
+        {organizeMsg ? (
+          <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
+            {organizeMsg}
+          </div>
+        ) : null}
+        {catalogPhotos.length > 0 ? (
+          <div
+            style={{
+              border: "1px solid var(--ct-border)",
+              borderRadius: "var(--ct-radius)",
+              padding: "0.85rem",
+              marginBottom: "1rem"
+            }}
+          >
+            <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
+              Move photos to another lot
+            </h3>
+            <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
+              Same sale only. Select images, choose a destination listing, then move them. To combine an entire
+              listing (all photos) into this one, use <strong>Merge a whole lot</strong> below.
+            </p>
+            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={organizeBusy || catalogPhotos.length === 0}
+                onClick={selectAllCatalogPhotos}
+              >
+                Select all photos
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={organizeBusy || selectedPhotoIds.size === 0}
+                onClick={clearPhotoSelection}
+              >
+                Clear selection
+              </button>
+              <span className="ct-muted" style={{ fontSize: "0.82rem", alignSelf: "center" }}>
+                {selectedPhotoIds.size} selected
+              </span>
+            </div>
+            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+              <select
+                className="ct-input"
+                style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                value={transferTargetId}
+                onChange={(e) => setTransferTargetId(e.target.value)}
+                disabled={organizeBusy}
+              >
+                <option value="">— Destination lot —</option>
+                {saleLots
+                  .filter((x) => x.id !== lot.id)
+                  .map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                      {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={
+                  organizeBusy || selectedPhotoIds.size === 0 || !transferTargetId || !saleLots.some((x) => x.id === transferTargetId)
+                }
+                onClick={() => void transferSelectedPhotos()}
+              >
+                {organizeBusy ? "Working…" : "Move selected"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
+          <div
+            style={{
+              border: "1px solid var(--ct-border)",
+              borderRadius: "var(--ct-radius)",
+              padding: "0.85rem",
+              marginBottom: "1rem"
+            }}
+          >
+            <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
+              Merge a whole lot into this one
+            </h3>
+            <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
+              Every photo from the other listing moves here; the other lot row is deleted. A short note is appended
+              to specification lines. Optional: adopt the other lot&apos;s tape SKU if yours is blank or if you check
+              the box to prefer it.
+            </p>
+            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+              <select
+                className="ct-input"
+                style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                value={mergeSourceId}
+                onChange={(e) => setMergeSourceId(e.target.value)}
+                disabled={organizeBusy}
+              >
+                <option value="">— Lot to absorb —</option>
+                {saleLots
+                  .filter((x) => x.id !== lot.id)
+                  .map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                      {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                className="ct-btn"
+                disabled={organizeBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
+                onClick={() => void mergeSourceIntoThisLot()}
+              >
+                {organizeBusy ? "Working…" : "Merge into this lot"}
+              </button>
+            </div>
+            <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
+              <input
+                type="checkbox"
+                checked={mergePreferSourceSku}
+                onChange={(e) => setMergePreferSourceSku(e.target.checked)}
+                disabled={organizeBusy}
+              />
+              <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
+                Prefer the absorbed lot&apos;s tape SKU (overwrites this lot&apos;s SKU when the other has one)
+              </span>
+            </label>
+          </div>
+        ) : null}
         {photosError ? (
           <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
             {photosError}
@@ -339,6 +626,23 @@ export default function LotDetailPage() {
                   >
                     {index + 1}
                   </span>
+                  <input
+                    type="checkbox"
+                    title="Select for move"
+                    checked={selectedPhotoIds.has(p.id)}
+                    onChange={() => togglePhotoSelect(p.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    disabled={organizeBusy}
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      zIndex: 2,
+                      width: "1rem",
+                      height: "1rem",
+                      cursor: "pointer"
+                    }}
+                  />
                   <button
                     type="button"
                     onClick={() => void loadViewerPhoto(index)}

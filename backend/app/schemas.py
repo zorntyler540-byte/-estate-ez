@@ -151,6 +151,24 @@ class LotPhotoOut(BaseModel):
     created_at: datetime
 
 
+class TransferPhotosIn(BaseModel):
+    """Move catalog photos into another lot in the same sale (same account)."""
+
+    photo_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class TransferPhotosOut(BaseModel):
+    moved: int
+    updated_lots: list[LotOut]
+
+
+class MergeLotsIn(BaseModel):
+    """Merge ``source_lot_id`` into this lot: all photos move here, then the source lot row is deleted."""
+
+    source_lot_id: str = Field(min_length=1, max_length=40)
+    prefer_source_sku: bool = False
+
+
 class SaleZipExportOut(BaseModel):
     id: str
     sale_id: str

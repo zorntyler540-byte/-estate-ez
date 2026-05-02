@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, nullslast, select
+from sqlalchemy import func, nullslast, select, update
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -34,6 +34,7 @@ from app.schemas import (
     HealthResponse,
     JobOut,
     LoginRequest,
+    MergeLotsIn,
     LotOut,
     LotUpdate,
     PasswordChangeIn,
@@ -50,6 +51,8 @@ from app.schemas import (
     UserSummary,
     LotPhotoOut,
     SaleZipExportOut,
+    TransferPhotosIn,
+    TransferPhotosOut,
 )
 from app.services import job_events
 from app.services.serialization import (
@@ -91,6 +94,35 @@ def _require_owner(current: User) -> None:
 def _require_open_sale(row: Sale) -> None:
     if row.closed_at is not None:
         raise HTTPException(status_code=409, detail="Sale is closed; reopen or create a new sale for new jobs.")
+
+
+def _assert_sale_editable_for_lot_moves(db: Session, sale_id: str, current: User) -> Sale:
+    sale = _sale_for_user(sale_id, current, db)
+    _require_open_sale(sale)
+    return sale
+
+
+def _reconcile_lot_photo_count(db: Session, lot_id: str, account_id: str) -> None:
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+    if not row:
+        return
+    n = (
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == lot_id, Photo.account_id == account_id)
+        .scalar()
+    )
+    row.photo_count = int(n or 0)
+
+
+def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    has = lot_id in lot_ids_with_linked_photos(db, account_id, [lot_id])
+    peer = sale_lot_photo_counts(db, row.sale_id, account_id)
+    many = photo_count_is_sale_outlier(row.photo_count, peer)
+    return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
 
 
 def _job_out(job: ProcessingJob) -> JobOut:
@@ -521,6 +553,116 @@ def list_lot_photos(
     return [
         LotPhotoOut(id=p.id, lot_id=lot_id, original_name=p.original_name, created_at=p.created_at) for p in photos
     ]
+
+
+@app.post("/lots/{target_lot_id}/photos/transfer", response_model=TransferPhotosOut)
+def transfer_photos_to_lot(
+    target_lot_id: str,
+    body: TransferPhotosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TransferPhotosOut:
+    """
+    Reassign selected catalog photos to ``target_lot_id``. Every photo must already belong to a lot
+    in the **same sale** as the target; the sale must not be closed.
+    """
+    target = db.query(Lot).filter(Lot.id == target_lot_id, Lot.account_id == current.account_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target lot not found")
+    _assert_sale_editable_for_lot_moves(db, target.sale_id, current)
+
+    ids = list(dict.fromkeys(body.photo_ids))  # stable dedupe
+    touched_lots: set[str] = {target_lot_id}
+    moved = 0
+    for pid in ids:
+        ph = db.query(Photo).filter(Photo.id == pid, Photo.account_id == current.account_id).first()
+        if not ph:
+            raise HTTPException(status_code=404, detail=f"Photo not found: {pid}")
+        if ph.lot_id is None:
+            raise HTTPException(status_code=400, detail=f"Photo {pid} is not attached to a lot yet.")
+        if ph.lot_id == target_lot_id:
+            continue
+        src_lot = db.query(Lot).filter(Lot.id == ph.lot_id, Lot.account_id == current.account_id).first()
+        if not src_lot:
+            raise HTTPException(status_code=400, detail=f"Photo {pid} references a missing lot.")
+        if src_lot.sale_id != target.sale_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Photos can only move between lots in the same sale.",
+            )
+        touched_lots.add(ph.lot_id)
+        ph.lot_id = target_lot_id
+        ph.user_id = current.id
+        moved += 1
+
+    if moved == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No photos were moved — they may already be on this lot.",
+        )
+
+    for lid in touched_lots:
+        _reconcile_lot_photo_count(db, lid, current.account_id)
+    db.commit()
+
+    updated = [_lot_out_for_id(db, current.account_id, lid) for lid in sorted(touched_lots)]
+    return TransferPhotosOut(moved=moved, updated_lots=updated)
+
+
+@app.post("/lots/{target_lot_id}/merge", response_model=LotOut)
+def merge_lot_into_target(
+    target_lot_id: str,
+    body: MergeLotsIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    """
+    Move every photo from ``source_lot_id`` onto this lot, append a short merge note to specs,
+    delete the source lot row, then return the updated target lot.
+    """
+    if body.source_lot_id == target_lot_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a lot into itself.")
+    target = db.query(Lot).filter(Lot.id == target_lot_id, Lot.account_id == current.account_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target lot not found")
+    source = (
+        db.query(Lot)
+        .filter(Lot.id == body.source_lot_id, Lot.account_id == current.account_id)
+        .first()
+    )
+    if not source:
+        raise HTTPException(status_code=404, detail="Source lot not found")
+    if source.sale_id != target.sale_id:
+        raise HTTPException(status_code=400, detail="Lots must belong to the same sale to merge.")
+    _assert_sale_editable_for_lot_moves(db, target.sale_id, current)
+
+    note = (
+        f"Merged lot {source.sku or source.id}: "
+        f"{(source.auction_title or '').strip()[:200]}"
+    ).strip()
+    specs = json.loads(target.specification_lines_json or "[]")
+    if not isinstance(specs, list):
+        specs = []
+    specs.append(note)
+    target.specification_lines_json = json.dumps(specs, ensure_ascii=True)
+
+    if body.prefer_source_sku and (source.sku or "").strip():
+        target.sku = source.sku
+        target.sku_needs_review = bool(source.sku_needs_review)
+    elif not (target.sku or "").strip() and (source.sku or "").strip():
+        target.sku = source.sku
+        target.sku_needs_review = bool(source.sku_needs_review)
+
+    db.execute(
+        update(Photo)
+        .where(Photo.lot_id == source.id, Photo.account_id == current.account_id)
+        .values(lot_id=target.id, user_id=current.id)
+    )
+    db.delete(source)
+    _reconcile_lot_photo_count(db, target.id, current.account_id)
+    db.commit()
+    db.refresh(target)
+    return _lot_out_for_id(db, current.account_id, target.id)
 
 
 @app.get("/lots/{lot_id}/photos/{photo_id}/thumbnail")
