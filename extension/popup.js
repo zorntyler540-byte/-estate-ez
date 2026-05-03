@@ -293,7 +293,7 @@ async function fetchLotPhotos(apiBase, token, lotId) {
 
 /**
  * Loads a downscaled JPEG from the Estate API for CT Seller upload.
- * Returns ``ArrayBuffer`` (no base64) so the popup avoids heavy encode and messages stay smaller.
+ * Returns ``ArrayBuffer`` in-memory; the popup encodes to base64 only when sending to the tab (Chrome message JSON).
  */
 async function fetchPhotoJpegBuffer(apiBase, token, lotId, photoId, originalName) {
   const res = await fetchWithRetry(
@@ -323,6 +323,21 @@ function jpegBufferToDataUrl(arrayBuffer, mime = "image/jpeg") {
     r.onerror = () => reject(r.error || new Error("readAsDataURL failed"));
     r.readAsDataURL(blob);
   });
+}
+
+/**
+ * Base64 for ``chrome.tabs.sendMessage``. Chrome extension messages are JSON-serialized by default,
+ * so ``ArrayBuffer`` does not survive the hop to the content script — we must send a string.
+ */
+function arrayBufferToBase64Chunked(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  const step = 8192;
+  for (let i = 0; i < bytes.length; i += step) {
+    const slice = bytes.subarray(i, Math.min(i + step, bytes.length));
+    binary += String.fromCharCode.apply(null, slice);
+  }
+  return btoa(binary);
 }
 
 /**
@@ -761,7 +776,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return {
           name: downloaded.fileName || p?.original_name || `${p?.id || i}.jpg`,
           type: downloaded.type || "image/jpeg",
-          arrayBuffer: downloaded.arrayBuffer
+          dataBase64: arrayBufferToBase64Chunked(downloaded.arrayBuffer)
         };
       });
 
