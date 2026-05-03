@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../lib/api";
 
 type Props = {
@@ -17,7 +17,7 @@ type Props = {
 /**
  * Loads ``/lots/{lotId}/photos/{photoId}/thumbnail`` with Bearer auth (blob URL).
  */
-export function LotPhotoThumb({ lotId, photoId, token, label, maxPx = 280, minHeight = 120 }: Props) {
+function LotPhotoThumbInner({ lotId, photoId, token, label, maxPx = 280, minHeight = 120 }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const urlRef = useRef<string | null>(null);
@@ -116,14 +116,18 @@ export function LotPhotoThumb({ lotId, photoId, token, label, maxPx = 280, minHe
         src={src}
         alt={label}
         title={label}
+        draggable={false}
         style={{
           width: "100%",
           height: "auto",
           maxHeight: 220,
           objectFit: "contain",
-          display: "block"
+          display: "block",
+          WebkitUserDrag: "none"
         }}
       />
     </div>
   );
 }
+
+export const LotPhotoThumb = memo(LotPhotoThumbInner);

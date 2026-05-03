@@ -589,7 +589,7 @@ export default function LotDetailPage() {
         <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem", maxWidth: "44rem" }}>
           Same order as{" "}
           <strong style={{ color: "var(--ct-text-muted)" }}>Upload lot photos</strong> in the browser extension —
-          first row left‑to‑right, then the next row. <strong>Drag</strong> a thumbnail here to change that order
+          first row left‑to‑right, then the next row. Drag the <strong>⋮⋮</strong> handle on a photo to change order
           (saved for ZIP, extension upload, and AI). <strong>Shift+click</strong> a checkbox to select a range;{" "}
           <strong>Ctrl/Cmd+click</strong> to add or remove one photo. Use <strong>Download all photos (ZIP)</strong> for
           originals in catalog order (for clients or backups).
@@ -790,15 +790,6 @@ export default function LotDetailPage() {
             {catalogPhotos.map((p, index) => (
               <figure
                 key={p.id}
-                draggable={!organizeBusy && !reorderBusy}
-                onDragStart={(e) => {
-                  dragPhotoIdRef.current = p.id;
-                  e.dataTransfer.effectAllowed = "move";
-                  e.dataTransfer.setData("text/plain", p.id);
-                }}
-                onDragEnd={() => {
-                  dragPhotoIdRef.current = null;
-                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
@@ -816,8 +807,7 @@ export default function LotDetailPage() {
                   margin: 0,
                   display: "flex",
                   flexDirection: "column",
-                  gap: "0.35rem",
-                  cursor: organizeBusy || reorderBusy ? "default" : "grab"
+                  gap: "0.35rem"
                 }}
               >
                 <div style={{ position: "relative" }}>
@@ -839,16 +829,50 @@ export default function LotDetailPage() {
                   >
                     {index + 1}
                   </span>
+                  <span
+                    draggable={!organizeBusy && !reorderBusy}
+                    onDragStart={(e) => {
+                      e.stopPropagation();
+                      dragPhotoIdRef.current = p.id;
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", p.id);
+                    }}
+                    onDragEnd={() => {
+                      dragPhotoIdRef.current = null;
+                    }}
+                    title="Drag to reorder"
+                    style={{
+                      position: "absolute",
+                      bottom: 4,
+                      left: 4,
+                      zIndex: 3,
+                      fontSize: "0.62rem",
+                      fontWeight: 700,
+                      letterSpacing: "-0.06em",
+                      padding: "2px 4px",
+                      cursor: organizeBusy || reorderBusy ? "default" : "grab",
+                      background: "rgba(12, 15, 18, 0.9)",
+                      color: "var(--ct-primary)",
+                      borderRadius: 4,
+                      border: "1px solid var(--ct-border)",
+                      userSelect: "none",
+                      lineHeight: 1
+                    }}
+                  >
+                    ⋮⋮
+                  </span>
                   <input
                     type="checkbox"
                     title="Select for move (Shift+click range, Ctrl/Cmd+click toggle)"
                     checked={selectedPhotoIds.has(p.id)}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (organizeBusy || reorderBusy) return;
-                      handlePhotoCheckboxClick(index, p.id, e);
+                    onMouseDown={(e) => {
+                      if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
                     }}
+                    onChange={(e) => {
+                      if (organizeBusy || reorderBusy) return;
+                      handlePhotoCheckboxClick(index, p.id, e.nativeEvent as unknown as React.MouseEvent<HTMLInputElement>);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
                     disabled={organizeBusy || reorderBusy}
                     style={{
                       position: "absolute",
