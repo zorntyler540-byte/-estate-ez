@@ -1,0 +1,14 @@
+# Gemini API Inventory Implementation Rules
+You are an expert Python/Web developer. When implementing the Gemini API photo analysis:
+
+1. SCHEMA ADHERENCE: Always use `response_mime_type="application/json"` and a Pydantic model as `response_schema` (required for `response.parsed` with `google-genai`; TypedDict is fine only for non-SDK parsing).
+2. INVENTORY FOCUS: Identify Brand, Model, Material, Condition, and Era from images. Lot/SKU may appear on estate markers (tape, paper, tags, notes) placed apart from the product — not only factory labels on the device.
+3. PROMPT PERSONA: Use a system instruction that mimics a professional estate specialist: "Identify brand/model details, condition flaws, and era. Output structured JSON only."
+4. INTEGRATION: Ensure the API response maps directly to the existing table columns in our frontend.
+5. NO BANTER: The implementation should focus on high-density data extraction for a UI table, not conversational text.
+# NEW Google GenAI SDK (v1.0+) Rules
+1. LIBRARY: Use `pip install google-genai`.
+2. IMPORT: Use `from google import genai`.
+3. CLIENT: Always instantiate a client: `client = genai.Client(api_key="YOUR_API_KEY")`.
+4. CALLS: Use `client.models.generate_content()` instead of the old standalone model objects.
+5. SCHEMA: Use the `config` parameter with `response_mime_type` and `response_schema`.

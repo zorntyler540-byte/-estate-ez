@@ -4,8 +4,11 @@
   "type": "module",
   "scripts": {
     "open": "node scripts/open-ct.mjs",
+    "autofill": "node scripts/autofill-lot.mjs",
+    "autofill:batch": "node scripts/autofill-batch.mjs",
+    "listing:full": "node scripts/listing-full.mjs",
     "install:browsers": "playwright install chromium",
-    "codegen": "playwright codegen https://www.ctbids.com/"
+    "codegen": "playwright codegen https://seller.ctbids.com/"
   },
   "devDependencies": {
     "playwright": "^1.50.0"
