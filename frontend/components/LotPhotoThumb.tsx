@@ -117,14 +117,16 @@ function LotPhotoThumbInner({ lotId, photoId, token, label, maxPx = 280, minHeig
         alt={label}
         title={label}
         draggable={false}
-        style={{
-          width: "100%",
-          height: "auto",
-          maxHeight: 220,
-          objectFit: "contain",
-          display: "block",
-          WebkitUserDrag: "none"
-        }}
+        style={
+          {
+            width: "100%",
+            height: "auto",
+            maxHeight: 220,
+            objectFit: "contain",
+            display: "block",
+            WebkitUserDrag: "none"
+          } as CSSProperties
+        }
       />
     </div>
   );
