@@ -44,6 +44,9 @@ type SaleLotOption = {
 /** Destination sentinel: create a new lot with the checked photos (same API as split). */
 const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
 
+/** Set when using ``← Back to dashboard`` so the dashboard can restore scroll after Details. */
+const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
+
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("token") || "";
@@ -612,7 +615,18 @@ export default function LotDetailPage() {
   return (
     <main id="lot-detail-top" className="ct-shell" style={{ maxWidth: 960 }}>
       <p style={{ margin: "0 0 0.75rem" }}>
-        <Link href="/dashboard">← Back to dashboard</Link>
+        <Link
+          href="/dashboard"
+          onClick={() => {
+            try {
+              sessionStorage.setItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY, "1");
+            } catch {
+              /* private mode */
+            }
+          }}
+        >
+          ← Back to dashboard
+        </Link>
       </p>
       <header className="ct-page-header" style={{ borderBottom: "none", paddingBottom: 0, marginBottom: "0.5rem" }}>
         <h1 className="ct-page-title">Lot {lot.sku || "(no SKU)"}</h1>

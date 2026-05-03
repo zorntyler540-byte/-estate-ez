@@ -25,6 +25,21 @@ import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
+/** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
+const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
+const DASHBOARD_SCROLL_SAVED_AT_KEY = "ct_dashboard_scroll_saved_at";
+const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
+const DASHBOARD_SCROLL_MAX_AGE_MS = 12 * 60 * 1000;
+
+function rememberDashboardScrollBeforeLotDetails() {
+  try {
+    sessionStorage.setItem(DASHBOARD_SCROLL_Y_KEY, String(window.scrollY));
+    sessionStorage.setItem(DASHBOARD_SCROLL_SAVED_AT_KEY, String(Date.now()));
+  } catch {
+    /* private mode */
+  }
+}
+
 /** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
 const UPLOAD_FILE_CHUNK = 200;
 
@@ -523,6 +538,66 @@ export default function DashboardPage() {
     saleZipBusy,
     loading
   ]);
+
+  /** After returning from lot detail via ``Back to dashboard``, scroll to where Details was opened. */
+  useEffect(() => {
+    if (typeof window === "undefined" || !token || loading) return;
+    let cancelled = false;
+    let yToRestore: number | null = null;
+    try {
+      if (sessionStorage.getItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY) !== "1") return;
+      const raw = sessionStorage.getItem(DASHBOARD_SCROLL_Y_KEY);
+      const rawAt = sessionStorage.getItem(DASHBOARD_SCROLL_SAVED_AT_KEY);
+      const savedAt = rawAt !== null ? Number.parseInt(rawAt, 10) : NaN;
+      if (
+        !Number.isFinite(savedAt) ||
+        Date.now() - savedAt > DASHBOARD_SCROLL_MAX_AGE_MS
+      ) {
+        sessionStorage.removeItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY);
+        if (raw !== null) sessionStorage.removeItem(DASHBOARD_SCROLL_Y_KEY);
+        sessionStorage.removeItem(DASHBOARD_SCROLL_SAVED_AT_KEY);
+        return;
+      }
+      const y = raw !== null ? Number.parseFloat(raw) : NaN;
+      if (!Number.isFinite(y) || y < 0) {
+        sessionStorage.removeItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY);
+        if (raw !== null) sessionStorage.removeItem(DASHBOARD_SCROLL_Y_KEY);
+        sessionStorage.removeItem(DASHBOARD_SCROLL_SAVED_AT_KEY);
+        return;
+      }
+      yToRestore = y;
+    } catch {
+      return;
+    }
+
+    const apply = () => {
+      if (cancelled || yToRestore === null) return;
+      window.scrollTo({ top: yToRestore, behavior: "auto" });
+    };
+    apply();
+    const raf = window.requestAnimationFrame(apply);
+    const t1 = window.setTimeout(apply, 80);
+    const t2 = window.setTimeout(apply, 280);
+    const t3 = window.setTimeout(apply, 700);
+    const tClear = window.setTimeout(() => {
+      if (cancelled) return;
+      try {
+        sessionStorage.removeItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY);
+        sessionStorage.removeItem(DASHBOARD_SCROLL_Y_KEY);
+        sessionStorage.removeItem(DASHBOARD_SCROLL_SAVED_AT_KEY);
+      } catch {
+        /* private mode */
+      }
+    }, 900);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+      window.clearTimeout(tClear);
+    };
+  }, [loading, token, lots.length, jobs.length, dataReloadNonce]);
 
   useEffect(() => {
     if (!token || !saleZipExport?.id) return;
@@ -2245,7 +2320,11 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.85rem", flexWrap: "wrap", alignItems: "center" }}>
-              <Link href={`/lots/${lot.id}#listing-details`} className="ct-btn ct-btn--primary">
+              <Link
+                href={`/lots/${lot.id}#listing-details`}
+                className="ct-btn ct-btn--primary"
+                onClick={rememberDashboardScrollBeforeLotDetails}
+              >
                 Details
               </Link>
               <label className="ct-row" style={{ gap: "0.45rem", alignItems: "center" }}>
@@ -2397,7 +2476,9 @@ export default function DashboardPage() {
               </td>
               <td>{lot.photo_count}</td>
               <td>
-                <Link href={`/lots/${lot.id}#listing-details`}>Details</Link>
+                <Link href={`/lots/${lot.id}#listing-details`} onClick={rememberDashboardScrollBeforeLotDetails}>
+                  Details
+                </Link>
               </td>
               <td>
                 <button
