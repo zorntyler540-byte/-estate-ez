@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Database,
   FileSpreadsheet,
   FileText,
@@ -409,6 +411,8 @@ export default function DashboardPage() {
   const [stagingEditContrast, setStagingEditContrast] = useState(100);
   const [stagingEditSaturation, setStagingEditSaturation] = useState(100);
   const [stagingEditBusy, setStagingEditBusy] = useState(false);
+  /** Fixed jump scroll buttons when the dashboard is taller than the viewport. */
+  const [showDashboardScrollJumpNav, setShowDashboardScrollJumpNav] = useState(false);
   /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
   const [singleLotManualSku, setSingleLotManualSku] = useState("");
   /** One loading row per catalog photo while the active job runs (SSE). */
@@ -485,6 +489,40 @@ export default function DashboardPage() {
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => {
+      const doc = document.documentElement;
+      setShowDashboardScrollJumpNav(doc.scrollHeight > window.innerHeight + 120);
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    window.addEventListener("scroll", update, { passive: true });
+    const t1 = window.setTimeout(update, 400);
+    const t2 = window.setTimeout(update, 1500);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update);
+    };
+  }, [
+    lots.length,
+    jobs.length,
+    folderPick,
+    lotCameraOpen,
+    lotCameraSnaps.length,
+    photoPendingSlots.length,
+    uploadProgress,
+    inInventoryPhase,
+    catalogStepProgress,
+    saleZipExport,
+    dataReloadNonce,
+    selectedSaleId,
+    saleZipBusy,
+    loading
+  ]);
 
   useEffect(() => {
     if (!token || !saleZipExport?.id) return;
@@ -1647,7 +1685,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="ct-shell">
+    <main id="dashboard-top" className="ct-shell">
       <header className="ct-page-header">
         <h1 className="ct-page-title">Lots dashboard</h1>
         <div className="ct-row ct-row--gap-lg">
@@ -3408,6 +3446,66 @@ export default function DashboardPage() {
               Apply replaces this file in the upload list (including tone). Tap outside to cancel.
             </p>
           </div>
+        </div>
+      ) : null}
+
+      {showDashboardScrollJumpNav ? (
+        <div
+          role="navigation"
+          aria-label="Jump scroll"
+          style={{
+            position: "fixed",
+            right: "max(12px, env(safe-area-inset-right, 0px))",
+            bottom: "max(16px, env(safe-area-inset-bottom, 0px))",
+            zIndex: 9990,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6
+          }}
+        >
+          <button
+            type="button"
+            className="ct-btn"
+            title="Top of page"
+            aria-label="Scroll to top of page"
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            style={{
+              minWidth: 48,
+              minHeight: 48,
+              padding: 0,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)"
+            }}
+          >
+            <ChevronUp size={22} strokeWidth={2.25} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="ct-btn"
+            title="Bottom of page"
+            aria-label="Scroll to bottom of page"
+            onClick={() =>
+              window.scrollTo({
+                top: document.documentElement.scrollHeight,
+                behavior: "smooth"
+              })
+            }
+            style={{
+              minWidth: 48,
+              minHeight: 48,
+              padding: 0,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)"
+            }}
+          >
+            <ChevronDown size={22} strokeWidth={2.25} aria-hidden />
+          </button>
         </div>
       ) : null}
     </main>
