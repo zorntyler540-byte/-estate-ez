@@ -2002,8 +2002,8 @@ export default function DashboardPage() {
                   ref={lotCameraZoomWrapRef}
                   style={{
                     width: "100%",
-                    maxHeight: "min(38dvh, 360px)",
-                    height: "min(38dvh, 360px)",
+                    maxHeight: "min(48dvh, 460px)",
+                    height: "min(48dvh, 460px)",
                     marginTop: "0.65rem",
                     borderRadius: 8,
                     overflow: "hidden",
