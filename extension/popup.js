@@ -187,6 +187,20 @@ function firstOpenIndex(lots) {
   return lots.findIndex((l) => !l?.is_completed);
 }
 
+/**
+ * After completing a lot, advance to the next open lot in ``created_asc`` walk order (same
+ * as dashboard), not the globally first open lot — otherwise finishing lot 12 jumps back to 1.
+ */
+function nextOpenLotIndexAfterComplete(lots, completedLotId) {
+  if (!Array.isArray(lots) || !lots.length) return -1;
+  const at = lots.findIndex((l) => l?.id === completedLotId);
+  if (at < 0) return firstOpenIndex(lots);
+  for (let j = at + 1; j < lots.length; j += 1) {
+    if (!lots[j]?.is_completed) return j;
+  }
+  return firstOpenIndex(lots);
+}
+
 function getCurrentLotFromCache() {
   if (!lotBrowser.currentLotId) return null;
   return lotBrowser.lots.find((l) => l?.id === lotBrowser.currentLotId) || null;
@@ -198,6 +212,7 @@ async function resolveCurrentLot(apiBase, token, { preferNextOpen = true } = {})
   if (!lots.length) throw new Error("No lots returned — create or select inventory in the Estate app first.");
 
   let selected = getCurrentLotFromCache();
+  if (selected?.is_completed) selected = null;
   if (!selected) {
     const idx = preferNextOpen ? firstOpenIndex(lots) : -1;
     selected = idx >= 0 ? lots[idx] : lots[0];
@@ -392,6 +407,36 @@ async function waitForSaveClick(lotId, timeoutMs = 60000) {
   return false;
 }
 
+function specLinePlainForPreview(item) {
+  return String(item || "")
+    .trim()
+    .replace(/^\s*[-•*·◇►]+\s*/, "");
+}
+
+function specLinesBrandValuesBlobLower(specItems) {
+  const bits = [];
+  for (const raw of specItems) {
+    const line = specLinePlainForPreview(raw);
+    let m = /^brands?\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^maker\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^manufacturers?\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^origin\s*:\s*(.+)$/i.exec(line);
+    if (m) bits.push(m[1].trim());
+  }
+  if (!bits.length) return "";
+  return bits.join("; ").toLowerCase();
+}
+
+function filterBrandsForFooter(brands, specItems) {
+  const blob = specLinesBrandValuesBlobLower(specItems);
+  if (!blob) return brands;
+  return brands.filter((b) => {
+    const t = String(b || "").trim().toLowerCase();
+    if (!t) return false;
+    return !blob.includes(t);
+  });
+}
+
 function buildDescription(lot) {
   const body = String(lot?.professional_description || "").replace(/\s+/g, " ").trim();
   const rawSpecs = Array.isArray(lot?.specification_lines) ? lot.specification_lines : [];
@@ -413,7 +458,8 @@ function buildDescription(lot) {
     if (specItems.length >= 18) break;
   }
 
-  const brands = Array.isArray(lot?.brands) ? lot.brands.map((x) => String(x || "").trim()).filter(Boolean) : [];
+  const brandsRaw = Array.isArray(lot?.brands) ? lot.brands.map((x) => String(x || "").trim()).filter(Boolean) : [];
+  const brands = filterBrandsForFooter(brandsRaw, specItems);
 
   const sections = [];
   if (body) sections.push(body);
@@ -704,7 +750,7 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           const refreshed = await fetchLots(apiBase, token);
           lotBrowser.lots = refreshed;
-          const idx = firstOpenIndex(refreshed);
+          const idx = nextOpenLotIndexAfterComplete(refreshed, lot.id);
           if (idx >= 0) {
             const nextLot = refreshed[idx];
             lotBrowser.currentLotId = nextLot?.id || "";

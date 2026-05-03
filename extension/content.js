@@ -84,6 +84,39 @@ function detectCtSellerStep() {
   return "unknown";
 }
 
+/** Best-effort click on CT Seller step tabs (same heuristics as ``detectCtSellerStep``). */
+function clickCtSellerTabStep(targetWant) {
+  const want = String(targetWant || "").toLowerCase();
+  if (!["detail", "settings", "media"].includes(want)) {
+    return { ok: false, error: `Invalid step: ${want}` };
+  }
+  const stepNodes = Array.from(document.querySelectorAll("button, a, div, span, li"));
+  let best = { el: null, score: 0 };
+  for (const node of stepNodes) {
+    const t = normalizeText(node.textContent || "");
+    if (!t || t.length > 140) continue;
+    const cls = normalizeText(node.className || "");
+    const activeHint = cls.includes("active") || cls.includes("current") || cls.includes("selected");
+    const bonus = activeHint ? 3 : 0;
+    const d1 = isolatedStepDigit(t, "1") || /\bstep\s*1\b/i.test(t);
+    const d2 = isolatedStepDigit(t, "2") || /\bstep\s*2\b/i.test(t);
+    const d3 = isolatedStepDigit(t, "3") || /\bstep\s*3\b/i.test(t);
+    let hit = 0;
+    if (want === "detail" && d1 && t.includes("detail")) hit = bonus + 1;
+    if (want === "settings" && d2 && t.includes("setting")) hit = bonus + 1;
+    if (want === "media" && d3 && t.includes("media")) hit = bonus + 1;
+    if (hit > 0 && hit >= best.score) {
+      const clickable = node.closest("button, a, [role='tab'], [role='button'], li") || node;
+      if (clickable && typeof clickable.click === "function") {
+        best = { el: clickable, score: hit };
+      }
+    }
+  }
+  if (!best.el) return { ok: false, error: `Could not find ${want} step tab` };
+  best.el.click();
+  return { ok: true };
+}
+
 const saveGate = {
   armed: false,
   lotId: "",
@@ -179,6 +212,32 @@ function specLinePlainForQuill(item) {
     .replace(/^\s*[-•*·◇►]+\s*/, "");
 }
 
+/** Lowercase blob of brand-like RHS text from spec lines (Key Details). */
+function specLinesBrandValuesBlobLower(specItems) {
+  const bits = [];
+  for (const raw of specItems) {
+    const line = specLinePlainForQuill(raw);
+    let m = /^brands?\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^maker\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^manufacturers?\s*:\s*(.+)$/i.exec(line);
+    if (!m) m = /^origin\s*:\s*(.+)$/i.exec(line);
+    if (m) bits.push(m[1].trim());
+  }
+  if (!bits.length) return "";
+  return bits.join("; ").toLowerCase();
+}
+
+/** Omit ``lot.brands`` entries already covered by a ``Brand:`` / ``Brands:`` spec line (avoids duplicate footer). */
+function filterBrandsForFooter(brands, specItems) {
+  const blob = specLinesBrandValuesBlobLower(specItems);
+  if (!blob) return brands;
+  return brands.filter((b) => {
+    const t = String(b || "").trim().toLowerCase();
+    if (!t) return false;
+    return !blob.includes(t);
+  });
+}
+
 /** Quill often drops ``<br>`` inside one ``<p>``; tight ``<p>`` per row keeps line breaks without list margins. */
 const CT_DESC_P = ' style="margin:0;padding:0;line-height:1.35"';
 /** One blank line under prose when Key Details follows (``margin-bottom`` ≈ one line at this line-height). */
@@ -210,7 +269,8 @@ function buildDescriptionPayload(lot) {
     if (specItems.length >= 18) break;
   }
 
-  const brands = Array.isArray(lot?.brands) ? lot.brands.map((x) => String(x || "").trim()).filter(Boolean) : [];
+  const brandsRaw = Array.isArray(lot?.brands) ? lot.brands.map((x) => String(x || "").trim()).filter(Boolean) : [];
+  const brands = filterBrandsForFooter(brandsRaw, specItems);
 
   const plainSections = [];
   if (body) plainSections.push(body);
@@ -790,6 +850,139 @@ async function fillFromLot(lot) {
   return { filled, warnings };
 }
 
+async function performAutoPhotoUpload(lotId, files) {
+  const fileInput =
+    document.querySelector("input[type='file'][accept*='image']") ||
+    document.querySelector("input[type='file']");
+  if (!fileInput) {
+    return { ok: false, error: "No file input found on this page. Open Media step first." };
+  }
+  const dt = new DataTransfer();
+  for (const f of files) {
+    const b64 = f?.dataBase64;
+    if (!b64) continue;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], f.name || "photo.jpg", { type: f.type || "image/jpeg" });
+    dt.items.add(file);
+  }
+  if (!dt.files.length) {
+    return { ok: false, error: "No image files available to upload." };
+  }
+  fileInput.files = dt.files;
+  fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+  fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+  saveGate.armed = true;
+  saveGate.lotId = String(lotId || "");
+  saveGate.armedAt = Date.now();
+  saveGate.savedAt = 0;
+  return { ok: true, count: dt.files.length };
+}
+
+function getSaveGateSnapshot(lotId) {
+  const lid = String(lotId || "");
+  const sameLot = !lid || !saveGate.lotId || lid === saveGate.lotId;
+  const saved = sameLot && saveGate.armed && saveGate.savedAt >= saveGate.armedAt && saveGate.savedAt > 0;
+  return {
+    ok: true,
+    armed: saveGate.armed,
+    lotId: saveGate.lotId,
+    saved,
+    savedAt: saveGate.savedAt
+  };
+}
+
+/**
+ * Injects ``window.__estateEzPlaywright`` (fill, upload, step nav, save gate) and legacy
+ * ``window.__estateEzPlaywrightBridge`` (fill only) for Playwright-driven full listings.
+ */
+(function installPlaywrightAutomationBridge() {
+  if (document.documentElement?.dataset?.estateEzPwBridge === "1") return;
+
+  try {
+    const src = document.createElement("script");
+    src.textContent =
+      "(function(){" +
+      "if(window.__estateEzPwApi)return;" +
+      "window.__estateEzPwApi=true;" +
+      "function waitDone(n){return new Promise(function(res){" +
+      "document.addEventListener(n,function(e){res(e.detail);},{once:true});});}" +
+      "window.__estateEzPlaywright={" +
+      "fillLot:function(lot){document.dispatchEvent(new CustomEvent('__estateEzAutofill',{detail:lot}));" +
+      "return waitDone('__estateEzAutofillDone');}," +
+      "uploadPhotos:function(lotId,files){document.dispatchEvent(new CustomEvent('__estateEzUploadPhotos',{detail:{lotId:lotId,files:files}}));" +
+      "return waitDone('__estateEzUploadPhotosDone');}," +
+      "getStep:function(){document.dispatchEvent(new CustomEvent('__estateEzPwGetStep'));" +
+      "return waitDone('__estateEzPwGetStepDone');}," +
+      "clickStep:function(step){document.dispatchEvent(new CustomEvent('__estateEzPwClickStep',{detail:{step:step}}));" +
+      "return waitDone('__estateEzPwClickStepDone');}," +
+      "getSaveGate:function(lotId){document.dispatchEvent(new CustomEvent('__estateEzPwGetSaveGate',{detail:{lotId:lotId}}));" +
+      "return waitDone('__estateEzPwGetSaveGateDone');}" +
+      "};" +
+      "window.__estateEzPlaywrightBridge=function(lot){document.dispatchEvent(new CustomEvent('__estateEzAutofill',{detail:lot}));};" +
+      "})();";
+    (document.documentElement || document.head).appendChild(src);
+    src.remove();
+  } catch (e) {
+    console.warn("[Estate-Ez] Playwright bridge inject failed", e);
+  }
+
+  document.addEventListener("__estateEzAutofill", (ev) => {
+    const lot = ev.detail;
+    if (!lot || typeof lot !== "object") return;
+    void (async () => {
+      let detail;
+      try {
+        const { filled, warnings } = await fillFromLot(lot);
+        detail = { ok: true, filled, warnings, lotId: lot?.id };
+      } catch (err) {
+        detail = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      try {
+        document.dispatchEvent(new CustomEvent("__estateEzAutofillDone", { detail }));
+      } catch (err2) {
+        console.error("[Estate-Ez] Playwright bridge done dispatch failed", err2);
+      }
+    })();
+  });
+
+  document.addEventListener("__estateEzUploadPhotos", (ev) => {
+    const { lotId, files } = ev.detail || {};
+    void (async () => {
+      let detail;
+      try {
+        detail = await performAutoPhotoUpload(lotId, Array.isArray(files) ? files : []);
+      } catch (err) {
+        detail = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      document.dispatchEvent(new CustomEvent("__estateEzUploadPhotosDone", { detail }));
+    })();
+  });
+
+  document.addEventListener("__estateEzPwGetStep", () => {
+    document.dispatchEvent(
+      new CustomEvent("__estateEzPwGetStepDone", { detail: { ok: true, step: detectCtSellerStep() } })
+    );
+  });
+
+  document.addEventListener("__estateEzPwClickStep", (ev) => {
+    const step = ev.detail?.step;
+    document.dispatchEvent(
+      new CustomEvent("__estateEzPwClickStepDone", { detail: clickCtSellerTabStep(step) })
+    );
+  });
+
+  document.addEventListener("__estateEzPwGetSaveGate", (ev) => {
+    const lotId = ev.detail?.lotId;
+    document.dispatchEvent(
+      new CustomEvent("__estateEzPwGetSaveGateDone", { detail: getSaveGateSnapshot(lotId) })
+    );
+  });
+
+  if (document.documentElement) document.documentElement.dataset.estateEzPwBridge = "1";
+})();
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "GET_CTSELLER_STEP") {
     sendResponse({ ok: true, step: detectCtSellerStep() });
@@ -798,54 +991,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "AUTO_UPLOAD_PHOTOS" && Array.isArray(message.files)) {
     void (async () => {
-      try {
-        const fileInput =
-          document.querySelector("input[type='file'][accept*='image']") ||
-          document.querySelector("input[type='file']");
-        if (!fileInput) {
-          sendResponse({ ok: false, error: "No file input found on this page. Open Media step first." });
-          return;
-        }
-        const dt = new DataTransfer();
-        for (const f of message.files) {
-          const b64 = f?.dataBase64;
-          if (!b64) continue;
-          const bin = atob(b64);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-          const file = new File([bytes], f.name || "photo.jpg", { type: f.type || "image/jpeg" });
-          dt.items.add(file);
-        }
-        if (!dt.files.length) {
-          sendResponse({ ok: false, error: "No image files available to upload." });
-          return;
-        }
-        fileInput.files = dt.files;
-        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-        saveGate.armed = true;
-        saveGate.lotId = String(message?.lotId || "");
-        saveGate.armedAt = Date.now();
-        saveGate.savedAt = 0;
-        sendResponse({ ok: true, count: dt.files.length });
-      } catch (e) {
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
-      }
+      const out = await performAutoPhotoUpload(message?.lotId, message.files);
+      sendResponse(out);
     })();
     return true;
   }
 
   if (message?.type === "GET_SAVE_GATE_STATE") {
-    const lotId = String(message?.lotId || "");
-    const sameLot = !lotId || !saveGate.lotId || lotId === saveGate.lotId;
-    const saved = sameLot && saveGate.armed && saveGate.savedAt >= saveGate.armedAt && saveGate.savedAt > 0;
-    sendResponse({
-      ok: true,
-      armed: saveGate.armed,
-      lotId: saveGate.lotId,
-      saved,
-      savedAt: saveGate.savedAt
-    });
+    sendResponse(getSaveGateSnapshot(message?.lotId));
     return false;
   }
 

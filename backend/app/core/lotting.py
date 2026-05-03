@@ -261,8 +261,28 @@ _BRAND_MERGE_LABEL_KEYS: frozenset[str] = frozenset(
         "maker",
         "manufacturer",
         "manufacturers",
+        # Origin duplicates the same facts models often put on ``Brand:`` / ``brands[]``.
+        "origin",
+        "countryoforigin",
     }
 )
+
+
+def _unique_semicolon_phrases(parts: list[str]) -> list[str]:
+    """Split each string on ``;``, trim, drop empties, preserve first-seen order (case-insensitive)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for block in parts:
+        for piece in str(block or "").split(";"):
+            frag = clean_listing_text(piece).strip()
+            if not frag:
+                continue
+            key = frag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(frag)
+    return out
 
 
 def _spec_label_value_parts(line: str) -> tuple[str, str] | None:
@@ -351,11 +371,13 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
         r = roles[i]
         if r == "b":
             if i == first_b and brand_vals:
-                out.append("Brand: " + "; ".join(brand_vals))
+                uniq = _unique_semicolon_phrases(brand_vals)
+                out.append("Brand: " + "; ".join(uniq))
             continue
         if r == "m":
             if i == first_m and marking_vals:
-                out.append("Markings: " + "; ".join(marking_vals))
+                uniq_m = _unique_semicolon_phrases(marking_vals)
+                out.append("Markings: " + "; ".join(uniq_m))
             continue
         out.append(line)
     return out
