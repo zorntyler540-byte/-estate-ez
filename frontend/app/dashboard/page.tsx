@@ -259,8 +259,6 @@ function revokeObjectUrls(urls: string[]) {
   urls.forEach((u) => URL.revokeObjectURL(u));
 }
 
-const PREVIEW_THUMB_MAX = 48;
-
 type FolderPickPreview = {
   folderLabel: string;
   imageFiles: File[];
@@ -281,8 +279,7 @@ function applySingleLotFilesToStaging(
     const merged = [...prev!.imageFiles, ...incoming];
     const mergedSkipped = prev!.skippedCount + extraSkipped;
     if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
-    const forThumbs = merged.slice(0, PREVIEW_THUMB_MAX);
-    const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+    const thumbUrls = merged.map((f) => URL.createObjectURL(f));
     return {
       folderLabel:
         merged.length === 1 ? folderLabelFromFile(merged[0]!) : `One lot (${merged.length} photos)`,
@@ -293,8 +290,7 @@ function applySingleLotFilesToStaging(
     };
   }
   if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-  const forThumbs = incoming.slice(0, PREVIEW_THUMB_MAX);
-  const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+  const thumbUrls = incoming.map((f) => URL.createObjectURL(f));
   return {
     folderLabel:
       incoming.length === 1 ? folderLabelFromFile(incoming[0]!) : `One lot (${incoming.length} photos)`,
@@ -363,6 +359,13 @@ export default function DashboardPage() {
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
+  /** Full-screen preview index for staged upload thumbnails, or null. */
+  const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null);
+  /** Post-stage edit (rotate + trim) for one staged file. */
+  const [stagingEditIndex, setStagingEditIndex] = useState<number | null>(null);
+  const [stagingEditRotation, setStagingEditRotation] = useState(0);
+  const [stagingEditTrim, setStagingEditTrim] = useState(0);
+  const [stagingEditBusy, setStagingEditBusy] = useState(false);
   /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
   const [singleLotManualSku, setSingleLotManualSku] = useState("");
   /** One loading row per catalog photo while the active job runs (SSE). */
@@ -885,10 +888,91 @@ export default function DashboardPage() {
   function clearFolderPick() {
     singleLotCaptureChainingRef.current = false;
     setSingleLotManualSku("");
+    setStagingViewerIndex(null);
+    setStagingEditIndex(null);
+    setStagingEditBusy(false);
+    setStagingEditRotation(0);
+    setStagingEditTrim(0);
     setFolderPick((prev) => {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       return null;
     });
+  }
+
+  function removeStagingImage(index: number) {
+    setFolderPick((prev) => {
+      if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
+      if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+      const nextFiles = prev.imageFiles.filter((_, j) => j !== index);
+      const thumbUrls = nextFiles.map((f) => URL.createObjectURL(f));
+      const folderLabel =
+        prev.singleLotMode && nextFiles.length > 0
+          ? nextFiles.length === 1
+            ? folderLabelFromFile(nextFiles[0]!)
+            : `One lot (${nextFiles.length} photos)`
+          : prev.folderLabel;
+      return { ...prev, imageFiles: nextFiles, thumbUrls, folderLabel };
+    });
+    setStagingViewerIndex((cur) => {
+      if (cur === null) return null;
+      if (cur === index) return null;
+      if (cur > index) return cur - 1;
+      return cur;
+    });
+    setStagingEditIndex((cur) => {
+      if (cur === null) return null;
+      if (cur === index) return null;
+      if (cur > index) return cur - 1;
+      return cur;
+    });
+  }
+
+  function replaceStagingImageFile(index: number, file: File) {
+    setFolderPick((prev) => {
+      if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
+      if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+      const nextFiles = [...prev.imageFiles];
+      nextFiles[index] = file;
+      const thumbUrls = nextFiles.map((f) => URL.createObjectURL(f));
+      return { ...prev, imageFiles: nextFiles, thumbUrls };
+    });
+  }
+
+  function openStagingEdit(i: number) {
+    const p = folderPickRef.current;
+    if (!p || i < 0 || i >= p.imageFiles.length) return;
+    setStagingViewerIndex(null);
+    setStagingEditIndex(i);
+    setStagingEditRotation(0);
+    setStagingEditTrim(0);
+  }
+
+  function closeStagingEdit() {
+    if (stagingEditBusy) return;
+    setStagingEditIndex(null);
+  }
+
+  async function applyStagingEdit() {
+    const i = stagingEditIndex;
+    if (i === null) return;
+    const p = folderPickRef.current;
+    const file = p?.imageFiles[i];
+    if (!file) return;
+    if (stagingEditRotation === 0 && stagingEditTrim === 0) {
+      setStagingEditIndex(null);
+      return;
+    }
+    setStagingEditBusy(true);
+    try {
+      const out = await rasterizeLotCameraEdit(file, stagingEditRotation, stagingEditTrim);
+      if (!out) return;
+      replaceStagingImageFile(i, out);
+      setStagingEditIndex(null);
+      setStagingEditRotation(0);
+      setStagingEditTrim(0);
+    } finally {
+      setStagingEditBusy(false);
+    }
   }
 
   function stopLotCameraTracks() {
@@ -1081,8 +1165,7 @@ export default function DashboardPage() {
     } else {
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-        const forThumbs = imageFiles.slice(0, PREVIEW_THUMB_MAX);
-        const thumbUrls = forThumbs.map((f) => URL.createObjectURL(f));
+        const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
         return {
           folderLabel: label,
           imageFiles,
@@ -1140,6 +1223,9 @@ export default function DashboardPage() {
     }
     setError("");
     setUploadProgress("");
+    setStagingViewerIndex(null);
+    setStagingEditIndex(null);
+    setStagingEditBusy(false);
     const files = folderPick.imageFiles;
     const total = files.length;
     setUploading(true);
@@ -1706,25 +1792,118 @@ export default function DashboardPage() {
                 </span>
               ) : null}
             </div>
+            {folderPick.imageFiles.length > 0 ? (
+              <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+                Tap a thumbnail to preview full size. Use the pencil to rotate or trim edges, or the trash icon to
+                remove a photo before upload.
+              </p>
+            ) : null}
             {folderPick.imageFiles.length > 0 && (
-              <div className="ct-thumb-strip">
+              <div
+                className="ct-thumb-strip"
+                style={{ flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch" }}
+              >
                 {folderPick.thumbUrls.map((url, i) => (
-                  <img
-                    key={`${url}`}
-                    src={url}
-                    alt=""
-                    title={folderPick.imageFiles[i]?.name ?? ""}
-                    width={72}
-                    height={72}
-                  />
+                  <div
+                    key={url}
+                    style={{
+                      position: "relative",
+                      flex: "0 0 auto",
+                      width: 72,
+                      height: 72
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => !uploading && setStagingViewerIndex(i)}
+                      aria-label={`Preview staged image ${i + 1}`}
+                      disabled={uploading}
+                      title={folderPick.imageFiles[i]?.name ?? ""}
+                      style={{
+                        display: "block",
+                        width: 72,
+                        height: 72,
+                        padding: 0,
+                        border: "1px solid var(--ct-border)",
+                        borderRadius: 6,
+                        overflow: "hidden",
+                        cursor: uploading ? "not-allowed" : "pointer",
+                        background: "var(--ct-surface)",
+                        opacity: uploading ? 0.55 : 1
+                      }}
+                    >
+                      <img
+                        src={url}
+                        alt=""
+                        width={72}
+                        height={72}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none" }}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Edit staged image ${i + 1}`}
+                      disabled={uploading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openStagingEdit(i);
+                      }}
+                      className="ct-btn ct-btn--ghost"
+                      style={{
+                        position: "absolute",
+                        bottom: -2,
+                        left: -2,
+                        minWidth: 34,
+                        minHeight: 34,
+                        width: 34,
+                        height: 34,
+                        padding: 0,
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(12,15,18,0.92)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#c8d4ff",
+                        boxShadow: "0 1px 4px rgba(0,0,0,0.25)"
+                      }}
+                    >
+                      <Pencil size={15} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove staged image ${i + 1}`}
+                      disabled={uploading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeStagingImage(i);
+                      }}
+                      className="ct-btn ct-btn--ghost"
+                      style={{
+                        position: "absolute",
+                        top: -2,
+                        right: -2,
+                        minWidth: 34,
+                        minHeight: 34,
+                        width: 34,
+                        height: 34,
+                        padding: 0,
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(12,15,18,0.92)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#f5a5a5",
+                        boxShadow: "0 1px 4px rgba(0,0,0,0.25)"
+                      }}
+                    >
+                      <Trash2 size={15} aria-hidden />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
-            {folderPick.imageFiles.length > PREVIEW_THUMB_MAX ? (
-              <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.82rem" }}>
-                Showing first {PREVIEW_THUMB_MAX} previews; all {folderPick.imageFiles.length} images will upload.
-              </p>
-            ) : null}
             <div className="ct-row ct-row--gap-lg">
               <button
                 type="button"
@@ -2722,6 +2901,286 @@ export default function DashboardPage() {
           </p>
         ) : null}
       </div>
+
+      {folderPick &&
+      stagingViewerIndex !== null &&
+      stagingViewerIndex >= 0 &&
+      stagingViewerIndex < folderPick.thumbUrls.length ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Staged photo preview"
+          onClick={() => !uploading && setStagingViewerIndex(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10003,
+            background: "rgba(0,0,0,0.94)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "12px",
+            paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 64px))",
+            boxSizing: "border-box"
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "0.75rem",
+              width: "100%",
+              maxWidth: "min(100vw - 24px, 720px)"
+            }}
+          >
+            <div className="ct-row" style={{ width: "100%", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="ct-muted" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.9rem" }}>
+                Staged photo {stagingViewerIndex + 1} of {folderPick.thumbUrls.length}
+              </span>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                aria-label="Close preview"
+                disabled={uploading}
+                onClick={() => setStagingViewerIndex(null)}
+                style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+              >
+                <X size={22} aria-hidden />
+              </button>
+            </div>
+            <img
+              src={folderPick.thumbUrls[stagingViewerIndex] ?? ""}
+              alt={`Staged photo ${stagingViewerIndex + 1}`}
+              style={{
+                maxWidth: "100%",
+                maxHeight: "min(72vh, 640px)",
+                width: "auto",
+                height: "auto",
+                objectFit: "contain",
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.2)"
+              }}
+            />
+            <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
+              {folderPick.thumbUrls.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Previous staged photo"
+                    disabled={uploading || stagingViewerIndex <= 0}
+                    onClick={() => setStagingViewerIndex((j) => (j !== null && j > 0 ? j - 1 : j))}
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <ChevronLeft size={24} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Next staged photo"
+                    disabled={uploading || stagingViewerIndex >= folderPick.thumbUrls.length - 1}
+                    onClick={() =>
+                      setStagingViewerIndex((j) =>
+                        j !== null && j < folderPick.thumbUrls.length - 1 ? j + 1 : j
+                      )
+                    }
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <ChevronRight size={24} aria-hidden />
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={uploading}
+                onClick={() => {
+                  const idx = stagingViewerIndex;
+                  if (idx !== null) openStagingEdit(idx);
+                }}
+                style={{ color: "#fff" }}
+              >
+                <Pencil size={16} aria-hidden style={{ verticalAlign: "middle", marginRight: 6 }} />
+                Edit
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--danger"
+                disabled={uploading}
+                onClick={() => {
+                  const idx = stagingViewerIndex;
+                  if (idx !== null) removeStagingImage(idx);
+                }}
+              >
+                Delete this photo
+              </button>
+            </div>
+            <p className="ct-muted" style={{ margin: 0, fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+              Tap outside the image to close
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {folderPick &&
+      stagingEditIndex !== null &&
+      stagingEditIndex >= 0 &&
+      stagingEditIndex < folderPick.thumbUrls.length ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit staged photo"
+          onClick={() => closeStagingEdit()}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10004,
+            background: "rgba(0,0,0,0.94)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "12px",
+            paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 64px))",
+            boxSizing: "border-box"
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: "0.75rem",
+              width: "100%",
+              maxWidth: "min(100vw - 24px, 520px)"
+            }}
+          >
+            <div className="ct-row" style={{ width: "100%", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="ct-muted" style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.95rem" }}>
+                Edit staged photo {stagingEditIndex + 1}
+              </span>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                aria-label="Close editor"
+                disabled={stagingEditBusy}
+                onClick={() => closeStagingEdit()}
+                style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+              >
+                <X size={22} aria-hidden />
+              </button>
+            </div>
+            <div
+              style={{
+                overflow: "hidden",
+                maxHeight: "min(50dvh, 480px)",
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.2)",
+                background: "#111"
+              }}
+            >
+              <div
+                style={{
+                  transform: `rotate(${stagingEditRotation}deg)`,
+                  transformOrigin: "center center"
+                }}
+              >
+                <img
+                  src={folderPick.thumbUrls[stagingEditIndex] ?? ""}
+                  alt=""
+                  style={{
+                    maxWidth: "min(92vw, 480px)",
+                    maxHeight: "min(46dvh, 420px)",
+                    width: "auto",
+                    height: "auto",
+                    display: "block",
+                    objectFit: "contain",
+                    clipPath: `inset(${stagingEditTrim}%)`
+                  }}
+                />
+              </div>
+            </div>
+            <div className="ct-row" style={{ flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                aria-label="Rotate counter-clockwise"
+                disabled={stagingEditBusy}
+                onClick={() => setStagingEditRotation((r) => (r + 270) % 360)}
+                style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+              >
+                <RotateCcw size={22} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                aria-label="Rotate clockwise"
+                disabled={stagingEditBusy}
+                onClick={() => setStagingEditRotation((r) => (r + 90) % 360)}
+                style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+              >
+                <RotateCw size={22} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={stagingEditBusy}
+                onClick={() => {
+                  setStagingEditRotation(0);
+                  setStagingEditTrim(0);
+                }}
+                style={{ color: "#fff" }}
+              >
+                Reset
+              </button>
+            </div>
+            <label className="ct-muted" style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.85)" }}>
+              Trim edges (uniform %)
+              <input
+                type="range"
+                min={0}
+                max={35}
+                step={1}
+                value={stagingEditTrim}
+                disabled={stagingEditBusy}
+                onChange={(e) => setStagingEditTrim(Number(e.target.value))}
+                style={{ width: "100%", marginTop: 8, display: "block" }}
+              />
+              <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>{stagingEditTrim}%</span>
+            </label>
+            <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={stagingEditBusy}
+                onClick={() => closeStagingEdit()}
+                style={{ color: "#fff" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={stagingEditBusy}
+                onClick={() => void applyStagingEdit()}
+              >
+                {stagingEditBusy ? "Applying…" : "Apply"}
+              </button>
+            </div>
+            <p className="ct-muted" style={{ margin: 0, fontSize: "0.76rem", color: "rgba(255,255,255,0.6)" }}>
+              Apply replaces this file in the upload list. Tap outside to cancel.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
