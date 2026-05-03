@@ -57,13 +57,47 @@ function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
+/** Basic tone controls; values are CSS ``filter`` percentages (100 = unchanged). */
+type RasterizeBasicAdjust = {
+  brightnessPct: number;
+  contrastPct: number;
+  saturationPct: number;
+};
+
+const RASTER_ADJUST_DEFAULT: RasterizeBasicAdjust = {
+  brightnessPct: 100,
+  contrastPct: 100,
+  saturationPct: 100
+};
+
+function clampRasterAdjust(a: RasterizeBasicAdjust): RasterizeBasicAdjust {
+  return {
+    brightnessPct: Math.max(50, Math.min(150, Math.round(a.brightnessPct))),
+    contrastPct: Math.max(50, Math.min(150, Math.round(a.contrastPct))),
+    saturationPct: Math.max(0, Math.min(150, Math.round(a.saturationPct)))
+  };
+}
+
+function rasterAdjustCssFilter(a: RasterizeBasicAdjust): string {
+  const c = clampRasterAdjust(a);
+  return `brightness(${c.brightnessPct}%) contrast(${c.contrastPct}%) saturate(${c.saturationPct}%)`;
+}
+
+function isRasterAdjustDefault(a: RasterizeBasicAdjust): boolean {
+  return (
+    a.brightnessPct === 100 && a.contrastPct === 100 && a.saturationPct === 100
+  );
+}
+
 /**
- * Uniform edge trim (0–35, same as CSS ``inset`` % on each side) then 0/90/180/270° rotation; re-encode as JPEG.
+ * Uniform edge trim (0–35, same as CSS ``inset`` % on each side) then 0/90/180/270° rotation;
+ * optional brightness/contrast/saturation via canvas ``filter``; re-encode as JPEG.
  */
 async function rasterizeLotCameraEdit(
   file: File,
   rotationDeg: number,
-  edgeTrimPct: number
+  edgeTrimPct: number,
+  adjust: RasterizeBasicAdjust = RASTER_ADJUST_DEFAULT
 ): Promise<File | null> {
   const trim = Math.max(0, Math.min(35, edgeTrimPct));
   const rot = (((rotationDeg % 360) + 360) % 360) as 0 | 90 | 180 | 270;
@@ -100,6 +134,9 @@ async function rasterizeLotCameraEdit(
   c2.height = outH;
   const g2 = c2.getContext("2d");
   if (!g2) return null;
+  if (!isRasterAdjustDefault(adjust)) {
+    g2.filter = rasterAdjustCssFilter(adjust);
+  }
   g2.translate(outW / 2, outH / 2);
   g2.rotate(rad);
   g2.imageSmoothingEnabled = true;
@@ -325,6 +362,9 @@ export default function DashboardPage() {
   const [lotCameraEditIndex, setLotCameraEditIndex] = useState<number | null>(null);
   const [lotCameraEditRotation, setLotCameraEditRotation] = useState(0);
   const [lotCameraEditTrim, setLotCameraEditTrim] = useState(0);
+  const [lotCameraEditBrightness, setLotCameraEditBrightness] = useState(100);
+  const [lotCameraEditContrast, setLotCameraEditContrast] = useState(100);
+  const [lotCameraEditSaturation, setLotCameraEditSaturation] = useState(100);
   const [lotCameraEditBusy, setLotCameraEditBusy] = useState(false);
   const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
@@ -365,6 +405,9 @@ export default function DashboardPage() {
   const [stagingEditIndex, setStagingEditIndex] = useState<number | null>(null);
   const [stagingEditRotation, setStagingEditRotation] = useState(0);
   const [stagingEditTrim, setStagingEditTrim] = useState(0);
+  const [stagingEditBrightness, setStagingEditBrightness] = useState(100);
+  const [stagingEditContrast, setStagingEditContrast] = useState(100);
+  const [stagingEditSaturation, setStagingEditSaturation] = useState(100);
   const [stagingEditBusy, setStagingEditBusy] = useState(false);
   /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
   const [singleLotManualSku, setSingleLotManualSku] = useState("");
@@ -893,6 +936,9 @@ export default function DashboardPage() {
     setStagingEditBusy(false);
     setStagingEditRotation(0);
     setStagingEditTrim(0);
+    setStagingEditBrightness(100);
+    setStagingEditContrast(100);
+    setStagingEditSaturation(100);
     setFolderPick((prev) => {
       if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       return null;
@@ -945,6 +991,9 @@ export default function DashboardPage() {
     setStagingEditIndex(i);
     setStagingEditRotation(0);
     setStagingEditTrim(0);
+    setStagingEditBrightness(100);
+    setStagingEditContrast(100);
+    setStagingEditSaturation(100);
   }
 
   function closeStagingEdit() {
@@ -958,18 +1007,35 @@ export default function DashboardPage() {
     const p = folderPickRef.current;
     const file = p?.imageFiles[i];
     if (!file) return;
-    if (stagingEditRotation === 0 && stagingEditTrim === 0) {
+    const adjust: RasterizeBasicAdjust = {
+      brightnessPct: stagingEditBrightness,
+      contrastPct: stagingEditContrast,
+      saturationPct: stagingEditSaturation
+    };
+    if (
+      stagingEditRotation === 0 &&
+      stagingEditTrim === 0 &&
+      isRasterAdjustDefault(adjust)
+    ) {
       setStagingEditIndex(null);
       return;
     }
     setStagingEditBusy(true);
     try {
-      const out = await rasterizeLotCameraEdit(file, stagingEditRotation, stagingEditTrim);
+      const out = await rasterizeLotCameraEdit(
+        file,
+        stagingEditRotation,
+        stagingEditTrim,
+        adjust
+      );
       if (!out) return;
       replaceStagingImageFile(i, out);
       setStagingEditIndex(null);
       setStagingEditRotation(0);
       setStagingEditTrim(0);
+      setStagingEditBrightness(100);
+      setStagingEditContrast(100);
+      setStagingEditSaturation(100);
     } finally {
       setStagingEditBusy(false);
     }
@@ -984,6 +1050,9 @@ export default function DashboardPage() {
     setLotCameraViewerIndex(null);
     setLotCameraEditIndex(null);
     setLotCameraEditBusy(false);
+    setLotCameraEditBrightness(100);
+    setLotCameraEditContrast(100);
+    setLotCameraEditSaturation(100);
     lotCameraPinchRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
@@ -1063,6 +1132,9 @@ export default function DashboardPage() {
     setLotCameraEditIndex(i);
     setLotCameraEditRotation(0);
     setLotCameraEditTrim(0);
+    setLotCameraEditBrightness(100);
+    setLotCameraEditContrast(100);
+    setLotCameraEditSaturation(100);
   }
 
   function closeLotCameraEdit() {
@@ -1075,13 +1147,27 @@ export default function DashboardPage() {
     if (i === null) return;
     const file = lotCameraSnapsRef.current[i];
     if (!file) return;
-    if (lotCameraEditRotation === 0 && lotCameraEditTrim === 0) {
+    const adjust: RasterizeBasicAdjust = {
+      brightnessPct: lotCameraEditBrightness,
+      contrastPct: lotCameraEditContrast,
+      saturationPct: lotCameraEditSaturation
+    };
+    if (
+      lotCameraEditRotation === 0 &&
+      lotCameraEditTrim === 0 &&
+      isRasterAdjustDefault(adjust)
+    ) {
       setLotCameraEditIndex(null);
       return;
     }
     setLotCameraEditBusy(true);
     try {
-      const out = await rasterizeLotCameraEdit(file, lotCameraEditRotation, lotCameraEditTrim);
+      const out = await rasterizeLotCameraEdit(
+        file,
+        lotCameraEditRotation,
+        lotCameraEditTrim,
+        adjust
+      );
       if (!out) return;
       setLotCameraSnaps((prev) => {
         if (i < 0 || i >= prev.length) return prev;
@@ -1093,6 +1179,9 @@ export default function DashboardPage() {
       setLotCameraEditIndex(null);
       setLotCameraEditRotation(0);
       setLotCameraEditTrim(0);
+      setLotCameraEditBrightness(100);
+      setLotCameraEditContrast(100);
+      setLotCameraEditSaturation(100);
     } finally {
       setLotCameraEditBusy(false);
     }
@@ -1108,6 +1197,9 @@ export default function DashboardPage() {
       setLotCameraViewerIndex(null);
       setLotCameraEditIndex(null);
       setLotCameraEditBusy(false);
+      setLotCameraEditBrightness(100);
+      setLotCameraEditContrast(100);
+      setLotCameraEditSaturation(100);
       lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
       setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
       setLotCameraOpen(true);
@@ -1226,6 +1318,9 @@ export default function DashboardPage() {
     setStagingViewerIndex(null);
     setStagingEditIndex(null);
     setStagingEditBusy(false);
+    setStagingEditBrightness(100);
+    setStagingEditContrast(100);
+    setStagingEditSaturation(100);
     const files = folderPick.imageFiles;
     const total = files.length;
     setUploading(true);
@@ -1794,8 +1889,8 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Tap a thumbnail to preview full size. Use the pencil to rotate or trim edges, or the trash icon to
-                remove a photo before upload.
+                Tap a thumbnail to preview full size. Use the pencil to rotate, trim edges, or adjust brightness /
+                contrast / color; use the trash icon to remove a photo before upload.
               </p>
             ) : null}
             {folderPick.imageFiles.length > 0 && (
@@ -2322,8 +2417,8 @@ export default function DashboardPage() {
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload. Pinch or use +/− to zoom the live view; the saved photo matches what you see. Tap a thumbnail to
-              preview; use the pencil to rotate or trim edges on a shot only when needed; use the trash control to remove
-              one shot.
+              preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation when needed;
+              use the trash control to remove one shot.
             </p>
             <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -2744,7 +2839,12 @@ export default function DashboardPage() {
                         height: "auto",
                         display: "block",
                         objectFit: "contain",
-                        clipPath: `inset(${lotCameraEditTrim}%)`
+                        clipPath: `inset(${lotCameraEditTrim}%)`,
+                        filter: rasterAdjustCssFilter({
+                          brightnessPct: lotCameraEditBrightness,
+                          contrastPct: lotCameraEditContrast,
+                          saturationPct: lotCameraEditSaturation
+                        })
                       }}
                     />
                   </div>
@@ -2777,6 +2877,9 @@ export default function DashboardPage() {
                     onClick={() => {
                       setLotCameraEditRotation(0);
                       setLotCameraEditTrim(0);
+                      setLotCameraEditBrightness(100);
+                      setLotCameraEditContrast(100);
+                      setLotCameraEditSaturation(100);
                     }}
                     style={{ color: "#fff" }}
                   >
@@ -2797,6 +2900,65 @@ export default function DashboardPage() {
                   />
                   <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>{lotCameraEditTrim}%</span>
                 </label>
+                <div
+                  className="ct-muted"
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "rgba(255,255,255,0.85)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem"
+                  }}
+                >
+                  <label>
+                    Brightness (100% = unchanged)
+                    <input
+                      type="range"
+                      min={50}
+                      max={150}
+                      step={1}
+                      value={lotCameraEditBrightness}
+                      disabled={lotCameraEditBusy}
+                      onChange={(e) => setLotCameraEditBrightness(Number(e.target.value))}
+                      style={{ width: "100%", marginTop: 6, display: "block" }}
+                    />
+                    <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                      {lotCameraEditBrightness}%
+                    </span>
+                  </label>
+                  <label>
+                    Contrast
+                    <input
+                      type="range"
+                      min={50}
+                      max={150}
+                      step={1}
+                      value={lotCameraEditContrast}
+                      disabled={lotCameraEditBusy}
+                      onChange={(e) => setLotCameraEditContrast(Number(e.target.value))}
+                      style={{ width: "100%", marginTop: 6, display: "block" }}
+                    />
+                    <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                      {lotCameraEditContrast}%
+                    </span>
+                  </label>
+                  <label>
+                    Saturation (0% = grayscale)
+                    <input
+                      type="range"
+                      min={0}
+                      max={150}
+                      step={1}
+                      value={lotCameraEditSaturation}
+                      disabled={lotCameraEditBusy}
+                      onChange={(e) => setLotCameraEditSaturation(Number(e.target.value))}
+                      style={{ width: "100%", marginTop: 6, display: "block" }}
+                    />
+                    <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                      {lotCameraEditSaturation}%
+                    </span>
+                  </label>
+                </div>
                 <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
                   <button
                     type="button"
@@ -2817,7 +2979,7 @@ export default function DashboardPage() {
                   </button>
                 </div>
                 <p className="ct-muted" style={{ margin: 0, fontSize: "0.76rem", color: "rgba(255,255,255,0.6)" }}>
-                  Apply saves a new JPEG for this shot (replaces the thumbnail). Tap outside to cancel.
+                  Apply saves a new JPEG (trim, rotate, brightness, contrast, color). Tap outside to cancel.
                 </p>
               </div>
             </div>
@@ -3103,7 +3265,12 @@ export default function DashboardPage() {
                     height: "auto",
                     display: "block",
                     objectFit: "contain",
-                    clipPath: `inset(${stagingEditTrim}%)`
+                    clipPath: `inset(${stagingEditTrim}%)`,
+                    filter: rasterAdjustCssFilter({
+                      brightnessPct: stagingEditBrightness,
+                      contrastPct: stagingEditContrast,
+                      saturationPct: stagingEditSaturation
+                    })
                   }}
                 />
               </div>
@@ -3136,6 +3303,9 @@ export default function DashboardPage() {
                 onClick={() => {
                   setStagingEditRotation(0);
                   setStagingEditTrim(0);
+                  setStagingEditBrightness(100);
+                  setStagingEditContrast(100);
+                  setStagingEditSaturation(100);
                 }}
                 style={{ color: "#fff" }}
               >
@@ -3156,6 +3326,65 @@ export default function DashboardPage() {
               />
               <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>{stagingEditTrim}%</span>
             </label>
+            <div
+              className="ct-muted"
+              style={{
+                fontSize: "0.85rem",
+                color: "rgba(255,255,255,0.85)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem"
+              }}
+            >
+              <label>
+                Brightness (100% = unchanged)
+                <input
+                  type="range"
+                  min={50}
+                  max={150}
+                  step={1}
+                  value={stagingEditBrightness}
+                  disabled={stagingEditBusy}
+                  onChange={(e) => setStagingEditBrightness(Number(e.target.value))}
+                  style={{ width: "100%", marginTop: 6, display: "block" }}
+                />
+                <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                  {stagingEditBrightness}%
+                </span>
+              </label>
+              <label>
+                Contrast
+                <input
+                  type="range"
+                  min={50}
+                  max={150}
+                  step={1}
+                  value={stagingEditContrast}
+                  disabled={stagingEditBusy}
+                  onChange={(e) => setStagingEditContrast(Number(e.target.value))}
+                  style={{ width: "100%", marginTop: 6, display: "block" }}
+                />
+                <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                  {stagingEditContrast}%
+                </span>
+              </label>
+              <label>
+                Saturation (0% = grayscale)
+                <input
+                  type="range"
+                  min={0}
+                  max={150}
+                  step={1}
+                  value={stagingEditSaturation}
+                  disabled={stagingEditBusy}
+                  onChange={(e) => setStagingEditSaturation(Number(e.target.value))}
+                  style={{ width: "100%", marginTop: 6, display: "block" }}
+                />
+                <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                  {stagingEditSaturation}%
+                </span>
+              </label>
+            </div>
             <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
               <button
                 type="button"
@@ -3176,7 +3405,7 @@ export default function DashboardPage() {
               </button>
             </div>
             <p className="ct-muted" style={{ margin: 0, fontSize: "0.76rem", color: "rgba(255,255,255,0.6)" }}>
-              Apply replaces this file in the upload list. Tap outside to cancel.
+              Apply replaces this file in the upload list (including tone). Tap outside to cancel.
             </p>
           </div>
         </div>
