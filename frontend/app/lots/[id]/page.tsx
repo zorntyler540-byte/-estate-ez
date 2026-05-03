@@ -537,6 +537,37 @@ export default function LotDetailPage() {
     }
   }
 
+  async function deleteSelectedPhotos() {
+    if (!lot || !token || selectedPhotoIds.size === 0) return;
+    const n = selectedPhotoIds.size;
+    if (
+      !window.confirm(
+        `Permanently delete ${n} selected photo file(s) from this lot? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setOrganizeBusy(true);
+    setOrganizeMsg("");
+    setError("");
+    try {
+      await apiFetch(`/lots/${encodeURIComponent(lot.id)}/photos/delete`, token, {
+        method: "POST",
+        body: JSON.stringify({ photo_ids: Array.from(selectedPhotoIds) })
+      });
+      closeViewer();
+      setSelectedPhotoIds(new Set());
+      lastPhotoSelectAnchorRef.current = null;
+      await refetchLotAndPhotos();
+      await refetchSaleLotsList();
+      setOrganizeMsg(`Deleted ${n} photo(s).`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not delete photos");
+    } finally {
+      setOrganizeBusy(false);
+    }
+  }
+
   if (!token) {
     return (
       <main className="ct-shell">
@@ -959,6 +990,37 @@ export default function LotDetailPage() {
               disabled={aiRegenerating || saving || !catalogPhotos.length}
             >
               {aiRegenerating ? "Running AI…" : "Regenerate listing with AI"}
+            </button>
+          </div>
+        </div>
+        <div
+          className="ct-stack"
+          style={{
+            marginBottom: "0.85rem",
+            padding: "0.65rem 0.75rem",
+            borderRadius: "var(--ct-radius)",
+            border: "1px solid var(--ct-border)",
+            background: "rgba(255,255,255,0.03)"
+          }}
+        >
+          <p className="ct-muted" style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.45 }}>
+            Use the checkboxes in <strong>Catalog photos</strong> above (same selection as move/split). Files are
+            removed from the server; the lot row stays unless you delete the whole listing.
+          </p>
+          <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--danger"
+              onClick={() => void deleteSelectedPhotos()}
+              disabled={
+                organizeBusy ||
+                reorderBusy ||
+                saving ||
+                selectedPhotoIds.size === 0 ||
+                catalogPhotos.length === 0
+              }
+            >
+              {organizeBusy ? "Working…" : "Delete selected photos"}
             </button>
           </div>
         </div>

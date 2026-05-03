@@ -158,6 +158,12 @@ class ReorderLotPhotosIn(BaseModel):
     photo_ids: list[str] = Field(min_length=1, max_length=500)
 
 
+class DeleteLotPhotosIn(BaseModel):
+    """Remove selected catalog photos from this lot (files removed after DB commit)."""
+
+    photo_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class TransferPhotosIn(BaseModel):
     """Move catalog photos into another lot in the same sale (same account)."""
 

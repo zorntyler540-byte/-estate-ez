@@ -41,6 +41,7 @@ from app.services.processing import run_lot_ai_regenerate_and_save
 from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
+    DeleteLotPhotosIn,
     HealthResponse,
     JobOut,
     LoginRequest,
@@ -578,6 +579,50 @@ def list_lot_photos(
         )
         for p in photos
     ]
+
+
+@app.post("/lots/{lot_id}/photos/delete", response_model=LotOut)
+def delete_lot_photos(
+    lot_id: str,
+    body: DeleteLotPhotosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    """Permanently remove selected catalog photos from this lot (same sale must be open)."""
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+
+    ids = list(dict.fromkeys(body.photo_ids))
+    to_delete = (
+        db.query(Photo)
+        .filter(
+            Photo.lot_id == lot_id,
+            Photo.account_id == current.account_id,
+            Photo.id.in_(ids),
+        )
+        .all()
+    )
+    found_ids = {p.id for p in to_delete}
+    if found_ids != set(ids):
+        missing = sorted(set(ids) - found_ids)
+        preview = ", ".join(missing[:5])
+        more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"Photo id(s) not on this lot: {preview}{more}" if preview else "No matching photos on this lot.",
+        )
+
+    paths = [Path(p.storage_path).resolve() for p in to_delete]
+    for ph in to_delete:
+        db.delete(ph)
+    renormalize_photo_sort_orders(db, lot_id, current.account_id)
+    _reconcile_lot_photo_count(db, lot_id, current.account_id)
+    db.commit()
+    for path in paths:
+        path.unlink(missing_ok=True)
+    return _lot_out_for_id(db, current.account_id, lot_id)
 
 
 @app.patch("/lots/{lot_id}/photos/reorder", response_model=list[LotPhotoOut])
