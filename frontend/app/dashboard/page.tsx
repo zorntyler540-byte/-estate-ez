@@ -3,7 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ChevronLeft, ChevronRight, Database, FileSpreadsheet, FileText, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ChevronLeft,
+  ChevronRight,
+  Database,
+  FileSpreadsheet,
+  FileText,
+  Minus,
+  Plus,
+  Trash2,
+  X
+} from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
@@ -11,6 +22,21 @@ const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
 /** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
 const UPLOAD_FILE_CHUNK = 200;
+
+/** Digital zoom for one-lot camera preview + JPEG crop; 1 = no zoom. */
+const LOT_CAMERA_ZOOM_MIN = 1;
+const LOT_CAMERA_ZOOM_MAX = 4;
+const LOT_CAMERA_ZOOM_STEP = 0.25;
+
+function lotCameraPinchDistance(e: TouchEvent): number {
+  if (e.touches.length < 2) return 0;
+  const a = e.touches[0];
+  const b = e.touches[1];
+  if (!a || !b) return 0;
+  const dx = a.clientX - b.clientX;
+  const dy = a.clientY - b.clientY;
+  return Math.hypot(dx, dy);
+}
 
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
@@ -215,6 +241,10 @@ export default function DashboardPage() {
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   /** Index into ``lotCameraSnapThumbUrls`` for full-screen preview, or null. */
   const [lotCameraViewerIndex, setLotCameraViewerIndex] = useState<number | null>(null);
+  const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
+  const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
+  const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
+  const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   const inventoryFirstLoad = useRef(true);
   const salesLoadId = useRef(0);
@@ -691,6 +721,58 @@ export default function DashboardPage() {
     strip.scrollLeft = strip.scrollWidth;
   }, [lotCameraSnapThumbUrls.length]);
 
+  /** Pinch-to-zoom on the live preview (non-passive ``touchmove`` so Safari does not scroll the page). */
+  useEffect(() => {
+    const el = lotCameraZoomWrapRef.current;
+    if (!el || !lotCameraOpen || !lotCameraStream) return;
+
+    const clampZoom = (z: number) =>
+      Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const d = lotCameraPinchDistance(e);
+        if (d > 0) {
+          lotCameraPinchRef.current = { startDist: d, startZoom: lotCameraZoomRef.current };
+        }
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !lotCameraPinchRef.current) return;
+      const d = lotCameraPinchDistance(e);
+      if (d < 1) return;
+      e.preventDefault();
+      const { startDist, startZoom } = lotCameraPinchRef.current;
+      if (startDist < 1) return;
+      const z = clampZoom(startZoom * (d / startDist));
+      lotCameraZoomRef.current = z;
+      setLotCameraZoom(z);
+    };
+
+    const onTouchEnd = () => {
+      lotCameraPinchRef.current = null;
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [lotCameraOpen, lotCameraStream]);
+
+  function setLotCameraZoomLevel(next: number) {
+    const z =
+      Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, next)) * 100) / 100;
+    lotCameraZoomRef.current = z;
+    setLotCameraZoom(z);
+  }
+
   function clearFolderPick() {
     singleLotCaptureChainingRef.current = false;
     setSingleLotManualSku("");
@@ -707,6 +789,9 @@ export default function DashboardPage() {
     setLotCameraOpen(false);
     setLotCameraPreviewReady(false);
     setLotCameraViewerIndex(null);
+    lotCameraPinchRef.current = null;
+    lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
+    setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
   }
 
   function cancelLotCameraSession() {
@@ -727,12 +812,23 @@ export default function DashboardPage() {
   function snapLotPhoto() {
     const v = lotCameraVideoRef.current;
     if (!v || v.readyState < 2 || v.videoWidth < 2) return;
+    const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
+    const w = v.videoWidth;
+    const h = v.videoHeight;
     const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(v, 0, 0);
+    if (z <= LOT_CAMERA_ZOOM_MIN + 0.001) {
+      ctx.drawImage(v, 0, 0, w, h, 0, 0, w, h);
+    } else {
+      const sw = w / z;
+      const sh = h / z;
+      const sx = (w - sw) / 2;
+      const sy = (h - sh) / 2;
+      ctx.drawImage(v, sx, sy, sw, sh, 0, 0, w, h);
+    }
     canvas.toBlob(
       (blob) => {
         if (!blob) return;
@@ -768,6 +864,8 @@ export default function DashboardPage() {
       lotCameraSnapsRef.current = [];
       setLotCameraPreviewReady(false);
       setLotCameraViewerIndex(null);
+      lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
+      setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
       setLotCameraOpen(true);
       try {
         const stream = await md.getUserMedia({
@@ -1881,7 +1979,8 @@ export default function DashboardPage() {
             <div className="ct-card ct-card--padded" style={{ width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload. Tap a thumbnail to preview; use the trash control to remove one shot.
+              upload. Pinch or use +/− to zoom the live view; the saved photo matches what you see. Tap a thumbnail to
+              preview; use the trash control to remove one shot.
             </p>
             <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -1898,20 +1997,73 @@ export default function DashboardPage() {
             {!lotCameraStream ? (
               <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
             ) : (
-              <video
-                ref={lotCameraVideoRef}
-                autoPlay
-                playsInline
-                muted
-                onLoadedData={() => setLotCameraPreviewReady(true)}
-                style={{
-                  width: "100%",
-                  maxHeight: "min(38dvh, 360px)",
-                  borderRadius: 8,
-                  objectFit: "cover",
-                  background: "#111"
-                }}
-              />
+              <>
+                <div
+                  ref={lotCameraZoomWrapRef}
+                  style={{
+                    width: "100%",
+                    maxHeight: "min(38dvh, 360px)",
+                    height: "min(38dvh, 360px)",
+                    marginTop: "0.65rem",
+                    borderRadius: 8,
+                    overflow: "hidden",
+                    background: "#111",
+                    touchAction: "none"
+                  }}
+                >
+                  <video
+                    ref={lotCameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    onLoadedData={() => setLotCameraPreviewReady(true)}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      display: "block",
+                      objectFit: "cover",
+                      transform: `scale(${lotCameraZoom})`,
+                      transformOrigin: "center center"
+                    }}
+                  />
+                </div>
+                <div
+                  className="ct-row"
+                  style={{
+                    marginTop: "0.5rem",
+                    flexWrap: "wrap",
+                    gap: "0.45rem",
+                    alignItems: "center",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <span className="ct-muted" style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.8)" }}>
+                    Zoom {lotCameraZoom.toFixed(2)}×
+                  </span>
+                  <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost"
+                      aria-label="Zoom out"
+                      disabled={lotCameraZoom <= LOT_CAMERA_ZOOM_MIN + 0.001}
+                      onClick={() => setLotCameraZoomLevel(lotCameraZoom - LOT_CAMERA_ZOOM_STEP)}
+                      style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
+                    >
+                      <Minus size={22} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost"
+                      aria-label="Zoom in"
+                      disabled={lotCameraZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
+                      onClick={() => setLotCameraZoomLevel(lotCameraZoom + LOT_CAMERA_ZOOM_STEP)}
+                      style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
+                    >
+                      <Plus size={22} aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
             <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
               <strong>{lotCameraSnaps.length}</strong> photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
