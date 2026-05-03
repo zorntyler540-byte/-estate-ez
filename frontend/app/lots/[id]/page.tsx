@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { API_BASE, apiFetch } from "../../../lib/api";
@@ -73,6 +74,8 @@ export default function LotDetailPage() {
   const [aiRegenerating, setAiRegenerating] = useState(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
+  /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
+  const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
   const lastPhotoSelectAnchorRef = useRef<number | null>(null);
   const dragPhotoIdRef = useRef<string | null>(null);
 
@@ -174,6 +177,25 @@ export default function LotDetailPage() {
       document.getElementById("listing-details")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, [lot?.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !lot) return;
+    const update = () => {
+      const doc = document.documentElement;
+      setShowScrollJumpNav(doc.scrollHeight > window.innerHeight + 120);
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    window.addEventListener("scroll", update, { passive: true });
+    const t1 = window.setTimeout(update, 400);
+    const t2 = window.setTimeout(update, 1500);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update);
+    };
+  }, [lot?.id, catalogPhotos.length]);
 
   async function loadViewerPhoto(index: number) {
     if (!lot || !token) return;
@@ -588,7 +610,7 @@ export default function LotDetailPage() {
   }
 
   return (
-    <main className="ct-shell" style={{ maxWidth: 960 }}>
+    <main id="lot-detail-top" className="ct-shell" style={{ maxWidth: 960 }}>
       <p style={{ margin: "0 0 0.75rem" }}>
         <Link href="/dashboard">← Back to dashboard</Link>
       </p>
@@ -1227,6 +1249,66 @@ export default function LotDetailPage() {
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {showScrollJumpNav && viewerIndex === null ? (
+        <div
+          role="navigation"
+          aria-label="Jump scroll"
+          style={{
+            position: "fixed",
+            right: "max(12px, env(safe-area-inset-right, 0px))",
+            bottom: "max(16px, env(safe-area-inset-bottom, 0px))",
+            zIndex: 9990,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6
+          }}
+        >
+          <button
+            type="button"
+            className="ct-btn"
+            title="Top of page"
+            aria-label="Scroll to top of page"
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            style={{
+              minWidth: 48,
+              minHeight: 48,
+              padding: 0,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)"
+            }}
+          >
+            <ChevronUp size={22} strokeWidth={2.25} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="ct-btn"
+            title="Bottom of page"
+            aria-label="Scroll to bottom of page"
+            onClick={() =>
+              window.scrollTo({
+                top: document.documentElement.scrollHeight,
+                behavior: "smooth"
+              })
+            }
+            style={{
+              minWidth: 48,
+              minHeight: 48,
+              padding: 0,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18)"
+            }}
+          >
+            <ChevronDown size={22} strokeWidth={2.25} aria-hidden />
+          </button>
         </div>
       ) : null}
     </main>
