@@ -1858,7 +1858,8 @@ export default function DashboardPage() {
             display: "flex",
             flexDirection: "column",
             padding: "12px",
-            paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+            // iOS Safari bottom chrome (URL / tab bar) sits outside ``safe-area-inset-bottom``; reserve space so thumbs stay tappable.
+            paddingBottom: "max(20px, calc(env(safe-area-inset-bottom, 0px) + 88px))",
             boxSizing: "border-box"
           }}
         >
@@ -1904,6 +1905,95 @@ export default function DashboardPage() {
             <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
               <strong>{lotCameraSnaps.length}</strong> photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
             </p>
+            {lotCameraSnapThumbUrls.length > 0 ? (
+              <div style={{ marginTop: "0.65rem", width: "100%" }}>
+                <p
+                  className="ct-muted"
+                  style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
+                >
+                  Captured (scroll sideways) — tap to preview
+                </p>
+                <div
+                  ref={lotCameraStripRef}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    overflowX: "auto",
+                    overflowY: "hidden",
+                    padding: "10px 4px 12px",
+                    WebkitOverflowScrolling: "touch",
+                    scrollSnapType: "x proximity"
+                  }}
+                >
+                  {lotCameraSnapThumbUrls.map((url, i) => (
+                    <div
+                      key={url}
+                      style={{
+                        position: "relative",
+                        flex: "0 0 auto",
+                        width: 56,
+                        height: 56,
+                        scrollSnapAlign: "start"
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setLotCameraViewerIndex(i)}
+                        aria-label={`Preview captured photo ${i + 1}`}
+                        style={{
+                          display: "block",
+                          width: 56,
+                          height: 56,
+                          padding: 0,
+                          border: "1px solid rgba(255,255,255,0.25)",
+                          borderRadius: 6,
+                          overflow: "hidden",
+                          cursor: "pointer",
+                          background: "#111"
+                        }}
+                      >
+                        <img
+                          src={url}
+                          alt=""
+                          width={56}
+                          height={56}
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete captured photo ${i + 1}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeLotCameraSnap(i);
+                        }}
+                        className="ct-btn ct-btn--ghost"
+                        style={{
+                          position: "absolute",
+                          top: -4,
+                          right: -4,
+                          minWidth: 36,
+                          minHeight: 36,
+                          width: 36,
+                          height: 36,
+                          padding: 0,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "rgba(12,15,18,0.92)",
+                          border: "1px solid rgba(255,255,255,0.35)",
+                          color: "#f5a5a5",
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
+                        }}
+                      >
+                        <Trash2 size={16} aria-hidden />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.75rem", flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -1921,95 +2011,6 @@ export default function DashboardPage() {
               </button>
             </div>
           </div>
-          {lotCameraSnapThumbUrls.length > 0 ? (
-            <div style={{ marginTop: 10, flexShrink: 0, width: "100%", maxWidth: 520, marginLeft: "auto", marginRight: "auto" }}>
-              <p
-                className="ct-muted"
-                style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
-              >
-                Captured (scroll sideways) — tap to preview
-              </p>
-              <div
-                ref={lotCameraStripRef}
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  overflowX: "auto",
-                  overflowY: "hidden",
-                  padding: "6px 2px 4px",
-                  WebkitOverflowScrolling: "touch",
-                  scrollSnapType: "x proximity"
-                }}
-              >
-                {lotCameraSnapThumbUrls.map((url, i) => (
-                  <div
-                    key={url}
-                    style={{
-                      position: "relative",
-                      flex: "0 0 auto",
-                      width: 56,
-                      height: 56,
-                      scrollSnapAlign: "start"
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setLotCameraViewerIndex(i)}
-                      aria-label={`Preview captured photo ${i + 1}`}
-                      style={{
-                        display: "block",
-                        width: 56,
-                        height: 56,
-                        padding: 0,
-                        border: "1px solid rgba(255,255,255,0.25)",
-                        borderRadius: 6,
-                        overflow: "hidden",
-                        cursor: "pointer",
-                        background: "#111"
-                      }}
-                    >
-                      <img
-                        src={url}
-                        alt=""
-                        width={56}
-                        height={56}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Delete captured photo ${i + 1}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeLotCameraSnap(i);
-                      }}
-                      className="ct-btn ct-btn--ghost"
-                      style={{
-                        position: "absolute",
-                        top: -4,
-                        right: -4,
-                        minWidth: 36,
-                        minHeight: 36,
-                        width: 36,
-                        height: 36,
-                        padding: 0,
-                        borderRadius: "50%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "rgba(12,15,18,0.92)",
-                        border: "1px solid rgba(255,255,255,0.35)",
-                        color: "#f5a5a5",
-                        boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
-                      }}
-                    >
-                      <Trash2 size={16} aria-hidden />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
 
           {lotCameraViewerIndex !== null &&
           lotCameraViewerIndex >= 0 &&
@@ -2029,7 +2030,7 @@ export default function DashboardPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 padding: "12px",
-                paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+                paddingBottom: "max(20px, calc(env(safe-area-inset-bottom, 0px) + 88px))",
                 boxSizing: "border-box"
               }}
             >
