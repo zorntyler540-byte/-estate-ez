@@ -223,6 +223,144 @@ def _semantic_spec_bucket(line: str) -> str | None:
     return None
 
 
+def _normalize_spec_label_for_bucket(raw_label: str) -> str:
+    """Lowercase, strip apostrophes, remove spaces so ``Production mark`` → ``productionmark``."""
+    s = str(raw_label or "").strip().lower()
+    s = re.sub(r"[''`]", "", s)
+    return re.sub(r"\s+", "", s)
+
+
+# Labels whose values are merged into a single ``Markings:`` row (order preserved, deduped).
+_MARKINGS_MERGE_LABEL_KEYS: frozenset[str] = frozenset(
+    {
+        "markings",
+        "marking",
+        "productionmark",
+        "productionmarks",
+        "makersmark",
+        "makermark",
+        "impressedmark",
+        "stampmark",
+        "stampmarks",
+        "bottommark",
+        "basemark",
+        "factorymark",
+        "hallmark",
+        "registeredmark",
+        "waremark",
+        "undersidemark",
+        "undersidemarks",
+    }
+)
+
+# Labels merged into one ``Brand:`` row (distinct values only).
+_BRAND_MERGE_LABEL_KEYS: frozenset[str] = frozenset(
+    {
+        "brand",
+        "brands",
+        "maker",
+        "manufacturer",
+        "manufacturers",
+    }
+)
+
+
+def _spec_label_value_parts(line: str) -> tuple[str, str] | None:
+    """``Label: value`` → (normalized_label_key, rhs value) or None."""
+    m = re.match(r"^([^:]+):\s*(.+)$", clean_listing_text(line).strip())
+    if not m:
+        return None
+    raw_l, rhs = m.group(1).strip(), m.group(2).strip()
+    if not rhs or _line_has_placeholder_value(line):
+        return None
+    return _normalize_spec_label_for_bucket(raw_l), rhs
+
+
+def _mark_rhs_is_brand_or_origin(rhs: str) -> bool:
+    """
+    ``Mark:`` is ambiguous (maker stamp vs country). Route long stamp prose to markings;
+    ``Made in …`` / country-style phrases to the brand bucket.
+    """
+    v = clean_listing_text(rhs).strip()
+    if not v:
+        return False
+    vl = v.lower()
+    if re.fullmatch(r"[\d\s.]+$", v):
+        return False
+    if "made in" in vl or "manufactured in" in vl:
+        return True
+    if len(v) <= 8 and re.search(r"\d", v) and not re.search(r"[a-z]{5,}", vl):
+        return False
+    if len(v) > 40 and any(
+        w in vl for w in ("stamp", "stamped", "incised", "impressed", "engraved", "circular", "marking")
+    ):
+        return False
+    return len(v) >= 10
+
+
+def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
+    """
+    Merge repeated brand/origin rows (``Brand:`` / ``Brands:`` / duplicate ``Mark:``) into one ``Brand:`` line
+    and all stamp / mark descriptions into one ``Markings:`` line (values joined with ``; ``).
+    """
+    brand_vals: list[str] = []
+    marking_vals: list[str] = []
+    seen_b: set[str] = set()
+    seen_m: set[str] = set()
+    roles: list[str | None] = []
+
+    for line in lines:
+        parts = _spec_label_value_parts(line)
+        if parts is None:
+            roles.append(None)
+            continue
+        lk, val = parts
+        role: str | None = None
+        if lk in _MARKINGS_MERGE_LABEL_KEYS:
+            role = "m"
+            key = val.lower()
+            if key not in seen_m:
+                seen_m.add(key)
+                marking_vals.append(val)
+        elif lk in _BRAND_MERGE_LABEL_KEYS:
+            role = "b"
+            key = val.lower()
+            if key not in seen_b:
+                seen_b.add(key)
+                brand_vals.append(val)
+        elif lk == "mark":
+            if _mark_rhs_is_brand_or_origin(val):
+                role = "b"
+                key = val.lower()
+                if key not in seen_b:
+                    seen_b.add(key)
+                    brand_vals.append(val)
+            else:
+                role = "m"
+                key = val.lower()
+                if key not in seen_m:
+                    seen_m.add(key)
+                    marking_vals.append(val)
+        roles.append(role)
+
+    first_b = next((i for i, r in enumerate(roles) if r == "b"), None)
+    first_m = next((i for i, r in enumerate(roles) if r == "m"), None)
+
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        r = roles[i]
+        if r == "b":
+            if i == first_b and brand_vals:
+                out.append("Brand: " + "; ".join(brand_vals))
+            continue
+        if r == "m":
+            if i == first_m and marking_vals:
+                out.append("Markings: " + "; ".join(marking_vals))
+            continue
+        out.append(line)
+    return out
+
+
 def _collapse_semantic_spec_lines(lines: list[str]) -> list[str]:
     """
     After exact dedupe: for common ``Label:`` prefixes (Style, Material, Base, …), keep a single line
@@ -273,7 +411,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
             continue
         seen.add(key)
         first.append(line)
-    return _collapse_semantic_spec_lines(first)
+    return consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
 
 
 def _strip_noted_brand_clauses(text: str) -> str:

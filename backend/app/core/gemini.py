@@ -228,6 +228,11 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- Use **at most one** ``Finish:`` (or ``Glaze:`` / lustre sheen) row unless two values clearly describe "
         "different surfaces (e.g. interior vs exterior); do not restate iridescent / lustre / gloss in multiple "
         "finish lines.\n"
+        "- Use **at most one** ``Brand:`` row for makers, importers, or ``Made in …`` origin phrases (join distinct "
+        "facts with ``; ``). Do **not** repeat the same maker or origin under ``Brands:``, ``Mark:``, or ``Brand:``.\n"
+        "- Use **at most one** ``Markings:`` row for stamps, impressed numbers, molded numbers, and factory marks "
+        "(join distinct facts with ``; ``). Prefer that over separate ``Production mark:``, ``Mark:`` (when it "
+        "describes a stamp), or multiple ``Markings:`` rows.\n"
         "- starting_price_usd: numeric USD estimate if reasonable, else null.\n"
     )
 
