@@ -859,11 +859,15 @@ async function performAutoPhotoUpload(lotId, files) {
   }
   const dt = new DataTransfer();
   for (const f of files) {
-    const b64 = f?.dataBase64;
-    if (!b64) continue;
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    let bytes = null;
+    if (f?.arrayBuffer instanceof ArrayBuffer) {
+      bytes = new Uint8Array(f.arrayBuffer);
+    } else if (f?.dataBase64) {
+      const bin = atob(f.dataBase64);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    }
+    if (!bytes || !bytes.length) continue;
     const file = new File([bytes], f.name || "photo.jpg", { type: f.type || "image/jpeg" });
     dt.items.add(file);
   }

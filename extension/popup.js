@@ -19,6 +19,9 @@ const MAX_THUMB_STORAGE_CHARS = 480_000;
 /** JPEG long edge for extension → CT Seller (avoids multi‑MB originals that time out behind Railway). */
 const EXTENSION_UPLOAD_THUMB_MAX = 1600;
 
+/** Parallel thumbnail downloads (bounded so Railway / browser stay stable). */
+const EXTENSION_PHOTO_FETCH_CONCURRENCY = 5;
+
 /** Align with dashboard / CT Seller walk order (oldest lot first). API must support ``sort`` (newer backends). */
 const EXTENSION_LOTS_SORT = "created_asc";
 /** Page size when API returns ``X-Total-Count`` (paginated ``limit``/``offset``). */
@@ -289,10 +292,10 @@ async function fetchLotPhotos(apiBase, token, lotId) {
 }
 
 /**
- * Loads a downscaled JPEG for CT Seller upload. Full ``/download`` originals are often too large
- * and cause Railway 502 / timeouts when many photos are fetched in sequence from the extension popup.
+ * Loads a downscaled JPEG from the Estate API for CT Seller upload.
+ * Returns ``ArrayBuffer`` (no base64) so the popup avoids heavy encode and messages stay smaller.
  */
-async function fetchPhotoBlob(apiBase, token, lotId, photoId, originalName) {
+async function fetchPhotoJpegBuffer(apiBase, token, lotId, photoId, originalName) {
   const res = await fetchWithRetry(
     `${apiBase}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${EXTENSION_UPLOAD_THUMB_MAX}`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -301,23 +304,46 @@ async function fetchPhotoBlob(apiBase, token, lotId, photoId, originalName) {
     const text = await res.text();
     throw new Error(text || `Photo API ${res.status}`);
   }
-  const blob = await res.blob();
-  const ab = await blob.arrayBuffer();
-  const bytes = new Uint8Array(ab);
-  // Avoid String.fromCharCode(... hugeUint8Array): spread size can exceed engine limits and throw.
-  let binary = "";
-  const step = 8192;
-  for (let i = 0; i < bytes.length; i += step) {
-    const slice = bytes.subarray(i, Math.min(i + step, bytes.length));
-    binary += String.fromCharCode.apply(null, slice);
-  }
+  const arrayBuffer = await res.arrayBuffer();
   const stem = String(originalName || "photo")
     .replace(/\\/g, "/")
     .split("/")
     .pop()
     .replace(/\.[^.]+$/i, "");
   const safeName = (stem || "photo").replace(/[^\w.\-]+/g, "_").slice(0, 120) || "photo";
-  return { type: "image/jpeg", dataBase64: btoa(binary), fileName: `${safeName}.jpg` };
+  return { type: "image/jpeg", arrayBuffer, fileName: `${safeName}.jpg` };
+}
+
+/** Data URL for the small lot preview card (one image; async FileReader). */
+function jpegBufferToDataUrl(arrayBuffer, mime = "image/jpeg") {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([arrayBuffer], { type: mime });
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = () => reject(r.error || new Error("readAsDataURL failed"));
+    r.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Run async ``mapper`` on ``items`` with at most ``concurrency`` in flight; preserves order in the result array.
+ */
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (true) {
+      const i = next;
+      next += 1;
+      if (i >= items.length) break;
+      results[i] = await mapper(items[i], i);
+    }
+  }
+
+  const n = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return results;
 }
 
 function setCurrentLotUI(lot, thumbDataUrl = "") {
@@ -352,8 +378,8 @@ async function refreshCurrentLotCard(apiBase, token, lot) {
     const photos = await fetchLotPhotos(apiBase, token, lot.id);
     if (!photos.length) return;
     const firstPhoto = photos[0];
-    const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, firstPhoto.id, firstPhoto.original_name);
-    const dataUrl = `data:${downloaded.type || "image/jpeg"};base64,${downloaded.dataBase64}`;
+    const downloaded = await fetchPhotoJpegBuffer(apiBase, token, lot.id, firstPhoto.id, firstPhoto.original_name);
+    const dataUrl = await jpegBufferToDataUrl(downloaded.arrayBuffer, downloaded.type || "image/jpeg");
     setCurrentLotUI(lot, dataUrl);
   } catch (_err) {
     // Keep metadata visible even if thumbnail cannot load.
@@ -716,17 +742,28 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const photos = await fetchLotPhotos(apiBase, token, lot.id);
 
-      const payloadFiles = [];
-      for (let i = 0; i < photos.length; i += 1) {
+      const total = photos.length;
+      let fetchDone = 0;
+      status.textContent = `Fetching lot photos… (0/${total})`;
+      const buffers = await mapWithConcurrency(
+        photos,
+        EXTENSION_PHOTO_FETCH_CONCURRENCY,
+        async (p) => {
+          const out = await fetchPhotoJpegBuffer(apiBase, token, lot.id, p.id, p.original_name);
+          fetchDone += 1;
+          status.textContent = `Fetching lot photos… (${fetchDone}/${total})`;
+          return out;
+        }
+      );
+
+      const payloadFiles = buffers.map((downloaded, i) => {
         const p = photos[i];
-        status.textContent = `Fetching lot photos… (${i + 1}/${photos.length})`;
-        const downloaded = await fetchPhotoBlob(apiBase, token, lot.id, p.id, p.original_name);
-        payloadFiles.push({
-          name: downloaded.fileName || p.original_name || `${p.id}.jpg`,
-          type: downloaded.type,
-          dataBase64: downloaded.dataBase64
-        });
-      }
+        return {
+          name: downloaded.fileName || p?.original_name || `${p?.id || i}.jpg`,
+          type: downloaded.type || "image/jpeg",
+          arrayBuffer: downloaded.arrayBuffer
+        };
+      });
 
       status.textContent = "Uploading into CT Seller form…";
       const reply = await sendToActiveTabWithFallback({
