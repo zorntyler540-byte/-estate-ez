@@ -246,6 +246,8 @@ export default function DashboardPage() {
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
+  /** Scrollable column inside the camera modal — kept at bottom so Snap/Done stay in view on mobile. */
+  const lotCameraScrollRef = useRef<HTMLDivElement | null>(null);
   const inventoryFirstLoad = useRef(true);
   const salesLoadId = useRef(0);
   const inventoryLoadId = useRef(0);
@@ -720,6 +722,24 @@ export default function DashboardPage() {
     if (!strip || !lotCameraSnapThumbUrls.length) return;
     strip.scrollLeft = strip.scrollWidth;
   }, [lotCameraSnapThumbUrls.length]);
+
+  /** Open with the panel scrolled to the bottom so primary actions (Snap / Done) are in view on short viewports. */
+  useEffect(() => {
+    if (!lotCameraOpen) return;
+    const el = lotCameraScrollRef.current;
+    if (!el) return;
+    const scrollToBottom = () => {
+      el.scrollTop = el.scrollHeight;
+    };
+    scrollToBottom();
+    requestAnimationFrame(scrollToBottom);
+    const t1 = window.setTimeout(scrollToBottom, 80);
+    const t2 = window.setTimeout(scrollToBottom, 320);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [lotCameraOpen, lotCameraStream, lotCameraPreviewReady, lotCameraSnaps.length]);
 
   /** Pinch-to-zoom on the live preview (non-passive ``touchmove`` so Safari does not scroll the page). */
   useEffect(() => {
@@ -1965,6 +1985,7 @@ export default function DashboardPage() {
           }}
         >
           <div
+            ref={lotCameraScrollRef}
             style={{
               flex: 1,
               minHeight: 0,
