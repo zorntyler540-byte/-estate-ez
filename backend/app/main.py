@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, nullslast, select, update
+from sqlalchemy import func, nullslast, or_, select, update
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -77,6 +77,7 @@ from app.services.serialization import (
     photo_count_outlier_by_lot_id,
     sale_lot_photo_counts,
 )
+from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.services.suggestion_email import (
     read_recent_saved_suggestions,
     save_suggestion_local,
@@ -451,6 +452,10 @@ def delete_sale(
 def list_lots(
     response: Response,
     sale_id: str | None = Query(None, description="When set, only lots for this sale."),
+    sku_flags: str | None = Query(
+        None,
+        description="When set to duplicate, text_mismatch, or any, only rows with that SKU sanity flag.",
+    ),
     sort: str = Query(
         "created_desc",
         description="created_desc (default), created_asc (oldest first), or sku_asc.",
@@ -473,6 +478,20 @@ def list_lots(
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
+
+    fk = (sku_flags or "").strip().lower()
+    if fk:
+        if fk not in ("duplicate", "text_mismatch", "any"):
+            raise HTTPException(
+                status_code=400,
+                detail="sku_flags must be one of: duplicate, text_mismatch, any",
+            )
+        if fk == "duplicate":
+            q = q.filter(Lot.sku_duplicate_in_sale.is_(True))
+        elif fk == "text_mismatch":
+            q = q.filter(Lot.sku_text_mismatch.is_(True))
+        else:
+            q = q.filter(or_(Lot.sku_duplicate_in_sale.is_(True), Lot.sku_text_mismatch.is_(True)))
 
     if sort_key == "created_asc":
         q = q.order_by(Lot.created_at.asc())
@@ -738,6 +757,8 @@ def transfer_photos_to_lot(
         renormalize_photo_sort_orders(db, lid, current.account_id)
         _reconcile_lot_photo_count(db, lid, current.account_id)
     db.commit()
+    recompute_sku_sanity_flags_for_sale(db, target.sale_id, current.account_id)
+    db.commit()
 
     updated = [_lot_out_for_id(db, current.account_id, lid) for lid in sorted(touched_lots)]
     return TransferPhotosOut(moved=moved, updated_lots=updated)
@@ -812,6 +833,8 @@ def split_selected_photos_into_new_lot(
         condition_text="",
         photo_count=0,
         sku_needs_review=True,
+        sku_duplicate_in_sale=False,
+        sku_text_mismatch=False,
     )
     db.add(new_lot)
     db.flush()
@@ -824,6 +847,10 @@ def split_selected_photos_into_new_lot(
     renormalize_photo_sort_orders(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, new_lot.id, current.account_id)
+    db.commit()
+    db.refresh(new_lot)
+    db.refresh(source)
+    recompute_sku_sanity_flags_for_sale(db, source.sale_id, current.account_id)
     db.commit()
     db.refresh(new_lot)
     db.refresh(source)
@@ -886,6 +913,9 @@ def merge_lot_into_target(
     db.delete(source)
     renormalize_photo_sort_orders(db, target.id, current.account_id)
     _reconcile_lot_photo_count(db, target.id, current.account_id)
+    db.commit()
+    db.refresh(target)
+    recompute_sku_sanity_flags_for_sale(db, target.sale_id, current.account_id)
     db.commit()
     db.refresh(target)
     return _lot_out_for_id(db, current.account_id, target.id)
@@ -1058,6 +1088,9 @@ def update_lot(
         row.sku_needs_review = False
     db.commit()
     db.refresh(row)
+    recompute_sku_sanity_flags_for_sale(db, row.sale_id, current.account_id)
+    db.commit()
+    db.refresh(row)
     has = lot_id in lot_ids_with_linked_photos(db, current.account_id, [lot_id])
     peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
@@ -1104,11 +1137,14 @@ def delete_lot(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    sale_id = row.sale_id
     db.query(Photo).filter(
         Photo.lot_id == lot_id,
         Photo.account_id == current.account_id,
     ).delete()
     db.delete(row)
+    db.commit()
+    recompute_sku_sanity_flags_for_sale(db, sale_id, current.account_id)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

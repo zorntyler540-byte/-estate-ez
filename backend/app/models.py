@@ -71,6 +71,8 @@ class Lot(Base):
     starting_price: Mapped[float | None] = mapped_column(Float)
     condition_text: Mapped[str] = mapped_column(String(255), default="")
     sku_needs_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sku_duplicate_in_sale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sku_text_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     photo_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

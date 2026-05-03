@@ -89,5 +89,7 @@ def lot_to_schema(
         created_at=row.created_at,
         sku_needs_review=bool(row.sku_needs_review),
         many_photos_review=many_photos_review,
+        sku_duplicate_in_sale=bool(getattr(row, "sku_duplicate_in_sale", False)),
+        sku_text_mismatch=bool(getattr(row, "sku_text_mismatch", False)),
     )
 

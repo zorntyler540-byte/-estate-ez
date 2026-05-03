@@ -235,6 +235,8 @@ type Lot = {
   created_at: string;
   sku_needs_review: boolean;
   many_photos_review: boolean;
+  sku_duplicate_in_sale: boolean;
+  sku_text_mismatch: boolean;
 };
 
 /** One inventory row streamed from ``GET /jobs/{id}/events`` (``lot_ready``). */
@@ -247,6 +249,10 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     sku: row.sku ?? null,
     sku_needs_review: Boolean(row.sku_needs_review),
     many_photos_review: Boolean(row.many_photos_review),
+    sku_duplicate_in_sale: Boolean(
+      (row as { sku_duplicate_in_sale?: unknown }).sku_duplicate_in_sale
+    ),
+    sku_text_mismatch: Boolean((row as { sku_text_mismatch?: unknown }).sku_text_mismatch),
     auction_title: row.auction_title ?? "",
     is_completed: Boolean(row.is_completed),
     completed_at: row.completed_at ?? null,
@@ -403,6 +409,12 @@ export default function DashboardPage() {
   const [creatingSale, setCreatingSale] = useState(false);
   const [closingSale, setClosingSale] = useState(false);
   const [lots, setLots] = useState<Lot[]>([]);
+  /** Filter ``GET /lots`` to rows with SKU sanity flags (duplicate digit-SKU in sale, or mixed lot numbers in text). */
+  const [inventorySkuFlagFilter, setInventorySkuFlagFilter] = useState<
+    "" | "duplicate" | "text_mismatch" | "any"
+  >("");
+  const inventorySkuFlagFilterRef = useRef<"" | "duplicate" | "text_mismatch" | "any">("");
+  inventorySkuFlagFilterRef.current = inventorySkuFlagFilter;
   const [jobs, setJobs] = useState<Job[]>([]);
   const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
@@ -682,9 +694,13 @@ export default function DashboardPage() {
     }
     localStorage.setItem(SALE_STORAGE_KEY, selectedSaleId);
     const loadId = ++inventoryLoadId.current;
+    const skuQ =
+      inventorySkuFlagFilter === ""
+        ? ""
+        : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilter)}`;
     void withNetworkRetry(() =>
       Promise.all([
-        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}`, t),
+        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}${skuQ}`, t),
         apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
       ])
     )
@@ -712,7 +728,7 @@ export default function DashboardPage() {
           setLoading(false);
         }
       });
-  }, [token, selectedSaleId, router, dataReloadNonce]);
+  }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
 
   useEffect(() => {
     const bumpSse = () => {
@@ -736,12 +752,16 @@ export default function DashboardPage() {
     const refreshJobsAndLots = () => {
       const sid = selectedSaleIdRef.current;
       if (!sid) return;
+      const fq =
+        inventorySkuFlagFilterRef.current === ""
+          ? ""
+          : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilterRef.current)}`;
       void apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token)
         .then((d) => setJobs(d as Job[]))
         .catch(() => {
           /* ignore */
         });
-      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}`, token)
+      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token)
         .then((d) => setLots(d as Lot[]))
         .catch(() => {
           /* ignore */
@@ -912,7 +932,11 @@ export default function DashboardPage() {
           const hadProcessing = prev.some((j) => j.status === "processing");
           const nowProcessing = jlist.some((j) => j.status === "processing");
           if (hadProcessing && !nowProcessing) {
-            void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}`, token).then((lotsData) =>
+            const fq =
+              inventorySkuFlagFilterRef.current === ""
+                ? ""
+                : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilterRef.current)}`;
+            void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token).then((lotsData) =>
               setLots(lotsData as Lot[])
             );
           }
@@ -935,7 +959,7 @@ export default function DashboardPage() {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [token, loading, busyProcessing, selectedSaleId]);
+  }, [token, loading, busyProcessing, selectedSaleId, inventorySkuFlagFilter]);
 
   useEffect(() => {
     return () => {
@@ -2201,13 +2225,34 @@ export default function DashboardPage() {
         ))}
       </ul>
 
-      <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline" }}>
+      <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 className="ct-section-title" style={{ margin: 0 }}>
           Lots ({lots.length})
         </h2>
         <span className="ct-muted">
           {lots.filter((l) => l.is_completed).length} completed / {lots.filter((l) => !l.is_completed).length} not done
         </span>
+        <label className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.35rem" }}>
+          <span className="ct-muted" style={{ fontSize: "0.85rem" }}>
+            SKU checks
+          </span>
+          <select
+            className="ct-input"
+            style={{ maxWidth: 220, fontSize: "0.88rem" }}
+            value={inventorySkuFlagFilter}
+            onChange={(e) =>
+              setInventorySkuFlagFilter(
+                (e.target.value || "") as "" | "duplicate" | "text_mismatch" | "any"
+              )
+            }
+            aria-label="Filter lots by SKU sanity flags"
+          >
+            <option value="">All lots</option>
+            <option value="any">Flagged: any issue</option>
+            <option value="duplicate">Duplicate SKU (same sale)</option>
+            <option value="text_mismatch">Mixed lot # in text</option>
+          </select>
+        </label>
         <button type="button" className="ct-btn ct-btn--danger" onClick={() => void purgeAll()} disabled={busyProcessing}>
           Clear all lots & jobs
         </button>
@@ -2287,7 +2332,11 @@ export default function DashboardPage() {
         {lots.map((lot) => (
           <div
             key={`m-${lot.id}`}
-            className={`ct-lot-mobile-card ct-card ct-card--padded${lot.many_photos_review ? " ct-lot-mobile-card--warn" : ""}`}
+            className={`ct-lot-mobile-card ct-card ct-card--padded${
+              lot.many_photos_review || lot.sku_duplicate_in_sale || lot.sku_text_mismatch
+                ? " ct-lot-mobile-card--warn"
+                : ""
+            }`}
           >
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "flex-start" }}>
               <div style={{ flexShrink: 0 }}>
@@ -2443,7 +2492,14 @@ export default function DashboardPage() {
             </tr>
           ))}
           {lots.map((lot) => (
-            <tr key={lot.id} className={lot.many_photos_review ? "ct-table-row--photo-outlier" : undefined}>
+            <tr
+              key={lot.id}
+              className={
+                lot.many_photos_review || lot.sku_duplicate_in_sale || lot.sku_text_mismatch
+                  ? "ct-table-row--photo-outlier"
+                  : undefined
+              }
+            >
               <td style={{ verticalAlign: "middle", width: 72 }}>
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </td>

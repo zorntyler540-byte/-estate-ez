@@ -108,6 +108,8 @@ class LotOut(BaseModel):
     created_at: datetime
     sku_needs_review: bool = False
     many_photos_review: bool = False
+    sku_duplicate_in_sale: bool = False
+    sku_text_mismatch: bool = False
 
 
 class LotUpdate(BaseModel):

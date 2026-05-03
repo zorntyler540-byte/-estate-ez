@@ -32,6 +32,8 @@ type Lot = {
   has_thumbnail: boolean;
   sku_needs_review: boolean;
   many_photos_review: boolean;
+  sku_duplicate_in_sale: boolean;
+  sku_text_mismatch: boolean;
 };
 
 type SaleLotOption = {
@@ -642,6 +644,20 @@ export default function LotDetailPage() {
           <strong>Photo count looks unusual</strong> for this sale — this listing has many more images than your other
           lots. Check that photos from a different lot were not merged here (wrong tape SKU early in the job can cause
           that). Re-upload as separate jobs if needed.
+        </div>
+      ) : null}
+      {lot.sku_duplicate_in_sale ? (
+        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+          <strong>Duplicate SKU in this sale.</strong> Another listing shares the same tape digits. Confirm photos and
+          SKUs are on the correct rows, or use <strong>Move / split photos</strong> / <strong>Merge</strong> on the
+          dashboard to fix mistaken splits.
+        </div>
+      ) : null}
+      {lot.sku_text_mismatch ? (
+        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+          <strong>Mixed lot numbers in text.</strong> The title or description mentions a different lot number than this
+          row&apos;s SKU — often a sign two tape SKUs were merged into one listing. Compare photos to tape, then split
+          or move frames as needed.
         </div>
       ) : null}
       <section className="ct-card ct-card--padded" style={{ marginBottom: "1rem" }}>

@@ -25,6 +25,7 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
+from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.services.image_preprocess import normalize_job_folder_image
 from app.services import job_events
 
@@ -429,6 +430,9 @@ def _lot_sse_payload(row: Lot) -> dict:
         "has_thumbnail": row.photo_count > 0,
         "created_at": created.isoformat() if created else "",
         "sku_needs_review": bool(row.sku_needs_review),
+        "many_photos_review": False,
+        "sku_duplicate_in_sale": bool(getattr(row, "sku_duplicate_in_sale", False)),
+        "sku_text_mismatch": bool(getattr(row, "sku_text_mismatch", False)),
     }
 
 
@@ -862,6 +866,7 @@ def process_job(
         if finalized is not None:
             _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(finalized)})
 
+    recompute_sku_sanity_flags_for_sale(db, job.sale_id, job.account_id)
     job.status = JobStatus.completed
     job.cancel_requested = False
     db.commit()
@@ -1012,6 +1017,9 @@ def run_lot_ai_regenerate_and_save(
         row.sku = current.sku
     _ = user_id  # future: audit log
     _sync_lot_photo_count(db, lot_id, account_id)
+    db.commit()
+    db.refresh(row)
+    recompute_sku_sanity_flags_for_sale(db, row.sale_id, account_id)
     db.commit()
     db.refresh(row)
     return row
