@@ -11,7 +11,10 @@ import {
   FileSpreadsheet,
   FileText,
   Minus,
+  Pencil,
   Plus,
+  RotateCcw,
+  RotateCw,
   Trash2,
   X
 } from "lucide-react";
@@ -36,6 +39,87 @@ function lotCameraPinchDistance(e: TouchEvent): number {
   const dx = a.clientX - b.clientX;
   const dy = a.clientY - b.clientY;
   return Math.hypot(dx, dy);
+}
+
+function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const u = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(u);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(u);
+      reject(new Error("Could not load image"));
+    };
+    img.src = u;
+  });
+}
+
+/**
+ * Uniform edge trim (0–35, same as CSS ``inset`` % on each side) then 0/90/180/270° rotation; re-encode as JPEG.
+ */
+async function rasterizeLotCameraEdit(
+  file: File,
+  rotationDeg: number,
+  edgeTrimPct: number
+): Promise<File | null> {
+  const trim = Math.max(0, Math.min(35, edgeTrimPct));
+  const rot = (((rotationDeg % 360) + 360) % 360) as 0 | 90 | 180 | 270;
+  if (rot !== 0 && rot !== 90 && rot !== 180 && rot !== 270) return null;
+
+  let img: HTMLImageElement;
+  try {
+    img = await loadImageFromFile(file);
+  } catch {
+    return null;
+  }
+  const w0 = img.naturalWidth;
+  const h0 = img.naturalHeight;
+  if (w0 < 2 || h0 < 2) return null;
+
+  const sx = Math.floor((w0 * trim) / 100);
+  const sy = Math.floor((h0 * trim) / 100);
+  const sw = Math.floor(w0 - (2 * w0 * trim) / 100);
+  const sh = Math.floor(h0 - (2 * h0 * trim) / 100);
+  if (sw < 2 || sh < 2) return null;
+
+  const c1 = document.createElement("canvas");
+  c1.width = sw;
+  c1.height = sh;
+  const g1 = c1.getContext("2d");
+  if (!g1) return null;
+  g1.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  const rad = (rot * Math.PI) / 180;
+  const outW = rot % 180 === 0 ? sw : sh;
+  const outH = rot % 180 === 0 ? sh : sw;
+  const c2 = document.createElement("canvas");
+  c2.width = outW;
+  c2.height = outH;
+  const g2 = c2.getContext("2d");
+  if (!g2) return null;
+  g2.translate(outW / 2, outH / 2);
+  g2.rotate(rad);
+  g2.imageSmoothingEnabled = true;
+  g2.imageSmoothingQuality = "high";
+  g2.drawImage(c1, -sw / 2, -sh / 2);
+
+  const baseName = (file.name || "lot.jpg").replace(/\.[^.]+$/i, "") || "lot";
+  return new Promise((resolve) => {
+    c2.toBlob(
+      (blob) => {
+        if (!blob) {
+          resolve(null);
+          return;
+        }
+        resolve(new File([blob], `${baseName}.jpg`, { type: "image/jpeg" }));
+      },
+      "image/jpeg",
+      0.92
+    );
+  });
 }
 
 function readStoredToken(): string {
@@ -241,6 +325,11 @@ export default function DashboardPage() {
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   /** Index into ``lotCameraSnapThumbUrls`` for full-screen preview, or null. */
   const [lotCameraViewerIndex, setLotCameraViewerIndex] = useState<number | null>(null);
+  /** Optional post-capture edit (rotate + trim edges); null when editor closed. */
+  const [lotCameraEditIndex, setLotCameraEditIndex] = useState<number | null>(null);
+  const [lotCameraEditRotation, setLotCameraEditRotation] = useState(0);
+  const [lotCameraEditTrim, setLotCameraEditTrim] = useState(0);
+  const [lotCameraEditBusy, setLotCameraEditBusy] = useState(false);
   const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
@@ -809,6 +898,8 @@ export default function DashboardPage() {
     setLotCameraOpen(false);
     setLotCameraPreviewReady(false);
     setLotCameraViewerIndex(null);
+    setLotCameraEditIndex(null);
+    setLotCameraEditBusy(false);
     lotCameraPinchRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
@@ -874,6 +965,53 @@ export default function DashboardPage() {
       if (cur > index) return cur - 1;
       return cur;
     });
+    setLotCameraEditIndex((cur) => {
+      if (cur === null) return null;
+      if (cur === index) return null;
+      if (cur > index) return cur - 1;
+      return cur;
+    });
+  }
+
+  function openLotCameraEdit(i: number) {
+    if (i < 0 || i >= lotCameraSnapsRef.current.length) return;
+    setLotCameraViewerIndex(null);
+    setLotCameraEditIndex(i);
+    setLotCameraEditRotation(0);
+    setLotCameraEditTrim(0);
+  }
+
+  function closeLotCameraEdit() {
+    if (lotCameraEditBusy) return;
+    setLotCameraEditIndex(null);
+  }
+
+  async function applyLotCameraEdit() {
+    const i = lotCameraEditIndex;
+    if (i === null) return;
+    const file = lotCameraSnapsRef.current[i];
+    if (!file) return;
+    if (lotCameraEditRotation === 0 && lotCameraEditTrim === 0) {
+      setLotCameraEditIndex(null);
+      return;
+    }
+    setLotCameraEditBusy(true);
+    try {
+      const out = await rasterizeLotCameraEdit(file, lotCameraEditRotation, lotCameraEditTrim);
+      if (!out) return;
+      setLotCameraSnaps((prev) => {
+        if (i < 0 || i >= prev.length) return prev;
+        const next = [...prev];
+        next[i] = out;
+        lotCameraSnapsRef.current = next;
+        return next;
+      });
+      setLotCameraEditIndex(null);
+      setLotCameraEditRotation(0);
+      setLotCameraEditTrim(0);
+    } finally {
+      setLotCameraEditBusy(false);
+    }
   }
 
   async function openCreateOneLotFlow() {
@@ -884,6 +1022,8 @@ export default function DashboardPage() {
       lotCameraSnapsRef.current = [];
       setLotCameraPreviewReady(false);
       setLotCameraViewerIndex(null);
+      setLotCameraEditIndex(null);
+      setLotCameraEditBusy(false);
       lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
       setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
       setLotCameraOpen(true);
@@ -2003,7 +2143,8 @@ export default function DashboardPage() {
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload. Pinch or use +/− to zoom the live view; the saved photo matches what you see. Tap a thumbnail to
-              preview; use the trash control to remove one shot.
+              preview; use the pencil to rotate or trim edges on a shot only when needed; use the trash control to remove
+              one shot.
             </p>
             <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -2097,7 +2238,7 @@ export default function DashboardPage() {
                   className="ct-muted"
                   style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
                 >
-                  Captured (scroll sideways) — tap to preview
+                  Captured (scroll sideways) — tap to preview, pencil to edit
                 </p>
                 <div
                   ref={lotCameraStripRef}
@@ -2145,6 +2286,35 @@ export default function DashboardPage() {
                           height={56}
                           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                         />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Edit captured photo ${i + 1}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openLotCameraEdit(i);
+                        }}
+                        className="ct-btn ct-btn--ghost"
+                        style={{
+                          position: "absolute",
+                          bottom: -4,
+                          left: -4,
+                          minWidth: 36,
+                          minHeight: 36,
+                          width: 36,
+                          height: 36,
+                          padding: 0,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "rgba(12,15,18,0.92)",
+                          border: "1px solid rgba(255,255,255,0.35)",
+                          color: "#c8d4ff",
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
+                        }}
+                      >
+                        <Pencil size={16} aria-hidden />
                       </button>
                       <button
                         type="button"
@@ -2290,6 +2460,18 @@ export default function DashboardPage() {
                   ) : null}
                   <button
                     type="button"
+                    className="ct-btn ct-btn--ghost"
+                    onClick={() => {
+                      const idx = lotCameraViewerIndex;
+                      if (idx !== null) openLotCameraEdit(idx);
+                    }}
+                    style={{ color: "#fff" }}
+                  >
+                    <Pencil size={16} aria-hidden style={{ verticalAlign: "middle", marginRight: 6 }} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
                     className="ct-btn ct-btn--danger"
                     onClick={() => {
                       const idx = lotCameraViewerIndex;
@@ -2301,6 +2483,162 @@ export default function DashboardPage() {
                 </div>
                 <p className="ct-muted" style={{ margin: 0, fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
                   Tap outside the image to close
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {lotCameraEditIndex !== null &&
+          lotCameraEditIndex >= 0 &&
+          lotCameraEditIndex < lotCameraSnapThumbUrls.length ? (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Edit captured photo"
+              onClick={() => closeLotCameraEdit()}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 10002,
+                background: "rgba(0,0,0,0.94)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "12px",
+                paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 64px))",
+                boxSizing: "border-box"
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "stretch",
+                  gap: "0.75rem",
+                  width: "100%",
+                  maxWidth: "min(100vw - 24px, 520px)"
+                }}
+              >
+                <div className="ct-row" style={{ width: "100%", justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="ct-muted" style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.95rem" }}>
+                    Edit photo {lotCameraEditIndex + 1}
+                  </span>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Close editor"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => closeLotCameraEdit()}
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <X size={22} aria-hidden />
+                  </button>
+                </div>
+                <div
+                  style={{
+                    overflow: "hidden",
+                    maxHeight: "min(50dvh, 480px)",
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    background: "#111"
+                  }}
+                >
+                  <div
+                    style={{
+                      transform: `rotate(${lotCameraEditRotation}deg)`,
+                      transformOrigin: "center center"
+                    }}
+                  >
+                    <img
+                      src={lotCameraSnapThumbUrls[lotCameraEditIndex] ?? ""}
+                      alt=""
+                      style={{
+                        maxWidth: "min(92vw, 480px)",
+                        maxHeight: "min(46dvh, 420px)",
+                        width: "auto",
+                        height: "auto",
+                        display: "block",
+                        objectFit: "contain",
+                        clipPath: `inset(${lotCameraEditTrim}%)`
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="ct-row" style={{ flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Rotate counter-clockwise"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => setLotCameraEditRotation((r) => (r + 270) % 360)}
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <RotateCcw size={22} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Rotate clockwise"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => setLotCameraEditRotation((r) => (r + 90) % 360)}
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <RotateCw size={22} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => {
+                      setLotCameraEditRotation(0);
+                      setLotCameraEditTrim(0);
+                    }}
+                    style={{ color: "#fff" }}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <label className="ct-muted" style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.85)" }}>
+                  Trim edges (uniform %)
+                  <input
+                    type="range"
+                    min={0}
+                    max={35}
+                    step={1}
+                    value={lotCameraEditTrim}
+                    disabled={lotCameraEditBusy}
+                    onChange={(e) => setLotCameraEditTrim(Number(e.target.value))}
+                    style={{ width: "100%", marginTop: 8, display: "block" }}
+                  />
+                  <span style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>{lotCameraEditTrim}%</span>
+                </label>
+                <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => closeLotCameraEdit()}
+                    style={{ color: "#fff" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary"
+                    disabled={lotCameraEditBusy}
+                    onClick={() => void applyLotCameraEdit()}
+                  >
+                    {lotCameraEditBusy ? "Applying…" : "Apply"}
+                  </button>
+                </div>
+                <p className="ct-muted" style={{ margin: 0, fontSize: "0.76rem", color: "rgba(255,255,255,0.6)" }}>
+                  Apply saves a new JPEG for this shot (replaces the thumbnail). Tap outside to cancel.
                 </p>
               </div>
             </div>
