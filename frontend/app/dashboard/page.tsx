@@ -1858,16 +1858,27 @@ export default function DashboardPage() {
             display: "flex",
             flexDirection: "column",
             padding: "12px",
-            // iOS Safari bottom chrome (URL / tab bar) sits outside ``safe-area-inset-bottom``; reserve space so thumbs stay tappable.
-            paddingBottom: "max(20px, calc(env(safe-area-inset-bottom, 0px) + 88px))",
-            boxSizing: "border-box"
+            // iOS Safari tab bar sits below ``safe-area-inset-bottom`` — reserve space so scroll + actions stay above it.
+            paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 80px))",
+            boxSizing: "border-box",
+            overflow: "hidden",
+            maxHeight: "100dvh"
           }}
         >
-          <div style={{ flex: 1, minHeight: 0 }} aria-hidden />
           <div
-            className="ct-card ct-card--padded"
-            style={{ maxWidth: 520, width: "100%", margin: "0 auto", boxSizing: "border-box", flexShrink: 0 }}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              width: "100%",
+              maxWidth: 520,
+              margin: "0 auto",
+              overflowY: "auto",
+              overflowX: "hidden",
+              WebkitOverflowScrolling: "touch",
+              overscrollBehavior: "contain"
+            }}
           >
+            <div className="ct-card ct-card--padded" style={{ width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload. Tap a thumbnail to preview; use the trash control to remove one shot.
@@ -1895,7 +1906,7 @@ export default function DashboardPage() {
                 onLoadedData={() => setLotCameraPreviewReady(true)}
                 style={{
                   width: "100%",
-                  maxHeight: "min(52vh, 420px)",
+                  maxHeight: "min(38dvh, 360px)",
                   borderRadius: 8,
                   objectFit: "cover",
                   background: "#111"
@@ -2009,6 +2020,7 @@ export default function DashboardPage() {
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => cancelLotCameraSession()}>
                 Cancel
               </button>
+            </div>
             </div>
           </div>
 
