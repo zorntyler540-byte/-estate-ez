@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Database, FileSpreadsheet, FileText } from "lucide-react";
+import { Archive, ChevronLeft, ChevronRight, Database, FileSpreadsheet, FileText, Trash2, X } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
@@ -213,6 +213,8 @@ export default function DashboardPage() {
   const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
   const [lotCameraSnapThumbUrls, setLotCameraSnapThumbUrls] = useState<string[]>([]);
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
+  /** Index into ``lotCameraSnapThumbUrls`` for full-screen preview, or null. */
+  const [lotCameraViewerIndex, setLotCameraViewerIndex] = useState<number | null>(null);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   const inventoryFirstLoad = useRef(true);
   const salesLoadId = useRef(0);
@@ -704,6 +706,7 @@ export default function DashboardPage() {
     setLotCameraStream(null);
     setLotCameraOpen(false);
     setLotCameraPreviewReady(false);
+    setLotCameraViewerIndex(null);
   }
 
   function cancelLotCameraSession() {
@@ -742,6 +745,21 @@ export default function DashboardPage() {
     );
   }
 
+  function removeLotCameraSnap(index: number) {
+    setLotCameraSnaps((prev) => {
+      if (index < 0 || index >= prev.length) return prev;
+      const next = prev.filter((_, j) => j !== index);
+      lotCameraSnapsRef.current = next;
+      return next;
+    });
+    setLotCameraViewerIndex((cur) => {
+      if (cur === null) return null;
+      if (cur === index) return null;
+      if (cur > index) return cur - 1;
+      return cur;
+    });
+  }
+
   async function openCreateOneLotFlow() {
     if (typeof window === "undefined") return;
     const md = navigator.mediaDevices;
@@ -749,6 +767,7 @@ export default function DashboardPage() {
       setLotCameraSnaps([]);
       lotCameraSnapsRef.current = [];
       setLotCameraPreviewReady(false);
+      setLotCameraViewerIndex(null);
       setLotCameraOpen(true);
       try {
         const stream = await md.getUserMedia({
@@ -1850,7 +1869,7 @@ export default function DashboardPage() {
           >
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload.
+              upload. Tap a thumbnail to preview; use the trash control to remove one shot.
             </p>
             <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -1908,7 +1927,7 @@ export default function DashboardPage() {
                 className="ct-muted"
                 style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
               >
-                Captured (scroll sideways)
+                Captured (scroll sideways) — tap to preview
               </p>
               <div
                 ref={lotCameraStripRef}
@@ -1923,24 +1942,178 @@ export default function DashboardPage() {
                 }}
               >
                 {lotCameraSnapThumbUrls.map((url, i) => (
-                  <img
+                  <div
                     key={url}
-                    src={url}
-                    alt=""
-                    aria-hidden
-                    width={56}
-                    height={56}
                     style={{
+                      position: "relative",
                       flex: "0 0 auto",
                       width: 56,
                       height: 56,
-                      objectFit: "cover",
-                      borderRadius: 6,
-                      border: "1px solid rgba(255,255,255,0.25)",
                       scrollSnapAlign: "start"
                     }}
-                  />
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setLotCameraViewerIndex(i)}
+                      aria-label={`Preview captured photo ${i + 1}`}
+                      style={{
+                        display: "block",
+                        width: 56,
+                        height: 56,
+                        padding: 0,
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        borderRadius: 6,
+                        overflow: "hidden",
+                        cursor: "pointer",
+                        background: "#111"
+                      }}
+                    >
+                      <img
+                        src={url}
+                        alt=""
+                        width={56}
+                        height={56}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete captured photo ${i + 1}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeLotCameraSnap(i);
+                      }}
+                      className="ct-btn ct-btn--ghost"
+                      style={{
+                        position: "absolute",
+                        top: -4,
+                        right: -4,
+                        minWidth: 36,
+                        minHeight: 36,
+                        width: 36,
+                        height: 36,
+                        padding: 0,
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(12,15,18,0.92)",
+                        border: "1px solid rgba(255,255,255,0.35)",
+                        color: "#f5a5a5",
+                        boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
+                      }}
+                    >
+                      <Trash2 size={16} aria-hidden />
+                    </button>
+                  </div>
                 ))}
+              </div>
+            </div>
+          ) : null}
+
+          {lotCameraViewerIndex !== null &&
+          lotCameraViewerIndex >= 0 &&
+          lotCameraViewerIndex < lotCameraSnapThumbUrls.length ? (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Photo preview"
+              onClick={() => setLotCameraViewerIndex(null)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 10001,
+                background: "rgba(0,0,0,0.94)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "12px",
+                paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+                boxSizing: "border-box"
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                  width: "100%",
+                  maxWidth: "min(100vw - 24px, 720px)"
+                }}
+              >
+                <div className="ct-row" style={{ width: "100%", justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="ct-muted" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.9rem" }}>
+                    Photo {lotCameraViewerIndex + 1} of {lotCameraSnapThumbUrls.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    aria-label="Close preview"
+                    onClick={() => setLotCameraViewerIndex(null)}
+                    style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                  >
+                    <X size={22} aria-hidden />
+                  </button>
+                </div>
+                <img
+                  src={lotCameraSnapThumbUrls[lotCameraViewerIndex] ?? ""}
+                  alt={`Captured photo ${lotCameraViewerIndex + 1}`}
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "min(72vh, 640px)",
+                    width: "auto",
+                    height: "auto",
+                    objectFit: "contain",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.2)"
+                  }}
+                />
+                <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
+                  {lotCameraSnapThumbUrls.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        aria-label="Previous photo"
+                        disabled={lotCameraViewerIndex <= 0}
+                        onClick={() => setLotCameraViewerIndex((j) => (j !== null && j > 0 ? j - 1 : j))}
+                        style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                      >
+                        <ChevronLeft size={24} aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        aria-label="Next photo"
+                        disabled={lotCameraViewerIndex >= lotCameraSnapThumbUrls.length - 1}
+                        onClick={() =>
+                          setLotCameraViewerIndex((j) =>
+                            j !== null && j < lotCameraSnapThumbUrls.length - 1 ? j + 1 : j
+                          )
+                        }
+                        style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
+                      >
+                        <ChevronRight size={24} aria-hidden />
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--danger"
+                    onClick={() => {
+                      const idx = lotCameraViewerIndex;
+                      if (idx !== null) removeLotCameraSnap(idx);
+                    }}
+                  >
+                    Delete this photo
+                  </button>
+                </div>
+                <p className="ct-muted" style={{ margin: 0, fontSize: "0.78rem", color: "rgba(255,255,255,0.65)" }}>
+                  Tap outside the image to close
+                </p>
               </div>
             </div>
           ) : null}
