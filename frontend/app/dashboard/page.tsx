@@ -1955,11 +1955,12 @@ export default function DashboardPage() {
             background: "rgba(0,0,0,0.82)",
             display: "flex",
             flexDirection: "column",
-            padding: "12px",
-            // iOS Safari tab bar sits below ``safe-area-inset-bottom`` — reserve space so scroll + actions stay above it.
-            paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 80px))",
+            padding: "8px 8px 0",
+            // Tab bar clears ``safe-area``; keep a modest band so Snap/Done stay tappable without leaving a large dead band.
+            paddingBottom: "max(8px, calc(env(safe-area-inset-bottom, 0px) + 44px))",
             boxSizing: "border-box",
             overflow: "hidden",
+            height: "100dvh",
             maxHeight: "100dvh"
           }}
         >
@@ -1970,6 +1971,7 @@ export default function DashboardPage() {
               width: "100%",
               maxWidth: 520,
               margin: "0 auto",
+              height: "100%",
               overflowY: "auto",
               overflowX: "hidden",
               WebkitOverflowScrolling: "touch",
@@ -2002,8 +2004,8 @@ export default function DashboardPage() {
                   ref={lotCameraZoomWrapRef}
                   style={{
                     width: "100%",
-                    maxHeight: "min(48dvh, 460px)",
-                    height: "min(48dvh, 460px)",
+                    maxHeight: "min(56dvh, 560px)",
+                    height: "min(56dvh, 560px)",
                     marginTop: "0.65rem",
                     borderRadius: 8,
                     overflow: "hidden",
@@ -2194,7 +2196,7 @@ export default function DashboardPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 padding: "12px",
-                paddingBottom: "max(20px, calc(env(safe-area-inset-bottom, 0px) + 88px))",
+                paddingBottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 64px))",
                 boxSizing: "border-box"
               }}
             >
