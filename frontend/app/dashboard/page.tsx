@@ -450,6 +450,7 @@ export default function DashboardPage() {
   const [adminError, setAdminError] = useState("");
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
   const [adminSearch, setAdminSearch] = useState("");
+  const [adminNameDraftById, setAdminNameDraftById] = useState<Record<string, string>>({});
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
@@ -805,9 +806,12 @@ export default function DashboardPage() {
         setAdminAccounts(arr);
         setIsMasterAdmin(true);
         const drafts: Record<string, string> = {};
+        const nameDrafts: Record<string, string> = {};
         arr.forEach((a) => {
           drafts[a.id] = a.plan_code || "beta_free";
+          nameDrafts[a.id] = a.name || "";
         });
+        setAdminNameDraftById(nameDrafts);
         setAdminPlanDraftById(drafts);
         setAdminUsageLoading(true);
         void apiFetch("/admin/analytics?since_days=30", token)
@@ -827,6 +831,7 @@ export default function DashboardPage() {
         if (msg.includes("403") || msg.toLowerCase().includes("master admin")) {
           setIsMasterAdmin(false);
           setAdminAccounts([]);
+          setAdminNameDraftById({});
           setAdminPlanDraftById({});
           setAdminUsage(null);
           return;
@@ -1773,9 +1778,12 @@ export default function DashboardPage() {
       const rows = (await apiFetch("/admin/accounts", token)) as AdminAccount[];
       setAdminAccounts(rows);
       const drafts: Record<string, string> = {};
+      const nameDrafts: Record<string, string> = {};
       rows.forEach((a) => {
         drafts[a.id] = a.plan_code || "beta_free";
+        nameDrafts[a.id] = a.name || "";
       });
+      setAdminNameDraftById(nameDrafts);
       setAdminPlanDraftById(drafts);
       setIsMasterAdmin(true);
       setAdminUsageLoading(true);
@@ -1794,7 +1802,10 @@ export default function DashboardPage() {
     }
   }
 
-  async function patchAdminAccount(accountId: string, body: { is_active?: boolean; plan_code?: string }) {
+  async function patchAdminAccount(
+    accountId: string,
+    body: { is_active?: boolean; plan_code?: string; name?: string }
+  ) {
     if (!token) return;
     setAdminSavingAccountId(accountId);
     setAdminError("");
@@ -1807,6 +1818,10 @@ export default function DashboardPage() {
       setAdminPlanDraftById((prev) => ({
         ...prev,
         [accountId]: updated.plan_code || prev[accountId] || "beta_free"
+      }));
+      setAdminNameDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.name || prev[accountId] || ""
       }));
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : "Could not update account");
@@ -1847,6 +1862,11 @@ export default function DashboardPage() {
     try {
       await apiFetch(`/admin/accounts/${encodeURIComponent(accountId)}`, token, { method: "DELETE" });
       setAdminAccounts((prev) => prev.filter((a) => a.id !== accountId));
+      setAdminNameDraftById((prev) => {
+        const next = { ...prev };
+        delete next[accountId];
+        return next;
+      });
       setAdminPlanDraftById((prev) => {
         const next = { ...prev };
         delete next[accountId];
@@ -2194,11 +2214,20 @@ export default function DashboardPage() {
                   {filteredAdminAccounts.map((a) => {
                     const busy = adminSavingAccountId === a.id;
                     const draft = adminPlanDraftById[a.id] ?? a.plan_code ?? "beta_free";
+                    const nameDraft = adminNameDraftById[a.id] ?? a.name ?? "";
                     const usage = adminUsage?.by_account.find((u) => u.account_id === a.id) || null;
                     return (
                       <tr key={a.id}>
                         <td>
-                          <div style={{ fontWeight: 600 }}>{a.name}</div>
+                          <input
+                            className="ct-input"
+                            style={{ width: 220, fontWeight: 600 }}
+                            value={nameDraft}
+                            onChange={(e) =>
+                              setAdminNameDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
+                            }
+                            disabled={busy}
+                          />
                           {a.owner_email ? (
                             <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
                               {a.owner_email}
@@ -2240,6 +2269,18 @@ export default function DashboardPage() {
                               disabled={busy}
                             >
                               {busy ? "Saving…" : a.is_active ? "Archive" : "Restore"}
+                            </button>
+                            <button
+                              type="button"
+                              className="ct-btn"
+                              onClick={() =>
+                                void patchAdminAccount(a.id, {
+                                  name: (nameDraft || "").trim() || a.name
+                                })
+                              }
+                              disabled={busy || (nameDraft || "").trim().length < 2}
+                            >
+                              Save name
                             </button>
                             <button
                               type="button"

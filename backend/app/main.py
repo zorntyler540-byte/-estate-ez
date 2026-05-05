@@ -384,6 +384,8 @@ def admin_update_account(
         raise HTTPException(status_code=404, detail="Account not found")
     if payload.is_active is not None:
         row.is_active = bool(payload.is_active)
+    if payload.name is not None:
+        row.name = payload.name.strip()
     if payload.plan_code is not None:
         row.plan_code = payload.plan_code.strip().lower()
     db.commit()

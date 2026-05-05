@@ -59,6 +59,7 @@ class AdminAccountOut(BaseModel):
 
 
 class AdminAccountUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
     is_active: bool | None = None
     plan_code: str | None = Field(default=None, min_length=2, max_length=40)
 
