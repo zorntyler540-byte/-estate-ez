@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
     gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
     gemini_api_version: str = Field(default="v1beta", alias="GEMINI_API_VERSION")
+    # Estimated Gemini pricing used for admin analytics (USD per 1M tokens).
+    gemini_input_cost_per_million: float = Field(
+        default=0.35, ge=0.0, alias="GEMINI_INPUT_COST_PER_MILLION"
+    )
+    gemini_output_cost_per_million: float = Field(
+        default=1.05, ge=0.0, alias="GEMINI_OUTPUT_COST_PER_MILLION"
+    )
     skip_tape_verify: bool = Field(default=False, alias="SKIP_TAPE_VERIFY")
     # Default is conservative: many parallel Gemini calls decode large JPEGs in RAM and trigger OOM on small hosts (e.g. Railway). Override with GEMINI_PARALLELISM=12–15 on a beefy machine.
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")

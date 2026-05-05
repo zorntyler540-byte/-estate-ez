@@ -224,6 +224,7 @@ type Sale = {
 type AdminAccount = {
   id: string;
   name: string;
+  owner_email?: string | null;
   plan_code: string;
   is_active: boolean;
   created_at: string;
@@ -245,6 +246,7 @@ type AdminUsageAccount = {
   avg_job_duration_seconds: number;
   est_input_tokens: number;
   est_output_tokens: number;
+  est_total_cost_usd: number;
 };
 
 type AdminUsageSummary = {
@@ -447,6 +449,7 @@ export default function DashboardPage() {
   const [adminSavingAccountId, setAdminSavingAccountId] = useState("");
   const [adminError, setAdminError] = useState("");
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
+  const [adminSearch, setAdminSearch] = useState("");
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
@@ -509,6 +512,16 @@ export default function DashboardPage() {
   );
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+  const filteredAdminAccounts = useMemo(() => {
+    const q = adminSearch.trim().toLowerCase();
+    if (!q) return adminAccounts;
+    return adminAccounts.filter((a) => {
+      const name = (a.name || "").toLowerCase();
+      const email = (a.owner_email || "").toLowerCase();
+      const id = (a.id || "").toLowerCase();
+      return name.includes(q) || email.includes(q) || id.includes(q);
+    });
+  }, [adminAccounts, adminSearch]);
 
   const geminiAnalyzedCount = useMemo(() => {
     if (!photoPendingSlots.length) return { done: 0, total: 0 };
@@ -2066,6 +2079,22 @@ export default function DashboardPage() {
             >
               {adminLoading ? "Refreshing…" : "Refresh accounts"}
             </button>
+            <input
+              className="ct-input"
+              style={{ maxWidth: 360, width: "100%" }}
+              placeholder="Search account name, owner email, or ID"
+              value={adminSearch}
+              onChange={(e) => setAdminSearch(e.target.value)}
+              disabled={!isMasterAdmin}
+            />
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => setAdminSearch("")}
+              disabled={!isMasterAdmin || !adminSearch.trim()}
+            >
+              Clear
+            </button>
           </div>
           {adminError ? <div className="ct-banner ct-banner--error">{adminError}</div> : null}
           {!isMasterAdmin && !adminLoading ? (
@@ -2087,7 +2116,8 @@ export default function DashboardPage() {
                   {adminUsage.totals.jobs_started} jobs started ({adminUsage.totals.jobs_completed} completed,{" "}
                   {adminUsage.totals.jobs_failed} failed), {adminUsage.totals.photos_uploaded} photos uploaded,{" "}
                   avg {adminUsage.totals.avg_photos_per_job.toFixed(2)} photos/job, est tokens{" "}
-                  {(adminUsage.totals.est_input_tokens + adminUsage.totals.est_output_tokens).toLocaleString()}.
+                  {(adminUsage.totals.est_input_tokens + adminUsage.totals.est_output_tokens).toLocaleString()} (
+                  est ${adminUsage.totals.est_total_cost_usd.toFixed(2)}).
                 </p>
               ) : (
                 <p className="ct-muted" style={{ margin: 0 }}>
@@ -2109,7 +2139,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {adminAccounts.map((a) => {
+                  {filteredAdminAccounts.map((a) => {
                     const busy = adminSavingAccountId === a.id;
                     const draft = adminPlanDraftById[a.id] ?? a.plan_code ?? "beta_free";
                     const usage = adminUsage?.by_account.find((u) => u.account_id === a.id) || null;
@@ -2117,6 +2147,11 @@ export default function DashboardPage() {
                       <tr key={a.id}>
                         <td>
                           <div style={{ fontWeight: 600 }}>{a.name}</div>
+                          {a.owner_email ? (
+                            <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                              {a.owner_email}
+                            </div>
+                          ) : null}
                           <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
                             {a.id}
                           </div>
@@ -2139,7 +2174,8 @@ export default function DashboardPage() {
                             <>
                               <br />
                               30d: {usage.photos_uploaded} photos · avg {usage.avg_photos_per_job.toFixed(2)} photos/job
-                              · est tokens {(usage.est_input_tokens + usage.est_output_tokens).toLocaleString()}
+                              · est tokens {(usage.est_input_tokens + usage.est_output_tokens).toLocaleString()} · est $
+                              {usage.est_total_cost_usd.toFixed(2)}
                             </>
                           ) : null}
                         </td>
@@ -2166,10 +2202,10 @@ export default function DashboardPage() {
                       </tr>
                     );
                   })}
-                  {adminAccounts.length === 0 && !adminLoading ? (
+                  {filteredAdminAccounts.length === 0 && !adminLoading ? (
                     <tr>
                       <td colSpan={5} className="ct-muted">
-                        No accounts found.
+                        No accounts match that search.
                       </td>
                     </tr>
                   ) : null}

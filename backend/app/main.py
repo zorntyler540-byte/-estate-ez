@@ -335,6 +335,19 @@ def admin_list_accounts(
     rows = db.query(Account).order_by(Account.created_at.desc()).all()
     out: list[AdminAccountOut] = []
     for a in rows:
+        owner_email = (
+            db.query(User.email)
+            .filter(User.account_id == a.id, User.role == "owner")
+            .order_by(User.created_at.asc())
+            .scalar()
+        )
+        if not owner_email:
+            owner_email = (
+                db.query(User.email)
+                .filter(User.account_id == a.id)
+                .order_by(User.created_at.asc())
+                .scalar()
+            )
         user_count = db.query(func.count()).select_from(User).filter(User.account_id == a.id).scalar() or 0
         sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == a.id).scalar() or 0
         lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == a.id).scalar() or 0
@@ -345,6 +358,7 @@ def admin_list_accounts(
             AdminAccountOut(
                 id=a.id,
                 name=a.name,
+                owner_email=owner_email,
                 plan_code=a.plan_code,
                 is_active=bool(a.is_active),
                 created_at=a.created_at,
@@ -374,6 +388,19 @@ def admin_update_account(
         row.plan_code = payload.plan_code.strip().lower()
     db.commit()
     db.refresh(row)
+    owner_email = (
+        db.query(User.email)
+        .filter(User.account_id == row.id, User.role == "owner")
+        .order_by(User.created_at.asc())
+        .scalar()
+    )
+    if not owner_email:
+        owner_email = (
+            db.query(User.email)
+            .filter(User.account_id == row.id)
+            .order_by(User.created_at.asc())
+            .scalar()
+        )
     user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
     sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
     lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
@@ -381,6 +408,7 @@ def admin_update_account(
     return AdminAccountOut(
         id=row.id,
         name=row.name,
+        owner_email=owner_email,
         plan_code=row.plan_code,
         is_active=bool(row.is_active),
         created_at=row.created_at,
@@ -398,6 +426,12 @@ def admin_analytics(
     db: Session = Depends(get_db),
 ) -> AdminUsageSummaryOut:
     _require_master_admin(current)
+    in_rate = float(settings.gemini_input_cost_per_million)
+    out_rate = float(settings.gemini_output_cost_per_million)
+
+    def _est_cost_usd(inp: int, out: int) -> float:
+        return round((inp / 1_000_000.0) * in_rate + (out / 1_000_000.0) * out_rate, 4)
+
     since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     accounts = db.query(Account).order_by(Account.created_at.asc()).all()
     rows: list[AdminUsageAccountOut] = []
@@ -443,6 +477,7 @@ def admin_analytics(
                 avg_job_duration_seconds=round(mean(durations), 1) if durations else 0.0,
                 est_input_tokens=est_input_tokens,
                 est_output_tokens=est_output_tokens,
+                est_total_cost_usd=_est_cost_usd(est_input_tokens, est_output_tokens),
             )
         )
     total_accounts = len(rows)
@@ -464,6 +499,7 @@ def admin_analytics(
         else 0.0,
         est_input_tokens=sum(r.est_input_tokens for r in rows),
         est_output_tokens=sum(r.est_output_tokens for r in rows),
+        est_total_cost_usd=round(sum(r.est_total_cost_usd for r in rows), 4),
     )
     return AdminUsageSummaryOut(
         since_days=since_days,

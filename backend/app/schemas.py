@@ -48,6 +48,7 @@ class TeamMemberOut(BaseModel):
 class AdminAccountOut(BaseModel):
     id: str
     name: str
+    owner_email: EmailStr | None = None
     plan_code: str
     is_active: bool
     created_at: datetime
@@ -74,6 +75,7 @@ class AdminUsageAccountOut(BaseModel):
     avg_job_duration_seconds: float
     est_input_tokens: int
     est_output_tokens: int
+    est_total_cost_usd: float = 0.0
 
 
 class AdminUsageSummaryOut(BaseModel):
