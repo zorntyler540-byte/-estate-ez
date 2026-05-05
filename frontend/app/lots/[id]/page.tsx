@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotThumbnail } from "../../../components/LotThumbnail";
+import { SiteHeader } from "../../../components/SiteHeader";
 import { API_BASE, apiFetch } from "../../../lib/api";
 
 type LotPhoto = {
@@ -57,6 +58,15 @@ function readStoredToken(): string {
 export default function LotDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+
+  function logout() {
+    try {
+      localStorage.removeItem("token");
+    } catch {
+      /* private mode */
+    }
+    router.replace("/");
+  }
   const [token, setToken] = useState(readStoredToken);
   const [lot, setLot] = useState<Lot | null>(null);
   const [catalogPhotos, setCatalogPhotos] = useState<LotPhoto[]>([]);
@@ -607,7 +617,7 @@ export default function LotDetailPage() {
   if (!lot) {
     return (
       <main className="ct-shell">
-        <div className="ct-panel">
+        <div className="ct-panel ct-panel--pulse">
           <p style={{ margin: 0 }}>Loading lot…</p>
         </div>
       </main>
@@ -616,22 +626,42 @@ export default function LotDetailPage() {
 
   return (
     <main id="lot-detail-top" className="ct-shell" style={{ maxWidth: 960 }}>
-      <p style={{ margin: "0 0 0.75rem" }}>
-        <Link
-          href="/dashboard"
-          onClick={() => {
-            try {
-              sessionStorage.setItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY, "1");
-            } catch {
-              /* private mode */
-            }
-          }}
-        >
-          ← Back to dashboard
-        </Link>
-      </p>
+      <SiteHeader
+        actions={
+          <>
+            <Link href="/account" className="ct-btn ct-btn--ghost">
+              Account
+            </Link>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
+              Log out
+            </button>
+          </>
+        }
+      />
+      <Link
+        href="/dashboard"
+        className="ct-back-link"
+        onClick={() => {
+          try {
+            sessionStorage.setItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY, "1");
+          } catch {
+            /* private mode */
+          }
+        }}
+      >
+        ← Back to dashboard
+      </Link>
       <header className="ct-page-header" style={{ borderBottom: "none", paddingBottom: 0, marginBottom: "0.5rem" }}>
-        <h1 className="ct-page-title">Lot {lot.sku || "(no SKU)"}</h1>
+        <div>
+          <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
+            Lot {lot.sku || "(no SKU)"}
+          </h1>
+          {(lot.auction_title || "").trim() ? (
+            <p className="ct-subtitle" style={{ margin: 0, maxWidth: "42rem" }}>
+              {(lot.auction_title || "").trim()}
+            </p>
+          ) : null}
+        </div>
       </header>
       {lot.sku_needs_review ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>

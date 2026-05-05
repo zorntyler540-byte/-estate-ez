@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
+import { SiteHeader } from "../../components/SiteHeader";
 import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
@@ -2010,27 +2011,43 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <main className="ct-shell">
-        <div className="ct-panel">
+        <div className="ct-panel ct-panel--pulse">
           <p style={{ margin: 0 }}>Loading dashboard…</p>
         </div>
       </main>
     );
   }
 
+  const saleContext =
+    selectedSale != null
+      ? `Working in “${selectedSale.name}”${selectedSale.closed_at ? " (closed)" : ""}. Switch sale below.`
+      : "Select or create a sale below to organize lots and jobs.";
+
   return (
     <main id="dashboard-top" className="ct-shell">
+      <SiteHeader
+        actions={
+          <>
+            <Link href="/account" className="ct-btn ct-btn--ghost">
+              Account
+            </Link>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
+              Log out
+            </button>
+          </>
+        }
+      />
       <header className="ct-page-header">
-        <h1 className="ct-page-title">Lots dashboard</h1>
-        <div className="ct-row ct-row--gap-lg">
-          <Link href="/account" className="ct-btn ct-btn--ghost">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-            Log out
-          </button>
+        <div>
+          <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
+            Lots dashboard
+          </h1>
+          <p className="ct-subtitle" style={{ margin: 0, maxWidth: "36rem" }}>
+            {saleContext}
+          </p>
         </div>
       </header>
-      <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
+      <section className="ct-card ct-card--padded ct-card--interactive" style={{ marginBottom: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Sales
         </h2>

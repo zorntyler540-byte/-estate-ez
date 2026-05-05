@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { SiteHeader } from "../../components/SiteHeader";
 import { apiFetch } from "../../lib/api";
 
 type Me = {
@@ -231,9 +232,21 @@ export default function AccountPage() {
 
   return (
     <main className="ct-shell" style={{ maxWidth: 640 }}>
-      <p style={{ margin: "0 0 0.75rem" }}>
-        <Link href="/dashboard">← Back to dashboard</Link>
-      </p>
+      <SiteHeader
+        actions={
+          <>
+            <Link href="/dashboard" className="ct-btn ct-btn--ghost">
+              Dashboard
+            </Link>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
+              Log out
+            </button>
+          </>
+        }
+      />
+      <Link href="/dashboard" className="ct-back-link">
+        ← Back to dashboard
+      </Link>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
@@ -243,14 +256,11 @@ export default function AccountPage() {
             Your sign-in and workspace identifiers. Additional profile and billing fields can be added here later.
           </p>
         </div>
-        <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-          Log out
-        </button>
       </header>
 
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
 
-      <div className="ct-card ct-card--padded">
+      <div className="ct-card ct-card--padded ct-card--interactive">
         {loading ? (
           <p className="ct-muted" style={{ margin: 0 }}>
             Loading account…

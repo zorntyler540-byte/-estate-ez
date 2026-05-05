@@ -613,3 +613,149 @@ a.ct-btn:hover {
   background: var(--ct-primary-muted);
   border-color: var(--ct-border-strong);
 }
+
+/* Sticky app chrome */
+.ct-site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  margin: calc(-1 * clamp(1.25rem, 4vw, 2.5rem)) calc(-1 * clamp(1.25rem, 4vw, 2.5rem)) 1.15rem;
+  padding: 0.65rem clamp(1.25rem, 4vw, 2.5rem) 0.7rem;
+  background: color-mix(in srgb, var(--ct-bg) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--ct-border);
+}
+
+.ct-site-header__row {
+  max-width: var(--ct-max);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.ct-site-header__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.ct-site-header__brand:hover {
+  text-decoration: none;
+}
+
+.ct-site-header__brand:hover .ct-site-header__eyebrow {
+  color: var(--ct-primary-hover);
+}
+
+.ct-site-header__eyebrow {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ct-primary);
+  transition: color 0.15s ease;
+}
+
+.ct-site-header__tagline {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ct-text-muted);
+  letter-spacing: 0.01em;
+}
+
+.ct-site-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Auth landing */
+.ct-auth-screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.ct-auth-screen .ct-shell--narrow {
+  width: 100%;
+}
+
+.ct-auth-card {
+  width: 100%;
+  max-width: var(--ct-max-narrow);
+}
+
+/* Back navigation */
+.ct-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ct-text-muted);
+  text-decoration: none;
+  padding: 0.35rem 0.5rem 0.35rem 0;
+  border-radius: var(--ct-radius-sm);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ct-back-link:hover {
+  color: var(--ct-primary);
+  background: var(--ct-primary-muted);
+  text-decoration: none;
+}
+
+/* Select matches inputs in dark UI */
+select.ct-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ct-text-muted) 50%),
+    linear-gradient(135deg, var(--ct-text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 1.1rem) 55%, calc(100% - 0.65rem) 55%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 2rem;
+}
+
+select.ct-input option {
+  background: var(--ct-bg-elevated);
+  color: var(--ct-text);
+}
+
+/* Card hover for interactive surfaces */
+.ct-card--interactive {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.ct-card--interactive:hover {
+  border-color: var(--ct-border-strong);
+  box-shadow: var(--ct-shadow);
+}
+
+/* Loading / empty states */
+.ct-panel--pulse {
+  animation: ct-panel-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ct-panel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
