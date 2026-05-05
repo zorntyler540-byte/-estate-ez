@@ -33,6 +33,8 @@ class Account(Base):
     __tablename__ = "accounts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(40), default="beta_free", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
@@ -111,6 +113,10 @@ class ProcessingJob(Base):
     inherit_sku_from_subfolder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_manual_sku: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    analyzed_photos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_photos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    est_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    est_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

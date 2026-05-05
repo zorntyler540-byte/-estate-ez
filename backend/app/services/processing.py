@@ -34,6 +34,8 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 # Set by ``_apply_last_known_sku_fallback`` when SKU was copied from a prior frame (not read on this image).
 # Must not open lots or run tape verify — otherwise stale digits + new lot SKU causes spurious verify stalls.
 _CT_SKU_INJECTED_FALLBACK_KEY = "_ct_sku_injected_fallback"
+EST_INPUT_TOKENS_PER_PHOTO = 1100
+EST_OUTPUT_TOKENS_PER_SUCCESS = 220
 
 _LOG = logging.getLogger(__name__)
 
@@ -502,6 +504,10 @@ def process_job(
     job.status = JobStatus.processing
     job.error_message = None
     job.cancel_requested = False
+    job.analyzed_photos = 0
+    job.failed_photos = 0
+    job.est_input_tokens = 0
+    job.est_output_tokens = 0
     db.commit()
     _emit_job(job, {"type": "status", "status": "processing"})
 
@@ -617,6 +623,13 @@ def process_job(
         payloads = _run_parallel_analysis_threadpool()
 
     _apply_last_known_sku_fallback(payloads)
+    success_count = sum(1 for p in payloads if p is not None)
+    job.analyzed_photos = int(success_count)
+    job.failed_photos = int(max(0, total_photos - success_count))
+    # Pilot-level heuristic estimates; not exact billable token numbers from provider metering.
+    job.est_input_tokens = int(total_photos * EST_INPUT_TOKENS_PER_PHOTO)
+    job.est_output_tokens = int(success_count * EST_OUTPUT_TOKENS_PER_SUCCESS)
+    db.commit()
 
     _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
 

@@ -221,6 +221,39 @@ type Sale = {
   created_at: string;
 };
 
+type AdminAccount = {
+  id: string;
+  name: string;
+  plan_code: string;
+  is_active: boolean;
+  created_at: string;
+  user_count: number;
+  sale_count: number;
+  lot_count: number;
+  job_count: number;
+};
+
+type AdminUsageAccount = {
+  account_id: string;
+  account_name: string;
+  jobs_started: number;
+  jobs_completed: number;
+  jobs_failed: number;
+  photos_uploaded: number;
+  lots_created: number;
+  avg_photos_per_job: number;
+  avg_job_duration_seconds: number;
+  est_input_tokens: number;
+  est_output_tokens: number;
+};
+
+type AdminUsageSummary = {
+  since_days: number;
+  total_accounts: number;
+  totals: AdminUsageAccount;
+  by_account: AdminUsageAccount[];
+};
+
 type Lot = {
   id: string;
   sale_id: string;
@@ -408,6 +441,15 @@ export default function DashboardPage() {
   const [newSaleName, setNewSaleName] = useState("");
   const [creatingSale, setCreatingSale] = useState(false);
   const [closingSale, setClosingSale] = useState(false);
+  const [isMasterAdmin, setIsMasterAdmin] = useState(false);
+  const [adminLoadAttempted, setAdminLoadAttempted] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminSavingAccountId, setAdminSavingAccountId] = useState("");
+  const [adminError, setAdminError] = useState("");
+  const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
+  const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
+  const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
+  const [adminUsageLoading, setAdminUsageLoading] = useState(false);
   const [lots, setLots] = useState<Lot[]>([]);
   /** Filter ``GET /lots`` to rows with SKU sanity flags (duplicate digit-SKU in sale, or mixed lot numbers in text). */
   const [inventorySkuFlagFilter, setInventorySkuFlagFilter] = useState<
@@ -729,6 +771,63 @@ export default function DashboardPage() {
         }
       });
   }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
+
+  useEffect(() => {
+    if (!token) {
+      setIsMasterAdmin(false);
+      setAdminLoadAttempted(false);
+      setAdminAccounts([]);
+      setAdminPlanDraftById({});
+      setAdminError("");
+      return;
+    }
+    let cancelled = false;
+    setAdminLoading(true);
+    setAdminLoadAttempted(true);
+    setAdminError("");
+    void apiFetch("/admin/accounts", token)
+      .then((rows) => {
+        if (cancelled) return;
+        const arr = rows as AdminAccount[];
+        setAdminAccounts(arr);
+        setIsMasterAdmin(true);
+        const drafts: Record<string, string> = {};
+        arr.forEach((a) => {
+          drafts[a.id] = a.plan_code || "beta_free";
+        });
+        setAdminPlanDraftById(drafts);
+        setAdminUsageLoading(true);
+        void apiFetch("/admin/analytics?since_days=30", token)
+          .then((u) => {
+            if (!cancelled) setAdminUsage(u as AdminUsageSummary);
+          })
+          .catch(() => {
+            if (!cancelled) setAdminUsage(null);
+          })
+          .finally(() => {
+            if (!cancelled) setAdminUsageLoading(false);
+          });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "Could not load admin accounts";
+        if (msg.includes("403") || msg.toLowerCase().includes("master admin")) {
+          setIsMasterAdmin(false);
+          setAdminAccounts([]);
+          setAdminPlanDraftById({});
+          setAdminUsage(null);
+          return;
+        }
+        setIsMasterAdmin(false);
+        setAdminError(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setAdminLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, dataReloadNonce]);
 
   useEffect(() => {
     const bumpSse = () => {
@@ -1653,6 +1752,56 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshAdminAccounts() {
+    if (!token || !adminLoadAttempted) return;
+    setAdminError("");
+    setAdminLoading(true);
+    try {
+      const rows = (await apiFetch("/admin/accounts", token)) as AdminAccount[];
+      setAdminAccounts(rows);
+      const drafts: Record<string, string> = {};
+      rows.forEach((a) => {
+        drafts[a.id] = a.plan_code || "beta_free";
+      });
+      setAdminPlanDraftById(drafts);
+      setIsMasterAdmin(true);
+      setAdminUsageLoading(true);
+      try {
+        const usage = (await apiFetch("/admin/analytics?since_days=30", token)) as AdminUsageSummary;
+        setAdminUsage(usage);
+      } catch {
+        setAdminUsage(null);
+      } finally {
+        setAdminUsageLoading(false);
+      }
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Could not refresh admin accounts");
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  async function patchAdminAccount(accountId: string, body: { is_active?: boolean; plan_code?: string }) {
+    if (!token) return;
+    setAdminSavingAccountId(accountId);
+    setAdminError("");
+    try {
+      const updated = (await apiFetch(`/admin/accounts/${encodeURIComponent(accountId)}`, token, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      })) as AdminAccount;
+      setAdminAccounts((prev) => prev.map((a) => (a.id === accountId ? updated : a)));
+      setAdminPlanDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.plan_code || prev[accountId] || "beta_free"
+      }));
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Could not update account");
+    } finally {
+      setAdminSavingAccountId("");
+    }
+  }
+
   async function purgeAll() {
     if (
       !window.confirm(
@@ -1899,6 +2048,136 @@ export default function DashboardPage() {
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.5rem" }}>
           {uploadProgress}
         </div>
+      ) : null}
+      {isMasterAdmin || adminLoading || adminError ? (
+        <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+            Master admin
+          </h2>
+          <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
+            Manage pilot accounts from one place: toggle access and set a plan label for internal tracking.
+          </p>
+          <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.75rem" }}>
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => void refreshAdminAccounts()}
+              disabled={adminLoading || !isMasterAdmin}
+            >
+              {adminLoading ? "Refreshing…" : "Refresh accounts"}
+            </button>
+          </div>
+          {adminError ? <div className="ct-banner ct-banner--error">{adminError}</div> : null}
+          {!isMasterAdmin && !adminLoading ? (
+            <p className="ct-muted" style={{ margin: 0 }}>
+              Your account is not in <code>MASTER_ADMIN_EMAILS</code>, so this panel is read-only hidden.
+            </p>
+          ) : null}
+          {isMasterAdmin ? (
+            <div className="ct-card ct-card--padded" style={{ marginBottom: "0.75rem" }}>
+              <h3 className="ct-section-title" style={{ marginTop: 0, marginBottom: "0.4rem", fontSize: "1rem" }}>
+                Analytics (last 30 days)
+              </h3>
+              {adminUsageLoading ? (
+                <p className="ct-muted" style={{ margin: 0 }}>
+                  Loading analytics…
+                </p>
+              ) : adminUsage ? (
+                <p className="ct-muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+                  {adminUsage.totals.jobs_started} jobs started ({adminUsage.totals.jobs_completed} completed,{" "}
+                  {adminUsage.totals.jobs_failed} failed), {adminUsage.totals.photos_uploaded} photos uploaded,{" "}
+                  avg {adminUsage.totals.avg_photos_per_job.toFixed(2)} photos/job, est tokens{" "}
+                  {(adminUsage.totals.est_input_tokens + adminUsage.totals.est_output_tokens).toLocaleString()}.
+                </p>
+              ) : (
+                <p className="ct-muted" style={{ margin: 0 }}>
+                  Analytics data unavailable yet.
+                </p>
+              )}
+            </div>
+          ) : null}
+          {isMasterAdmin ? (
+            <div className="ct-dashboard-table-desktop ct-table-wrap" style={{ marginBottom: 0 }}>
+              <table className="ct-table">
+                <thead>
+                  <tr>
+                    <th>Account</th>
+                    <th>Plan</th>
+                    <th>Status</th>
+                    <th>Usage</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminAccounts.map((a) => {
+                    const busy = adminSavingAccountId === a.id;
+                    const draft = adminPlanDraftById[a.id] ?? a.plan_code ?? "beta_free";
+                    const usage = adminUsage?.by_account.find((u) => u.account_id === a.id) || null;
+                    return (
+                      <tr key={a.id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{a.name}</div>
+                          <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                            {a.id}
+                          </div>
+                        </td>
+                        <td>
+                          <input
+                            className="ct-input"
+                            style={{ width: 150 }}
+                            value={draft}
+                            onChange={(e) =>
+                              setAdminPlanDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
+                            }
+                            disabled={busy}
+                          />
+                        </td>
+                        <td>{a.is_active ? "Active" : "Inactive"}</td>
+                        <td className="ct-muted" style={{ fontSize: "0.85rem" }}>
+                          {a.user_count} users · {a.sale_count} sales · {a.lot_count} lots · {a.job_count} jobs
+                          {usage ? (
+                            <>
+                              <br />
+                              30d: {usage.photos_uploaded} photos · avg {usage.avg_photos_per_job.toFixed(2)} photos/job
+                              · est tokens {(usage.est_input_tokens + usage.est_output_tokens).toLocaleString()}
+                            </>
+                          ) : null}
+                        </td>
+                        <td>
+                          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="ct-btn"
+                              onClick={() => void patchAdminAccount(a.id, { is_active: !a.is_active })}
+                              disabled={busy}
+                            >
+                              {busy ? "Saving…" : a.is_active ? "Deactivate" : "Activate"}
+                            </button>
+                            <button
+                              type="button"
+                              className="ct-btn"
+                              onClick={() => void patchAdminAccount(a.id, { plan_code: draft.trim() || "beta_free" })}
+                              disabled={busy || draft.trim().length < 2}
+                            >
+                              Save plan
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {adminAccounts.length === 0 && !adminLoading ? (
+                    <tr>
+                      <td colSpan={5} className="ct-muted">
+                        No accounts found.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
       ) : null}
       <div style={{ marginBottom: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>

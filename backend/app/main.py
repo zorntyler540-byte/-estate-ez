@@ -14,7 +14,8 @@ import tempfile
 import uuid
 import zipfile
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from statistics import mean
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -29,6 +30,7 @@ from app.auth import (
     get_current_user,
     get_current_user_sse,
     hash_password,
+    is_master_admin_email,
     oauth2_scheme,
     user_from_access_token,
     verify_password,
@@ -59,6 +61,10 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    AdminAccountOut,
+    AdminAccountUpdateIn,
+    AdminUsageAccountOut,
+    AdminUsageSummaryOut,
     UserSummary,
     LotAiRegenerateIn,
     LotPhotoOut,
@@ -106,6 +112,11 @@ def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
 def _require_owner(current: User) -> None:
     if (current.role or "").strip().lower() != "owner":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
+
+
+def _require_master_admin(current: User) -> None:
+    if not is_master_admin_email(current.email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Master admin access required")
 
 
 def _require_open_sale(row: Sale) -> None:
@@ -193,7 +204,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
-    account = Account(name=payload.account_name)
+    account = Account(name=payload.account_name.strip(), plan_code="beta_free", is_active=True)
     db.add(account)
     db.flush()
     try:
@@ -219,6 +230,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     user = db.query(User).filter(User.email == payload.email.lower()).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid login")
+    acct_active = db.query(Account.is_active).filter(Account.id == user.account_id).scalar()
+    if acct_active is False:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
     token = create_access_token(user.id, user.account_id, user.role)
     return TokenResponse(access_token=token)
 
@@ -310,6 +324,153 @@ def reset_team_member_password(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/admin/accounts", response_model=list[AdminAccountOut])
+def admin_list_accounts(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[AdminAccountOut]:
+    _require_master_admin(current)
+    rows = db.query(Account).order_by(Account.created_at.desc()).all()
+    out: list[AdminAccountOut] = []
+    for a in rows:
+        user_count = db.query(func.count()).select_from(User).filter(User.account_id == a.id).scalar() or 0
+        sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == a.id).scalar() or 0
+        lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == a.id).scalar() or 0
+        job_count = (
+            db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == a.id).scalar() or 0
+        )
+        out.append(
+            AdminAccountOut(
+                id=a.id,
+                name=a.name,
+                plan_code=a.plan_code,
+                is_active=bool(a.is_active),
+                created_at=a.created_at,
+                user_count=int(user_count),
+                sale_count=int(sale_count),
+                lot_count=int(lot_count),
+                job_count=int(job_count),
+            )
+        )
+    return out
+
+
+@app.patch("/admin/accounts/{account_id}", response_model=AdminAccountOut)
+def admin_update_account(
+    account_id: str,
+    payload: AdminAccountUpdateIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminAccountOut:
+    _require_master_admin(current)
+    row = db.query(Account).filter(Account.id == account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if payload.is_active is not None:
+        row.is_active = bool(payload.is_active)
+    if payload.plan_code is not None:
+        row.plan_code = payload.plan_code.strip().lower()
+    db.commit()
+    db.refresh(row)
+    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
+    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
+    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
+    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
+    return AdminAccountOut(
+        id=row.id,
+        name=row.name,
+        plan_code=row.plan_code,
+        is_active=bool(row.is_active),
+        created_at=row.created_at,
+        user_count=int(user_count),
+        sale_count=int(sale_count),
+        lot_count=int(lot_count),
+        job_count=int(job_count),
+    )
+
+
+@app.get("/admin/analytics", response_model=AdminUsageSummaryOut)
+def admin_analytics(
+    since_days: int = Query(30, ge=1, le=365),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminUsageSummaryOut:
+    _require_master_admin(current)
+    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
+    accounts = db.query(Account).order_by(Account.created_at.asc()).all()
+    rows: list[AdminUsageAccountOut] = []
+    for a in accounts:
+        jobs = (
+            db.query(ProcessingJob)
+            .filter(ProcessingJob.account_id == a.id, ProcessingJob.created_at >= since_dt)
+            .all()
+        )
+        jobs_started = len(jobs)
+        jobs_completed = sum(1 for j in jobs if j.status == JobStatus.completed)
+        jobs_failed = sum(1 for j in jobs if j.status == JobStatus.failed)
+        durations: list[float] = []
+        for j in jobs:
+            if j.updated_at and j.created_at:
+                durations.append(max(0.0, (j.updated_at - j.created_at).total_seconds()))
+        photos_uploaded = int(
+            db.query(func.count())
+            .select_from(Photo)
+            .filter(Photo.account_id == a.id, Photo.created_at >= since_dt)
+            .scalar()
+            or 0
+        )
+        lots_created = int(
+            db.query(func.count())
+            .select_from(Lot)
+            .filter(Lot.account_id == a.id, Lot.created_at >= since_dt)
+            .scalar()
+            or 0
+        )
+        est_input_tokens = int(sum(int(getattr(j, "est_input_tokens", 0) or 0) for j in jobs))
+        est_output_tokens = int(sum(int(getattr(j, "est_output_tokens", 0) or 0) for j in jobs))
+        rows.append(
+            AdminUsageAccountOut(
+                account_id=a.id,
+                account_name=a.name,
+                jobs_started=jobs_started,
+                jobs_completed=jobs_completed,
+                jobs_failed=jobs_failed,
+                photos_uploaded=photos_uploaded,
+                lots_created=lots_created,
+                avg_photos_per_job=round((photos_uploaded / jobs_started), 2) if jobs_started else 0.0,
+                avg_job_duration_seconds=round(mean(durations), 1) if durations else 0.0,
+                est_input_tokens=est_input_tokens,
+                est_output_tokens=est_output_tokens,
+            )
+        )
+    total_accounts = len(rows)
+    totals = AdminUsageAccountOut(
+        account_id="all",
+        account_name="All accounts",
+        jobs_started=sum(r.jobs_started for r in rows),
+        jobs_completed=sum(r.jobs_completed for r in rows),
+        jobs_failed=sum(r.jobs_failed for r in rows),
+        photos_uploaded=sum(r.photos_uploaded for r in rows),
+        lots_created=sum(r.lots_created for r in rows),
+        avg_photos_per_job=(
+            round(sum(r.photos_uploaded for r in rows) / sum(r.jobs_started for r in rows), 2)
+            if sum(r.jobs_started for r in rows) > 0
+            else 0.0
+        ),
+        avg_job_duration_seconds=round(mean([r.avg_job_duration_seconds for r in rows if r.jobs_started > 0]), 1)
+        if any(r.jobs_started > 0 for r in rows)
+        else 0.0,
+        est_input_tokens=sum(r.est_input_tokens for r in rows),
+        est_output_tokens=sum(r.est_output_tokens for r in rows),
+    )
+    return AdminUsageSummaryOut(
+        since_days=since_days,
+        total_accounts=total_accounts,
+        totals=totals,
+        by_account=rows,
+    )
 
 
 @app.post("/feedback/suggestions")

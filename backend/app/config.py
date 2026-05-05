@@ -88,6 +88,8 @@ class Settings(BaseSettings):
 
     # When ``ENVIRONMENT=production`` and this is false, ``POST /auth/register`` returns 403 (set true only to bootstrap users).
     allow_open_registration: bool = Field(default=True, alias="ALLOW_OPEN_REGISTRATION")
+    # Comma-separated global admin emails that can manage all accounts across the server.
+    master_admin_emails: str = Field(default="", alias="MASTER_ADMIN_EMAILS")
 
     # JWT lifetime (minutes). Shorter values reduce exposure if a token leaks.
     access_token_expire_minutes: int = Field(default=1440, ge=15, le=10080, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
@@ -115,6 +117,17 @@ class Settings(BaseSettings):
     def trusted_host_list(self) -> list[str]:
         hosts = [h.strip() for h in (self.trusted_hosts or "").split(",") if h.strip()]
         return hosts
+
+    def master_admin_email_list(self) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in (self.master_admin_emails or "").split(","):
+            v = raw.strip().lower()
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            out.append(v)
+        return out
 
     @model_validator(mode="after")
     def production_must_be_safe(self) -> Self:

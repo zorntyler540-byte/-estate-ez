@@ -45,6 +45,44 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class AdminAccountOut(BaseModel):
+    id: str
+    name: str
+    plan_code: str
+    is_active: bool
+    created_at: datetime
+    user_count: int = 0
+    sale_count: int = 0
+    lot_count: int = 0
+    job_count: int = 0
+
+
+class AdminAccountUpdateIn(BaseModel):
+    is_active: bool | None = None
+    plan_code: str | None = Field(default=None, min_length=2, max_length=40)
+
+
+class AdminUsageAccountOut(BaseModel):
+    account_id: str
+    account_name: str
+    jobs_started: int
+    jobs_completed: int
+    jobs_failed: int
+    photos_uploaded: int
+    lots_created: int
+    avg_photos_per_job: float
+    avg_job_duration_seconds: float
+    est_input_tokens: int
+    est_output_tokens: int
+
+
+class AdminUsageSummaryOut(BaseModel):
+    since_days: int
+    total_accounts: int
+    totals: AdminUsageAccountOut
+    by_account: list[AdminUsageAccountOut]
+
+
 class PasswordChangeIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=72)
     new_password: str = Field(min_length=8, max_length=72)

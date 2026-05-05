@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal, get_db
-from app.models import User
+from app.models import Account, User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 http_bearer_optional = HTTPBearer(auto_error=False)
@@ -69,6 +69,13 @@ def user_from_access_token(token: str, db: Session) -> User:
     user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
     if not user:
         raise CREDENTIALS_EXCEPTION
+    acct_active = (
+        db.query(Account.is_active)
+        .filter(Account.id == user.account_id)
+        .scalar()
+    )
+    if acct_active is False:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
     return user
 
 
@@ -92,4 +99,8 @@ def get_current_user_sse(
         raise CREDENTIALS_EXCEPTION
     with SessionLocal() as db:
         return user_from_access_token(token, db)
+
+
+def is_master_admin_email(email: str) -> bool:
+    return (email or "").strip().lower() in set(settings.master_admin_email_list())
 
