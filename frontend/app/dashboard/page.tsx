@@ -2051,9 +2051,9 @@ export default function DashboardPage() {
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Sales
         </h2>
-        <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "42rem" }}>
-          Use separate sales to organize inventory by auction, client, or project. Lots and jobs are stored under the
-          sale tab you select.
+        <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "42rem" }}>
+          Each <strong>sale</strong> is its own workspace — pick the tab for the auction or project you are working on.
+          Lots and uploads always go into the <strong>selected</strong> sale.
         </p>
         {sales.length > 0 ? (
           <nav className="ct-tabs" aria-label="Sales">
@@ -2111,22 +2111,21 @@ export default function DashboardPage() {
       </section>
       {busyProcessing && (
         <div className="ct-banner ct-banner--warning">
-          <strong>A job is running.</strong> The lots table shows one <strong>Processing…</strong> row per photo in
-          the batch; each slot updates when Gemini finishes that frame, then new catalog rows appear above as{" "}
-          <code>lot_ready</code> events arrive. Use <strong>Cancel</strong> on the job row to stop after the current
-          image. Job status also refreshes in the background (slower while the tab is hidden); reopening the tab
-          reconnects the live feed.
+          <p style={{ margin: 0 }}>
+            <strong>Working on your photos.</strong> New lots will appear in the table below as they are ready. Use{" "}
+            <strong>Cancel</strong> on the job row if you need to stop.
+          </p>
           {geminiAnalyzedCount.total > 0 && !inInventoryPhase ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
-              <strong>Gemini pass:</strong> {geminiAnalyzedCount.done} / {geminiAnalyzedCount.total} photos analyzed
+              <strong>Step 1 — Reading photos:</strong> {geminiAnalyzedCount.done} / {geminiAnalyzedCount.total} done
               {geminiAnalyzedCount.done < geminiAnalyzedCount.total
-                ? " — counters should advance every few seconds while the API is healthy."
-                : " — finished; merging into catalog next."}
+                ? " (this usually moves every few seconds)."
+                : " — finishing up, then lots are saved."}
             </p>
           ) : null}
           {inInventoryPhase ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
-              <strong>Catalog merge:</strong>{" "}
+              <strong>Step 2 — Saving lots:</strong>{" "}
               {catalogStepProgress ? (
                 <>
                   photo {catalogStepProgress.index + 1} of {catalogStepProgress.total}
@@ -2136,13 +2135,22 @@ export default function DashboardPage() {
                       — <code style={{ fontSize: "0.88em" }}>{catalogStepProgress.fileName}</code>
                     </>
                   ) : null}
-                  . If this number stalls for several minutes, check API logs or cancel and retry.
+                  . If this stays stuck for several minutes, try Cancel and run the job again, or ask your tech contact
+                  to check the server.
                 </>
               ) : (
-                <>starting (waiting for first frame from server)…</>
+                <>starting…</>
               )}
             </p>
           ) : null}
+          <details className="ct-help-details" style={{ marginTop: "0.65rem", marginBottom: 0 }}>
+            <summary>For staff: how the live table works</summary>
+            <div className="ct-help-details__body">
+              You may see one <strong>Processing…</strong> row per photo until each frame is analyzed; rows then turn
+              into catalog entries. Updates stream from the server in real time. If you switch away from this tab,
+              progress may refresh more slowly — come back to this page to see the latest.
+            </div>
+          </details>
         </div>
       )}
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
@@ -2338,23 +2346,50 @@ export default function DashboardPage() {
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Run photo processing job
         </h2>
-        <p className="ct-muted" style={{ maxWidth: "45rem", marginBottom: "0.75rem" }}>
-          <strong>Choose folder</strong> opens your system folder picker (it may not show photo thumbnails there —
-          that is normal). After you confirm, you will see previews and counts here, then upload to the server — the
-          job <strong>starts automatically</strong> and the table updates live from the SSE feed (spinner row while
-          Gemini runs). Folders with <strong>more than 200 images</strong> upload in multiple requests into the{" "}
-          <strong>same</strong> job (avoids browser/proxy limits). Use <strong>Choose photos</strong> to pick image files with visible previews in most desktop
-          and mobile pickers.{" "}
-          For <strong>several different items without lot tape on every group</strong>, put each item in its own
-          subfolder inside the folder you pick (e.g. <code>Matryoshka/*.jpg</code> and <code>Turtle/*.jpg</code>) so
-          each becomes its own row. For <strong>one flat folder</strong>, purple tape still marks new lots; a{" "}
-          <strong>blank white divider page</strong> between groups is detected as a lot boundary (that frame is not
-          stored as a product photo). Use <strong>Create one lot…</strong> on mobile when every photo is the same listing (angles / details) and you want{" "}
-          <strong>one SKU and one row</strong>. On your phone (HTTPS), that opens an in-page camera so you can{" "}
-          <strong>Snap</strong> many photos before <strong>Done</strong>; if the camera cannot start, the file picker
-          is used instead. <strong>Server path</strong> is for folders already on the machine running the API (no
-          upload).
+        <p className="ct-lead">
+          Add photos for the <strong>sale you selected above</strong>. Choose a whole folder, or pick individual
+          photos — then review thumbnails and tap <strong>Upload</strong>. Processing runs automatically; new lots
+          appear in the table when each group is ready.
         </p>
+        <details className="ct-help-details">
+          <summary>Advanced tips &amp; technical notes</summary>
+          <div className="ct-help-details__body">
+            <ul>
+              <li>
+                <strong>Choose photo folder</strong> uses your computer&apos;s folder dialog (thumbnails may not show
+                there — that is normal). After you confirm, previews and counts appear here before upload.
+              </li>
+              <li>
+                <strong>Choose photos</strong> is better when you want thumbnails in the picker (common on phones and
+                desktops).
+              </li>
+              <li>
+                Large folders (<strong>200+ images</strong>) upload in chunks into the <strong>same</strong> job so the
+                browser does not time out.
+              </li>
+              <li>
+                <strong>Separate items:</strong> put each item in its own subfolder (e.g. <code>Matryoshka/</code>,{" "}
+                <code>Turtle/</code>) if you are not using purple tape on every group.
+              </li>
+              <li>
+                <strong>One flat folder:</strong> purple estate tape marks new lots; a <strong>blank white divider</strong>{" "}
+                photo between groups can also split lots (that frame is not kept as a product photo).
+              </li>
+              <li>
+                <strong>Create one lot…</strong> (when shown): all photos become <strong>one</strong> catalog row — good
+                for many angles of a single item. On phones this can open the camera; if the camera fails, the regular
+                file picker opens.
+              </li>
+              <li>
+                <strong>Server path + Queue job</strong> is for staff only: photos already on the server running the
+                API — nothing is uploaded from your browser.
+              </li>
+              <li>
+                While a job runs, the table shows live progress; you can <strong>Cancel</strong> from the job row.
+              </li>
+            </ul>
+          </div>
+        </details>
         <label className="ct-row" style={{ gap: "0.5rem", marginBottom: "0.75rem", alignItems: "flex-start" }}>
           <input
             type="checkbox"
@@ -2362,9 +2397,9 @@ export default function DashboardPage() {
             onChange={(e) => setInheritSkuFromSubfolder(e.target.checked)}
           />
           <span className="ct-muted" style={{ fontSize: "0.9rem", maxWidth: "44rem" }}>
-            <strong>Use folder names as SKU</strong> when each lot lives in its own subfolder named with 2–6 digits
-            only (e.g. <code>035/IMG…</code>, <code>036/IMG…</code>). Overrides model guesses for tape SKU when this
-            job finishes each lot.
+            <strong>Use folder names as lot numbers</strong> when each lot is in its own subfolder named with digits
+            only (for example <code>035</code>, <code>036</code>). The app uses that number as the SKU instead of
+            guessing from tape.
           </span>
         </label>
         <input
@@ -2397,7 +2432,7 @@ export default function DashboardPage() {
           Choose photo folder…
         </button>
         <span className="ct-muted" style={{ marginLeft: "0.6rem", fontSize: "0.8rem" }}>
-          Folder dialogs may not show image thumbnails on some systems.
+          Tip: folder pickers often hide thumbnails — use <strong>Choose photos</strong> if you need previews.
         </span>
         <button
           type="button"
@@ -2429,8 +2464,8 @@ export default function DashboardPage() {
             {folderPick.singleLotMode ? (
               <div style={{ marginBottom: "0.65rem" }}>
                 <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
-                  <strong>One-lot mode:</strong> after upload, every photo is merged into a single catalog lot (tape
-                  reads on later frames will not start a new row).
+                  <strong>One lot only:</strong> all photos below become <strong>one</strong> listing (one row in the
+                  table).
                 </p>
                 <label className="ct-muted" style={{ display: "block", fontSize: "0.85rem" }}>
                   SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -2460,8 +2495,7 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Tap a thumbnail to preview full size. Use the pencil to rotate, trim edges, or adjust brightness /
-                contrast / color; use the trash icon to remove a photo before upload.
+                Tap a photo to enlarge. Pencil = edit (rotate, trim, color). Trash = remove before upload.
               </p>
             ) : null}
             {folderPick.imageFiles.length > 0 && (
@@ -2589,16 +2623,17 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
-        <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.85rem" }}>
+        <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.85rem", alignItems: "center" }}>
           <span className="ct-muted" style={{ fontSize: "0.85rem" }}>
-            or
+            Staff / server only
           </span>
           <input
             className="ct-input"
             style={{ maxWidth: 360, width: "100%" }}
             value={folder}
             onChange={(e) => setFolder(e.target.value)}
-            placeholder="Server folder path, e.g. C:\...\Images"
+            placeholder="Path on the server where images already live"
+            aria-label="Server folder path for queued job"
           />
           <button
             type="button"
@@ -3598,8 +3633,9 @@ export default function DashboardPage() {
 
       <h2 className="ct-section-title">Exports</h2>
       <div className="ct-card ct-card--padded ct-exports">
-        <p className="ct-muted" style={{ marginTop: 0 }}>
-          Exports include lots for the <strong>currently selected sale</strong> only.
+        <p className="ct-lead" style={{ marginTop: 0 }}>
+          Download a file of everything in the <strong>sale you selected above</strong> — titles, descriptions, prices,
+          and SKUs — for spreadsheets or printing.
         </p>
         <div className="ct-export-actions">
           <button
@@ -3631,12 +3667,27 @@ export default function DashboardPage() {
           </button>
         </div>
         <hr style={{ border: 0, borderTop: "1px solid var(--ct-border)", margin: "1.1rem 0" }} />
-        <p className="ct-muted" style={{ fontSize: "0.88rem", marginBottom: "0.65rem", maxWidth: "44rem" }}>
-          <strong>All catalog photos for this sale</strong> — one ZIP of originals, <strong>one folder per lot SKU</strong>{" "}
-          (e.g. <code>lot-045</code>; lots without a SKU use <code>lot-no-sku-…</code>). Large sales (600–3000+ images)
-          can take several minutes. Leave this tab open; progress updates every few seconds, then
-          use <strong>Download ZIP</strong>. Per-lot ZIPs stay on each lot’s Details page.
+        <p className="ct-lead" style={{ marginBottom: "0.5rem" }}>
+          <strong>Photo ZIP (full sale)</strong> — Download every catalog photo for this sale in one file. Large sales
+          can take a few minutes; keep this tab open, then press <strong>Download ZIP</strong> when it appears.
         </p>
+        <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
+          <summary>How the photo ZIP is organized</summary>
+          <div className="ct-help-details__body">
+            <ul>
+              <li>
+                Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>; lots
+                without a SKU use <code>lot-no-sku-…</code>).
+              </li>
+              <li>
+                Progress counts update every few seconds while the server builds the archive.
+              </li>
+              <li>
+                To zip <strong>one listing only</strong>, open that lot&apos;s Details page and use the download there.
+              </li>
+            </ul>
+          </div>
+        </details>
         <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
           <button
             type="button"

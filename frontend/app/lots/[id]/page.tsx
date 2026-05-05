@@ -665,29 +665,26 @@ export default function LotDetailPage() {
       </header>
       {lot.sku_needs_review ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
-          <strong>SKU review.</strong> The model was unsure or did not read purple-tape digits clearly. Confirm the
-          handwritten lot number below matches your photos before posting with the extension.
+          <strong>Double-check the lot number.</strong> We could not read the purple tape clearly — make sure the SKU
+          below matches your photos before you publish.
         </div>
       ) : null}
       {lot.many_photos_review ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
-          <strong>Photo count looks unusual</strong> for this sale — this listing has many more images than your other
-          lots. Check that photos from a different lot were not merged here (wrong tape SKU early in the job can cause
-          that). Re-upload as separate jobs if needed.
+          <strong>Unusual number of photos.</strong> This listing has many more pictures than your other lots. Check
+          that another item&apos;s photos were not combined here by mistake.
         </div>
       ) : null}
       {lot.sku_duplicate_in_sale ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
-          <strong>Duplicate SKU in this sale.</strong> Another listing shares the same tape digits. Confirm photos and
-          SKUs are on the correct rows, or use <strong>Move / split photos</strong> / <strong>Merge</strong> on the
-          dashboard to fix mistaken splits.
+          <strong>Same lot number as another row.</strong> Two listings share this number — confirm each item&apos;s
+          photos are on the right row (use <strong>Move or split</strong> or <strong>Merge</strong> above).
         </div>
       ) : null}
       {lot.sku_text_mismatch ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
-          <strong>Mixed lot numbers in text.</strong> The title or description mentions a different lot number than this
-          row&apos;s SKU — often a sign two tape SKUs were merged into one listing. Compare photos to tape, then split
-          or move frames as needed.
+          <strong>Text does not match the lot number.</strong> The title or description mentions a different number than
+          this row&apos;s SKU — you may need to split or move photos.
         </div>
       ) : null}
       <section className="ct-card ct-card--padded" style={{ marginBottom: "1rem" }}>
@@ -699,14 +696,28 @@ export default function LotDetailPage() {
             </span>
           ) : null}
         </h2>
-        <p className="ct-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.88rem", maxWidth: "44rem" }}>
-          Same order as{" "}
-          <strong style={{ color: "var(--ct-text-muted)" }}>Upload lot photos</strong> in the browser extension —
-          first row left‑to‑right, then the next row. Drag the <strong>⋮⋮</strong> handle on a photo to change order
-          (saved for ZIP, extension upload, and AI). <strong>Shift+click</strong> a checkbox to select a range;{" "}
-          <strong>Ctrl/Cmd+click</strong> to add or remove one photo. Use <strong>Download all photos (ZIP)</strong> for
-          originals in catalog order (for clients or backups).
+        <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
+          Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
+          picture to reorder. <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
         </p>
+        <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
+          <summary>Extension order, checkboxes, and keyboard tips</summary>
+          <div className="ct-help-details__body">
+            <ul>
+              <li>
+                Same order as <strong>Upload lot photos</strong> in the browser extension: first row left to right,
+                then the next row.
+              </li>
+              <li>
+                Order is saved for ZIP downloads, extension upload, and AI.
+              </li>
+              <li>
+                <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to add or
+                remove one photo.
+              </li>
+            </ul>
+          </div>
+        </details>
         {catalogPhotos.length > 0 ? (
           <div style={{ marginBottom: "1rem" }}>
             <button
@@ -736,12 +747,18 @@ export default function LotDetailPage() {
             <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
               Move or split selected photos
             </h3>
-            <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
-              Same sale only. Check the frames to move, then choose <strong>Destination</strong>: pick another listing
-              or <strong>New listing (selected photos only)</strong> to fix a mistaken merge (e.g. two tape SKUs on
-              one row). One photo must stay on this lot. To combine a <em>whole</em> other listing into this one, use{" "}
-              <strong>Merge a whole lot</strong> below.
+            <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
+              Select photos, pick a <strong>destination</strong>, then move them or start a <strong>new listing</strong>{" "}
+              with just those pictures. One photo must stay on this lot.
             </p>
+            <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
+              <summary>When to use this vs merge</summary>
+              <div className="ct-help-details__body">
+                Use this when only <em>some</em> photos belong elsewhere, or two tape numbers were merged into one row
+                by mistake. To pull in <em>every</em> photo from another row at once, use <strong>Merge a whole lot</strong>{" "}
+                below instead.
+              </div>
+            </details>
             <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
               <button
                 type="button"
@@ -831,13 +848,18 @@ export default function LotDetailPage() {
             <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
               Merge a whole lot into this one
             </h3>
-            <p className="ct-muted" style={{ fontSize: "0.82rem", margin: "0 0 0.65rem", maxWidth: "44rem" }}>
-              Every photo from the other listing moves here; the other lot row is deleted. A short note is appended
-              to specification lines. Optional: adopt the other lot&apos;s tape SKU if yours is blank or if you check
-              the box to prefer it. To move only <em>some</em> frames into a <strong>new</strong> row (not an existing
-              lot), use <strong>Move or split selected photos</strong> above and choose <strong>New listing</strong> in
-              the destination menu.
+            <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
+              All photos from the other listing move into this one; the other row is removed. A short note is added to
+              your specs.
             </p>
+            <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
+              <summary>SKU option &amp; partial moves</summary>
+              <div className="ct-help-details__body">
+                You can optionally take the other lot&apos;s tape SKU using the checkbox below. To move only{" "}
+                <em>some</em> photos into a new row, use <strong>Move or split selected photos</strong> above and pick{" "}
+                <strong>New listing</strong> in the menu.
+              </div>
+            </details>
             <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
               <select
                 className="ct-input"
@@ -873,7 +895,7 @@ export default function LotDetailPage() {
                 disabled={organizeBusy || reorderBusy}
               />
               <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-                Prefer the absorbed lot&apos;s tape SKU (overwrites this lot&apos;s SKU when the other has one)
+                Use the other listing&apos;s lot number as this row&apos;s SKU when it has one
               </span>
             </label>
           </div>
@@ -887,8 +909,7 @@ export default function LotDetailPage() {
           <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
             <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={400} />
             <p className="ct-lot-hero-note" style={{ margin: 0 }}>
-              No linked photos yet. Thumbnail shows the first image only when the API reports one; run a catalog job
-              to attach frames to this lot.
+              No photos on this listing yet. Run a photo job from the dashboard to attach images.
             </p>
           </div>
         ) : (
@@ -1049,10 +1070,17 @@ export default function LotDetailPage() {
             background: "rgba(255,255,255,0.03)"
           }}
         >
-          <p className="ct-muted" style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.45 }}>
-            Re-run catalog vision on the images already stored for this lot. If you checked photos above, only those
-            frames are sent (in gallery order); otherwise all photos are used. Large sets can take several minutes.
+          <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
+            Refresh title and description using AI and the photos on this listing. Checked photos above are used first;
+            if none are checked, all photos are used. Large sets may take a few minutes.
           </p>
+          <details className="ct-help-details" style={{ marginTop: "0.5rem" }}>
+            <summary>Technical note</summary>
+            <div className="ct-help-details__body">
+              Sends stored catalog images to the model in gallery order. Only checkboxes in <strong>Catalog photos</strong>{" "}
+              above affect which frames are included when any are selected.
+            </div>
+          </details>
           <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.5rem" }}>
             <input
               type="checkbox"
@@ -1061,7 +1089,7 @@ export default function LotDetailPage() {
               disabled={aiRegenerating || saving}
             />
             <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-              Preserve tape SKU (only refresh title, description, specs, etc.)
+              Keep the current lot number — only refresh wording and details
             </span>
           </label>
           <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
@@ -1085,9 +1113,9 @@ export default function LotDetailPage() {
             background: "rgba(255,255,255,0.03)"
           }}
         >
-          <p className="ct-muted" style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.45 }}>
-            Use the checkboxes in <strong>Catalog photos</strong> above (same selection as move/split). Files are
-            removed from the server; the lot row stays unless you delete the whole listing.
+          <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
+            Remove checked photos from this listing and the server for good. The listing row stays unless you delete the
+            whole lot below.
           </p>
           <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
             <button
@@ -1120,7 +1148,7 @@ export default function LotDetailPage() {
             onChange={(e) => setLot({ ...lot, sku: e.target.value.trim() || null })}
           />
           <p className="ct-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-            Save after correcting. This clears the “review SKU” highlight on the dashboard.
+            Save after you fix it — the yellow “review SKU” flag on the dashboard clears.
           </p>
         </div>
         <div>

@@ -759,3 +759,55 @@ select.ct-input option {
     opacity: 0.72;
   }
 }
+
+/* Collapsible help (dashboard, etc.) */
+.ct-help-details {
+  max-width: 45rem;
+  margin-bottom: 0.85rem;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+  padding: 0.55rem 0.9rem 0.65rem;
+}
+
+.ct-help-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--ct-text-muted);
+  list-style-position: outside;
+  user-select: none;
+}
+
+.ct-help-details summary:hover {
+  color: var(--ct-primary);
+}
+
+.ct-help-details[open] summary {
+  margin-bottom: 0.5rem;
+  color: var(--ct-primary);
+}
+
+.ct-help-details__body {
+  font-size: 0.88rem;
+  color: var(--ct-text-muted);
+  line-height: 1.55;
+  padding-top: 0.15rem;
+}
+
+.ct-help-details__body ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.15rem;
+}
+
+.ct-help-details__body li {
+  margin-bottom: 0.35rem;
+}
+
+.ct-lead {
+  margin: 0 0 0.65rem;
+  max-width: 45rem;
+  font-size: 0.95rem;
+  color: var(--ct-text);
+  line-height: 1.5;
+}

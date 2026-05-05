@@ -253,7 +253,7 @@ export default function AccountPage() {
             Account
           </h1>
           <p className="ct-subtitle" style={{ margin: 0 }}>
-            Your sign-in and workspace identifiers. Additional profile and billing fields can be added here later.
+            Who you are in the app, password, feedback, and (for owners) teammates.
           </p>
         </div>
       </header>
@@ -342,10 +342,16 @@ export default function AccountPage() {
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Suggestions and improvements
         </h2>
-        <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem" }}>
-          Ideas for the app, auction workflow, or anything else you would like us to consider. Your account email is
-          included automatically with the message.
+        <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
+          Send ideas or problems to the product team. Your email is attached automatically.
         </p>
+        <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
+          <summary>What happens when you send</summary>
+          <div className="ct-help-details__body">
+            Your message may be emailed to support when delivery is configured; otherwise it can be stored on the server
+            for staff to read (you will see a confirmation on screen).
+          </div>
+        </details>
         {suggestionSentState ? (
           <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
             {suggestionSentState === "saved_local"
@@ -391,9 +397,16 @@ export default function AccountPage() {
           <h2 className="ct-section-title" style={{ marginTop: 0 }}>
             Team cataloggers
           </h2>
-          <p className="ct-muted" style={{ marginTop: "0.4rem" }}>
-            Add authorized account users who can sign in and work this account inventory.
+          <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+            Invite people who can sign in and help catalog <strong>this</strong> account&apos;s sales.
           </p>
+          <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
+            <summary>Roles</summary>
+            <div className="ct-help-details__body">
+              <strong>Catalogger</strong> — work on lots and photos. <strong>Owner</strong> — same, plus team
+              management and account-level actions. Choose a temporary password; they can change it after signing in.
+            </div>
+          </details>
           {teamError ? <div className="ct-banner ct-banner--error">{teamError}</div> : null}
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
@@ -419,8 +432,8 @@ export default function AccountPage() {
               value={newMemberRole}
               onChange={(e) => setNewMemberRole((e.target.value as "catalogger" | "owner") || "catalogger")}
             >
-              <option value="catalogger">catalogger</option>
-              <option value="owner">owner</option>
+              <option value="catalogger">Catalogger (edit inventory)</option>
+              <option value="owner">Owner (full access)</option>
             </select>
             <button
               type="button"
@@ -481,9 +494,16 @@ export default function AccountPage() {
               {savedLoading ? "Refreshing…" : "Refresh"}
             </button>
           </div>
-          <p className="ct-muted" style={{ marginTop: "0.45rem" }}>
-            Shows fallback entries saved on the server when email delivery is unavailable.
+          <p className="ct-lead" style={{ marginTop: "0.45rem", marginBottom: "0.5rem", fontSize: "0.92rem" }}>
+            Internal copies of feedback when email is not set up yet.
           </p>
+          <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
+            <summary>Who sees this</summary>
+            <div className="ct-help-details__body">
+              Owners can refresh this list. Entries are stored on the server for staff review when outbound email is
+              unavailable.
+            </div>
+          </details>
           {savedError ? <div className="ct-banner ct-banner--error">{savedError}</div> : null}
           {savedSuggestions.length === 0 ? (
             <p className="ct-muted" style={{ marginBottom: 0 }}>
