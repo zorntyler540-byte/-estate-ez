@@ -419,6 +419,118 @@ def admin_update_account(
     )
 
 
+@app.post("/admin/accounts/{account_id}/archive", response_model=AdminAccountOut)
+def admin_archive_account(
+    account_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminAccountOut:
+    _require_master_admin(current)
+    row = db.query(Account).filter(Account.id == account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    row.is_active = False
+    db.commit()
+    db.refresh(row)
+    owner_email = (
+        db.query(User.email)
+        .filter(User.account_id == row.id, User.role == "owner")
+        .order_by(User.created_at.asc())
+        .scalar()
+    )
+    if not owner_email:
+        owner_email = (
+            db.query(User.email)
+            .filter(User.account_id == row.id)
+            .order_by(User.created_at.asc())
+            .scalar()
+        )
+    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
+    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
+    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
+    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
+    return AdminAccountOut(
+        id=row.id,
+        name=row.name,
+        owner_email=owner_email,
+        plan_code=row.plan_code,
+        is_active=bool(row.is_active),
+        created_at=row.created_at,
+        user_count=int(user_count),
+        sale_count=int(sale_count),
+        lot_count=int(lot_count),
+        job_count=int(job_count),
+    )
+
+
+@app.post("/admin/accounts/{account_id}/restore", response_model=AdminAccountOut)
+def admin_restore_account(
+    account_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminAccountOut:
+    _require_master_admin(current)
+    row = db.query(Account).filter(Account.id == account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    row.is_active = True
+    db.commit()
+    db.refresh(row)
+    owner_email = (
+        db.query(User.email)
+        .filter(User.account_id == row.id, User.role == "owner")
+        .order_by(User.created_at.asc())
+        .scalar()
+    )
+    if not owner_email:
+        owner_email = (
+            db.query(User.email)
+            .filter(User.account_id == row.id)
+            .order_by(User.created_at.asc())
+            .scalar()
+        )
+    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
+    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
+    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
+    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
+    return AdminAccountOut(
+        id=row.id,
+        name=row.name,
+        owner_email=owner_email,
+        plan_code=row.plan_code,
+        is_active=bool(row.is_active),
+        created_at=row.created_at,
+        user_count=int(user_count),
+        sale_count=int(sale_count),
+        lot_count=int(lot_count),
+        job_count=int(job_count),
+    )
+
+
+@app.delete("/admin/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+def admin_delete_account(
+    account_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_master_admin(current)
+    row = db.query(Account).filter(Account.id == account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account_id == current.account_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your currently signed-in account")
+    # Explicit delete order (no DB-level cascade configured): children first, then parent account.
+    db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == account_id).delete(synchronize_session=False)
+    db.query(ProcessingJob).filter(ProcessingJob.account_id == account_id).delete(synchronize_session=False)
+    db.query(Photo).filter(Photo.account_id == account_id).delete(synchronize_session=False)
+    db.query(Lot).filter(Lot.account_id == account_id).delete(synchronize_session=False)
+    db.query(Sale).filter(Sale.account_id == account_id).delete(synchronize_session=False)
+    db.query(User).filter(User.account_id == account_id).delete(synchronize_session=False)
+    db.query(Account).filter(Account.id == account_id).delete(synchronize_session=False)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get("/admin/analytics", response_model=AdminUsageSummaryOut)
 def admin_analytics(
     since_days: int = Query(30, ge=1, le=365),

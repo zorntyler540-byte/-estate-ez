@@ -1815,6 +1815,58 @@ export default function DashboardPage() {
     }
   }
 
+  async function toggleArchiveAdminAccount(accountId: string, nextActive: boolean) {
+    if (!token) return;
+    setAdminSavingAccountId(accountId);
+    setAdminError("");
+    try {
+      const endpoint = nextActive
+        ? `/admin/accounts/${encodeURIComponent(accountId)}/restore`
+        : `/admin/accounts/${encodeURIComponent(accountId)}/archive`;
+      const updated = (await apiFetch(endpoint, token, { method: "POST" })) as AdminAccount;
+      setAdminAccounts((prev) => prev.map((a) => (a.id === accountId ? updated : a)));
+      setAdminPlanDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.plan_code || prev[accountId] || "beta_free"
+      }));
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Could not update archive status");
+    } finally {
+      setAdminSavingAccountId("");
+    }
+  }
+
+  async function deleteAdminAccount(accountId: string, label: string) {
+    if (!token) return;
+    const typed = window.prompt(
+      `Delete account "${label}"?\n\nThis permanently removes users, sales, lots, photos, jobs, and exports.\nType DELETE to confirm.`
+    );
+    if (typed !== "DELETE") return;
+    setAdminSavingAccountId(accountId);
+    setAdminError("");
+    try {
+      await apiFetch(`/admin/accounts/${encodeURIComponent(accountId)}`, token, { method: "DELETE" });
+      setAdminAccounts((prev) => prev.filter((a) => a.id !== accountId));
+      setAdminPlanDraftById((prev) => {
+        const next = { ...prev };
+        delete next[accountId];
+        return next;
+      });
+      setAdminUsage((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          total_accounts: Math.max(0, prev.total_accounts - 1),
+          by_account: prev.by_account.filter((u) => u.account_id !== accountId)
+        };
+      });
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Could not delete account");
+    } finally {
+      setAdminSavingAccountId("");
+    }
+  }
+
   async function purgeAll() {
     if (
       !window.confirm(
@@ -2184,10 +2236,10 @@ export default function DashboardPage() {
                             <button
                               type="button"
                               className="ct-btn"
-                              onClick={() => void patchAdminAccount(a.id, { is_active: !a.is_active })}
+                              onClick={() => void toggleArchiveAdminAccount(a.id, !a.is_active)}
                               disabled={busy}
                             >
-                              {busy ? "Saving…" : a.is_active ? "Deactivate" : "Activate"}
+                              {busy ? "Saving…" : a.is_active ? "Archive" : "Restore"}
                             </button>
                             <button
                               type="button"
@@ -2196,6 +2248,15 @@ export default function DashboardPage() {
                               disabled={busy || draft.trim().length < 2}
                             >
                               Save plan
+                            </button>
+                            <button
+                              type="button"
+                              className="ct-btn"
+                              onClick={() => void deleteAdminAccount(a.id, a.name || a.id)}
+                              disabled={busy}
+                              title="Permanently delete this account and all related data"
+                            >
+                              Delete account
                             </button>
                           </div>
                         </td>
