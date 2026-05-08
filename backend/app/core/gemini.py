@@ -55,7 +55,13 @@ class InventoryTableEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     manifest_id: str = ""
-    item_name: str = ""
+    item_name: str = Field(
+        default="",
+        description=(
+            "Single-line auction title: include era/style, the confirmed maker name as a search keyword when known, "
+            "material or form, and subject. Example: 'Art Deco Ditmar-Urbach Ceramic Bird Flower Frog'."
+        ),
+    )
     brand: str = Field(
         default="",
         description=(
@@ -117,6 +123,10 @@ SYSTEM_INSTRUCTION = (
     "### THE SINGLE-BRAND RULE:\n"
     "- Identify exactly ONE primary brand. No brand-soup or competing guesses.\n"
     "- If 'Czechoslovakia' is present, the brand is **Ditmar-Urbach**. Omit 'Royal Bonn'.\n\n"
+    "### AUCTION TITLE (item_name):\n"
+    "- When the maker is confirmed, put the brand in the title as a keyword shoppers can search — same spelling as brand.\n"
+    "- Typical shape: era or style + maker + material/type + subject (compact; no lot SKU).\n"
+    "- Example: 'Art Deco Ditmar-Urbach Ceramic Bird Flower Frog'.\n\n"
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
     "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
@@ -143,7 +153,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         + "Analyze this catalog photo for an estate inventory row.\n"
         + "Identify specific finishes: **Lusterware**, **Faux Bois (Wood Grain)**, or **Geometric Art Deco**.\n"
         + "RULES:\n"
-        "- item_name: Short auction title.\n"
+        "- item_name: One-line auction title — include the confirmed maker name as a search keyword when known "
+        "(match brand spelling). Pattern: style/era + maker + material or form + subject. "
+        "Example: Art Deco Ditmar-Urbach Ceramic Bird Flower Frog.\n"
         "- brand: Primary visible maker ONLY. If 'Czechoslovakia' is present, default to **Ditmar-Urbach** for circular stamps and omit 'Royal Bonn'.\n"
         "- professional_description: Flowing prose; **bold** confirmed makers at first mention. Omit guesses.\n"
         "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
