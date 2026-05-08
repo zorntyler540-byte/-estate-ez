@@ -132,6 +132,7 @@ SYSTEM_INSTRUCTION = (
     "Identify brand, model, material, condition flaws, and era from the image. Use a tone that is helpful, clear, and professional. "
     "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of purple/lavender tape — prioritize image 2 for SKU. "
     "SKU must be HANDWRITTEN on purple/lavender tape only. Never use sewn tags, size tags, or stamped numbers on the item body as SKU. "
+    "Condition must use exactly one of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
     "Output must match JSON schema only."
 )
 
@@ -146,9 +147,46 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- item_name: Short auction title.\n"
         "- brand: Primary visible maker ONLY. If 'Czechoslovakia' is present, default to **Ditmar-Urbach** for circular stamps and omit 'Royal Bonn'.\n"
         "- professional_description: Flowing prose; **bold** confirmed makers at first mention. Omit guesses.\n"
+        "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
+        "  * NEW: no signs of wear; may include tags/packaging.\n"
+        "  * LIKE NEW: clearly unused, but tags may be missing.\n"
+        "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
+        "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
+        "  * FAIR: heavy wear and visible scratches/damage.\n"
         "- specification_lines: Use 'Label: value' format. Use at most one 'Markings:' line for all stamps and molded numbers.\n"
         "- sku: Handwritten digits on purple/lavender tape ONLY. null if not on tape.\n"
     )
+
+
+def _normalize_condition_label(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return "GOOD"
+    norm = re.sub(r"\s+", " ", text).strip().lower()
+
+    if norm == "new":
+        return "NEW"
+    if norm in {"like new", "likenew"}:
+        return "LIKE NEW"
+    if norm in {"very good", "verygood"}:
+        return "VERY GOOD"
+    if norm == "good":
+        return "GOOD"
+    if norm == "fair":
+        return "FAIR"
+
+    if "new with tag" in norm or "new w/" in norm:
+        return "NEW"
+    if "like new" in norm or "unused" in norm:
+        return "LIKE NEW"
+    if "very good" in norm or "minor" in norm or "light scuff" in norm or "light scratch" in norm:
+        return "VERY GOOD"
+    if "fair" in norm or "heavy wear" in norm or "heavy scratch" in norm:
+        return "FAIR"
+    if "good" in norm or "moderate" in norm:
+        return "GOOD"
+
+    return "GOOD"
 
 
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
@@ -168,7 +206,7 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         "SpecificationLines": specs,
         "Brands": [row.brand.strip()] if row.brand.strip() else [],
         "LabelsAndTags": row.labels_and_tags,
-        "Condition": row.condition_notes.strip(),
+        "Condition": _normalize_condition_label(row.condition_notes),
         "StartingPrice": row.starting_price_usd,
         "SkuConfidence": row.sku_read_confidence,
         "lot_boundary_blank_page": row.lot_boundary_blank_page,
