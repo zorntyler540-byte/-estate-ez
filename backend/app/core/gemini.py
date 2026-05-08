@@ -277,12 +277,37 @@ def analyze_path_with_retries(photo_path: Path, *, manifest_tag: str = "") -> di
     return analyze_photo_from_bytes(img_bytes, mime, manifest_tag=manifest_tag, focus_jpeg=focus_jpeg)
 
 
-async def analyze_photos_parallel_async(photo_paths: list[Path], **kwargs) -> list[dict[str, Any] | None]:
-    sem = asyncio.Semaphore(settings.gemini_parallelism)
-    async def _one(path: Path):
-        async with sem:
-            return await asyncio.to_thread(analyze_path_with_retries, path, **kwargs)
-    return await asyncio.gather(*[_one(p) for p in photo_paths])
+async def analyze_photos_parallel_async(
+    photo_paths: list[Path],
+    *,
+    manifest_tag: str = "",
+    limit: int | None = None,
+    on_each: Callable[[int, int, Path, dict[str, Any] | None], None] | None = None,
+) -> list[dict[str, Any] | None]:
+    sem = asyncio.Semaphore(max(1, settings.gemini_parallelism if limit is None else limit))
+    total = len(photo_paths)
+
+    async def _one(idx: int, path: Path) -> tuple[int, dict[str, Any] | None]:
+        result: dict[str, Any] | None = None
+        try:
+            async with sem:
+                result = await asyncio.to_thread(
+                    analyze_path_with_retries,
+                    path,
+                    manifest_tag=manifest_tag,
+                )
+        except Exception:
+            result = None
+        if on_each is not None:
+            try:
+                on_each(idx, total, path, result)
+            except Exception:
+                pass
+        return idx, result
+
+    pairs = await asyncio.gather(*[_one(i, p) for i, p in enumerate(photo_paths)])
+    pairs.sort(key=lambda x: x[0])
+    return [p[1] for p in pairs]
 
 
 def analyze_photo(photo_path: Path, **kwargs) -> dict[str, Any] | None:
