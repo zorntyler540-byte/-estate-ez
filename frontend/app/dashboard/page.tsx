@@ -3034,8 +3034,6 @@ export default function DashboardPage() {
             display: "flex",
             flexDirection: "column",
             padding: "8px 8px 0",
-            // Tab bar clears ``safe-area``; keep a modest band so Snap/Done stay tappable without leaving a large dead band.
-            paddingBottom: "max(8px, calc(env(safe-area-inset-bottom, 0px) + 44px))",
             boxSizing: "border-box",
             overflow: "hidden",
             height: "100dvh",
@@ -3057,7 +3055,10 @@ export default function DashboardPage() {
               overscrollBehavior: "contain"
             }}
           >
-            <div className="ct-card ct-card--padded" style={{ width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+            <div
+              className="ct-card ct-card--padded"
+              style={{ width: "100%", margin: "0 auto", boxSizing: "border-box", paddingBottom: "1rem" }}
+            >
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload. Pinch or use +/− to zoom the live view; the saved photo matches what you see. Tap a thumbnail to
@@ -3268,7 +3269,28 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : null}
-            <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.75rem", flexWrap: "wrap" }}>
+            </div>
+          </div>
+          <div
+            style={{
+              flexShrink: 0,
+              width: "100%",
+              maxWidth: 520,
+              margin: "0 auto",
+              paddingTop: "10px",
+              paddingLeft: 8,
+              paddingRight: 8,
+              paddingBottom: "max(12px, calc(env(safe-area-inset-bottom, 0px) + 8px))",
+              boxSizing: "border-box",
+              background: "rgba(12, 12, 14, 0.96)",
+              borderTop: "1px solid rgba(255,255,255,0.12)",
+              backdropFilter: "blur(8px)"
+            }}
+          >
+            <div
+              className="ct-row ct-row--gap-lg"
+              style={{ flexWrap: "wrap", justifyContent: "center", gap: "0.5rem", alignItems: "center" }}
+            >
               <button
                 type="button"
                 className="ct-btn ct-btn--primary"
@@ -3283,7 +3305,6 @@ export default function DashboardPage() {
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => cancelLotCameraSession()}>
                 Cancel
               </button>
-            </div>
             </div>
           </div>
 
