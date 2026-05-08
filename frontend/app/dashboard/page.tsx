@@ -44,6 +44,9 @@ function rememberDashboardScrollBeforeLotDetails() {
 /** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
 const UPLOAD_FILE_CHUNK = 200;
 
+/** CTBids listing cap — one-lot uploads cannot exceed this many catalog photos. */
+const CTBIDS_MAX_PHOTOS_PER_LOT = 40;
+
 /** Digital zoom for one-lot camera preview + JPEG crop; 1 = no zoom. */
 const LOT_CAMERA_ZOOM_MIN = 1;
 const LOT_CAMERA_ZOOM_MAX = 4;
@@ -57,6 +60,51 @@ function lotCameraPinchDistance(e: TouchEvent): number {
   const dx = a.clientX - b.clientX;
   const dy = a.clientY - b.clientY;
   return Math.hypot(dx, dy);
+}
+
+/** Reused for a short shutter-style beep after each create-one-lot snap. */
+let lotCameraShutterAudioCtx: AudioContext | null = null;
+
+function playLotCameraShutterSound() {
+  try {
+    const w = window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+    const AC = window.AudioContext ?? w.webkitAudioContext;
+    if (!AC) return;
+    if (!lotCameraShutterAudioCtx || lotCameraShutterAudioCtx.state === "closed") {
+      lotCameraShutterAudioCtx = new AC();
+    }
+    const ctx = lotCameraShutterAudioCtx;
+    const run = () => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const t = ctx.currentTime;
+      osc.frequency.setValueAtTime(920, t);
+      osc.frequency.exponentialRampToValueAtTime(240, t + 0.055);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.065, t + 0.002);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.075);
+      osc.start(t);
+      osc.stop(t + 0.08);
+    };
+    void (ctx.state === "suspended" ? ctx.resume() : Promise.resolve()).then(run);
+  } catch {
+    /* autoplay policy, private mode, or no Web Audio */
+  }
+}
+
+/** Light haptic (Android / some devices) plus shutter sound after a successful snap. */
+function triggerLotCameraSnapFeedback() {
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+      navigator.vibrate(12);
+    }
+  } catch {
+    /* ignore */
+  }
+  playLotCameraShutterSound();
 }
 
 function loadImageFromFile(file: File): Promise<HTMLImageElement> {
@@ -364,36 +412,54 @@ type FolderPickPreview = {
   singleLotMode?: boolean;
 };
 
-/** Merge or replace staged files for one-lot uploads (picker + inline camera). */
+type SingleLotStagingApply = { pick: FolderPickPreview; droppedFromCap: number };
+
+function capIncomingSingleLotFiles(existingCount: number, incoming: File[]): { files: File[]; dropped: number } {
+  const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - existingCount);
+  if (incoming.length <= room) return { files: incoming, dropped: 0 };
+  return { files: incoming.slice(0, room), dropped: incoming.length - room };
+}
+
+/** Merge or replace staged files for one-lot uploads (picker + inline camera). Caps at ``CTBIDS_MAX_PHOTOS_PER_LOT``. */
 function applySingleLotFilesToStaging(
   prev: FolderPickPreview | null,
   incoming: File[],
   extraSkipped: number
-): FolderPickPreview {
+): SingleLotStagingApply {
   const appendSingleLot = Boolean(prev?.singleLotMode);
   if (appendSingleLot) {
-    const merged = [...prev!.imageFiles, ...incoming];
-    const mergedSkipped = prev!.skippedCount + extraSkipped;
+    const { files: cappedIncoming, dropped } = capIncomingSingleLotFiles(prev!.imageFiles.length, incoming);
+    const merged = [...prev!.imageFiles, ...cappedIncoming];
+    const mergedSkipped = prev!.skippedCount + extraSkipped + dropped;
     if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
     const thumbUrls = merged.map((f) => URL.createObjectURL(f));
     return {
-      folderLabel:
-        merged.length === 1 ? folderLabelFromFile(merged[0]!) : `One lot (${merged.length} photos)`,
-      imageFiles: merged,
-      thumbUrls,
-      skippedCount: mergedSkipped,
-      singleLotMode: true
+      pick: {
+        folderLabel:
+          merged.length === 1 ? folderLabelFromFile(merged[0]!) : `One lot (${merged.length} photos)`,
+        imageFiles: merged,
+        thumbUrls,
+        skippedCount: mergedSkipped,
+        singleLotMode: true
+      },
+      droppedFromCap: dropped
     };
   }
+  const { files: cappedIncoming, dropped } = capIncomingSingleLotFiles(0, incoming);
   if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-  const thumbUrls = incoming.map((f) => URL.createObjectURL(f));
+  const thumbUrls = cappedIncoming.map((f) => URL.createObjectURL(f));
   return {
-    folderLabel:
-      incoming.length === 1 ? folderLabelFromFile(incoming[0]!) : `One lot (${incoming.length} photos)`,
-    imageFiles: incoming,
-    thumbUrls,
-    skippedCount: extraSkipped,
-    singleLotMode: true
+    pick: {
+      folderLabel:
+        cappedIncoming.length === 1
+          ? folderLabelFromFile(cappedIncoming[0]!)
+          : `One lot (${cappedIncoming.length} photos)`,
+      imageFiles: cappedIncoming,
+      thumbUrls,
+      skippedCount: extraSkipped + dropped,
+      singleLotMode: true
+    },
+    droppedFromCap: dropped
   };
 }
 
@@ -1339,16 +1405,39 @@ export default function DashboardPage() {
     stopLotCameraTracks();
   }
 
+  /** Cancel away from Snap/Done; confirm only when snaps would be lost (not uploaded until Done). */
+  function tryCancelLotCameraSession() {
+    const n = lotCameraSnapsRef.current.length;
+    if (n > 0) {
+      const msg =
+        n === 1
+          ? "Discard 1 captured photo and close the camera? Photos are not uploaded until you tap Done."
+          : `Discard ${n} captured photos and close the camera? They are not uploaded until you tap Done.`;
+      if (!window.confirm(msg)) return;
+    }
+    cancelLotCameraSession();
+  }
+
   function finishLotCameraSession() {
     const files = [...lotCameraSnapsRef.current];
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
     stopLotCameraTracks();
     if (!files.length) return;
-    setFolderPick((prev) => applySingleLotFilesToStaging(prev, files, 0));
+    const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
+    setFolderPick(pick);
+    if (droppedFromCap > 0) {
+      setError(
+        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
+      );
+    }
   }
 
   function snapLotPhoto() {
+    if (lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
+      return;
+    }
     const v = lotCameraVideoRef.current;
     if (!v || v.readyState < 2 || v.videoWidth < 2) return;
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
@@ -1371,9 +1460,11 @@ export default function DashboardPage() {
     canvas.toBlob(
       (blob) => {
         if (!blob) return;
+        if (lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT) return;
         const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
         lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
         setLotCameraSnaps([...lotCameraSnapsRef.current]);
+        triggerLotCameraSnapFeedback();
       },
       "image/jpeg",
       0.88
@@ -1528,7 +1619,17 @@ export default function DashboardPage() {
       imageFiles.length === 1;
 
     if (singleLotMode) {
-      setFolderPick((prev) => applySingleLotFilesToStaging(prev, imageFiles, skippedCount));
+      const { pick, droppedFromCap } = applySingleLotFilesToStaging(
+        folderPickRef.current,
+        imageFiles,
+        skippedCount
+      );
+      setFolderPick(pick);
+      if (droppedFromCap > 0) {
+        setError(
+          `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
+        );
+      }
     } else {
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
@@ -1598,6 +1699,12 @@ export default function DashboardPage() {
     setStagingEditSaturation(100);
     const files = folderPick.imageFiles;
     const total = files.length;
+    if (folderPick.singleLotMode && total > CTBIDS_MAX_PHOTOS_PER_LOT) {
+      setError(
+        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove ${total - CTBIDS_MAX_PHOTOS_PER_LOT} photo(s) before uploading.`
+      );
+      return;
+    }
     setUploading(true);
     try {
       const buildFormForSlice = (slice: File[]) => {
@@ -2485,7 +2592,8 @@ export default function DashboardPage() {
               <div style={{ marginBottom: "0.65rem" }}>
                 <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
                   <strong>One lot only:</strong> all photos below become <strong>one</strong> listing (one row in the
-                  table).
+                  table). CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
+                  files are skipped.
                 </p>
                 <label className="ct-muted" style={{ display: "block", fontSize: "0.85rem" }}>
                   SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -2504,7 +2612,11 @@ export default function DashboardPage() {
             <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem" }}>
               <strong>
                 {folderPick.imageFiles.length
-                  ? `${folderPick.imageFiles.length} image${folderPick.imageFiles.length === 1 ? "" : "s"} in “${folderPick.folderLabel}”`
+                  ? folderPick.singleLotMode
+                    ? `${folderPick.imageFiles.length} / ${CTBIDS_MAX_PHOTOS_PER_LOT} image${
+                        folderPick.imageFiles.length === 1 ? "" : "s"
+                      } in “${folderPick.folderLabel}”`
+                    : `${folderPick.imageFiles.length} image${folderPick.imageFiles.length === 1 ? "" : "s"} in “${folderPick.folderLabel}”`
                   : `No catalog images found in “${folderPick.folderLabel}”`}
               </strong>
               {folderPick.skippedCount > 0 ? (
@@ -2637,7 +2749,22 @@ export default function DashboardPage() {
                     ? `Upload ${folderPick.imageFiles.length} photo(s) as one lot`
                     : `Upload ${folderPick.imageFiles.length} photo(s) to server`}
               </button>
-              <button type="button" className="ct-btn" onClick={clearFolderPick} disabled={uploading}>
+              <button
+                type="button"
+                className="ct-btn"
+                disabled={uploading}
+                onClick={() => {
+                  const n = folderPick.imageFiles.length;
+                  const msg =
+                    n === 0
+                      ? "Close this selection? Nothing has been uploaded yet."
+                      : n === 1
+                        ? "Remove the 1 staged photo from this upload box? Nothing has been uploaded yet."
+                        : `Remove all ${n} staged photos from this upload box? Nothing has been uploaded yet.`;
+                  if (!window.confirm(msg)) return;
+                  clearFolderPick();
+                }}
+              >
                 Clear selection
               </button>
             </div>
@@ -3171,7 +3298,16 @@ export default function DashboardPage() {
               </>
             )}
             <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
-              <strong>{lotCameraSnaps.length}</strong> photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
+              <strong>
+                {lotCameraSnaps.length} / {CTBIDS_MAX_PHOTOS_PER_LOT}
+              </strong>{" "}
+              photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
+              {lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT ? (
+                <span className="ct-muted" style={{ display: "block", marginTop: 4, fontSize: "0.82rem" }}>
+                  CTBids limit reached — tap <strong>Done</strong> to add these to the upload box, or remove shots with
+                  the trash icon.
+                </span>
+              ) : null}
             </p>
             {lotCameraSnapThumbUrls.length > 0 ? (
               <div style={{ marginTop: "0.65rem", width: "100%" }}>
@@ -3311,22 +3447,34 @@ export default function DashboardPage() {
           >
             <div
               className="ct-row ct-row--gap-lg"
-              style={{ flexWrap: "wrap", justifyContent: "center", gap: "0.5rem", alignItems: "center" }}
+              style={{
+                flexWrap: "wrap",
+                justifyContent: "space-between",
+                gap: "0.5rem",
+                alignItems: "center",
+                width: "100%"
+              }}
             >
-              <button
-                type="button"
-                className="ct-btn ct-btn--primary"
-                onClick={() => snapLotPhoto()}
-                disabled={!lotCameraStream || !lotCameraPreviewReady}
-              >
-                Snap photo
-              </button>
-              <button type="button" className="ct-btn" onClick={() => finishLotCameraSession()}>
-                Done
-              </button>
-              <button type="button" className="ct-btn ct-btn--ghost" onClick={() => cancelLotCameraSession()}>
+              <button type="button" className="ct-btn ct-btn--ghost" onClick={() => tryCancelLotCameraSession()}>
                 Cancel
               </button>
+              <div className="ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  onClick={() => snapLotPhoto()}
+                  disabled={
+                    !lotCameraStream ||
+                    !lotCameraPreviewReady ||
+                    lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                  }
+                >
+                  Snap photo
+                </button>
+                <button type="button" className="ct-btn" onClick={() => finishLotCameraSession()}>
+                  Done
+                </button>
+              </div>
             </div>
           </div>
 

@@ -94,6 +94,7 @@ from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
+from app.catalog_limits import CTBIDS_MAX_PHOTOS_PER_LOT, count_catalog_image_files
 
 app = FastAPI(title=settings.app_name)
 
@@ -1500,6 +1501,14 @@ async def create_job_from_upload(
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     sale = _sale_for_user(sale_id, current, db)
     _require_open_sale(sale)
+    if bool(single_lot_mode) and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                f"this upload has {len(files)} files."
+            ),
+        )
     dest = new_batch_dir(current.account_id)
     await save_uploaded_files(dest, files)
     _manual_sku = (single_lot_manual_sku or "").strip() or None
@@ -1555,6 +1564,16 @@ async def append_files_to_queued_job(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
     dest = _queued_job_upload_folder(current.account_id, job)
+    if bool(getattr(job, "single_lot_mode", False)):
+        existing = count_catalog_image_files(dest)
+        if existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. "
+                    f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
+                ),
+            )
     await save_uploaded_files(dest, files)
     return _job_out(job)
 
