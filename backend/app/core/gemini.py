@@ -251,6 +251,29 @@ def _normalize_condition_label(raw: str) -> str:
     return "GOOD"
 
 
+def _infer_metal_material(*, material: str, specs: list[str], description: str) -> str | None:
+    blob = " ".join([material, description, *specs]).lower()
+    has_pewter = any(k in blob for k in ("pewter", "zinn", "etain"))
+    has_plate = any(k in blob for k in ("silver plate", "silverplate", "epns"))
+    has_sterling = any(k in blob for k in (" sterling", "sterling ", " 925", "925 "))
+
+    # Hallmark-first preference: explicit pewter/zinn/etain should override loose silver-plate wording.
+    if has_pewter:
+        return "Pewter"
+    if has_sterling:
+        return "Sterling Silver"
+    if has_plate:
+        return "Silver Plate"
+    return None
+
+
+def _upsert_material_spec(specs: list[str], material_value: str | None) -> list[str]:
+    out = [s for s in specs if not re.match(r"^\s*material\s*:", s.strip(), re.I)]
+    if material_value:
+        out.append(f"Material: {material_value}")
+    return out
+
+
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
     sku_clean = tape_marking_canonical(row.sku)
     title = row.item_name.strip() or (f"Estate lot #{sku_clean}" if sku_clean else "Estate catalog item")
@@ -259,8 +282,13 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         for s in row.specification_lines
         if s.strip() and not re.match(r"^\s*markings?\s*:", s.strip(), re.I)
     ]
-    if row.material.strip() and not any(s.lower().startswith("material:") for s in specs):
-        specs.append(f"Material: {row.material.strip()}")
+    metal_material = _infer_metal_material(
+        material=row.material.strip(),
+        specs=specs,
+        description=row.professional_description.strip(),
+    )
+    material_value = metal_material or row.material.strip() or None
+    specs = _upsert_material_spec(specs, material_value)
     if row.era.strip() and not any(s.lower().startswith("era:") for s in specs):
         specs.append(f"Era: {row.era.strip()}")
     
