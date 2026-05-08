@@ -95,6 +95,11 @@ class InventoryTableEntry(BaseModel):
     specification_lines: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("specification_lines", "SpecificationLines"),
+        description=(
+            "Bullet facts as 'Label: value'. Include dimension lines when a yellow measuring tape, ruler, or scale "
+            "in the photo clearly shows a span (use approximate inches with ~, note orientation e.g. width vs height). "
+            "Do not invent numbers without a visible scale."
+        ),
     )
     labels_and_tags: list[str] = Field(
         default_factory=list,
@@ -130,6 +135,14 @@ SYSTEM_INSTRUCTION = (
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
     "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
+    "### DIMENSIONS FROM PHOTOS (specification_lines):\n"
+    "- If a **yellow measuring tape**, metal ruler, or yardstick appears and the readout is legible, add one line per "
+    "clear measurement to **specification_lines** (not the purple estate lot tape — that is SKU only).\n"
+    "- Use 'Label: value' with units (prefer inches: ~10 in., ~4.5 in.). Prefix with ~ for estimates from the photo.\n"
+    "- Name what was measured: e.g. 'Overall width (set): ~10 in. (tape along front)', "
+    "'Height (tallest figurine): ~4.5 in. (tape vertical)', 'Height (center piece): ~3.5 in.'\n"
+    "- For multi-piece lots, separate lines for overall span vs individual heights when the tape shows them.\n"
+    "- If no scale is visible or numbers are unreadable, omit dimension lines — do not guess.\n\n"
     "### CERAMICS & POTTERY ACCURACY RULES (STRICT):\n"
     "- STRIKE RULE: If the item is marked 'Czechoslovakia', you are FORBIDDEN from using the brand 'Royal Bonn' or origin 'Germany'. These are mutually exclusive.\n"
     "- If 'CM-R' or 'CMHR' is present: This is C.M. HUTSCHENREUTHER ownership. NEVER identify as 'Carl-Moritz Reichenbach'.\n"
@@ -164,7 +177,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
-        "- specification_lines: 'Label: value' only — Material, Style, Finish, Era, Subject, etc. "
+        "- specification_lines: 'Label: value' — Material, Style, Finish, Era, Subject, **and dimensions from a visible "
+        "yellow tape or ruler** (e.g. Overall width (set): ~10 in.; Height (tallest): ~4.5 in.). "
+        "Never use purple/lavender **estate** tape numbers as dimensions. "
         "Never include a Markings line or stamp/mold-number transcription.\n"
         "- sku: Handwritten digits on purple/lavender tape ONLY. null if not on tape.\n"
     )
