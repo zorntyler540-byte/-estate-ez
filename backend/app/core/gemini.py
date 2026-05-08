@@ -58,8 +58,9 @@ class InventoryTableEntry(BaseModel):
     item_name: str = Field(
         default="",
         description=(
-            "Single-line auction title: include era/style, the confirmed maker name as a search keyword when known, "
-            "material or form, and subject. Example: 'Art Deco Ditmar-Urbach Ceramic Bird Flower Frog'."
+            "Single-line auction title: era/style + confirmed maker (when known) + material/form + **only subjects "
+            "clearly visible in the photos** — never add animals or object types you do not see (e.g. do not say "
+            "'frog' on a bird figurine). Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine'."
         ),
     )
     brand: str = Field(
@@ -89,7 +90,8 @@ class InventoryTableEntry(BaseModel):
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
         description=(
             "2–6 sentences of flowing prose. Name each confirmed maker in the text with **bold** at first mention. "
-            "Omit unknown makers entirely."
+            "Omit unknown makers entirely. Describe only visible subjects and forms — do not invent animals or "
+            "mislabel birds as flower frogs."
         ),
     )
     specification_lines: list[str] = Field(
@@ -128,10 +130,17 @@ SYSTEM_INSTRUCTION = (
     "### THE SINGLE-BRAND RULE:\n"
     "- Identify exactly ONE primary brand. No brand-soup or competing guesses.\n"
     "- If 'Czechoslovakia' is present, the brand is **Ditmar-Urbach**. Omit 'Royal Bonn'.\n\n"
+    "### VISIBLE SUBJECT ONLY (CRITICAL — NO HALLUCINATED KEYWORDS):\n"
+    "- In **item_name** and **professional_description**, describe only what is **clearly visible** in the image(s). "
+    "Do not add extra animals, figures, or object-type words to sound like a catalog category.\n"
+    "- **Flower frog** is a specific ceramic form (flower-arranging frog / pin holder). Use that term **only** if the "
+    "piece is visibly that type. A **bird** on a branch with a small cup or well is **not** a frog — say bird figurine, "
+    "spill vase, or posy-style form as fits; **never** append 'frog'.\n"
+    "- If the exact ceramic term is uncertain, use neutral wording (e.g. 'ceramic bird figurine') rather than guessing.\n\n"
     "### AUCTION TITLE (item_name):\n"
     "- When the maker is confirmed, put the brand in the title as a keyword shoppers can search — same spelling as brand.\n"
-    "- Typical shape: era or style + maker + material/type + subject (compact; no lot SKU).\n"
-    "- Example: 'Art Deco Ditmar-Urbach Ceramic Bird Flower Frog'.\n\n"
+    "- Typical shape: era or style + maker + material/type + **visible** subject or form only (compact; no lot SKU).\n"
+    "- Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine' (not '... Bird Flower Frog' unless a real flower frog is visible).\n\n"
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
     "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
@@ -166,9 +175,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         + "Analyze this catalog photo for an estate inventory row.\n"
         + "Identify specific finishes: **Lusterware**, **Faux Bois (Wood Grain)**, or **Geometric Art Deco**.\n"
         + "RULES:\n"
-        "- item_name: One-line auction title — include the confirmed maker name as a search keyword when known "
-        "(match brand spelling). Pattern: style/era + maker + material or form + subject. "
-        "Example: Art Deco Ditmar-Urbach Ceramic Bird Flower Frog.\n"
+        "- item_name: One-line auction title — confirmed maker as keyword when known; **only name subjects/forms you see** "
+        "(no extra animals: e.g. bird only → do not add frog). Pattern: style/era + maker + material/form + visible subject. "
+        "Example: Art Deco Ditmar-Urbach Lusterware Bird Figurine.\n"
         "- brand: Primary visible maker ONLY. If 'Czechoslovakia' is present, default to **Ditmar-Urbach** for circular stamps and omit 'Royal Bonn'.\n"
         "- professional_description: Flowing prose; **bold** confirmed makers at first mention. Omit guesses.\n"
         "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
