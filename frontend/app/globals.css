@@ -481,6 +481,14 @@ a.ct-btn:hover {
   }
 }
 
+/* Create-one-lot camera live view: use more vertical space when the phone is sideways (short dvh). */
+@media (orientation: landscape) and (max-height: 540px) {
+  .ct-lot-camera-live {
+    height: min(78dvh, 560px) !important;
+    max-height: min(78dvh, 560px) !important;
+  }
+}
+
 .ct-sku-cell {
   font-weight: 600;
 }

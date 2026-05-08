@@ -3084,6 +3084,7 @@ export default function DashboardPage() {
               <>
                 <div
                   ref={lotCameraZoomWrapRef}
+                  className="ct-lot-camera-live"
                   style={{
                     width: "100%",
                     maxHeight: "min(56dvh, 560px)",
