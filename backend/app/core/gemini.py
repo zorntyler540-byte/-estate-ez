@@ -144,7 +144,15 @@ SYSTEM_INSTRUCTION = (
     "You are an AI assistant for Caring Transitions of Enterprise-Las Vegas, owned by Julie Zorn. "
     "Your goal is to analyze photos and generate professional manifest descriptions for our online auction platform. "
     "Use a tone that is helpful, clear, and follows our franchise standards. "
-    "Focus on item accuracy to ensure our clients get the best value for their estate transitions. "
+    "Focus on item accuracy to ensure our clients get the best value for their estate transitions.\n\n"
+    "### CERAMICS & POTTERY ACCURACY RULES:\n"
+    "- If 'CM-R' or 'CMHR' is present: This is C.M. HUTSCHENREUTHER ownership. NEVER identify as 'Carl-Moritz Reichenbach'.\n"
+    "- 'Star' mark = Haas & Czjzek (Schlaggenwald).\n"
+    "- 'Shield' mark = Utilitarian mark for Schlaggenwald.\n"
+    "- 'EPIAG' = First Porcelain Industry Corp (High-end Czech association).\n"
+    "- 'Red circular stamps' = Typically Ditmar-Urbach (often associated with Art Deco Seahorse or Hen motifs).\n"
+    "- 'MZ Altrohlau' = Moritz Zdekauer factory.\n"
+    "- If 'Czecho-Slov' (with hyphen) is seen: Date the item specifically to the early 1920s.\n\n"
     "As a professional estate liquidation specialist, "
     "identify brand, model, material, condition flaws, and era from the image — including partial views, "
     "rear stickers, power bricks, and cable shots when they belong to the same catalog item. "
@@ -177,6 +185,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
     return (
         tag_line
         + "Analyze this single catalog photo for an estate sale inventory row.\n"
+        + "Identify specific finishes such as **Lusterware**, **Faux Bois (Wood Grain)**, or **Geometric Art Deco**.\n"
         "Every frame is part of the catalog: rear labels, underside, power adapters, cables, close-ups of "
         "ports/buttons, and partial product shots still describe the SAME item in this lot — infer from text "
         "logos (HDMI, DVD, Blu-ray, brand names) and visible model numbers. Never return empty JSON; fill "
@@ -184,7 +193,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "Rules:\n"
         "- manifest_id: use the manifest tag above if provided, else empty.\n"
         "- item_name: short auction-style title for the item.\n"
-        "- brand: primary visible brand as plain text (single string).\n"
+        "- brand: primary visible brand as plain text (single string). Use verified makers like **Hutschenreuther**, **Schlaggenwald**, or **Ditmar-Urbach**.\n"
         "- material, condition_notes, era: concise factual strings.\n"
         "- sku: NON-NULL ONLY for HANDWRITTEN lot codes on PURPLE or LAVENDER estate tape (not the product body). "
         "Codes may be digits-only (015) or letters plus digits on one line (SR006, SA004, SA 003). Ignore a small "
@@ -502,9 +511,6 @@ def analyze_photo_from_bytes(
 def analyze_path_with_retries(photo_path: Path, *, manifest_tag: str = "") -> dict[str, Any] | None:
     """
     Try Gemini with progressively sharper JPEGs (detail / label shots often need higher quality).
-
-    Pillow resize/encode runs before each API call so outbound payloads stay small on the first tier.
-    When enabled, a purple-tape focus crop is built once from the file and sent as a second image.
     """
     from app.services.tape_focus import purple_tape_focus_jpeg_from_path
 
@@ -548,11 +554,7 @@ async def analyze_photos_parallel_async(
     on_each: Callable[[int, int, Path, dict[str, Any] | None], None] | None = None,
 ) -> list[dict[str, Any] | None]:
     """
-    Run Gemini on many images concurrently with ``asyncio.gather`` and a bounded semaphore.
-
-    Results are returned in ``photo_paths`` order. ``on_each`` is invoked as soon as each
-    photo finishes (completion order), before sibling tasks complete, so SSE can stream
-    per-photo progress without waiting for the full batch.
+    Run Gemini on many images concurrently with ``asyncio.gather``.
     """
     n = len(photo_paths)
     cap = max(1, settings.gemini_parallelism if limit is None else limit)
@@ -581,10 +583,7 @@ async def analyze_photos_parallel_async(
 
 def analyze_photo(photo_path: Path, *, manifest_tag: str = "") -> dict[str, Any] | None:
     """
-    Analyze one image for the inventory pipeline (multi-tier resolution for hard frames).
-
-    Primary path: ``google-genai`` with ``response_schema=InventoryTableEntry`` and ``response.parsed``.
-    Fallback: REST ``generateContent`` (no client-side schema enforcement).
+    Analyze one image for the inventory pipeline.
     """
     return analyze_path_with_retries(photo_path, manifest_tag=manifest_tag)
 
@@ -603,10 +602,7 @@ def _tape_verify_prompt(claimed_digits: str) -> str:
 
 def _generate_content_tape_verify(payload: dict[str, Any]) -> str | None:
     """
-    Same endpoint as ``_generate_content`` but uses explicit (connect, read) timeouts so a hung TLS/socket
-    cannot block the inventory worker indefinitely (the old SDK path had no reliable per-call timeout).
-
-    Single POST (no 429 sleep loop): catalog merge must never wait minutes inside one verify call.
+    Content generation with timeouts for tape verification.
     """
     headers = {"Content-Type": "application/json", "x-goog-api-key": settings.google_api_key}
     connect = float(settings.tape_verify_http_connect_seconds)
@@ -672,9 +668,6 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None
 def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
     """
     Second-pass audit when the catalog model claims a tape SKU.
-
-    Uses REST ``generateContent`` with bounded connect/read timeouts (not the SDK client, which can
-    hang without a socket deadline). Still wrapped in a thread plus ``fut.result`` as a backstop.
     """
     timeout = float(settings.tape_verify_total_timeout_seconds)
     fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_digits)
