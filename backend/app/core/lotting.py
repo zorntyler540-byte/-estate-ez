@@ -450,6 +450,39 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     return consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
 
 
+def _components_spec_text(specification_lines: list[str]) -> str | None:
+    for line in specification_lines:
+        m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
+        if m:
+            rhs = clean_listing_text(m.group(1)).strip(" .;")
+            if rhs:
+                return rhs
+    return None
+
+
+def _components_indicate_multi_piece(components_text: str) -> bool:
+    nums = [int(x) for x in re.findall(r"\b\d+\b", components_text or "")]
+    if sum(nums) >= 2:
+        return True
+    low = (components_text or "").lower()
+    return any(k in low for k in ("set", "pieces", "cups", "tumblers", "jars", "bowls", "plates", "glasses"))
+
+
+def _ensure_multi_piece_description(description: str, specification_lines: list[str]) -> str:
+    comp = _components_spec_text(specification_lines)
+    if not comp or not _components_indicate_multi_piece(comp):
+        return description
+    desc = clean_listing_text(description)
+    low = desc.lower()
+    if "this lot includes multiple pieces:" in low or comp.lower() in low:
+        return desc
+    extra = f"This lot includes multiple pieces: {comp}."
+    if not desc:
+        return extra
+    joiner = " " if desc.endswith((".", "!", "?")) else ". "
+    return f"{desc}{joiner}{extra}"
+
+
 def _strip_noted_brand_clauses(text: str) -> str:
     """Remove every ``Noted brand: …`` / ``Noted brands: …`` clause (models often chain several with periods)."""
     s = text.strip()
@@ -774,6 +807,7 @@ class LotOutput:
         )
         move_unmentioned_brands_to_specs(brands, prof, spec_lines)
         spec_lines = dedupe_specification_lines_preserve_order(spec_lines)
+        prof = _ensure_multi_piece_description(prof, spec_lines)
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
@@ -818,6 +852,9 @@ class LotOutput:
         self.professional_description = sanitize_description_unknowns(self.professional_description)
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.professional_description = _ensure_multi_piece_description(
+            self.professional_description, self.specification_lines
+        )
         self.photo_count += 1
         if payload_suggests_sku_review(detail_payload):
             self.sku_needs_review = True
