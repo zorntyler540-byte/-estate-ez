@@ -181,6 +181,8 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "sponge pattern": "spec__pattern",
     "shape": "spec__form",
     "silhouette": "spec__form",
+    "subject": "spec__subject",
+    "subjects": "spec__subject",
     "set size": "spec__quantity",
     "pieces in set": "spec__quantity",
     "set count": "spec__quantity",
@@ -196,6 +198,29 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "glaze": "spec__finish",
     "gloss": "spec__finish",
 }
+
+
+def _primary_alt_value(text: str) -> str:
+    """Keep first value when models emit alternatives (e.g. ``A / B`` or ``A; B``)."""
+    s = clean_listing_text(text)
+    if not s:
+        return s
+    parts = re.split(r"\s*(?:;|\||/|\bor\b)\s*", s, maxsplit=1, flags=re.I)
+    return clean_listing_text(parts[0]) if parts else s
+
+
+def _normalize_subject_form_line_for_bucket(line: str, bucket: str) -> str:
+    """Force singular primary value for Subject/Form spec rows."""
+    if bucket not in {"spec__subject", "spec__form"}:
+        return line
+    m = re.match(r"^([^:]+):\s*(.+)$", clean_listing_text(line).strip())
+    if not m:
+        return line
+    label = "Subject" if bucket == "spec__subject" else "Form"
+    rhs = _primary_alt_value(m.group(2))
+    if not rhs:
+        return line
+    return f"{label}: {rhs}"
 
 
 def _semantic_spec_bucket(line: str) -> str | None:
@@ -396,7 +421,7 @@ def _collapse_semantic_spec_lines(lines: list[str]) -> list[str]:
             out.append(line)
             continue
         if i == first_idx[b]:
-            out.append(winner[b])
+            out.append(_normalize_subject_form_line_for_bucket(winner[b], b))
         # else: skip duplicate bucket member
     return out
 
