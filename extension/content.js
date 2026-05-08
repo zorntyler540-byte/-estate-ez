@@ -833,7 +833,8 @@ async function fillFromLot(lot) {
   const sku = lot.sku || "";
   const price = lot.starting_price != null ? String(lot.starting_price) : "";
   const condition = lot.condition_text || "";
-  const inferredCategory = lot.ct_category || inferCategory(lot, description);
+  const inferredCategoryRaw = String(lot.ct_category || "").trim();
+  const inferredCategory = inferredCategoryRaw || inferCategory(lot, description) || "Household Goods Other";
   const inferredSubcategory = lot.ct_subcategory || "";
   const inferredArea = inferAreaFromCategory(inferredCategory);
 
@@ -874,6 +875,8 @@ async function fillFromLot(lot) {
       filled.push("category");
     } else if (await setDropdownByLabel("Category", categoryCandidates, warnings)) {
       filled.push("category");
+    } else {
+      warnings.push(`category option not found: ${categoryCandidates.join(" | ")}`);
     }
   } else {
     warnings.push("no category inference");
