@@ -341,7 +341,16 @@ function inferCategory(lot, description) {
       best = { category: rule.category, score };
     }
   }
-  return best.score >= 6 ? best.category : "";
+  if (best.score >= 6) return best.category;
+  // Strong furniture fallback keywords often missed by generic rules.
+  if (
+    /\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay)\b/i.test(
+      hay
+    )
+  ) {
+    return "Household Goods Other";
+  }
+  return "";
 }
 
 function sleep(ms) {
@@ -766,6 +775,53 @@ function inferAreaFromCategory(category) {
   return "";
 }
 
+function mapAreaCandidates(area, inferredCategory, title) {
+  const out = [];
+  const push = (v) => {
+    const t = String(v || "").trim();
+    if (!t) return;
+    if (!out.some((x) => normalizeText(x) === normalizeText(t))) out.push(t);
+  };
+
+  const a = normalizeText(area);
+  if (a.includes("houseware")) {
+    push("Housewares");
+    push("House Wares");
+    push("Home");
+    push("Furniture");
+  } else if (a.includes("wall decor")) {
+    push("Wall Decor");
+    push("Home Decor");
+    push("Decor");
+  } else if (a.includes("closet")) {
+    push("Closet");
+    push("Clothing");
+    push("Fashion");
+  } else if (a.includes("jewelry")) {
+    push("Jewelry");
+  } else {
+    push(area);
+  }
+
+  const cat = normalizeText(inferredCategory);
+  if (cat.includes("household") || cat.includes("furniture") || cat.includes("bedroom")) {
+    push("Housewares");
+    push("Furniture");
+    push("Home");
+  }
+  if (cat.includes("art") || cat.includes("painting")) {
+    push("Wall Decor");
+    push("Decor");
+  }
+
+  if (/\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay)\b/i.test(title || "")) {
+    push("Furniture");
+    push("Housewares");
+    push("Home");
+  }
+  return out;
+}
+
 async function fillFromLot(lot) {
   const filled = [];
   const warnings = [];
@@ -828,10 +884,11 @@ async function fillFromLot(lot) {
   }
 
   if (inferredArea) {
+    const areaCandidates = mapAreaCandidates(inferredArea, inferredCategory, title);
     const areaSelect = getExactSelect("area");
-    if (areaSelect && setSelectByTextOrValue(areaSelect, [inferredArea])) {
+    if (areaSelect && setSelectByTextOrValue(areaSelect, areaCandidates)) {
       filled.push("area");
-    } else if (await setDropdownByLabel("Area", [inferredArea], warnings)) {
+    } else if (await setDropdownByLabel("Area", areaCandidates, warnings)) {
       filled.push("area");
     }
   }
