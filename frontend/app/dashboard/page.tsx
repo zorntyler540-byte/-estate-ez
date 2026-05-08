@@ -1113,23 +1113,43 @@ export default function DashboardPage() {
     strip.scrollLeft = strip.scrollWidth;
   }, [lotCameraSnapThumbUrls.length]);
 
-  /** Open with the panel scrolled to the bottom so primary actions (Snap / Done) are in view on short viewports. */
+  /** Center the live photo preview in the scroll panel so it stays fully in view (actions sit in a fixed bottom bar). */
   useEffect(() => {
-    if (!lotCameraOpen) return;
-    const el = lotCameraScrollRef.current;
-    if (!el) return;
-    const scrollToBottom = () => {
-      el.scrollTop = el.scrollHeight;
+    if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady) return;
+    const wrap = lotCameraZoomWrapRef.current;
+    if (!wrap) return;
+
+    const centerPreview = () => {
+      wrap.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
     };
-    scrollToBottom();
-    requestAnimationFrame(scrollToBottom);
-    const t1 = window.setTimeout(scrollToBottom, 80);
-    const t2 = window.setTimeout(scrollToBottom, 320);
+
+    centerPreview();
+    requestAnimationFrame(centerPreview);
+    const t1 = window.setTimeout(centerPreview, 80);
+    const t2 = window.setTimeout(centerPreview, 320);
+
+    let resizeRaf = 0;
+    const onResizeOrOrientation = () => {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = window.requestAnimationFrame(() => {
+        lotCameraZoomWrapRef.current?.scrollIntoView({
+          block: "center",
+          inline: "nearest",
+          behavior: "auto"
+        });
+      });
+    };
+    window.addEventListener("orientationchange", onResizeOrOrientation);
+    window.addEventListener("resize", onResizeOrOrientation);
+
     return () => {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
+      cancelAnimationFrame(resizeRaf);
+      window.removeEventListener("orientationchange", onResizeOrOrientation);
+      window.removeEventListener("resize", onResizeOrOrientation);
     };
-  }, [lotCameraOpen, lotCameraStream, lotCameraPreviewReady, lotCameraSnaps.length]);
+  }, [lotCameraOpen, lotCameraStream, lotCameraPreviewReady]);
 
   /** Pinch-to-zoom on the live preview (non-passive ``touchmove`` so Safari does not scroll the page). */
   useEffect(() => {
