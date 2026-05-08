@@ -1004,7 +1004,30 @@ def run_lot_ai_regenerate_and_save(
         current.merge_detail(payload)
 
     if current is None:
-        raise ValueError("AI returned no usable rows for these photos — try again or pick different frames.")
+        def _safe_json_list(raw: str | None) -> list[str]:
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return []
+            if not isinstance(parsed, list):
+                return []
+            return [str(x).strip() for x in parsed if str(x).strip()]
+
+        # Fallback instead of hard-failing regenerate: keep existing listing content and mark for review.
+        current = LotOutput(
+            sku=tape_marking_canonical(row.sku),
+            auction_title=(row.auction_title or "").strip(),
+            professional_description=(row.professional_description or "").strip(),
+            specification_lines=_safe_json_list(row.specification_lines_json),
+            brands=_safe_json_list(row.brands_json),
+            labels_and_tags=_safe_json_list(row.labels_and_tags_json),
+            condition=(row.condition_text or "").strip(),
+            starting_price=row.starting_price,
+            sku_needs_review=True,
+            lot_boundary_blank_page=False,
+        )
 
     linked = int(
         db.query(func.count())
