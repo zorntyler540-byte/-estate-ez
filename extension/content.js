@@ -320,13 +320,17 @@ const CATEGORY_RULES = [
   { category: "Paintings", keywords: ["painting", "canvas", "acrylic", "oil on", "watercolor", "batik", "signed art"] },
   { category: "Photography", keywords: ["camera", "photography", "lens", "nikon", "canon"] },
   { category: "Clocks", keywords: ["clock", "timepiece", "mantel clock", "wall clock"] },
+  { category: "Glassware", keywords: ["glass vase", "art glass", "glassware", "crystal", "decanter", "goblet"] },
+  { category: "Decorative Collectibles", keywords: ["collectible", "decorative collectible", "display piece", "novelty"] },
+  { category: "Coins", keywords: ["coin", "coins", "peso", "mint", "bullion", "numismatic"] },
+  { category: "Costume Jewelry", keywords: ["rhinestone", "costume jewelry", "brooch", "clip-on"] },
   { category: "Kitchen & Home", keywords: ["kitchen", "cookware", "dish", "plate", "glassware", "mug", "vase"] },
   { category: "Bedroom Goods", keywords: ["bedding", "linen", "bedspread", "comforter", "sheet", "pillowcase"] },
   { category: "Music Other", keywords: ["speaker", "stereo", "record player", "turntable", "audio", "music"] },
   { category: "Art Other", keywords: ["art", "framed art", "wall art", "print", "decor art"] },
   { category: "Antiques Other", keywords: ["antique", "vintage", "heirloom", "collectible antique"] },
   { category: "Accessories", keywords: ["belt", "scarf", "hat", "accessory"] },
-  { category: "Household Goods Other", keywords: ["household", "home decor", "decor", "furniture", "lamp", "ceramic"] }
+  { category: "Household Goods Other", keywords: ["household", "home goods", "furniture", "lamp"] }
 ];
 
 function inferCategory(lot, description) {
@@ -503,21 +507,61 @@ function mapConditionOptions(conditionText) {
   return ["Good", "Very Good", "Excellent", "Like New", "Fair", "Acceptable"];
 }
 
+const CTSELLER_ALLOWED_CATEGORIES = [
+  "Antiques Other",
+  "Coins",
+  "Costume Jewelry",
+  "Crystal",
+  "Decor",
+  "Decorative Collectibles",
+  "Dining Room",
+  "Figures & Figurines",
+  "Glassware",
+  "Household Goods Other",
+  "Kitchen & Home",
+  "Luggage",
+  "Men's",
+  "Paintings",
+  "Women's"
+];
+
 function mapCategoryCandidates(category) {
   const c = normalizeText(category);
   if (!c) return [];
-  const m = {
-    "luxury & designer items": ["Luxury & Designer Items", "Luxury and Designer Items", "Luxury / Designer Items"],
-    "handbags & wallets": ["Handbags & Wallets", "Handbags and Wallets"],
-    "kitchen & home": ["Kitchen & Home", "Kitchen and Home"],
-    "art other": ["Art Other", "Art - Other"],
-    "antiques other": ["Antiques Other", "Antiques - Other"],
-    "household goods other": ["Household Goods Other", "Household Goods - Other"],
-    "jewelry other": ["Jewelry Other", "Jewelry - Other"],
-    "music other": ["Music Other", "Music - Other"],
-    "clothing other": ["Clothing Other", "Clothing - Other"]
+
+  const aliasToAllowed = {
+    "kitchen and home": "Kitchen & Home",
+    "kitchen & home": "Kitchen & Home",
+    "figures and figurines": "Figures & Figurines",
+    "figures & figurines": "Figures & Figurines",
+    "womens": "Women's",
+    "women's": "Women's",
+    "mens": "Men's",
+    "men's": "Men's",
+    "decorative collectible": "Decorative Collectibles",
+    "decorative collectibles": "Decorative Collectibles",
+    "art other": "Paintings",
+    "housewares": "Household Goods Other",
+    "furniture": "Household Goods Other",
+    "home": "Household Goods Other",
+    "jewelry other": "Costume Jewelry"
   };
-  return m[c] || [category];
+
+  const out = [];
+  const push = (v) => {
+    const t = String(v || "").trim();
+    if (!t) return;
+    if (!out.some((x) => normalizeText(x) === normalizeText(t))) out.push(t);
+  };
+
+  const mapped = aliasToAllowed[c];
+  if (mapped) push(mapped);
+  push(category);
+
+  // Only keep categories known to exist on CT Seller from exported data.
+  const allowedNorm = new Set(CTSELLER_ALLOWED_CATEGORIES.map((x) => normalizeText(x)));
+  const filtered = out.filter((x) => allowedNorm.has(normalizeText(x)));
+  return filtered.length ? filtered : [];
 }
 
 function tryFillDescriptionRich(plain, html, warnings) {
@@ -834,7 +878,7 @@ async function fillFromLot(lot) {
   const price = lot.starting_price != null ? String(lot.starting_price) : "";
   const condition = lot.condition_text || "";
   const inferredCategoryRaw = String(lot.ct_category || "").trim();
-  const inferredCategory = inferredCategoryRaw || inferCategory(lot, description) || "Household Goods Other";
+  const inferredCategory = inferredCategoryRaw || inferCategory(lot, description);
   const inferredSubcategory = lot.ct_subcategory || "";
   const inferredArea = inferAreaFromCategory(inferredCategory);
 
