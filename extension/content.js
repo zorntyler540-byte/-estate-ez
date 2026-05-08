@@ -330,7 +330,9 @@ const CATEGORY_RULES = [
 ];
 
 function inferCategory(lot, description) {
-  const hay = `${lot.auction_title || ""}\n${description || ""}\n${(lot.brands || []).join(" ")}`.toLowerCase();
+  const specs = Array.isArray(lot?.specification_lines) ? lot.specification_lines.join(" ") : "";
+  const tags = Array.isArray(lot?.labels_and_tags) ? lot.labels_and_tags.join(" ") : "";
+  const hay = `${lot.auction_title || ""}\n${description || ""}\n${(lot.brands || []).join(" ")}\n${specs}\n${tags}`.toLowerCase();
   let best = { category: "", score: 0 };
   for (const rule of CATEGORY_RULES) {
     let score = 0;
@@ -344,7 +346,7 @@ function inferCategory(lot, description) {
   if (best.score >= 6) return best.category;
   // Strong furniture fallback keywords often missed by generic rules.
   if (
-    /\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay)\b/i.test(
+    /\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay|box|keepsake|trunk|storage)\b/i.test(
       hay
     )
   ) {
