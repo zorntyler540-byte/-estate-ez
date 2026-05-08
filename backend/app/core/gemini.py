@@ -131,6 +131,8 @@ SYSTEM_INSTRUCTION = (
     "- Identify exactly ONE primary brand. No brand-soup or competing guesses.\n"
     "- If 'Czechoslovakia' is present, the brand is **Ditmar-Urbach**. Omit 'Royal Bonn'.\n"
     "- Only list brands or names explicitly visible in the photos or on the hallmarks. Do not include 'related' brands.\n"
+    "- If multiple brand names are identified, only list the one that appears most clearly on the physical hallmark. "
+    "Do not list 'similar' or 'related' brands.\n"
     "- If no manufacturer mark is clearly visible or confirmed, do not include a brand rather than speculating.\n\n"
     "### VISIBLE SUBJECT ONLY (CRITICAL — NO HALLUCINATED KEYWORDS):\n"
     "- In **item_name** and **professional_description**, describe only what is **clearly visible** in the image(s). "

@@ -186,6 +186,7 @@ _SPEC_LABEL_TO_CANON: dict[str, str] = {
     "set size": "spec__quantity",
     "pieces in set": "spec__quantity",
     "set count": "spec__quantity",
+    "components": "spec__components",
     # Surface sheen / glaze wording — model often emits many Finish lines across angles.
     "finish": "spec__finish",
     "finishes": "spec__finish",
