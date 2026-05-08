@@ -320,13 +320,13 @@ def _mark_rhs_is_brand_or_origin(rhs: str) -> bool:
 
 def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
     """
-    Merge repeated brand/origin rows (``Brand:`` / ``Brands:`` / duplicate ``Mark:``) into one ``Brand:`` line
-    and all stamp / mark descriptions into one ``Markings:`` line (values joined with ``; ``).
+    Merge repeated brand/origin rows (``Brand:`` / ``Brands:`` / duplicate ``Mark:``) into one ``Brand:`` line.
+
+    Rows that would have been merged into ``Markings:`` are **omitted** — detailed stamp transcription is too
+    error-prone for catalog specs.
     """
     brand_vals: list[str] = []
-    marking_vals: list[str] = []
     seen_b: set[str] = set()
-    seen_m: set[str] = set()
     roles: list[str | None] = []
 
     for line in lines:
@@ -338,10 +338,6 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
         role: str | None = None
         if lk in _MARKINGS_MERGE_LABEL_KEYS:
             role = "m"
-            key = val.lower()
-            if key not in seen_m:
-                seen_m.add(key)
-                marking_vals.append(val)
         elif lk in _BRAND_MERGE_LABEL_KEYS:
             role = "b"
             key = val.lower()
@@ -357,14 +353,9 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
                     brand_vals.append(val)
             else:
                 role = "m"
-                key = val.lower()
-                if key not in seen_m:
-                    seen_m.add(key)
-                    marking_vals.append(val)
         roles.append(role)
 
     first_b = next((i for i, r in enumerate(roles) if r == "b"), None)
-    first_m = next((i for i, r in enumerate(roles) if r == "m"), None)
 
     out: list[str] = []
     for i, line in enumerate(lines):
@@ -375,9 +366,6 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
                 out.append("Brand: " + "; ".join(uniq))
             continue
         if r == "m":
-            if i == first_m and marking_vals:
-                uniq_m = _unique_semicolon_phrases(marking_vals)
-                out.append("Markings: " + "; ".join(uniq_m))
             continue
         out.append(line)
     return out

@@ -118,9 +118,8 @@ SYSTEM_INSTRUCTION = (
     "- Identify exactly ONE primary brand. No brand-soup or competing guesses.\n"
     "- If 'Czechoslovakia' is present, the brand is **Ditmar-Urbach**. Omit 'Royal Bonn'.\n\n"
     "### DESCRIPTION LOGIC:\n"
-    "- Weave technical markings (like incised numbers or export stamps) directly into the **Professional Description**.\n"
-    "- Example: 'This Art Deco piece features a hand-painted floral motif and is marked with an incised mold number 3 on the base.'\n"
-    "- Focus on visual beauty and confirmed marks. If a marking is unreadable, ignore it; do not guess digits.\n\n"
+    "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
+    "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
     "### CERAMICS & POTTERY ACCURACY RULES (STRICT):\n"
     "- STRIKE RULE: If the item is marked 'Czechoslovakia', you are FORBIDDEN from using the brand 'Royal Bonn' or origin 'Germany'. These are mutually exclusive.\n"
     "- If 'CM-R' or 'CMHR' is present: This is C.M. HUTSCHENREUTHER ownership. NEVER identify as 'Carl-Moritz Reichenbach'.\n"
@@ -153,7 +152,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
-        "- specification_lines: Use 'Label: value' format. Use at most one 'Markings:' line for all stamps and molded numbers.\n"
+        "- specification_lines: 'Label: value' only — Material, Style, Finish, Era, Subject, etc. "
+        "Never include a Markings line or stamp/mold-number transcription.\n"
         "- sku: Handwritten digits on purple/lavender tape ONLY. null if not on tape.\n"
     )
 
@@ -192,7 +192,11 @@ def _normalize_condition_label(raw: str) -> str:
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
     sku_clean = tape_marking_canonical(row.sku)
     title = row.item_name.strip() or (f"Estate lot #{sku_clean}" if sku_clean else "Estate catalog item")
-    specs = list(row.specification_lines)
+    specs = [
+        s
+        for s in row.specification_lines
+        if s.strip() and not re.match(r"^\s*markings?\s*:", s.strip(), re.I)
+    ]
     if row.material.strip() and not any(s.lower().startswith("material:") for s in specs):
         specs.append(f"Material: {row.material.strip()}")
     if row.era.strip() and not any(s.lower().startswith("era:") for s in specs):
