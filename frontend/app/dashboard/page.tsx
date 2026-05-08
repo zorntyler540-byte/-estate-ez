@@ -3043,12 +3043,13 @@ export default function DashboardPage() {
           <div
             ref={lotCameraScrollRef}
             style={{
-              flex: 1,
+              // flex:1 + minHeight:0 lets this shrink so the action bar stays in view; do not set height:100% or it
+              // consumes the full dialog and pins the footer below the clipped edge (bad in landscape).
+              flex: "1 1 0",
               minHeight: 0,
               width: "100%",
               maxWidth: 520,
               margin: "0 auto",
-              height: "100%",
               overflowY: "auto",
               overflowX: "hidden",
               WebkitOverflowScrolling: "touch",
