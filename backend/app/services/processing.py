@@ -284,6 +284,24 @@ def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     return False
 
 
+def _is_gemini_placeholder_lot(lot: LotOutput) -> bool:
+    """
+    True when ``current_lot`` was created only to hold catalog files whose Gemini calls returned null.
+
+    The first successful analysis row replaces this shell so those files are not stranded on a
+    blank listing or dropped when a tape frame fails vision.
+    """
+    if (lot.sku or "").strip():
+        return False
+    if (lot.auction_title or "").strip():
+        return False
+    if (lot.professional_description or "").strip():
+        return False
+    if lot.brands or lot.specification_lines or lot.labels_and_tags:
+        return False
+    return True
+
+
 def _single_lot_maybe_adopt_tape_sku(
     job: ProcessingJob,
     current_lot: LotOutput,
@@ -724,19 +742,33 @@ def process_job(
 
         if not payload:
             # Keep photo files on the active lot even when Gemini fails so nothing “disappears” from inventory.
-            if current_lot is not None:
-                current_lot.photo_count += 1
-                row = Photo(
-                    account_id=job.account_id,
-                    user_id=job.user_id,
-                    lot_id=None,
-                    original_name=photo_path.name,
-                    storage_path=str(photo_path.resolve()),
+            if current_lot is None:
+                current_lot = LotOutput(
+                    sku=None,
+                    auction_title="",
+                    professional_description="",
+                    specification_lines=[],
+                    brands=[],
+                    labels_and_tags=[],
+                    condition="",
+                    starting_price=None,
+                    photo_count=0,
+                    sku_needs_review=False,
+                    lot_boundary_blank_page=False,
                 )
-                db.add(row)
-                db.flush()
-                pending_photo_ids.append(row.id)
-                db.commit()
+                current_lot_folder_batch_key = batch_key
+            current_lot.photo_count += 1
+            row = Photo(
+                account_id=job.account_id,
+                user_id=job.user_id,
+                lot_id=None,
+                original_name=photo_path.name,
+                storage_path=str(photo_path.resolve()),
+            )
+            db.add(row)
+            db.flush()
+            pending_photo_ids.append(row.id)
+            db.commit()
             continue
         lot_candidate = LotOutput.from_model(payload)
         _emit_job_debug(
@@ -797,6 +829,26 @@ def process_job(
             if verified is not True:
                 lot_candidate.sku = None
                 sku_ok = False
+
+        if current_lot is not None and _is_gemini_placeholder_lot(current_lot):
+            saved_pc = current_lot.photo_count
+            current_lot = lot_candidate
+            current_lot.photo_count = saved_pc + 1
+            _emit_inventory_tick(
+                job, index=i, total=total_photos, photo_path=photo_path, stage="promote_after_gemini_failures"
+            )
+            row = Photo(
+                account_id=job.account_id,
+                user_id=job.user_id,
+                lot_id=None,
+                original_name=photo_path.name,
+                storage_path=str(photo_path.resolve()),
+            )
+            db.add(row)
+            db.flush()
+            pending_photo_ids.append(row.id)
+            db.commit()
+            continue
 
         if single_lot_mode and current_lot is not None:
             _single_lot_maybe_adopt_tape_sku(
