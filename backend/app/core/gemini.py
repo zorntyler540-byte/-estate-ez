@@ -115,6 +115,7 @@ class InventoryTableEntry(BaseModel):
     lot_boundary_blank_page: bool = Field(
         default=False,
         validation_alias=AliasChoices("lot_boundary_blank_page", "lotBoundaryBlankPage"),
+        description="Deprecated: server ignores blank-divider detection; always leave false.",
     )
 
 

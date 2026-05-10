@@ -469,7 +469,7 @@ export default function DashboardPage() {
   const photosInputRef = useRef<HTMLInputElement>(null);
   /** Next file-picker result: normal batch vs one combined lot. */
   const uploadPickModeRef = useRef<"batch" | "single_lot">("batch");
-  /** True after "Create one lot" until multi-file pick, upload, clear, or picker cancel. Used to chain camera opens on mobile. */
+  /** True after "Add one lot" camera flow until multi-file pick, upload, clear, or picker cancel. Chains camera opens on mobile. */
   const singleLotCaptureChainingRef = useRef(false);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
@@ -564,7 +564,6 @@ export default function DashboardPage() {
     total: number;
     fileName: string;
   } | null>(null);
-  const [showCreateOneLot, setShowCreateOneLot] = useState(false);
   /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
   const [jobSseSession, setJobSseSession] = useState(0);
   const sseRetryAfterErrorRef = useRef(0);
@@ -627,18 +626,6 @@ export default function DashboardPage() {
   useEffect(() => {
     setSaleZipExport(null);
   }, [selectedSaleId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const update = () => {
-      const narrow = window.matchMedia("(max-width: 900px)").matches;
-      const coarse = window.matchMedia("(pointer: coarse)").matches;
-      setShowCreateOneLot(narrow || coarse);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1553,7 +1540,22 @@ export default function DashboardPage() {
     }
   }
 
-  async function openCreateOneLotFlow() {
+  /** Desktop: open multi-file picker as one listing. Touch devices: camera when available, else picker. */
+  async function openAddOneLotFlow() {
+    if (typeof window === "undefined") return;
+    const coarse =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+    if (coarse) {
+      await openCreateOneLotCameraFlow();
+      return;
+    }
+    singleLotCaptureChainingRef.current = false;
+    uploadPickModeRef.current = "single_lot";
+    photosInputRef.current?.click();
+  }
+
+  async function openCreateOneLotCameraFlow() {
     if (typeof window === "undefined") return;
     const md = navigator.mediaDevices;
     if (window.isSecureContext && md?.getUserMedia) {
@@ -2499,14 +2501,13 @@ export default function DashboardPage() {
                 <code>Turtle/</code>) if you are not using colored estate tape on every group.
               </li>
               <li>
-                <strong>One flat folder:</strong> colored estate tape (purple, green, yellow, etc.) marks new lots; a{" "}
-                <strong>blank white divider</strong>{" "}
-                photo between groups can also split lots (that frame is not kept as a product photo).
+                <strong>One flat folder:</strong> colored estate tape (purple, green, yellow, etc.) marks new lots.
+                Subfolders per item also work if you prefer not to use tape on every group.
               </li>
               <li>
-                <strong>Create one lot…</strong> (when shown): all photos become <strong>one</strong> catalog row — good
-                for many angles of a single item. On phones this can open the camera; if the camera fails, the regular
-                file picker opens.
+                <strong>Add one lot…</strong> combines every selected image into <strong>one</strong> catalog row (tape
+                in the photos is still used for the lot SKU when visible). On touch devices this can open the camera
+                first; if the camera fails, the file picker opens. On desktop it opens the photo picker directly.
               </li>
               <li>
                 <strong>Server path + Queue job</strong> is for staff only: photos already on the server running the
@@ -2575,25 +2576,24 @@ export default function DashboardPage() {
         >
           Choose photos…
         </button>
-        {showCreateOneLot ? (
-          <button
-            type="button"
-            className="ct-btn"
-            style={{ marginLeft: "0.6rem" }}
-            title="All selected images become one catalog row with one SKU"
-            onClick={() => void openCreateOneLotFlow()}
-            disabled={uploading || !selectedSaleId || selectedSaleClosed}
-          >
-            Create one lot…
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="ct-btn"
+          style={{ marginLeft: "0.6rem" }}
+          title="All selected images become one catalog row; SKU from estate tape in the photos when detected"
+          onClick={() => void openAddOneLotFlow()}
+          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+        >
+          Add one lot…
+        </button>
         {folderPick && (
           <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
             {folderPick.singleLotMode ? (
               <div style={{ marginBottom: "0.65rem" }}>
                 <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
                   <strong>One lot only:</strong> all photos below become <strong>one</strong> listing (one row in the
-                  table). CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
+                  table). The SKU is read from colored estate tape when it appears in any frame, or you can set it
+                  below. CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
                   files are skipped.
                 </p>
                 <label className="ct-muted" style={{ display: "block", fontSize: "0.85rem" }}>

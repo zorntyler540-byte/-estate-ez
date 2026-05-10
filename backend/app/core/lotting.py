@@ -626,18 +626,6 @@ def folder_token_as_inherited_sku(folder_batch_key: str | None) -> str | None:
     return None
 
 
-def payload_lot_boundary_blank_page(payload: dict[str, Any]) -> bool:
-    """True when the model marked this frame as a blank divider sheet between lots (flat-folder workflow)."""
-    v = payload.get("lot_boundary_blank_page")
-    if v is None:
-        v = payload.get("lotBoundaryBlankPage")
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, str):
-        return v.strip().lower() in ("true", "1", "yes")
-    return False
-
-
 def payload_suggests_sku_review(payload: dict[str, Any]) -> bool:
     """True when the model omitted a tape SKU or was unconfident — worth human verification after the job."""
     conf = str(payload.get("SkuConfidence") or payload.get("sku_read_confidence") or "").strip().lower()
@@ -775,7 +763,6 @@ class LotOutput:
             ).strip()
         )
         title = _sanitize_gendered_title(title, payload)
-        boundary_blank = payload_lot_boundary_blank_page(payload)
         spec_lines = dedupe_specification_lines_preserve_order(
             normalize_listing_lines(
                 payload.get("SpecificationLines") or payload.get("specification_lines")
@@ -784,19 +771,6 @@ class LotOutput:
         brands = normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands"))
         labels = normalize_listing_lines(payload.get("LabelsAndTags") or payload.get("labels_and_tags"))
         condition = str(payload.get("Condition") or payload.get("condition_notes") or "").strip()
-        if boundary_blank:
-            return cls(
-                sku=None,
-                auction_title="Blank lot separator (page)",
-                professional_description="Separator frame between catalog lots; not a listed item.",
-                specification_lines=spec_lines,
-                brands=brands,
-                labels_and_tags=labels,
-                condition=condition,
-                starting_price=None,
-                sku_needs_review=False,
-                lot_boundary_blank_page=True,
-            )
         prof = sanitize_description_unknowns(
             str(
                 payload.get("ProfessionalDescription")
@@ -822,8 +796,6 @@ class LotOutput:
         )
 
     def merge_detail(self, detail_payload: dict[str, Any]) -> None:
-        if payload_lot_boundary_blank_page(detail_payload):
-            return
         detail_brands = normalize_brand_list(
             detail_payload.get("Brands") or detail_payload.get("brand") or detail_payload.get("brands")
         )

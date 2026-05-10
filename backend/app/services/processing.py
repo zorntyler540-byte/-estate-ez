@@ -17,7 +17,6 @@ from app.core.lotting import (
     LotOutput,
     folder_token_as_inherited_sku,
     normalize_tape_sku_input,
-    payload_lot_boundary_blank_page,
     sku_digits,
     tape_marking_canonical,
     tape_sku_opens_new_lot,
@@ -223,7 +222,7 @@ def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | N
     uses real tape wording (purple/lavender/green/yellow estate tape phrases), not naive substring
     checks that misfire on ``silverplate``. Other cases: digits-only plus underside hints.
     """
-    if not lot.sku or lot.lot_boundary_blank_page:
+    if not lot.sku:
         return
     blob = _maker_stamp_evidence_blob(lot, raw_payload)
     sheffield_style = "sheffield" in blob and (
@@ -285,6 +284,59 @@ def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     return False
 
 
+def _single_lot_maybe_adopt_tape_sku(
+    job: ProcessingJob,
+    current_lot: LotOutput,
+    lot_candidate: LotOutput,
+    photo_path: Path,
+    *,
+    index: int,
+    total_photos: int,
+) -> None:
+    """
+    ``merge_detail`` does not merge SKU. For single-lot jobs, adopt a tape marking from any frame
+    that passes the same tape gate (and optional second-pass verify) as batch uploads.
+    """
+    if not bool(getattr(job, "single_lot_mode", False)):
+        return
+    cand_sku = lot_candidate.sku
+    if not cand_sku or not tape_sku_opens_new_lot(cand_sku):
+        return
+    claimed = (tape_marking_canonical(cand_sku) or sku_digits(cand_sku) or "").strip()
+    if not claimed:
+        return
+    if not settings.skip_tape_verify:
+        _emit_inventory_tick(job, index=index, total=total_photos, photo_path=photo_path, stage="tape_verify")
+        t0 = time.monotonic()
+        verified = verify_tape_sku(photo_path, claimed)
+        _emit_job_debug(
+            job,
+            "job=%s single_lot_tape_verify i=%s file=%s claimed=%s result=%s ms=%.0f"
+            % (
+                job.id,
+                index + 1,
+                photo_path.name,
+                claimed,
+                verified,
+                (time.monotonic() - t0) * 1000.0,
+            ),
+        )
+        if verified is not True:
+            return
+    canonical = tape_marking_canonical(cand_sku) or cand_sku
+    if current_lot.sku is None:
+        current_lot.sku = canonical
+        if settings.skip_tape_verify:
+            current_lot.sku_needs_review = bool(lot_candidate.sku_needs_review)
+        else:
+            current_lot.sku_needs_review = False
+        return
+    if tape_sku_same_marking(current_lot.sku, canonical):
+        current_lot.sku = canonical
+        return
+    current_lot.sku_needs_review = True
+
+
 def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> None:
     """When the job was created with optional tape/SKU digits, force that SKU on the merged lot."""
     if not lot or not bool(getattr(job, "single_lot_mode", False)):
@@ -330,19 +382,12 @@ def _apply_last_known_sku_fallback(payloads: list[dict | None]) -> None:
 
     ``last`` still advances on low/unsure when the explicit digits change, so a new lot tape (e.g.
     SA013) is not followed by empty frames that keep reusing the previous lot's digits (e.g. 001).
-
-    A blank divider page ends the prior lot in the inventory pass; ``last`` must reset here so the
-    next frame (typically the hero shot with tape) is not filled with the previous lot's SKU when
-    Gemini leaves ``SKU`` empty on that frame.
     """
     if not settings.last_known_sku_fallback:
         return
     last: str | None = None
     for p in payloads:
         if not p or not isinstance(p, dict):
-            continue
-        if payload_lot_boundary_blank_page(p):
-            last = None
             continue
         conf = str(p.get("SkuConfidence") or p.get("sku_read_confidence") or "").strip().lower()
         raw = p.get("SKU")
@@ -711,22 +756,8 @@ def process_job(
         _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
         _emit_job_debug(
             job,
-            f"job={job.id} after strip i={i + 1} file={photo_path.name} sku={lot_candidate.sku!r} blank={lot_candidate.lot_boundary_blank_page}",
+            f"job={job.id} after strip i={i + 1} file={photo_path.name} sku={lot_candidate.sku!r}",
         )
-        if lot_candidate.lot_boundary_blank_page:
-            if single_lot_mode:
-                continue
-            if current_lot is not None:
-                _apply_inherit_sku_from_subfolder_name(job, current_lot, current_lot_folder_batch_key)
-                current_lot, pending_photo_ids, finalized = _finalize_open_lot(
-                    db, job.account_id, job.user_id, current_lot, pending_photo_ids, job.sale_id
-                )
-                db.commit()
-                if finalized is not None:
-                    _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(finalized)})
-            current_lot = None
-            current_lot_folder_batch_key = None
-            continue
 
         sku_ok = tape_sku_opens_new_lot(lot_candidate.sku)
         # ``last_known_sku_fallback`` can copy the tape SKU onto detail frames that never showed tape
@@ -737,15 +768,13 @@ def process_job(
             and bool(lot_candidate.sku)
             and tape_sku_same_marking(current_lot.sku, lot_candidate.sku)
         )
-        # One-lot (mobile) jobs merge every frame; tape-split verification only adds latency and can
-        # mis-trigger on retail packaging digits. The SDK verify path also has no hard timeout and
-        # has wedged workers in production when the API never returns.
+        # Second-pass tape verify before opening a new lot from a fresh SKU read (single-lot jobs
+        # still use this on the first tape frame; merged follow-ups use ``_single_lot_maybe_adopt_tape_sku``).
         if (
             sku_ok
             and not continuation_same_tape
             and not settings.skip_tape_verify
             and lot_candidate.sku
-            and not single_lot_mode
         ):
             _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="tape_verify")
             t_verify = time.monotonic()
@@ -770,6 +799,14 @@ def process_job(
                 sku_ok = False
 
         if single_lot_mode and current_lot is not None:
+            _single_lot_maybe_adopt_tape_sku(
+                job,
+                current_lot,
+                lot_candidate,
+                photo_path,
+                index=i,
+                total_photos=total_photos,
+            )
             _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
             current_lot.merge_detail(payload)
             row = Photo(
@@ -1000,8 +1037,6 @@ def run_lot_ai_regenerate_and_save(
         try:
             lot_candidate = LotOutput.from_model(payload)
         except (TypeError, ValueError, KeyError):
-            continue
-        if lot_candidate.lot_boundary_blank_page:
             continue
         _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
         if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
