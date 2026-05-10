@@ -9,6 +9,29 @@ CTBIDS_MAX_PHOTOS_PER_LOT = 40
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 
 
+def ctbids_lot_photo_delta_error(*, current: int, delta: int) -> str | None:
+    """
+    None if ``current + delta`` is within the CTBids per-listing photo cap; else an HTTP 400 detail string.
+
+    Use after counting **actual** rows to add (saved files, photos to transfer, etc.), not only multipart part count.
+    """
+    if delta <= 0:
+        return None
+    cap = CTBIDS_MAX_PHOTOS_PER_LOT
+    if current > cap:
+        return (
+            f"CTBids allows at most {cap} photos per listing; this lot has {current} (already over the limit). "
+            "Remove photos before adding or moving more."
+        )
+    if current >= cap:
+        return f"CTBids allows at most {cap} photos per listing; this lot already has {current}."
+    if current + delta > cap:
+        return (
+            f"CTBids allows at most {cap} photos per listing; this lot has {current} and adding {delta} would exceed the limit."
+        )
+    return None
+
+
 def count_catalog_image_files(root: Path) -> int:
     """Count image-like files under ``root`` (browser uploads are flattened or shallow)."""
     if not root.is_dir():

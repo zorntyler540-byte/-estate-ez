@@ -50,6 +50,25 @@ const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
 /** Set when using ``← Back to dashboard`` so the dashboard can restore scroll after Details. */
 const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
 
+/** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT``. */
+const CTBIDS_MAX_PHOTOS_PER_LOT = 40;
+
+function parseFastApiErrorMessage(raw: string): string {
+  const t = raw.trim();
+  if (!t.startsWith("{")) return raw;
+  try {
+    const j = JSON.parse(t) as { detail?: string | { msg?: string }[] };
+    const d = j.detail;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d) && d[0] && typeof d[0] === "object" && "msg" in d[0]) {
+      return String((d[0] as { msg: string }).msg);
+    }
+  } catch {
+    /* keep raw */
+  }
+  return raw;
+}
+
 /** Next.js 15 may type dynamic segments as ``string | string[]`` at runtime. */
 function singleDynamicRouteParam(raw: unknown): string {
   if (typeof raw === "string" && raw.trim()) return raw.trim();
@@ -460,6 +479,20 @@ export default function LotDetailPage() {
   async function uploadAdditionalCatalogPhotos(fileList: FileList | null) {
     if (!lot || !token || !fileList || fileList.length === 0) return;
     const n = fileList.length;
+    const existing = catalogPhotos.length;
+    if (existing >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+      setError(
+        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove photos before adding more.`
+      );
+      return;
+    }
+    if (existing + n > CTBIDS_MAX_PHOTOS_PER_LOT) {
+      const room = CTBIDS_MAX_PHOTOS_PER_LOT - existing;
+      setError(
+        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. This lot has ${existing}; you can add at most ${room} more in one go.`
+      );
+      return;
+    }
     setAddPhotosBusy(true);
     setError("");
     setOrganizeMsg("");
@@ -480,7 +513,8 @@ export default function LotDetailPage() {
       await refetchSaleLotsList();
       setOrganizeMsg(`Added ${n} photo(s) to this listing.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not upload photos");
+      const raw = e instanceof Error ? e.message : "Could not upload photos";
+      setError(parseFastApiErrorMessage(raw));
     } finally {
       setAddPhotosBusy(false);
       if (addPhotosInputRef.current) addPhotosInputRef.current.value = "";
@@ -744,8 +778,9 @@ export default function LotDetailPage() {
         </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder. <strong>Add photos</strong> uploads more frames to this listing anytime.{" "}
-          <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
+          picture to reorder. <strong>Add photos</strong> uploads more frames (CTBids max{" "}
+          {CTBIDS_MAX_PHOTOS_PER_LOT} per listing). <strong>Download all photos (ZIP)</strong> saves originals for this
+          listing only.
         </p>
         <input
           ref={addPhotosInputRef}
@@ -762,10 +797,20 @@ export default function LotDetailPage() {
           <button
             type="button"
             className="ct-btn ct-btn--primary"
-            disabled={addPhotosBusy || organizeBusy || reorderBusy || aiRegenerating}
+            disabled={
+              addPhotosBusy ||
+              organizeBusy ||
+              reorderBusy ||
+              aiRegenerating ||
+              catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+            }
             onClick={() => addPhotosInputRef.current?.click()}
           >
-            {addPhotosBusy ? "Uploading…" : "Add photos…"}
+            {addPhotosBusy
+              ? "Uploading…"
+              : catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                ? "Photo limit reached"
+                : "Add photos…"}
           </button>
           {catalogPhotos.length > 0 ? (
             <button

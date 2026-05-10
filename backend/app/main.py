@@ -94,7 +94,12 @@ from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
-from app.catalog_limits import CTBIDS_MAX_PHOTOS_PER_LOT, count_catalog_image_files, list_catalog_image_files_sorted
+from app.catalog_limits import (
+    CTBIDS_MAX_PHOTOS_PER_LOT,
+    count_catalog_image_files,
+    ctbids_lot_photo_delta_error,
+    list_catalog_image_files_sorted,
+)
 
 app = FastAPI(title=settings.app_name)
 
@@ -938,14 +943,8 @@ async def upload_lot_photos(
         .scalar()
     )
     n_existing = int(existing or 0)
-    if n_existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
-                f"this lot has {n_existing} and adding {len(files)} would exceed the limit."
-            ),
-        )
+    if err := ctbids_lot_photo_delta_error(current=n_existing, delta=len(files)):
+        raise HTTPException(status_code=400, detail=err)
     dest = new_batch_dir(current.account_id)
     try:
         await save_uploaded_files(dest, files)
@@ -955,6 +954,9 @@ async def upload_lot_photos(
                 status_code=400,
                 detail="No valid image files could be saved (try JPEG, PNG, WebP, or HEIC).",
             )
+        # Multipart ``len(files)`` can disagree with saved image count; enforce on real paths (closes over-40 bypass).
+        if err := ctbids_lot_photo_delta_error(current=n_existing, delta=len(paths)):
+            raise HTTPException(status_code=400, detail=err)
     except HTTPException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
@@ -1118,6 +1120,21 @@ def transfer_photos_to_lot(
     _assert_sale_editable_for_lot_moves(db, target.sale_id, current)
 
     ids = list(dict.fromkeys(body.photo_ids))  # stable dedupe
+    n_target = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == target_lot_id, Photo.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    to_move = 0
+    for pid in ids:
+        ph = db.query(Photo).filter(Photo.id == pid, Photo.account_id == current.account_id).first()
+        if ph and ph.lot_id != target_lot_id:
+            to_move += 1
+    if err := ctbids_lot_photo_delta_error(current=n_target, delta=to_move):
+        raise HTTPException(status_code=400, detail=err)
+
     touched_lots: set[str] = {target_lot_id}
     moved = 0
     mx = (
@@ -1200,6 +1217,14 @@ def split_selected_photos_into_new_lot(
         raise HTTPException(
             status_code=400,
             detail="Leave at least one photo on this lot — select fewer images, move extras to an existing lot instead.",
+        )
+    if len(ids) > CTBIDS_MAX_PHOTOS_PER_LOT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                f"cannot move {len(ids)} photos into a new lot in one split."
+            ),
         )
 
     title_default = f"New lot (split from {source.sku.strip()})" if (source.sku or "").strip() else "New lot (split)"
@@ -1290,6 +1315,23 @@ def merge_lot_into_target(
     if source.sale_id != target.sale_id:
         raise HTTPException(status_code=400, detail="Lots must belong to the same sale to merge.")
     _assert_sale_editable_for_lot_moves(db, target.sale_id, current)
+
+    n_target = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == target.id, Photo.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    n_source = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == source.id, Photo.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    if err := ctbids_lot_photo_delta_error(current=n_target, delta=n_source):
+        raise HTTPException(status_code=400, detail=err)
 
     note = (
         f"Merged lot {source.sku or source.id}: "
