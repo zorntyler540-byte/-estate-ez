@@ -44,8 +44,11 @@ function rememberDashboardScrollBeforeLotDetails() {
 /** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
 const UPLOAD_FILE_CHUNK = 200;
 
-/** CTBids listing cap — one-lot uploads cannot exceed this many catalog photos. */
-const CTBIDS_MAX_PHOTOS_PER_LOT = 40;
+/**
+ * Per-listing catalog photo cap (null = none). Keep in sync with ``backend/app/catalog_limits.py``.
+ * Re-enable (e.g. 40) when CTBids limits should apply again.
+ */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
 /** Digital zoom for one-lot camera preview + JPEG crop; 1 = no zoom. */
 const LOT_CAMERA_ZOOM_MIN = 1;
@@ -415,12 +418,13 @@ type FolderPickPreview = {
 type SingleLotStagingApply = { pick: FolderPickPreview; droppedFromCap: number };
 
 function capIncomingSingleLotFiles(existingCount: number, incoming: File[]): { files: File[]; dropped: number } {
+  if (CTBIDS_MAX_PHOTOS_PER_LOT == null) return { files: incoming, dropped: 0 };
   const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - existingCount);
   if (incoming.length <= room) return { files: incoming, dropped: 0 };
   return { files: incoming.slice(0, room), dropped: incoming.length - room };
 }
 
-/** Merge or replace staged files for one-lot uploads (picker + inline camera). Caps at ``CTBIDS_MAX_PHOTOS_PER_LOT``. */
+/** Merge or replace staged files for one-lot uploads (picker + inline camera). Caps when ``CTBIDS_MAX_PHOTOS_PER_LOT`` is set. */
 function applySingleLotFilesToStaging(
   prev: FolderPickPreview | null,
   incoming: File[],
@@ -1413,7 +1417,7 @@ export default function DashboardPage() {
     if (!files.length) return;
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
     setFolderPick(pick);
-    if (droppedFromCap > 0) {
+    if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
       setError(
         `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
       );
@@ -1421,7 +1425,10 @@ export default function DashboardPage() {
   }
 
   function snapLotPhoto() {
-    if (lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+    if (
+      CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+    ) {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
       return;
     }
@@ -1447,7 +1454,11 @@ export default function DashboardPage() {
     canvas.toBlob(
       (blob) => {
         if (!blob) return;
-        if (lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT) return;
+        if (
+          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+          lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+        )
+          return;
         const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
         lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
         setLotCameraSnaps([...lotCameraSnapsRef.current]);
@@ -1627,7 +1638,7 @@ export default function DashboardPage() {
         skippedCount
       );
       setFolderPick(pick);
-      if (droppedFromCap > 0) {
+      if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
         setError(
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
@@ -1701,7 +1712,11 @@ export default function DashboardPage() {
     setStagingEditSaturation(100);
     const files = folderPick.imageFiles;
     const total = files.length;
-    if (folderPick.singleLotMode && total > CTBIDS_MAX_PHOTOS_PER_LOT) {
+    if (
+      folderPick.singleLotMode &&
+      CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+      total > CTBIDS_MAX_PHOTOS_PER_LOT
+    ) {
       setError(
         `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove ${total - CTBIDS_MAX_PHOTOS_PER_LOT} photo(s) before uploading.`
       );
@@ -2593,8 +2608,14 @@ export default function DashboardPage() {
                 <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
                   <strong>One lot only:</strong> all photos below become <strong>one</strong> listing (one row in the
                   table). The SKU is read from colored estate tape when it appears in any frame, or you can set it
-                  below. CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
-                  files are skipped.
+                  below.
+                  {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
+                    <>
+                      {" "}
+                      CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
+                      files are skipped.
+                    </>
+                  ) : null}
                 </p>
                 <label className="ct-muted" style={{ display: "block", fontSize: "0.85rem" }}>
                   SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -2614,9 +2635,13 @@ export default function DashboardPage() {
               <strong>
                 {folderPick.imageFiles.length
                   ? folderPick.singleLotMode
-                    ? `${folderPick.imageFiles.length} / ${CTBIDS_MAX_PHOTOS_PER_LOT} image${
-                        folderPick.imageFiles.length === 1 ? "" : "s"
-                      } in “${folderPick.folderLabel}”`
+                    ? CTBIDS_MAX_PHOTOS_PER_LOT != null
+                      ? `${folderPick.imageFiles.length} / ${CTBIDS_MAX_PHOTOS_PER_LOT} image${
+                          folderPick.imageFiles.length === 1 ? "" : "s"
+                        } in “${folderPick.folderLabel}”`
+                      : `${folderPick.imageFiles.length} image${
+                          folderPick.imageFiles.length === 1 ? "" : "s"
+                        } in “${folderPick.folderLabel}”`
                     : `${folderPick.imageFiles.length} image${folderPick.imageFiles.length === 1 ? "" : "s"} in “${folderPick.folderLabel}”`
                   : `No catalog images found in “${folderPick.folderLabel}”`}
               </strong>
@@ -3300,10 +3325,11 @@ export default function DashboardPage() {
             )}
             <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
               <strong>
-                {lotCameraSnaps.length} / {CTBIDS_MAX_PHOTOS_PER_LOT}
+                {lotCameraSnaps.length}
+                {CTBIDS_MAX_PHOTOS_PER_LOT != null ? ` / ${CTBIDS_MAX_PHOTOS_PER_LOT}` : ""}
               </strong>{" "}
               photo{lotCameraSnaps.length === 1 ? "" : "s"} captured
-              {lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT ? (
+              {CTBIDS_MAX_PHOTOS_PER_LOT != null && lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT ? (
                 <span className="ct-muted" style={{ display: "block", marginTop: 4, fontSize: "0.82rem" }}>
                   CTBids limit reached — tap <strong>Done</strong> to add these to the upload box, or remove shots with
                   the trash icon.
@@ -3467,7 +3493,8 @@ export default function DashboardPage() {
                   disabled={
                     !lotCameraStream ||
                     !lotCameraPreviewReady ||
-                    lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                    (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                      lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
                   }
                 >
                   Snap photo

@@ -1218,7 +1218,7 @@ def split_selected_photos_into_new_lot(
             status_code=400,
             detail="Leave at least one photo on this lot — select fewer images, move extras to an existing lot instead.",
         )
-    if len(ids) > CTBIDS_MAX_PHOTOS_PER_LOT:
+    if CTBIDS_MAX_PHOTOS_PER_LOT is not None and len(ids) > CTBIDS_MAX_PHOTOS_PER_LOT:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1634,7 +1634,11 @@ async def create_job_from_upload(
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     sale = _sale_for_user(sale_id, current, db)
     _require_open_sale(sale)
-    if bool(single_lot_mode) and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
+    if (
+        bool(single_lot_mode)
+        and CTBIDS_MAX_PHOTOS_PER_LOT is not None
+        and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT
+    ):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1697,7 +1701,7 @@ async def append_files_to_queued_job(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
     dest = _queued_job_upload_folder(current.account_id, job)
-    if bool(getattr(job, "single_lot_mode", False)):
+    if bool(getattr(job, "single_lot_mode", False)) and CTBIDS_MAX_PHOTOS_PER_LOT is not None:
         existing = count_catalog_image_files(dest)
         if existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
             raise HTTPException(

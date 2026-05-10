@@ -50,8 +50,8 @@ const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
 /** Set when using ``← Back to dashboard`` so the dashboard can restore scroll after Details. */
 const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
 
-/** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT``. */
-const CTBIDS_MAX_PHOTOS_PER_LOT = 40;
+/** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT`` (null = no cap). */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
 function parseFastApiErrorMessage(raw: string): string {
   const t = raw.trim();
@@ -480,16 +480,17 @@ export default function LotDetailPage() {
     if (!lot || !token || !fileList || fileList.length === 0) return;
     const n = fileList.length;
     const existing = catalogPhotos.length;
-    if (existing >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+    const cap = CTBIDS_MAX_PHOTOS_PER_LOT;
+    if (cap != null && existing >= cap) {
       setError(
-        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove photos before adding more.`
+        `CTBids allows at most ${cap} photos per listing. Remove photos before adding more.`
       );
       return;
     }
-    if (existing + n > CTBIDS_MAX_PHOTOS_PER_LOT) {
-      const room = CTBIDS_MAX_PHOTOS_PER_LOT - existing;
+    if (cap != null && existing + n > cap) {
+      const room = cap - existing;
       setError(
-        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. This lot has ${existing}; you can add at most ${room} more in one go.`
+        `CTBids allows at most ${cap} photos per listing. This lot has ${existing}; you can add at most ${room} more in one go.`
       );
       return;
     }
@@ -778,9 +779,16 @@ export default function LotDetailPage() {
         </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder. <strong>Add photos</strong> uploads more frames (CTBids max{" "}
-          {CTBIDS_MAX_PHOTOS_PER_LOT} per listing). <strong>Download all photos (ZIP)</strong> saves originals for this
-          listing only.
+          picture to reorder. <strong>Add photos</strong> uploads more frames
+          {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
+            <>
+              {" "}
+              (CTBids max <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> per listing).
+            </>
+          ) : (
+            "."
+          )}{" "}
+          <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
         </p>
         <input
           ref={addPhotosInputRef}
@@ -802,13 +810,15 @@ export default function LotDetailPage() {
               organizeBusy ||
               reorderBusy ||
               aiRegenerating ||
-              catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+              (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
             }
             onClick={() => addPhotosInputRef.current?.click()}
           >
             {addPhotosBusy
               ? "Uploading…"
-              : catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+              : CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                  catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
                 ? "Photo limit reached"
                 : "Add photos…"}
           </button>

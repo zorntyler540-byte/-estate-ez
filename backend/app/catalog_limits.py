@@ -4,20 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-CTBIDS_MAX_PHOTOS_PER_LOT = 40
+# None = no per-listing photo cap for now. Set to an int (e.g. 40) to re-enforce CTBids-style limits.
+CTBIDS_MAX_PHOTOS_PER_LOT: int | None = None
 
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 
 
 def ctbids_lot_photo_delta_error(*, current: int, delta: int) -> str | None:
     """
-    None if ``current + delta`` is within the CTBids per-listing photo cap; else an HTTP 400 detail string.
+    None if there is no cap, or if ``current + delta`` is within the per-listing photo cap; else an HTTP 400 detail string.
 
     Use after counting **actual** rows to add (saved files, photos to transfer, etc.), not only multipart part count.
     """
     if delta <= 0:
         return None
     cap = CTBIDS_MAX_PHOTOS_PER_LOT
+    if cap is None:
+        return None
     if current > cap:
         return (
             f"CTBids allows at most {cap} photos per listing; this lot has {current} (already over the limit). "
