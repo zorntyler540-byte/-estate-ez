@@ -7,7 +7,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { SiteHeader } from "../../../components/SiteHeader";
-import { API_BASE, apiFetch } from "../../../lib/api";
+import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 
 type LotPhoto = {
   id: string;
@@ -93,6 +93,8 @@ export default function LotDetailPage() {
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
   const lastPhotoSelectAnchorRef = useRef<number | null>(null);
   const dragPhotoIdRef = useRef<string | null>(null);
+  const addPhotosInputRef = useRef<HTMLInputElement>(null);
+  const [addPhotosBusy, setAddPhotosBusy] = useState(false);
 
   useEffect(() => {
     try {
@@ -441,6 +443,28 @@ export default function LotDetailPage() {
     setCatalogPhotos(Array.isArray(photos) ? photos : []);
   }
 
+  async function uploadAdditionalCatalogPhotos(fileList: FileList | null) {
+    if (!lot || !token || !fileList || fileList.length === 0) return;
+    setAddPhotosBusy(true);
+    setError("");
+    setOrganizeMsg("");
+    try {
+      const fd = new FormData();
+      for (let i = 0; i < fileList.length; i++) {
+        fd.append("files", fileList[i]);
+      }
+      await apiUploadFiles(`/lots/${encodeURIComponent(lot.id)}/photos/upload`, token, fd);
+      await refetchLotAndPhotos();
+      await refetchSaleLotsList();
+      setOrganizeMsg(`Added ${fileList.length} photo(s) to this listing.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not upload photos");
+    } finally {
+      setAddPhotosBusy(false);
+      if (addPhotosInputRef.current) addPhotosInputRef.current.value = "";
+    }
+  }
+
   async function refetchSaleLotsList() {
     if (!token || !lot?.sale_id) return;
     const qs = new URLSearchParams({
@@ -698,8 +722,40 @@ export default function LotDetailPage() {
         </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder. <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
+          picture to reorder. <strong>Add photos</strong> uploads more frames to this listing anytime.{" "}
+          <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
         </p>
+        <input
+          ref={addPhotosInputRef}
+          type="file"
+          multiple
+          accept="image/*,.heic,.heif"
+          style={{ display: "none" }}
+          onChange={(e) => void uploadAdditionalCatalogPhotos(e.target.files)}
+        />
+        <div
+          className="ct-row"
+          style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem", alignItems: "center" }}
+        >
+          <button
+            type="button"
+            className="ct-btn ct-btn--primary"
+            disabled={addPhotosBusy || organizeBusy || reorderBusy || aiRegenerating}
+            onClick={() => addPhotosInputRef.current?.click()}
+          >
+            {addPhotosBusy ? "Uploading…" : "Add photos…"}
+          </button>
+          {catalogPhotos.length > 0 ? (
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={zipDownloading || addPhotosBusy}
+              onClick={() => void downloadLotPhotosZip()}
+            >
+              {zipDownloading ? "Preparing ZIP…" : "Download all photos (ZIP)"}
+            </button>
+          ) : null}
+        </div>
         <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
           <summary>Extension order, checkboxes, and keyboard tips</summary>
           <div className="ct-help-details__body">
@@ -718,18 +774,6 @@ export default function LotDetailPage() {
             </ul>
           </div>
         </details>
-        {catalogPhotos.length > 0 ? (
-          <div style={{ marginBottom: "1rem" }}>
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={zipDownloading}
-              onClick={() => void downloadLotPhotosZip()}
-            >
-              {zipDownloading ? "Preparing ZIP…" : "Download all photos (ZIP)"}
-            </button>
-          </div>
-        ) : null}
         {organizeMsg ? (
           <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
             {organizeMsg}
@@ -909,7 +953,8 @@ export default function LotDetailPage() {
           <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
             <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={400} />
             <p className="ct-lot-hero-note" style={{ margin: 0 }}>
-              No photos on this listing yet. Run a photo job from the dashboard to attach images.
+              No photos on this listing yet. Use <strong>Add photos</strong> above, or run a photo job from the
+              dashboard.
             </p>
           </div>
         ) : (

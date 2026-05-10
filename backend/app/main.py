@@ -94,7 +94,7 @@ from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
-from app.catalog_limits import CTBIDS_MAX_PHOTOS_PER_LOT, count_catalog_image_files
+from app.catalog_limits import CTBIDS_MAX_PHOTOS_PER_LOT, count_catalog_image_files, list_catalog_image_files_sorted
 
 app = FastAPI(title=settings.app_name)
 
@@ -894,6 +894,97 @@ def list_lot_photos(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    return [
+        LotPhotoOut(
+            id=p.id,
+            lot_id=lot_id,
+            original_name=p.original_name,
+            created_at=p.created_at,
+            sort_order=p.sort_order,
+        )
+        for p in photos
+    ]
+
+
+@app.post("/lots/{lot_id}/photos/upload", response_model=list[LotPhotoOut])
+async def upload_lot_photos(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    files: list[UploadFile] = File(),
+) -> list[LotPhotoOut]:
+    """
+    Append new catalog images to an existing lot (same sale must be open).
+
+    Files are stored under a new upload batch, compressed like ``/jobs/upload``, then linked in gallery order
+    after existing photos.
+    """
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    existing = (
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .scalar()
+    )
+    n_existing = int(existing or 0)
+    if n_existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                f"this lot has {n_existing} and adding {len(files)} would exceed the limit."
+            ),
+        )
+    dest = new_batch_dir(current.account_id)
+    try:
+        await save_uploaded_files(dest, files)
+        paths = list_catalog_image_files_sorted(dest)
+        if not paths:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid image files could be saved (try JPEG, PNG, WebP, or HEIC).",
+            )
+    except HTTPException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+
+    mx = (
+        db.query(func.max(Photo.sort_order))
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .scalar()
+    )
+    base = (int(mx) if mx is not None else -1) + 1
+    for i, path in enumerate(paths):
+        db.add(
+            Photo(
+                account_id=current.account_id,
+                user_id=current.id,
+                lot_id=lot_id,
+                original_name=path.name,
+                storage_path=str(path.resolve()),
+                sort_order=base + i,
+            )
+        )
+    renormalize_photo_sort_orders(db, lot_id, current.account_id)
+    _reconcile_lot_photo_count(db, lot_id, current.account_id)
+    db.commit()
+    recompute_sku_sanity_flags_for_sale(db, row.sale_id, current.account_id)
+    db.commit()
+
     photos = (
         db.query(Photo)
         .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
