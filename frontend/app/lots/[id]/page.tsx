@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -50,6 +50,13 @@ const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
 /** Set when using ``← Back to dashboard`` so the dashboard can restore scroll after Details. */
 const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
 
+/** Next.js 15 may type dynamic segments as ``string | string[]`` at runtime. */
+function singleDynamicRouteParam(raw: unknown): string {
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "string" && raw[0].trim()) return raw[0].trim();
+  return "";
+}
+
 function readStoredToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("token") || "";
@@ -57,7 +64,8 @@ function readStoredToken(): string {
 
 export default function LotDetailPage() {
   const router = useRouter();
-  const params = useParams<{ id: string }>();
+  const params = useParams();
+  const routeLotId = useMemo(() => singleDynamicRouteParam(params.id), [params.id]);
 
   function logout() {
     try {
@@ -109,21 +117,21 @@ export default function LotDetailPage() {
         /* private mode / SSR */
       }
     };
-  }, [params.id]);
+  }, [routeLotId]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
     setToken(t);
-    if (!t || !params.id) return;
+    if (!t || !routeLotId) return;
     let cancelled = false;
     setPhotosError("");
     void (async () => {
       try {
-        const d = await apiFetch(`/lots/${params.id}`, t);
+        const d = await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, t);
         if (cancelled) return;
         setLot(d);
         try {
-          const photos = (await apiFetch(`/lots/${params.id}/photos`, t)) as LotPhoto[];
+          const photos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/photos`, t)) as LotPhoto[];
           if (cancelled) return;
           setCatalogPhotos(Array.isArray(photos) ? photos : []);
         } catch {
@@ -139,7 +147,7 @@ export default function LotDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [params.id]);
+  }, [routeLotId]);
 
   useEffect(() => {
     if (!token || !lot?.sale_id) return;
@@ -179,7 +187,7 @@ export default function LotDetailPage() {
     setOrganizeMsg("");
     setSplitNewLotTitle("");
     lastPhotoSelectAnchorRef.current = null;
-  }, [params.id]);
+  }, [routeLotId]);
 
   useEffect(() => {
     return () => {
@@ -436,27 +444,41 @@ export default function LotDetailPage() {
   }
 
   async function refetchLotAndPhotos() {
-    if (!token || !params.id) return;
-    const d = await apiFetch(`/lots/${params.id}`, token);
+    const id = lot?.id ?? routeLotId;
+    if (!token || !id) return;
+    const d = await apiFetch(`/lots/${encodeURIComponent(id)}`, token);
     setLot(d);
-    const photos = (await apiFetch(`/lots/${params.id}/photos`, token)) as LotPhoto[];
-    setCatalogPhotos(Array.isArray(photos) ? photos : []);
+    try {
+      const photos = (await apiFetch(`/lots/${encodeURIComponent(id)}/photos`, token)) as LotPhoto[];
+      setCatalogPhotos(Array.isArray(photos) ? photos : []);
+      setPhotosError("");
+    } catch {
+      setPhotosError("Could not load the photo list for this lot.");
+    }
   }
 
   async function uploadAdditionalCatalogPhotos(fileList: FileList | null) {
     if (!lot || !token || !fileList || fileList.length === 0) return;
+    const n = fileList.length;
     setAddPhotosBusy(true);
     setError("");
     setOrganizeMsg("");
     try {
       const fd = new FormData();
-      for (let i = 0; i < fileList.length; i++) {
-        fd.append("files", fileList[i]);
+      const files = Array.from(fileList);
+      for (const f of files) {
+        fd.append("files", f);
       }
-      await apiUploadFiles(`/lots/${encodeURIComponent(lot.id)}/photos/upload`, token, fd);
-      await refetchLotAndPhotos();
+      const raw = await apiUploadFiles(`/lots/${encodeURIComponent(lot.id)}/photos/upload`, token, fd);
+      if (!Array.isArray(raw)) {
+        throw new Error("Upload response was not a photo list — check API version.");
+      }
+      setCatalogPhotos(raw as LotPhoto[]);
+      setPhotosError("");
+      const d = await apiFetch(`/lots/${encodeURIComponent(lot.id)}`, token);
+      setLot(d);
       await refetchSaleLotsList();
-      setOrganizeMsg(`Added ${fileList.length} photo(s) to this listing.`);
+      setOrganizeMsg(`Added ${n} photo(s) to this listing.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not upload photos");
     } finally {
