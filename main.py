@@ -1,7 +1,7 @@
 """
 Estate sale photo scanner: uses Google Gemini vision (multimodal) with your
 GOOGLE_API_KEY from .env / Images/.env — the same key you keep in project settings.
-New lot only when purple estate tape shows a readable lot number (SKU); otherwise detail of current lot.
+New lot only when colored estate tape (purple, lavender, green, yellow, etc.) shows a readable lot number (SKU); otherwise detail of current lot.
 Each lot is written as Auction title + professional description (**brands**) + bulleted item specifications.
 """
 from __future__ import annotations
@@ -175,7 +175,7 @@ def _as_str_list(value: object) -> list[str]:
 def tape_sku_opens_new_lot(sku: object) -> bool:
     """
     True only when the model returned a real lot number (digits) for tape SKU.
-    Purple tape without a readable number must use SKU null — this catches stray text.
+    Estate tape without a readable number must use SKU null — this catches stray text.
     """
     if sku is None:
         return False
@@ -503,7 +503,7 @@ def _tape_digits_equal(a: str, b: str) -> bool:
 
 def verify_tape_sku_for_image(img_path: Path, claimed_digits: str) -> bool | None:
     """
-    Second vision pass: True only if purple/lavender painter's tape with this lot # is on the tape.
+    Second vision pass: True only if colored estate masking tape (purple, lavender, green, or yellow) with this lot # is on the tape.
     False = do not open a new lot from SKU. None = could not verify (caller keeps primary SKU).
     """
     with open(img_path, "rb") as f:
@@ -511,14 +511,14 @@ def verify_tape_sku_for_image(img_path: Path, claimed_digits: str) -> bool | Non
     audit = (
         "You are a strict visual auditor for estate-sale software. Look at ONLY this photo.\n"
         "Answer with one JSON object and these exact keys:\n"
-        '- "new_lot_from_tape": boolean — true ONLY if you clearly see purple or lavender '
+        '- "new_lot_from_tape": boolean — true ONLY if you clearly see purple, lavender, bright green, or bright yellow '
         "MASKING-TAPE (painter's tape) used as a lot marker AND a handwritten or printed lot number "
-        "ON THE SURFACE OF THAT TAPE.\n"
+        "ON THE SURFACE OF THAT TAPE (not a yellow measuring tape with inch/cm scale only).\n"
         '- "lot_digits_on_tape": string or null — digits only as read from the tape (no #); null if none.\n'
         "Set new_lot_from_tape to FALSE if: there is no such tape, tape has no readable number, the number "
         "is only on paper/card/other stickers, or you are unsure.\n"
         "Also FALSE for mistaking: zippers or pulls, hanger clips, metal hooks, shadows, wrinkles, "
-        "tiny background specks, purple clothing (not tape), or any digit not clearly ON purple/lavender tape.\n"
+        "tiny background specks, colored clothing (not tape), or any digit not clearly ON that estate tape.\n"
         f"The catalog model guessed lot digits: {claimed_digits!r}. "
         "new_lot_from_tape must be false unless those exact digits (leading zeros optional) are what you read ON the tape.\n"
         "Respond with JSON only, no markdown fences."
@@ -571,20 +571,20 @@ def analyze_photo(img_path: Path) -> dict | None:
     prompt = (
         "You are an expert estate liquidator reviewing one photo for a sale catalog.\n"
         "Rules:\n"
-        "- START A NEW LOT ONLY when BOTH are true: (1) you see this sale's PURPLE (or lavender) "
-        "estate painter's tape marking the lot, AND (2) a CLEAR lot number is written or printed ON "
+        "- START A NEW LOT ONLY when BOTH are true: (1) you see this sale's colored estate painter's tape "
+        "(purple, lavender, bright green, or bright yellow) marking the lot, AND (2) a CLEAR lot number is written or printed ON "
         "that tape. Set 'SKU' to that number as digits only (strip # and spaces).\n"
         "- NEVER invent a lot number from: zippers or metal pulls, hanger clips, hooks, shadows, "
-        "backdrop specks, purple/magenta fabric (clothing is not tape), blur, or digits on tags/paper "
-        "unless they are clearly printed ON purple/lavender painter's tape.\n"
-        "- Example of a valid NEW-lot opener: purple tape on a hanger or rack with a handwritten or "
+        "backdrop specks, fabric the same color as tape (clothing is not tape), blur, or digits on tags/paper "
+        "unless they are clearly printed ON that colored estate painter's tape.\n"
+        "- Example of a valid NEW-lot opener: colored tape on a hanger or rack with a handwritten or "
         "printed lot number ON the tape (e.g. #002); a wide shot may show several garments together. "
         "Read SKU only from that tape — not from price stickers elsewhere. Brands or sizes may be "
         "invisible in that same photo; use empty Brands/LabelsAndTags if so, but still set SKU from the tape.\n"
-        "- If there is purple tape but NO readable number on the tape, or tape is not visible, or you "
+        "- If there is estate tape but NO readable number on the tape, or tape is not visible, or you "
         "are unsure: set 'SKU' to null — never invent a lot number. That frame is still part of the "
         "current lot (detail, angle, or context shot).\n"
-        "- If there is no purple tape with a number (detail shot, alternate angle, close-up), "
+        "- If there is no estate tape with a number (detail shot, alternate angle, close-up), "
         "set 'SKU' to null. This image belongs to the same physical lot as the previous hero shot. "
         "For such frames, prioritize readable BRANDS and SIZE/FIT text in Brands, LabelsAndTags, "
         "SpecificationLines, and a short ProfessionalDescription of what this frame clarifies.\n"
@@ -593,7 +593,7 @@ def analyze_photo(img_path: Path) -> dict | None:
         "- 'Brands': JSON array of strings—each string one brand or designer name clearly visible "
         "(empty array if none). Do not guess.\n"
         "- 'LabelsAndTags': JSON array of strings—ONLY sizes and fit reads from tags "
-        "(e.g. 'M', 'Size 8', '32x30', 'OSFA', 'Petite P'). Exclude the purple tape SKU number. Use [] if none.\n"
+        "(e.g. 'M', 'Size 8', '32x30', 'OSFA', 'Petite P'). Exclude the estate tape SKU number. Use [] if none.\n"
         "- 'AuctionTitle': ONE line for the auction listing title—include each garment piece, brand names, "
         "and sizes (e.g. 'Spartina 449 Boutique Tunic & Chico's Travelers Pleated Trousers Set - Size XL/2').\n"
         "- 'ProfessionalDescription': ONE polished paragraph (4–6 sentences). Describe colors, cut, "
@@ -842,7 +842,7 @@ def main() -> None:
             print("[detail for current lot]")
         else:
             print(
-                "[skipped: no open lot yet — need purple tape with a readable lot number to start]"
+                "[skipped: no open lot yet — need colored estate tape with a readable lot number to start]"
             )
 
     if current_lot:

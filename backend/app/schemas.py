@@ -244,7 +244,7 @@ class LotAiRegenerateIn(BaseModel):
     )
     preserve_sku: bool = Field(
         default=False,
-        description="When true, keep the lot's current tape SKU and only refresh title/description/specs/etc.",
+        description="When true, keep the lot's current estate-tape SKU and only refresh title/description/specs/etc.",
     )
 
 

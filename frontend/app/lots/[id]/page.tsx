@@ -665,8 +665,8 @@ export default function LotDetailPage() {
       </header>
       {lot.sku_needs_review ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
-          <strong>Double-check the lot number.</strong> We could not read the purple tape clearly — make sure the SKU
-          below matches your photos before you publish.
+          <strong>Double-check the lot number.</strong> We could not read the colored estate tape clearly — make sure
+          the SKU below matches your photos before you publish.
         </div>
       ) : null}
       {lot.many_photos_review ? (
@@ -1136,14 +1136,14 @@ export default function LotDetailPage() {
         </div>
         <div>
           <label className="ct-label" htmlFor="lot-sku">
-            Estate lot SKU (tape digits)
+            Estate lot SKU (handwritten on colored tape)
           </label>
           <input
             id="lot-sku"
             className="ct-input"
-            inputMode="numeric"
+            inputMode="text"
             autoComplete="off"
-            placeholder="e.g. 034"
+            placeholder="e.g. 034 or SA013"
             value={lot.sku ?? ""}
             onChange={(e) => setLot({ ...lot, sku: e.target.value.trim() || null })}
           />

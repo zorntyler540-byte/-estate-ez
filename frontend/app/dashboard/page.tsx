@@ -553,7 +553,7 @@ export default function DashboardPage() {
   const [stagingEditBusy, setStagingEditBusy] = useState(false);
   /** Fixed jump scroll buttons when the dashboard is taller than the viewport. */
   const [showDashboardScrollJumpNav, setShowDashboardScrollJumpNav] = useState(false);
-  /** Optional tape/lot digits for one-lot uploads (camera + file picker). */
+  /** Optional lot/tape marking for one-lot uploads (camera + file picker). */
   const [singleLotManualSku, setSingleLotManualSku] = useState("");
   /** One loading row per catalog photo while the active job runs (SSE). */
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
@@ -2496,10 +2496,11 @@ export default function DashboardPage() {
               </li>
               <li>
                 <strong>Separate items:</strong> put each item in its own subfolder (e.g. <code>Matryoshka/</code>,{" "}
-                <code>Turtle/</code>) if you are not using purple tape on every group.
+                <code>Turtle/</code>) if you are not using colored estate tape on every group.
               </li>
               <li>
-                <strong>One flat folder:</strong> purple estate tape marks new lots; a <strong>blank white divider</strong>{" "}
+                <strong>One flat folder:</strong> colored estate tape (purple, green, yellow, etc.) marks new lots; a{" "}
+                <strong>blank white divider</strong>{" "}
                 photo between groups can also split lots (that frame is not kept as a product photo).
               </li>
               <li>
@@ -2526,7 +2527,7 @@ export default function DashboardPage() {
           <span className="ct-muted" style={{ fontSize: "0.9rem", maxWidth: "44rem" }}>
             <strong>Use folder names as lot numbers</strong> when each lot is in its own subfolder named with digits
             only (for example <code>035</code>, <code>036</code>). The app uses that number as the SKU instead of
-            guessing from tape.
+            reading it from colored estate tape in the photos.
           </span>
         </label>
         <input
@@ -3125,7 +3126,7 @@ export default function DashboardPage() {
                   lot.many_photos_review
                     ? "Unusually many photos for this sale — confirm images belong to this listing."
                     : lot.sku_needs_review || !lot.sku
-                      ? "Verify handwritten tape SKU (or enter manually on the lot page)."
+                      ? "Verify handwritten lot code on colored estate tape (or enter manually on the lot page)."
                       : undefined
                 }
               >

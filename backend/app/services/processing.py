@@ -81,12 +81,18 @@ _TAPE_PHRASES = (
     "lot tape",
     "purple tape",
     "lavender tape",
+    "green tape",
+    "yellow tape",
+    "neon green",
+    "neon yellow",
 )
 
 
 def _blob_suggests_purple_tape_language(blob: str) -> bool:
-    """True when prose likely refers to purple/lavender *estate* tape (not substrings like ``plate`` in ``silverplate``)."""
+    """True when prose refers to colored *estate* lot tape (not substrings like ``plate`` in ``silverplate``)."""
     if re.search(r"\b(purple|lavender)\b", blob):
+        return True
+    if re.search(r"\bneon\s+(?:green|yellow)\b", blob):
         return True
     return any(p in blob for p in _TAPE_PHRASES)
 
@@ -209,12 +215,12 @@ def _shared_material_and_form_tokens(ta: set[str], tb: set[str]) -> bool:
 
 def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
     """
-    Detail shots of silverplate often show stamped pattern numbers (e.g. 1420) on the base — not purple tape.
+    Detail shots of silverplate often show stamped pattern numbers (e.g. 1420) on the base — not estate tape.
 
     When the model puts those digits in ``sku``, we would otherwise run tape verify and churn lot boundaries.
 
     Sheffield reproduction / hand-chased / silverplate base titles: clear **any** sku unless the row text
-    uses real tape wording (word-boundary purple/lavender or phrases like ``purple tape``), not naive substring
+    uses real tape wording (purple/lavender/green/yellow estate tape phrases), not naive substring
     checks that misfire on ``silverplate``. Other cases: digits-only plus underside hints.
     """
     if not lot.sku or lot.lot_boundary_blank_page:
@@ -258,7 +264,7 @@ def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     Heuristic continuity check to avoid accidental lot splits in bulk uploads.
     Returns true when title/brand overlap strongly suggests same physical item.
 
-    When the open lot has **no tape SKU yet** (detail shots before the hero frame with purple tape),
+    When the open lot has **no tape SKU yet** (detail shots before the hero frame with colored estate tape),
     compare tokens from title + description + specs so a handle macro still matches the SA015
     wide shot (e.g. both ``ceramic`` + ``pitcher``).
     """
@@ -743,7 +749,10 @@ def process_job(
         ):
             _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="tape_verify")
             t_verify = time.monotonic()
-            verified = verify_tape_sku(photo_path, sku_digits(lot_candidate.sku))
+            claimed_marking = (
+                tape_marking_canonical(lot_candidate.sku) or sku_digits(lot_candidate.sku) or ""
+            ).strip()
+            verified = verify_tape_sku(photo_path, claimed_marking)
             _emit_job_debug(
                 job,
                 "job=%s tape_verify i=%s file=%s claimed=%s result=%s ms=%.0f"
@@ -751,7 +760,7 @@ def process_job(
                     job.id,
                     i + 1,
                     photo_path.name,
-                    sku_digits(lot_candidate.sku),
+                    claimed_marking,
                     verified,
                     (time.monotonic() - t_verify) * 1000.0,
                 ),

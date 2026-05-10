@@ -1,4 +1,4 @@
-"""Detect purple / lavender estate tape and build a high-contrast crop for SKU reading."""
+"""Detect colored estate lot tape (purple, lavender, neon green, yellow) and build a SKU crop."""
 
 from __future__ import annotations
 
@@ -32,9 +32,80 @@ def _is_lavender_purple_tape_pixel(r: int, g: int, b: int) -> bool:
     return True
 
 
-def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
+def _is_neon_green_tape_pixel(r: int, g: int, b: int) -> bool:
+    """Neon / painter green lot tape — green channel clearly leads (avoids brass/greys that union into huge bboxes)."""
+    if max(r, g, b) < 60:
+        return False
+    if g < 115:
+        return False
+    if g < max(r, b) + 8:
+        return False
+    if g < r + 28 and g < b + 22:
+        return False
+    spread = max(r, g, b) - min(r, g, b)
+    if spread < 32:
+        return False
+    return True
+
+
+def _is_bright_yellow_masking_tape_pixel(r: int, g: int, b: int) -> bool:
     """
-    Return a grayscale high-contrast JPEG of the purple-tape region, or None if no plausible region.
+    Saturated yellow / chartreuse adhesive tape (lot marker).
+
+    Deliberately avoids near-white; does not try to separate yellow *measuring* tape (model uses full frame for that).
+    """
+    if max(r, g, b) < 70:
+        return False
+    if min(r, g) < 100:
+        return False
+    spread = max(r, g, b) - min(r, g, b)
+    if spread < 24:
+        return False
+    # Yellow: red and green both high vs blue (not white, not pure green)
+    if b > min(r, g) + 55:
+        return False
+    if r + g < b + 130:
+        return False
+    if g > r + 55:
+        return False
+    return True
+
+
+def _is_estate_tape_pixel(r: int, g: int, b: int) -> bool:
+    return (
+        _is_lavender_purple_tape_pixel(r, g, b)
+        or _is_neon_green_tape_pixel(r, g, b)
+        or _is_bright_yellow_masking_tape_pixel(r, g, b)
+    )
+
+
+def _bbox_for_color_mask(
+    px: object, tw: int, th: int, pred: object, *, dilate: int
+) -> tuple[int, int, int, int] | None:
+    """Build a boolean mask for ``pred``, optionally dilate, return bbox if area is in a plausible tape range."""
+    from PIL import Image, ImageFilter
+
+    mask = Image.new("L", (tw, th), 0)
+    mp = mask.load()
+    for y in range(th):
+        for x in range(tw):
+            r, g, b = px[x, y]
+            if pred(r, g, b):
+                mp[x, y] = 255
+    if dilate > 1:
+        mask = mask.filter(ImageFilter.MaxFilter(dilate))
+    bbox = mask.getbbox()
+    if not bbox:
+        return None
+    area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    if area < 140 or area > 0.52 * tw * th:
+        return None
+    return bbox
+
+
+def estate_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
+    """
+    Return a grayscale high-contrast JPEG of the estate-tape region, or None if no plausible region.
 
     Uses a downscaled pass for speed then maps bbox back to full resolution before crop.
     """
@@ -58,22 +129,36 @@ def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
     thumb.thumbnail((640, 640), Image.Resampling.LANCZOS)
     tw, th = thumb.size
     px = thumb.load()
-    mask = Image.new("L", (tw, th), 0)
-    mp = mask.load()
-    for y in range(th):
-        for x in range(tw):
-            r, g, b = px[x, y]
-            if _is_lavender_purple_tape_pixel(r, g, b):
-                mp[x, y] = 255
 
-    mask = mask.filter(ImageFilter.MaxFilter(9))
-    bbox = mask.getbbox()
-    if not bbox:
-        return None
+    candidates: list[tuple[int, tuple[int, int, int, int]]] = []
+    for pred in (
+        _is_lavender_purple_tape_pixel,
+        _is_neon_green_tape_pixel,
+        _is_bright_yellow_masking_tape_pixel,
+    ):
+        bb = _bbox_for_color_mask(px, tw, th, pred, dilate=9)
+        if bb:
+            area = (bb[2] - bb[0]) * (bb[3] - bb[1])
+            candidates.append((area, bb))
 
-    area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-    if area < 140 or area > 0.52 * tw * th:
-        return None
+    if candidates:
+        # Prefer the tightest plausible region so a true tape strip wins over broad false positives (e.g. grey + brass).
+        bbox = min(candidates, key=lambda t: t[0])[1]
+    else:
+        mask = Image.new("L", (tw, th), 0)
+        mp = mask.load()
+        for y in range(th):
+            for x in range(tw):
+                r, g, b = px[x, y]
+                if _is_estate_tape_pixel(r, g, b):
+                    mp[x, y] = 255
+        mask = mask.filter(ImageFilter.MaxFilter(9))
+        bbox = mask.getbbox()
+        if not bbox:
+            return None
+        area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        if area < 140 or area > 0.52 * tw * th:
+            return None
 
     sx = w / tw
     sy = h / th
@@ -97,3 +182,8 @@ def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
     buf = BytesIO()
     out.save(buf, format="JPEG", quality=92, optimize=True)
     return buf.getvalue()
+
+
+def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
+    """Backward-compatible alias for :func:`estate_tape_focus_jpeg_from_path`."""
+    return estate_tape_focus_jpeg_from_path(path)

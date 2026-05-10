@@ -14,7 +14,7 @@ import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import settings
-from app.core.lotting import tape_marking_canonical
+from app.core.lotting import sku_digits, tape_marking_canonical
 from app.services.image_preprocess import prepare_gemini_image_file
 
 TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
@@ -77,8 +77,9 @@ class InventoryTableEntry(BaseModel):
         default=None,
         validation_alias=AliasChoices("sku", "SKU"),
         description=(
-            "Handwritten lot code on PURPLE or LAVENDER adhesive estate tape. Read sku from focused crop if provided. "
-            "Never use stamped manufacturer numbers (e.g. 1420) or silverplate pattern numbers as SKU."
+            "Handwritten or printed lot code on colored estate adhesive tape: PURPLE, LAVENDER, bright NEON GREEN, "
+            "or bright YELLOW masking/painter tape (lot marker — not yellow measuring tape). Read sku from focused crop "
+            "if provided. Never use stamped manufacturer numbers (e.g. 1420) or silverplate pattern numbers as SKU."
         ),
     )
     sku_read_confidence: str | None = Field(
@@ -166,7 +167,7 @@ SYSTEM_INSTRUCTION = (
     "'Components: 1 flagon/jug, 1 tray, 6 cups'. Use only clearly visible counts.\n\n"
     "### DIMENSIONS FROM PHOTOS (specification_lines):\n"
     "- If a **yellow measuring tape**, metal ruler, or yardstick appears and the readout is legible, add one line per "
-    "clear measurement to **specification_lines** (not the purple estate lot tape — that is SKU only).\n"
+    "clear measurement to **specification_lines** (not colored estate lot tape — that is SKU only).\n"
     "- Use 'Label: value' with units (prefer inches: ~10 in., ~4.5 in.). Prefix with ~ for estimates from the photo.\n"
     "- Name what was measured: e.g. 'Overall width (set): ~10 in. (tape along front)', "
     "'Height (tallest figurine): ~4.5 in. (tape vertical)', 'Height (center piece): ~3.5 in.'\n"
@@ -181,8 +182,10 @@ SYSTEM_INSTRUCTION = (
     "- 'MZ Altrohlau' = Moritz Zdekauer factory.\n"
     "- DECISIVENESS: Return exactly ONE primary brand. Do not provide a list of competing guesses (no Brand Soup).\n\n"
     "Identify brand, model, material, condition flaws, and era from the image. Use a tone that is helpful, clear, and professional. "
-    "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of purple/lavender tape — prioritize image 2 for SKU. "
-    "SKU must be HANDWRITTEN on purple/lavender tape only. Never use sewn tags, size tags, or stamped numbers on the item body as SKU. "
+    "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of colored estate lot tape "
+    "(purple, lavender, neon green, or yellow masking tape) — prioritize image 2 for SKU. "
+    "SKU must appear on that estate tape only (not yellow measuring tape, not rulers). "
+    "Never use sewn tags, size tags, or stamped numbers on the item body as SKU. "
     "Condition must use exactly one of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
     "Output must match JSON schema only."
 )
@@ -210,13 +213,14 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "  * FAIR: heavy wear and visible scratches/damage.\n"
         "- specification_lines: 'Label: value' — Material, Style, Finish, Era, Subject, **and dimensions from a visible "
         "yellow tape or ruler** (e.g. Overall width (set): ~10 in.; Height (tallest): ~4.5 in.). "
-        "Never use purple/lavender **estate** tape numbers as dimensions. "
+        "Never use colored **estate** tape (purple/lavender/green/yellow lot tape) numbers as dimensions. "
         "For multi-piece lots, include one 'Components:' line with the major visible pieces and counts (e.g., "
         "1 jug/flagon, 1 tray, 6 cups). "
         "In the specification lines, provide only one 'Subject' and one 'Form' that most accurately describes the item. "
         "Do not provide alternatives or related keywords. "
         "Never include a Markings line or stamp/mold-number transcription.\n"
-        "- sku: Handwritten digits on purple/lavender tape ONLY. null if not on tape.\n"
+        "- sku: Lot marking on purple, lavender, bright green, or bright yellow estate masking tape ONLY "
+        "(same code you would read from image 2 when provided). null if not on tape.\n"
     )
 
 
@@ -330,7 +334,11 @@ def _analyze_photo_sdk_from_bytes(
     if not client: return None
     from google.genai import types as genai_types
     
-    focus_note = "\nA second image follows: high-contrast crop of purple tape. Read SKU from this crop." if focus_jpeg else ""
+    focus_note = (
+        "\nA second image follows: high-contrast crop of colored estate lot tape. Read SKU from this crop."
+        if focus_jpeg
+        else ""
+    )
     contents = [
         _user_prompt(manifest_tag=manifest_tag) + focus_note,
         genai_types.Part(inline_data=genai_types.Blob(mime_type=mime_type, data=image_bytes)),
@@ -399,10 +407,10 @@ def analyze_photo_from_bytes(image_bytes: bytes, mime_type: str, **kwargs) -> di
 
 
 def analyze_path_with_retries(photo_path: Path, *, manifest_tag: str = "") -> dict[str, Any] | None:
-    from app.services.tape_focus import purple_tape_focus_jpeg_from_path
+    from app.services.tape_focus import estate_tape_focus_jpeg_from_path
     focus_jpeg = None
     if settings.tape_focus_enabled:
-        try: focus_jpeg = purple_tape_focus_jpeg_from_path(photo_path)
+        try: focus_jpeg = estate_tape_focus_jpeg_from_path(photo_path)
         except Exception: pass
 
     img_bytes, mime = prepare_gemini_image_file(photo_path, max_edge=settings.gemini_image_max_edge, quality=settings.gemini_jpeg_quality)
@@ -446,14 +454,35 @@ def analyze_photo(photo_path: Path, **kwargs) -> dict[str, Any] | None:
     return analyze_path_with_retries(photo_path, **kwargs)
 
 # --- Tape Verification logic follows standard audit rules ---
-def verify_tape_sku(photo_path: Path, claimed_digits: str) -> bool | None:
+def verify_tape_sku(photo_path: Path, claimed_marking: str) -> bool | None:
     timeout = float(settings.tape_verify_total_timeout_seconds)
-    fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_digits)
+    fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_marking)
     try: return fut.result(timeout=timeout)
     except Exception: return None
 
-def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None:
-    prompt = f"Audit: Is handwritten {claimed_digits} visible on PURPLE/LAVENDER tape? Return JSON {{'new_lot_from_tape': bool, 'lot_digits_on_tape': str}}."
+def _normalize_tape_audit_reading(raw: object) -> str:
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s or s.lower() in ("null", "none", ""):
+        return ""
+    return (tape_marking_canonical(s) or sku_digits(s) or "").strip().upper()
+
+
+def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | None:
+    claim = (claimed_marking or "").strip()
+    if not claim:
+        return None
+    prompt = (
+        f"Audit: Is the lot marking {claim!r} clearly visible on estate lot tape? "
+        "Tape may be PURPLE, LAVENDER, bright NEON GREEN, or bright YELLOW adhesive masking/painter tape "
+        "with handwriting or print on its surface. "
+        "Set new_lot_from_tape false if the marking is only on a yellow MEASURING tape (inch/cm scale), ruler, "
+        "sticker, tag, or item body. "
+        "Return JSON {\"new_lot_from_tape\": bool, \"lot_digits_on_tape\": string}. "
+        "lot_digits_on_tape: exact marking read from the tape (letters+digits as seen), or null if none/unreadable."
+    )
+    prompt = prompt + _tape_verify_prompt_extra()
     img_bytes, mime = prepare_gemini_image_file(photo_path, max_edge=1536, quality=85)
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": base64.b64encode(img_bytes).decode("utf-8")}}]}]
@@ -462,5 +491,9 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_digits: str) -> bool | None
     if not text: return None
     try:
         res = json.loads(re.sub(r"```json|```", "", text).strip())
-        return res.get("new_lot_from_tape") is True and str(res.get("lot_digits_on_tape", "")) == claimed_digits
+        if res.get("new_lot_from_tape") is not True:
+            return False
+        read_norm = _normalize_tape_audit_reading(res.get("lot_digits_on_tape"))
+        claim_norm = _normalize_tape_audit_reading(claim)
+        return bool(claim_norm) and read_norm == claim_norm
     except Exception: return None

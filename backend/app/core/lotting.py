@@ -566,7 +566,7 @@ def _sanitize_gendered_title(title: str, payload: dict[str, Any]) -> str:
 
 def tape_marking_canonical(raw: str | None) -> str | None:
     """
-    Normalize a handwritten purple-tape lot code for storage and comparison.
+    Normalize a handwritten colored estate-tape lot code for storage and comparison.
 
     Supports:
     - Digits-only after ``#`` or plain digit runs (2–6 digits), via ``normalize_tape_sku_input``.
@@ -651,7 +651,7 @@ def payload_suggests_sku_review(payload: dict[str, Any]) -> bool:
 
 def normalize_tape_sku_input(raw: str | None) -> str | None:
     """
-    Prefer digits after the last ``#`` (purple-tape convention). Take the first 2–6 digit run after ``#``,
+    Prefer digits after the last ``#`` (estate-tape convention). Take the first 2–6 digit run after ``#``,
     or the leading 2–6 digit run when there is no ``#``, without concatenating unrelated long strings.
     """
     if raw is None:

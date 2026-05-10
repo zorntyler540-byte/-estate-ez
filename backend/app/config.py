@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     tape_focus_enabled: bool = Field(default=True, alias="TAPE_FOCUS_ENABLED")
     last_known_sku_fallback: bool = Field(default=True, alias="LAST_KNOWN_SKU_FALLBACK")
-    # Outer wall time for one tape-SKU audit thread (should exceed HTTP connect+read below).
+    # Outer wall time for one estate-tape SKU audit thread (should exceed HTTP connect+read below).
     tape_verify_total_timeout_seconds: float = Field(
         default=120.0, ge=30.0, le=600.0, alias="TAPE_VERIFY_TOTAL_TIMEOUT_SECONDS"
     )
