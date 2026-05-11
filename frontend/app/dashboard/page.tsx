@@ -631,6 +631,17 @@ export default function DashboardPage() {
     setSaleZipExport(null);
   }, [selectedSaleId]);
 
+  /** Refresh/close during multipart upload aborts the request and clears staging — warn first. */
+  useEffect(() => {
+    if (typeof window === "undefined" || !uploading) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [uploading]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const update = () => {
