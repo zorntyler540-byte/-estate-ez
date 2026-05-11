@@ -923,6 +923,81 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
     return out[:500]
 
 
+def _coin_years_in_text(text: str) -> set[int]:
+    """Collect plausible U.S. coin dates from text (e.g. 1904, 1910-S → 1910)."""
+    years: set[int] = set()
+    for m in re.finditer(r"\b((?:17|18|19|20)\d{2})(?:\s*[-–]?\s*[A-Za-z]+)?\b", text or ""):
+        y = int(m.group(1))
+        if 1700 <= y <= 2039:
+            years.add(y)
+    return years
+
+
+def _broaden_auction_title_for_numismatic_multi_year(
+    title: str, specification_lines: list[str]
+) -> str:
+    """
+    After **merge_detail**, merged **Components** / **Item** lines often list **several** cent dates while **item_name**
+    stayed on the **first** frame (e.g. only 1904). Replace with an inclusive lot-style title when multiple years are
+    visible in specs but the title still signals a single date.
+    """
+    t = (title or "").strip()
+    if not t:
+        return t
+    blob = " ".join(specification_lines).lower()
+    coinish = any(
+        k in blob
+        for k in (
+            " cent",
+            "cents",
+            "penny",
+            "pennies",
+            "lincoln",
+            "indian head",
+            "littleton",
+            "wheat",
+            " holder",
+            "flip",
+            "dealer card",
+        )
+    ) or any(k in t.lower() for k in (" cent", "penny", "lincoln", "indian head"))
+    if not coinish:
+        return t
+    full = " ".join(specification_lines) + " " + t
+    years = _coin_years_in_text(full)
+    if len(years) < 2:
+        return t
+    title_years = _coin_years_in_text(t)
+    if len(title_years) >= 2:
+        return t
+    bits: list[str] = []
+    if "lincoln" in blob or "wheat" in blob:
+        bits.append("Lincoln")
+    if "indian head" in blob:
+        bits.append("Indian Head")
+    series = " / ".join(bits) if bits else "U.S."
+    y_sorted = sorted(years)
+    if len(y_sorted) <= 6:
+        y_disp = ", ".join(str(x) for x in y_sorted)
+    else:
+        y_disp = f"{y_sorted[0]}–{y_sorted[-1]} ({len(y_sorted)} dates; see Components)"
+    has_holder = "littleton" in blob or "holder" in blob or "flip" in blob or "dealer card" in blob
+    has_folder = "folder" in blob or "album" in blob
+    pack_parts: list[str] = []
+    if has_holder:
+        pack_parts.append("Littleton-style holders")
+    if has_folder:
+        pack_parts.append("folders")
+    pack = " + ".join(pack_parts) if pack_parts else "see Components"
+    mat = _material_lead_word_from_title_and_specs(t, specification_lines)
+    lead = mat if mat and mat != "Brass" else "Vintage"
+    if lead == "Vintage":
+        out = f"Vintage {series} cent lot ({y_disp}) - {pack}"
+    else:
+        out = f"{lead} {series} cent lot ({y_disp}) - {pack}"
+    return out[:500]
+
+
 MERGED_PRO_DESCRIPTION_MAX_CHARS = 1000
 """Hard char backstop after merge; primary length control is ``PROFESSIONAL_DESCRIPTION_MAX_WORDS``."""
 
@@ -1390,6 +1465,7 @@ class LotOutput:
         prof = _trim_prose_to_max_words(prof, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
         prof = _trim_prose_at_limit(prof, MERGED_PRO_DESCRIPTION_MAX_CHARS)
         title = _broaden_auction_title_for_components(title, spec_lines)
+        title = _broaden_auction_title_for_numismatic_multi_year(title, spec_lines)
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
@@ -1462,6 +1538,9 @@ class LotOutput:
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
         self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
+        self.auction_title = _broaden_auction_title_for_numismatic_multi_year(
+            self.auction_title, self.specification_lines
+        )
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines
         )
