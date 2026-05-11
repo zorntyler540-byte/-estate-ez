@@ -749,10 +749,22 @@ def _components_spec_text(specification_lines: list[str]) -> str | None:
 
 
 def _components_indicate_multi_piece(components_text: str) -> bool:
-    nums = [int(x) for x in re.findall(r"\b\d+\b", components_text or "")]
-    if sum(nums) >= 2:
+    """
+    True when **Components:** clearly describes several salable units or a true group lot.
+
+    Coin dates (e.g. 1906) must **not** be summed as quantities — ``sum([1906]) >= 2`` wrongly fired
+    ``Includes multiple pieces`` for a single cent plus a paper tag.
+    """
+    raw = components_text or ""
+    nums = [int(x) for x in re.findall(r"\b\d+\b", raw)]
+    coin_year = frozenset(range(1700, 2040))
+    years = [n for n in nums if n in coin_year]
+    if len(set(years)) >= 2:
         return True
-    low = (components_text or "").lower()
+    countish = [n for n in nums if n not in coin_year and 2 <= n <= 500]
+    if countish and sum(countish) >= 2:
+        return True
+    low = raw.lower()
     return any(
         k in low
         for k in (
@@ -773,6 +785,14 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
             "bell",
             "bells",
             "clapper",
+            "folder",
+            "folders",
+            "album",
+            "holders",
+            "holder",
+            "envelopes",
+            "envelope",
+            "cards",
         )
     )
 
