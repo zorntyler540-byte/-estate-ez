@@ -1741,6 +1741,9 @@ export default function DashboardPage() {
 
       let created: Job;
       if (total <= UPLOAD_FILE_CHUNK) {
+        setUploadProgress(
+          `Uploading ${total} photo${total === 1 ? "" : "s"} to server (send + save)…`
+        );
         created = (await apiUploadFiles("/jobs/upload", token, buildFormForSlice(files))) as Job;
       } else {
         const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
