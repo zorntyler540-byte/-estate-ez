@@ -543,8 +543,11 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
     )
 
 
-MERGED_PRO_DESCRIPTION_MAX_CHARS = 4200
-"""Cap merged lot prose so many photo passes do not stack into an unreadable wall."""
+MERGED_PRO_DESCRIPTION_MAX_CHARS = 1000
+"""Hard char backstop after merge; primary length control is ``PROFESSIONAL_DESCRIPTION_MAX_WORDS``."""
+
+PROFESSIONAL_DESCRIPTION_MAX_WORDS = 50
+"""Estate prose stays scannable (~half prior ~95-word guidance); inventory belongs in specification_lines."""
 
 
 def _trim_prose_at_limit(text: str, max_chars: int) -> str:
@@ -564,7 +567,23 @@ def _trim_prose_at_limit(text: str, max_chars: int) -> str:
     return cut.strip() + "…"
 
 
-def _trim_block_for_merge_append(block: str, max_chars: int = 1100) -> str:
+def _trim_prose_to_max_words(text: str, max_words: int) -> str:
+    """Keep the opening of the description; prefer cutting at a sentence boundary."""
+    t = clean_listing_text(text or "").strip()
+    if not t:
+        return t
+    words = t.split()
+    if len(words) <= max_words:
+        return t
+    chunk = " ".join(words[:max_words])
+    for sep in (". ", "? ", "! ", ".\n"):
+        idx = chunk.rfind(sep)
+        if idx >= int(len(chunk) * 0.45):
+            return chunk[: idx + 1].strip()
+    return chunk.rstrip(",;:") + "…"
+
+
+def _trim_block_for_merge_append(block: str, max_chars: int = 480) -> str:
     """Each merged frame contributes at most a short addendum; details belong in specification_lines."""
     return _trim_prose_at_limit(block.strip(), max_chars)
 
@@ -576,9 +595,16 @@ def _prose_substantially_new(existing: str, new_block: str) -> bool:
         return False
     if n in e:
         return False
-    head = n[:160]
+    head = n[:280]
     if head and head in e:
         return False
+    # Rephrased repeat paragraphs (same objects/adjectives) share most long tokens.
+    new_words = set(re.findall(r"[a-z]{4,}", n))
+    old_words = set(re.findall(r"[a-z]{4,}", e))
+    if len(new_words) >= 14:
+        inter = len(new_words & old_words)
+        if inter / len(new_words) >= 0.58:
+            return False
     return True
 
 
@@ -628,9 +654,15 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
         return description
     desc = clean_listing_text(description)
     low = desc.lower()
-    if "this lot includes multiple pieces:" in low or comp.lower() in low:
+    if (
+        "this lot includes multiple pieces" in low
+        or "includes multiple pieces" in low
+        or "see components" in low
+        or comp.lower() in low
+    ):
         return desc
-    extra = f"This lot includes multiple pieces: {comp}."
+    # Keep prose short — full inventory belongs in **Components**, not pasted again here.
+    extra = "Includes multiple pieces; see Components."
     if not desc:
         return extra
     joiner = " " if desc.endswith((".", "!", "?")) else ". "
@@ -935,7 +967,10 @@ class LotOutput:
         )
         move_unmentioned_brands_to_specs(brands, prof, spec_lines)
         spec_lines = dedupe_specification_lines_preserve_order(spec_lines)
+        prof = _trim_prose_to_max_words(prof, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8))
         prof = _ensure_multi_piece_description(prof, spec_lines)
+        prof = _trim_prose_to_max_words(prof, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
+        prof = _trim_prose_at_limit(prof, MERGED_PRO_DESCRIPTION_MAX_CHARS)
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
@@ -1007,8 +1042,14 @@ class LotOutput:
         self.professional_description = sanitize_description_unknowns(self.professional_description)
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.professional_description = _trim_prose_to_max_words(
+            self.professional_description, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8)
+        )
         self.professional_description = _ensure_multi_piece_description(
             self.professional_description, self.specification_lines
+        )
+        self.professional_description = _trim_prose_to_max_words(
+            self.professional_description, PROFESSIONAL_DESCRIPTION_MAX_WORDS
         )
         self.professional_description = _trim_prose_at_limit(
             self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
