@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
     gemini_image_max_edge: int = Field(default=1920, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
+    # Stored catalog bytes (browser upload + EXIF/HEIC normalize). ZIP + /photos/.../download + extensions use these.
+    catalog_upload_max_edge: int = Field(default=4096, ge=512, le=8192, alias="CATALOG_UPLOAD_MAX_EDGE")
+    catalog_upload_jpeg_quality: int = Field(default=93, ge=70, le=98, alias="CATALOG_UPLOAD_JPEG_QUALITY")
     tape_focus_enabled: bool = Field(default=True, alias="TAPE_FOCUS_ENABLED")
     last_known_sku_fallback: bool = Field(default=True, alias="LAST_KNOWN_SKU_FALLBACK")
     # Outer wall time for one estate-tape SKU audit thread (should exceed HTTP connect+read below).

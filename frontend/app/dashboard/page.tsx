@@ -23,7 +23,6 @@ import {
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { SiteHeader } from "../../components/SiteHeader";
 import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
-import { maybeDownscaleForUpload } from "../../lib/preuploadResize";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
@@ -1734,7 +1733,7 @@ export default function DashboardPage() {
     setStagingEditBrightness(100);
     setStagingEditContrast(100);
     setStagingEditSaturation(100);
-    let files = folderPick.imageFiles;
+    const files = folderPick.imageFiles;
     const total = files.length;
     if (
       folderPick.singleLotMode &&
@@ -1748,24 +1747,6 @@ export default function DashboardPage() {
     }
     setUploading(true);
     try {
-      if (typeof createImageBitmap === "function") {
-        setUploadProgress(`Preparing ${total} photos (resize for faster upload)…`);
-        type Tagged = File & { webkitRelativePath?: string };
-        const prepared: Tagged[] = [];
-        for (let i = 0; i < files.length; i++) {
-          if (i % 4 === 0) {
-            setUploadProgress(`Preparing photos ${i + 1}/${total}…`);
-          }
-          const orig = files[i] as Tagged;
-          const out = (await maybeDownscaleForUpload(orig)) as Tagged;
-          if (orig.webkitRelativePath) {
-            out.webkitRelativePath = orig.webkitRelativePath;
-          }
-          prepared.push(out);
-        }
-        files = prepared;
-      }
-
       const buildFormForSlice = (slice: File[]) => {
         const form = new FormData();
         form.append("sale_id", selectedSaleId);
@@ -2576,8 +2557,8 @@ export default function DashboardPage() {
               <li>
                 Large folders upload in chunks of about <strong>{UPLOAD_FILE_CHUNK} images</strong> per request into the{" "}
                 <strong>same</strong> job so the browser does not time out; progress shows bytes while each chunk sends.
-                Large JPEG/PNG/WebP are resized in the browser first so uploads finish faster (your originals are not stored
-                from this path — only the optimized copies are sent).
+                The server stores high-resolution catalog JPEGs (see <code>CATALOG_UPLOAD_MAX_EDGE</code> in the API
+                env) for lot details, ZIP export, and CT Seller uploads.
               </li>
               <li>
                 <strong>Separate items:</strong> put each item in its own subfolder (e.g. <code>Matryoshka/</code>,{" "}

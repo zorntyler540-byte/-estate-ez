@@ -63,21 +63,25 @@ def compress_upload_bytes_if_image(
     data: bytes,
     filename: str,
     *,
-    max_edge: int = 2560,
-    quality: int = 88,
+    max_edge: int | None = None,
+    quality: int | None = None,
 ) -> tuple[bytes, str]:
     """
     Normalize uploads for catalog + web: HEIC/HEIF → JPEG and ``.jpg`` name; resize other rasters
-    to ``max_edge`` (bounded file size keeps disk writes predictable on small hosts).
+    using ``CATALOG_UPLOAD_MAX_EDGE`` / ``CATALOG_UPLOAD_JPEG_QUALITY`` (override with ``max_edge`` / ``quality``).
 
     Returns ``(body, storage_relative_path)`` — storage path matches bytes (e.g. ``.heic`` → ``.jpg``).
     """
+    from app.config import settings
+
+    me = int(settings.catalog_upload_max_edge if max_edge is None else max_edge)
+    q = int(settings.catalog_upload_jpeg_quality if quality is None else quality)
     raw_name = (filename or "unnamed").replace("\\", "/").lstrip("/")
     path = Path(raw_name)
     ext = path.suffix.lower()
     if ext in {".heic", ".heif"}:
         try:
-            out = bytes_to_gemini_jpeg(data, max_edge=max_edge, quality=quality)
+            out = bytes_to_gemini_jpeg(data, max_edge=me, quality=q)
         except Exception as exc:
             raise ValueError(
                 "Could not read HEIC/HEIF (install pillow-heif on the server, or use JPEG photos)."
@@ -86,7 +90,7 @@ def compress_upload_bytes_if_image(
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
         return data, raw_name
     try:
-        return bytes_to_gemini_jpeg(data, max_edge=max_edge, quality=quality), raw_name
+        return bytes_to_gemini_jpeg(data, max_edge=me, quality=q), raw_name
     except Exception:
         return data, raw_name
 

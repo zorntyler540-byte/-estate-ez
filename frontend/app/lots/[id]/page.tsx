@@ -788,7 +788,8 @@ export default function LotDetailPage() {
           ) : (
             "."
           )}{" "}
-          <strong>Download all photos (ZIP)</strong> saves originals for this listing only.
+          <strong>Download all photos (ZIP)</strong> and the CT Seller flow use the same stored files as{" "}
+          <strong>tap-to-zoom</strong> (full resolution). Grid thumbnails are only previews.
         </p>
         <input
           ref={addPhotosInputRef}
@@ -1028,7 +1029,7 @@ export default function LotDetailPage() {
         ) : null}
         {catalogPhotos.length === 0 && !photosError ? (
           <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
-            <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={400} />
+            <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={720} />
             <p className="ct-lot-hero-note" style={{ margin: 0 }}>
               No photos on this listing yet. Use <strong>Add photos</strong> above, or run a photo job from the
               dashboard.
@@ -1156,7 +1157,7 @@ export default function LotDetailPage() {
                       photoId={p.id}
                       token={token}
                       label={p.original_name}
-                      maxPx={360}
+                      maxPx={960}
                       minHeight={120}
                     />
                   </button>
