@@ -991,6 +991,67 @@ def _coin_years_in_text(text: str) -> set[int]:
     return years
 
 
+_INVENTORY_SPEC_FOR_DATES_RE = re.compile(
+    r"(?i)^\s*(components|item\s*#?\s*\d+|display\s+quarter)",
+)
+
+_COIN_DATE_CONTEXT_RE = re.compile(
+    r"(?i)(cent|penny|pennies|cents|lincoln|wheat|indian|littleton|coin|holder|holders|"
+    r"card|flip|dime|nickel|quarter|head\s+cent)",
+)
+
+
+def _inventory_chunks_for_coin_dates(specification_lines: list[str]) -> str:
+    """
+    Text used to infer **which** years belong to coins in the lot.
+
+    Scanning every spec line pulled in stray years (e.g. folder copyright **1975**) from **Era** / **Style** / other rows.
+    """
+    parts: list[str] = []
+    for line in specification_lines:
+        s = clean_listing_text(line).strip()
+        if _INVENTORY_SPEC_FOR_DATES_RE.match(s):
+            parts.append(s)
+    return " ".join(parts)
+
+
+def _inventory_coin_years(specification_lines: list[str]) -> set[int]:
+    """
+    Years inferred only from **Components** clauses that mention coins/holders and from **Item** / **Display** lines,
+    so folder copyright dates do not enter the title or synthesized lot prose.
+    """
+    years: set[int] = set()
+    for line in specification_lines:
+        s = clean_listing_text(line).strip()
+        m_comp = re.match(r"(?i)^\s*components\s*:\s*(.+)$", s)
+        if m_comp:
+            for piece in m_comp.group(1).split(";"):
+                frag = piece.strip()
+                if not frag or not _COIN_DATE_CONTEXT_RE.search(frag):
+                    continue
+                years |= _coin_years_in_text(frag)
+            continue
+        if re.match(r"(?i)^\s*item\s*#?\s*\d+\s*:", s):
+            years |= _coin_years_in_text(s)
+            continue
+        if re.match(r"(?i)^\s*display\s+quarter", s):
+            years |= _coin_years_in_text(s)
+    return years
+
+
+def _format_cent_year_tokens_chronological(specification_lines: list[str], years: set[int]) -> str:
+    """``1904, 1906, 1908, 1910-S`` — use mint suffix from inventory text when present (e.g. ``1910-S``)."""
+    if not years:
+        return ""
+    chunk = _inventory_chunks_for_coin_dates(specification_lines)
+    mint_by_year: dict[int, str] = {}
+    for m in re.finditer(r"\b((?:18|19|20)\d{2})\s*[-–]?\s*([SDOP])\b", chunk, re.I):
+        y = int(m.group(1))
+        if y in years:
+            mint_by_year[y] = f"{m.group(1)}-{m.group(2).upper()}"
+    return ", ".join(mint_by_year.get(y, str(y)) for y in sorted(years))
+
+
 def _broaden_auction_title_for_numismatic_multi_year(
     title: str, specification_lines: list[str]
 ) -> str:
@@ -1021,8 +1082,7 @@ def _broaden_auction_title_for_numismatic_multi_year(
     ) or any(k in t.lower() for k in (" cent", "penny", "lincoln", "indian head"))
     if not coinish:
         return t
-    full = " ".join(specification_lines) + " " + t
-    years = _coin_years_in_text(full)
+    years = _inventory_coin_years(specification_lines)
     if len(years) < 2:
         return t
     title_years = _coin_years_in_text(t)
@@ -1034,11 +1094,9 @@ def _broaden_auction_title_for_numismatic_multi_year(
     if "indian head" in blob:
         bits.append("Indian Head")
     series = " / ".join(bits) if bits else "U.S."
-    y_sorted = sorted(years)
-    if len(y_sorted) <= 6:
-        y_disp = ", ".join(str(x) for x in y_sorted)
-    else:
-        y_disp = f"{y_sorted[0]}–{y_sorted[-1]} ({len(y_sorted)} dates; see Components)"
+    y_disp = _format_cent_year_tokens_chronological(specification_lines, years)
+    if len(years) > 6:
+        y_disp = f"{min(years)}–{max(years)} ({len(years)} dates; see Components)"
     has_holder = "littleton" in blob or "holder" in blob or "flip" in blob or "dealer card" in blob
     has_folder = "folder" in blob or "album" in blob
     pack_parts: list[str] = []
@@ -1073,7 +1131,7 @@ def _synthesize_numismatic_multi_cent_prose(
     if photo_count < 2:
         return description
     full = " ".join(specification_lines)
-    years = _coin_years_in_text(full)
+    years = _inventory_coin_years(specification_lines)
     if len(years) < 2:
         return description
     blob = full.lower()
@@ -1091,8 +1149,7 @@ def _synthesize_numismatic_multi_cent_prose(
         )
     ):
         return description
-    y_sorted = sorted(years)
-    y_disp = ", ".join(str(y) for y in y_sorted)
+    y_disp = _format_cent_year_tokens_chronological(specification_lines, years)
     bits: list[str] = []
     if "folder" in blob or "album" in blob:
         bits.append("collector folders (Lincoln and/or Indian Head themes)")
