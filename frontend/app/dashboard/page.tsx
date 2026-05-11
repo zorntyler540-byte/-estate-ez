@@ -41,8 +41,20 @@ function rememberDashboardScrollBeforeLotDetails() {
   }
 }
 
-/** One multipart request per batch so 1000+ photos do not hit proxy/browser body limits. */
-const UPLOAD_FILE_CHUNK = 200;
+/**
+ * Max files per multipart POST. Smaller chunks shorten each request (less “stuck” behind proxies)
+ * while still batching enough for large estate folders.
+ */
+const UPLOAD_FILE_CHUNK = 48;
+
+function uploadProgressFromBytes(prefix: string, loaded: number, total: number | null): string {
+  const loMb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+  if (total != null && total > 0) {
+    const pct = Math.min(99, Math.round((100 * loaded) / total));
+    return `${prefix} ${pct}% (${loMb(loaded)} / ${loMb(total)} MB)`;
+  }
+  return `${prefix} ${loMb(loaded)} MB sent…`;
+}
 
 /**
  * Per-listing catalog photo cap (null = none). Keep in sync with ``backend/app/catalog_limits.py``.
@@ -1751,16 +1763,31 @@ export default function DashboardPage() {
       };
 
       let created: Job;
+      const onUploadPart =
+        (label: string) => (ev: { loaded: number; total: number | null }) => {
+          setUploadProgress(uploadProgressFromBytes(label, ev.loaded, ev.total));
+        };
+
       if (total <= UPLOAD_FILE_CHUNK) {
-        setUploadProgress(
-          `Uploading ${total} photo${total === 1 ? "" : "s"} to server (send + save)…`
-        );
-        created = (await apiUploadFiles("/jobs/upload", token, buildFormForSlice(files))) as Job;
+        setUploadProgress(`Starting upload of ${total} photo${total === 1 ? "" : "s"}…`);
+        created = (await apiUploadFiles(
+          "/jobs/upload",
+          token,
+          buildFormForSlice(files),
+          900_000,
+          onUploadPart(`Upload ${total} photos`)
+        )) as Job;
       } else {
         const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
         setUploadProgress(`Uploading batch 1/${batchCount} (${Math.min(UPLOAD_FILE_CHUNK, total)} of ${total} files)…`);
         const first = files.slice(0, UPLOAD_FILE_CHUNK);
-        created = (await apiUploadFiles("/jobs/upload", token, buildFormForSlice(first))) as Job;
+        created = (await apiUploadFiles(
+          "/jobs/upload",
+          token,
+          buildFormForSlice(first),
+          900_000,
+          onUploadPart(`Batch 1/${batchCount}`)
+        )) as Job;
         let uploaded = first.length;
         let batchIndex = 2;
         while (uploaded < total) {
@@ -1773,7 +1800,13 @@ export default function DashboardPage() {
             const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
             form.append("files", file, rel);
           }
-          created = (await apiUploadFiles(`/jobs/${created.id}/upload-files`, token, form)) as Job;
+          created = (await apiUploadFiles(
+            `/jobs/${created.id}/upload-files`,
+            token,
+            form,
+            900_000,
+            onUploadPart(`Batch ${batchIndex}/${batchCount}`)
+          )) as Job;
           uploaded += slice.length;
           batchIndex += 1;
         }
@@ -2522,8 +2555,8 @@ export default function DashboardPage() {
                 desktops).
               </li>
               <li>
-                Large folders (<strong>200+ images</strong>) upload in chunks into the <strong>same</strong> job so the
-                browser does not time out.
+                Large folders upload in chunks of about <strong>{UPLOAD_FILE_CHUNK} images</strong> per request into the{" "}
+                <strong>same</strong> job so the browser does not time out; progress shows bytes while each chunk sends.
               </li>
               <li>
                 <strong>Separate items:</strong> put each item in its own subfolder (e.g. <code>Matryoshka/</code>,{" "}
