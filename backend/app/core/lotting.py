@@ -431,6 +431,41 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
     return out
 
 
+def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
+    """
+    Merge multiple ``Condition note:`` / ``Condition notes:`` rows (common after multi-photo merges) into **one**
+    summary line; de-duplicates clauses so wording stays like a single estate note instead of a stack.
+    """
+    hits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        s = clean_listing_text(line).strip()
+        m = re.match(r"(?i)^\s*condition\s*notes?\s*:\s*(.+)$", s)
+        if m:
+            rhs = m.group(1).strip().strip(" .;")
+            if rhs:
+                hits.append((i, rhs))
+    if len(hits) < 2:
+        return lines
+    first_i = hits[0][0]
+    vals = [rhs.replace("..", ".") for _, rhs in hits]
+    uniq = _unique_semicolon_phrases(vals)
+    combined = "; ".join(uniq)
+    combined = clean_listing_text(re.sub(r"\s*;\s*", "; ", combined)).strip(" ;")
+    if len(combined) > 260:
+        combined = _trim_prose_at_limit(combined, 260).rstrip(" ,;.")
+    if combined and not combined.endswith((".", "!", "?")):
+        combined += "."
+    skip_idx = {i for i, _ in hits}
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if i in skip_idx:
+            if i == first_i:
+                out.append(f"Condition note: {combined}")
+            continue
+        out.append(line)
+    return out
+
+
 def _collapse_semantic_spec_lines(lines: list[str]) -> list[str]:
     """
     After exact dedupe: for common ``Label:`` prefixes (Style, Material, Base, …), keep a single line
@@ -504,6 +539,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         seen.add(key)
         first.append(line)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
+    merged = consolidate_condition_note_spec_lines(merged)
     return _prune_subject_form_when_item_bullets_present(merged)
 
 
@@ -539,8 +575,89 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
             "striker",
             "gong",
             "figurine",
+            "bell",
+            "bells",
+            "clapper",
         )
     )
+
+
+_INVENTORY_TITLE_CATEGORY_MAP: tuple[tuple[str, str], ...] = (
+    ("bells", "bell"),
+    ("clapper", "bell"),
+    ("bell", "bell"),
+    ("dallah", "ewer"),
+    ("aftaba", "ewer"),
+    ("flagon", "ewer"),
+    ("pitcher", "ewer"),
+    ("ewer", "ewer"),
+    ("censers", "censer"),
+    ("censer", "censer"),
+    ("incense", "censer"),
+    ("burner", "censer"),
+    ("serpent", "dragon"),
+    ("dragon", "dragon"),
+    ("striker", "striker"),
+    ("gong", "gong"),
+)
+
+
+def _distinct_inventory_categories(text_low: str) -> set[str]:
+    cats: set[str] = set()
+    for needle, cat in _INVENTORY_TITLE_CATEGORY_MAP:
+        if needle in text_low:
+            cats.add(cat)
+    return cats
+
+
+def _title_narrows_multi_component_lot(title: str, specification_lines: list[str]) -> bool:
+    """
+    True when **Components:** clearly lists several distinct object types but the auction title only signals one
+    (e.g. \"Two-Piece Incense Censer\" while Components also list ewer, bell, dragon stand).
+    """
+    comp = _components_spec_text(specification_lines)
+    if not comp or not _components_indicate_multi_piece(comp):
+        return False
+    cl, tl = comp.lower(), (title or "").lower()
+    c_cats = _distinct_inventory_categories(cl)
+    t_cats = _distinct_inventory_categories(tl)
+    if len(c_cats) < 2:
+        return False
+    missing = c_cats - t_cats
+    if len(t_cats) <= 1 and len(missing) >= 1:
+        return True
+    if len(missing) >= 2:
+        return True
+    return False
+
+
+def _material_lead_word_from_title_and_specs(title: str, specification_lines: list[str]) -> str:
+    blob = f"{title} {' '.join(specification_lines)}".lower()
+    if "bronze" in blob:
+        return "Bronze"
+    if "pewter" in blob or "zinn" in blob:
+        return "Pewter"
+    if "sterling" in blob or "925" in blob:
+        return "Sterling silver"
+    if "silver plate" in blob or "epns" in blob:
+        return "Silver plate"
+    if "ceramic" in blob or "porcelain" in blob:
+        return "Ceramic"
+    if "glass" in blob:
+        return "Glass"
+    return "Brass"
+
+
+def _broaden_auction_title_for_components(title: str, specification_lines: list[str]) -> str:
+    """
+    Replace an under-inclusive title with a short lot-style title when **Components:** proves multiple distinct forms.
+    """
+    t = (title or "").strip()
+    if not t or not _title_narrows_multi_component_lot(t, specification_lines):
+        return t
+    mat = _material_lead_word_from_title_and_specs(t, specification_lines)
+    out = f"{mat} decorative table lot - multiple pieces (see Components)"
+    return out[:500]
 
 
 MERGED_PRO_DESCRIPTION_MAX_CHARS = 1000
@@ -644,6 +761,10 @@ def _merge_auction_title_for_lot(old: str, new: str, specification_lines: list[s
     if n.count(",") >= o.count(",") + 1 and len(n) > len(o):
         return n
     if len(n) > len(o) + 45:
+        return n
+    if _title_narrows_multi_component_lot(o, specification_lines) and not _title_narrows_multi_component_lot(
+        n, specification_lines
+    ):
         return n
     return o
 
@@ -971,6 +1092,7 @@ class LotOutput:
         prof = _ensure_multi_piece_description(prof, spec_lines)
         prof = _trim_prose_to_max_words(prof, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
         prof = _trim_prose_at_limit(prof, MERGED_PRO_DESCRIPTION_MAX_CHARS)
+        title = _broaden_auction_title_for_components(title, spec_lines)
         return cls(
             sku=sku_normalized or None,
             auction_title=title,
@@ -1042,6 +1164,7 @@ class LotOutput:
         self.professional_description = sanitize_description_unknowns(self.professional_description)
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
         self.professional_description = _trim_prose_to_max_words(
             self.professional_description, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8)
         )

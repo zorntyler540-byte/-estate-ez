@@ -14,7 +14,12 @@ import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import settings
-from app.core.lotting import sku_digits, tape_marking_canonical
+from app.core.lotting import (
+    _broaden_auction_title_for_components,
+    dedupe_specification_lines_preserve_order,
+    sku_digits,
+    tape_marking_canonical,
+)
 from app.services.image_preprocess import prepare_gemini_image_file
 
 TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
@@ -61,7 +66,9 @@ class InventoryTableEntry(BaseModel):
             "Single-line auction title: era/style + confirmed maker when one maker fits the whole visible group + "
             "material/form + **only subjects clearly visible**. For several distinct pieces in one shot, use a compound "
             "title that states quantity and type (e.g. 'Seven ceramic Disney character figurines') rather than naming "
-            "only one figure. Never add animals or object types you do not see."
+            "only one figure. **Bad** when the table shows many forms: 'Brass Two-Piece Incense Censer' (names only one "
+            "subset). **Good**: 'Vintage brass lot: censers, ewer, bell, dragon stand' or 'Brass decorative lot (multiple "
+            "forms)'. Never add animals or object types you do not see."
         ),
     )
     brand: str = Field(
@@ -123,6 +130,8 @@ class InventoryTableEntry(BaseModel):
             "Bullet facts as 'Label: value'. For photos with several distinct salable pieces (figurines in a row, "
             "multiple coins/medals, pairs, or a set), add separate lines per distinct item or subgroup — e.g. "
             "'Item A (left): …', 'Item B (center): …', 'Finish (item A): …', 'Visible mark (item B): …'. "
+            "**Components:** must list **every** salient separate object (including bells alongside censers/ewers). "
+            "**At most one** 'Condition note:' line — one combined sentence for general wear. "
             "Include dimension lines when a yellow measuring tape or ruler clearly shows a span (~ inches). "
             "Do not invent numbers without a visible scale."
         ),
@@ -169,7 +178,10 @@ SYSTEM_INSTRUCTION = (
     "### AUCTION TITLE (item_name):\n"
     "- When the maker is confirmed, put the brand in the title as a keyword shoppers can search — same spelling as brand.\n"
     "- Typical shape: era or style + maker + material/type + **visible** subject or form only (compact; no lot SKU).\n"
-    "- Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine' (not '... Bird Flower Frog' unless a real flower frog is visible).\n\n"
+    "- Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine' (not '... Bird Flower Frog' unless a real flower frog is visible).\n"
+    "- **Multi-object lots:** the title must be **inclusive** of the main distinct forms on the table (or explicitly say "
+    "**lot** / **group** / **multiple forms**) — do **not** name only one piece type (e.g. a two-part censer) when an "
+    "ewer, bell, dragon stand, striker, or other salient objects are **clearly** in the same lot.\n\n"
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
     "- **professional_description**: appearance, style, and **why the lot is appealing** — not a condition report "
@@ -181,8 +193,9 @@ SYSTEM_INSTRUCTION = (
     "verdigris/\"character wear\"/scratch or dent inventories, and **no** re-explaining the grade. Shoppers have photos "
     "and the tier field.\n"
     "- At most **one short** optional clause in prose (e.g. \"ready to display\") **or** skip wear talk entirely. "
-    "Factual quirks that matter (small dent, loose lid) → one compact **Condition note:** line in **specification_lines**, "
-    "not prose paragraphs.\n\n"
+    "General wear (oxidation, tarnish, patina) → **at most one** **Condition note:** line in **specification_lines** "
+    "with a **single combined** sentence (e.g. surface oxidation and tarnish consistent with age) — not several separate "
+    "Condition note bullets.\n\n"
     "### ESTATE SALE VOICE & LENGTH (CRITICAL):\n"
     "- Write like a friendly estate specialist on CTBids: **warm, clear, and scannable** — not a lab report or appraisal.\n"
     "- **professional_description** hard cap: **~50 words max** (**one paragraph only**). Do **not** stack multiple "
@@ -239,6 +252,9 @@ SYSTEM_INSTRUCTION = (
     "inventory lines**, not one object.\n"
     "- **Never** write the listing as only 'dragon piece' or 'dragon stand' when other distinct shapes are clearly "
     "present (elongated spouts, bell domes, vented lids, separate bowls).\n"
+    "- **Bells** (hand bell with handle, temple / sphere / crotal bell, bell with clapper) are **separate inventory** from "
+    "censers and ewers. If a bell is visible, include it in **Components:**, **item_name**, and the **professional_description** "
+    "overview — do **not** drop it because censers or an ewer dominate the photo.\n"
     "- **item_name** for the hero frame must signal quantity or variety: e.g. "
     "'Vintage brass lot: dragon-form stand, incense censers, bell, ewer, striker' — or "
     "'Collection of decorative brass table pieces (multiple forms)'.\n"
@@ -302,7 +318,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "otherwise use neutral accurate terms — do not guess a decorative finish label.\n"
         + "RULES:\n"
         "- item_name: One-line auction title — for **multiple brass/metal objects on one surface**, list the object "
-        "categories (stand, censer, bell, ewer, striker…) — do **not** title after only the largest silhouette. "
+        "categories (stand, censer, **bell**, ewer, striker…) — do **not** title after only the largest silhouette or "
+        "name only one sub-type (e.g. two-piece censer) when other distinct forms (bell, ewer, stand) are clearly present. "
         "Confirmed maker as keyword only when one maker fits everything; otherwise omit maker from title. "
         "For figurine/coin rows use quantity + type. Pattern: material + inventory breadth + visible subjects.\n"
         "- brand: ONE primary maker ONLY when that maker clearly applies to all pieces OR one dominant branded piece; "
@@ -325,8 +342,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
-        "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, optional single "
-        "**Condition note:** (brief factual quirk only), **and dimensions** "
+        "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, **at most one** "
+        "**Condition note:** (one combined sentence for general wear, e.g. oxidation/tarnish consistent with age), **and dimensions** "
         "from a visible yellow tape or ruler. "
         "Never use colored **estate** tape numbers as dimensions. "
         "For multi-piece lots: include 'Components: …' AND at most **one** line per distinct piece when you use numbered "
@@ -431,13 +448,12 @@ def _upsert_material_spec(specs: list[str], material_value: str | None) -> list[
 
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
     sku_clean = tape_marking_canonical(row.sku)
-    title = row.item_name.strip() or (f"Estate lot #{sku_clean}" if sku_clean else "Estate catalog item")
+    title = (row.item_name.strip() or (f"Estate lot #{sku_clean}" if sku_clean else "Estate catalog item"))
     specs = [
         s
         for s in row.specification_lines
         if s.strip() and not re.match(r"^\s*markings?\s*:", s.strip(), re.I)
     ]
-    title = row.item_name.strip()
     desc = row.professional_description.strip()
     metal_material = _infer_metal_material(
         material=row.material.strip(),
@@ -451,7 +467,9 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
     specs = _upsert_material_spec(specs, material_value)
     if row.era.strip() and not any(s.lower().startswith("era:") for s in specs):
         specs.append(f"Era: {row.era.strip()}")
-    
+    specs = dedupe_specification_lines_preserve_order(specs)
+    title = _broaden_auction_title_for_components(title, specs)
+
     desc = desc or title
     return {
         "SKU": sku_clean or None,
