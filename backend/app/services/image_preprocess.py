@@ -67,9 +67,8 @@ def compress_upload_bytes_if_image(
     quality: int = 88,
 ) -> tuple[bytes, str]:
     """
-    Normalize uploads for catalog + web: HEIC/HEIF → JPEG and ``.jpg`` name; otherwise re-encode
-    JPEG/PNG/WebP only when EXIF orientation requires it — skips a full Pillow resize for typical upright
-    camera files so browser uploads finish faster.
+    Normalize uploads for catalog + web: HEIC/HEIF → JPEG and ``.jpg`` name; resize other rasters
+    to ``max_edge`` (bounded file size keeps disk writes predictable on small hosts).
 
     Returns ``(body, storage_relative_path)`` — storage path matches bytes (e.g. ``.heic`` → ``.jpg``).
     """
@@ -85,8 +84,6 @@ def compress_upload_bytes_if_image(
             ) from exc
         return out, str(path.with_suffix(".jpg"))
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
-        return data, raw_name
-    if not image_bytes_need_orientation_reencode(data, raw_name):
         return data, raw_name
     try:
         return bytes_to_gemini_jpeg(data, max_edge=max_edge, quality=quality), raw_name
