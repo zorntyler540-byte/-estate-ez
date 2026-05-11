@@ -465,7 +465,78 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
     if sum(nums) >= 2:
         return True
     low = (components_text or "").lower()
-    return any(k in low for k in ("set", "pieces", "cups", "tumblers", "jars", "bowls", "plates", "glasses"))
+    return any(
+        k in low
+        for k in (
+            "set",
+            "pieces",
+            "cups",
+            "tumblers",
+            "jars",
+            "bowls",
+            "plates",
+            "glasses",
+            "ewer",
+            "censer",
+            "incense",
+            "striker",
+            "gong",
+            "figurine",
+        )
+    )
+
+
+def _prose_substantially_new(existing: str, new_block: str) -> bool:
+    """True when ``new_block`` is worth appending (not a near-duplicate of ``existing``)."""
+    e, n = (existing or "").strip().lower(), (new_block or "").strip().lower()
+    if not n or len(n) < 25:
+        return False
+    if n in e:
+        return False
+    head = n[:160]
+    if head and head in e:
+        return False
+    return True
+
+
+def _merge_auction_title_for_lot(old: str, new: str, specification_lines: list[str]) -> str:
+    """
+    When later frames describe a broader inventory than the first, prefer a more inclusive title.
+    First frame often latches onto the most ornate single object (e.g. dragon stand) and omits the rest.
+    """
+    o, n = (old or "").strip(), (new or "").strip()
+    if not n:
+        return o or ""
+    if not o:
+        return n
+    multi_kw = (
+        "collection",
+        "group",
+        "mixed",
+        "pieces",
+        "piece ",
+        "-piece",
+        "set",
+        "lot includes",
+        "including",
+        "assorted",
+        "various",
+        "brass lot",
+        "metal lot",
+        "group lot",
+    )
+    old_m = any(k in o.lower() for k in multi_kw)
+    new_m = any(k in n.lower() for k in multi_kw)
+    if new_m and not old_m:
+        return n
+    spec_blob = " ".join(specification_lines).lower()
+    if spec_blob.count("components:") >= 1 and len(n) > len(o) + 12:
+        return n
+    if n.count(",") >= o.count(",") + 1 and len(n) > len(o):
+        return n
+    if len(n) > len(o) + 45:
+        return n
+    return o
 
 
 def _ensure_multi_piece_description(description: str, specification_lines: list[str]) -> str:
@@ -814,6 +885,34 @@ class LotOutput:
             self.specification_lines, detail_specs
         )
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+
+        new_prof = sanitize_description_unknowns(
+            str(
+                detail_payload.get("ProfessionalDescription")
+                or detail_payload.get("Description")
+                or detail_payload.get("professional_description")
+                or ""
+            )
+        ).strip()
+        if new_prof and _prose_substantially_new(self.professional_description, new_prof):
+            cur = (self.professional_description or "").strip()
+            joined = f"{cur}\n\n{new_prof}".strip()
+            if len(joined) <= 14000:
+                self.professional_description = joined
+
+        new_title_raw = (
+            str(
+                detail_payload.get("AuctionTitle")
+                or detail_payload.get("Title")
+                or detail_payload.get("item_name")
+                or ""
+            ).strip()
+        )
+        if new_title_raw:
+            merged = _merge_auction_title_for_lot(
+                self.auction_title, new_title_raw, self.specification_lines
+            )
+            self.auction_title = _sanitize_gendered_title(merged, detail_payload)
 
         if added_labels:
             for lab in added_labels:
