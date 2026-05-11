@@ -50,6 +50,8 @@ def clean_listing_text(raw: str) -> str:
     s = str(raw or "")
     # Remove markdown emphasis/code markers while preserving text.
     s = s.replace("**", "").replace("__", "").replace("`", "")
+    # Long runs of periods are usually spurious model filler (not our single-character ellipsis trim).
+    s = re.sub(r"\.{4,}", " ", s)
     # Normalize multiline bullets into a sentence-like flow for CT Seller.
     s = re.sub(r"\s*[\r\n]+\s*", " ", s)
     s = re.sub(r"\s{2,}", " ", s).strip()
