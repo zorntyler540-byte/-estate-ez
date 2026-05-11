@@ -1096,7 +1096,7 @@ def _broaden_auction_title_for_numismatic_multi_year(
     series = " / ".join(bits) if bits else "U.S."
     y_disp = _format_cent_year_tokens_chronological(specification_lines, years)
     if len(years) > 6:
-        y_disp = f"{min(years)}–{max(years)} ({len(years)} dates; see Components)"
+        y_disp = f"{min(years)}–{max(years)} ({len(years)} dates; verify in photos)"
     has_holder = "littleton" in blob or "holder" in blob or "flip" in blob or "dealer card" in blob
     has_folder = "folder" in blob or "album" in blob
     pack_parts: list[str] = []
@@ -1104,13 +1104,13 @@ def _broaden_auction_title_for_numismatic_multi_year(
         pack_parts.append("Littleton-style holders")
     if has_folder:
         pack_parts.append("folders")
-    pack = " + ".join(pack_parts) if pack_parts else "see Components"
+    pack = " + ".join(pack_parts) if pack_parts else "as shown in photos"
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
     lead = mat if mat and mat != "Brass" else "Vintage"
     if lead == "Vintage":
-        out = f"Vintage {series} cent lot ({y_disp}) - {pack}"
+        out = f"Vintage {series} coin lot ({y_disp}) - {pack}"
     else:
-        out = f"{lead} {series} cent lot ({y_disp}) - {pack}"
+        out = f"{lead} {series} coin lot ({y_disp}) - {pack}"
     return out[:500]
 
 
@@ -1160,8 +1160,8 @@ def _synthesize_numismatic_multi_cent_prose(
         bits.append("Littleton-style dealer cards or holders")
     pack = "; ".join(bits) if bits else "items as shown in the photos"
     out = (
-        f"This estate lot groups multiple U.S. small cents with dates {y_disp}, together with {pack}. "
-        "See Components for the item-by-item breakdown; follow handwritten grades and prices on the cards when visible."
+        f"This estate U.S. coin lot spans {y_disp}, together with {pack}. "
+        "Refer to the listing photos as the most accurate way to confirm each coin's date, mint mark, and detail."
     )
     return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
