@@ -58,9 +58,10 @@ class InventoryTableEntry(BaseModel):
     item_name: str = Field(
         default="",
         description=(
-            "Single-line auction title: era/style + confirmed maker (when known) + material/form + **only subjects "
-            "clearly visible in the photos** — never add animals or object types you do not see (e.g. do not say "
-            "'frog' on a bird figurine). Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine'."
+            "Single-line auction title: era/style + confirmed maker when one maker fits the whole visible group + "
+            "material/form + **only subjects clearly visible**. For several distinct pieces in one shot, use a compound "
+            "title that states quantity and type (e.g. 'Seven ceramic Disney character figurines') rather than naming "
+            "only one figure. Never add animals or object types you do not see."
         ),
     )
     brand: str = Field(
@@ -90,17 +91,20 @@ class InventoryTableEntry(BaseModel):
         default="",
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
         description=(
-            "2–6 sentences of flowing prose. Name each confirmed maker in the text with **bold** at first mention. "
-            "Omit unknown makers entirely. Describe only visible subjects and forms — do not invent animals or "
-            "mislabel birds as flower frogs."
+            "2–8 sentences when multiple distinct items appear; otherwise 2–6. Name each confirmed maker with **bold** "
+            "at first mention only when legibly marked or tagged on that piece. Enumerate distinct visible pieces "
+            "(count, placement left-to-right, character/type) so buyers see this is a multi-piece lot — do not merge "
+            "several subjects into one vague noun. Omit unknown makers entirely."
         ),
     )
     specification_lines: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("specification_lines", "SpecificationLines"),
         description=(
-            "Bullet facts as 'Label: value'. Include dimension lines when a yellow measuring tape, ruler, or scale "
-            "in the photo clearly shows a span (use approximate inches with ~, note orientation e.g. width vs height). "
+            "Bullet facts as 'Label: value'. For photos with several distinct salable pieces (figurines in a row, "
+            "multiple coins/medals, pairs, or a set), add separate lines per distinct item or subgroup — e.g. "
+            "'Item A (left): …', 'Item B (center): …', 'Finish (item A): …', 'Visible mark (item B): …'. "
+            "Include dimension lines when a yellow measuring tape or ruler clearly shows a span (~ inches). "
             "Do not invent numbers without a visible scale."
         ),
     )
@@ -166,6 +170,21 @@ SYSTEM_INSTRUCTION = (
     "- Prioritize the dominant/structural pieces in wording: e.g., flagon/jug, serving tray/platter, then cups/goblets.\n"
     "- Add one concise components line in specification_lines, such as: "
     "'Components: 1 flagon/jug, 1 tray, 6 cups'. Use only clearly visible counts.\n\n"
+    "### MULTI-DISTINCT ITEMS IN ONE FRAME (figurines, coins, jewelry rows):\n"
+    "- If several separate salable pieces appear (e.g. a row of character figurines, multiple medals, pairs of earrings), "
+    "you MUST NOT summarize as a single generic subject. Name or describe each distinct piece or position "
+    "(left / center / right, or count by type).\n"
+    "- **brand** field: use the ONE maker that applies to the whole lot only when every piece is clearly the same line; "
+    "otherwise leave brand empty and put per-piece marks in **specification_lines** "
+    "(e.g. 'Visible mark (3rd from left): …' only if legible).\n"
+    "- Never invent a single brand to cover different sculpts, eras, or mismatched bases.\n\n"
+    "### FINISHES AND SURFACES (DO NOT DEFAULT TO DECOR STYLES):\n"
+    "- **Finish** means physical surface: glazed ceramic, satin metal, polished chrome, textured enamel, patinated brass, "
+    "matte paint — describe what you see (sheen, texture, wear), not a style movement unless the whole piece clearly fits.\n"
+    "- Use **Lusterware**, **Faux Bois**, or **Geometric Art Deco** only when that finish or decoration is **visibly** "
+    "present (iridescent metallic glaze, wood-grain slip, strong stepped geometry). If unsure, say 'glazed ceramic' or "
+    "'painted ceramic' instead of inventing a collectible finish name.\n"
+    "- For metals: finish (polished / brushed / satin) is separate from whether it is sterling vs plate — follow hallmark evidence.\n\n"
     "### DIMENSIONS FROM PHOTOS (specification_lines):\n"
     "- If a **yellow measuring tape**, metal ruler, or yardstick appears and the readout is legible, add one line per "
     "clear measurement to **specification_lines** (not colored estate lot tape — that is SKU only).\n"
@@ -197,28 +216,37 @@ def _user_prompt(*, manifest_tag: str) -> str:
     return (
         tag_line
         + "Analyze this catalog photo for an estate inventory row.\n"
-        + "Identify specific finishes: **Lusterware**, **Faux Bois (Wood Grain)**, or **Geometric Art Deco**.\n"
+        + "If several distinct salable pieces are visible (row of figurines, multiple coins/medals, pairs, tableware set), "
+        "describe EACH distinct piece or subgroup in specification_lines and professional_description — do not collapse "
+        "several items into one vague subject line.\n"
+        + "Surface / finish: describe visible sheen and material (e.g. glazed ceramic, polished vs satin metal). "
+        "Only call out **Lusterware**, **Faux Bois**, or strong **Art Deco** styling when clearly visible; "
+        "otherwise use neutral accurate terms — do not guess a decorative finish label.\n"
         + "RULES:\n"
-        "- item_name: One-line auction title — confirmed maker as keyword when known; **only name subjects/forms you see** "
-        "(no extra animals: e.g. bird only → do not add frog). Pattern: style/era + maker + material/form + visible subject. "
-        "Example: Art Deco Ditmar-Urbach Lusterware Bird Figurine.\n"
-        "- brand: Primary visible maker ONLY. Treat 'Czechoslovakia' as origin text unless a specific maker hallmark is visible.\n"
+        "- item_name: One-line auction title — confirmed maker as keyword when one maker clearly applies to the whole "
+        "visible group; otherwise omit maker from title and list marks per piece in specs. **Only name subjects/forms you see**. "
+        "For multi-piece lots, prefer a compound title that signals quantity/type (e.g. 'Seven ceramic Disney character figurines'). "
+        "Pattern: style/era + maker (if unified) + material/form + visible subjects.\n"
+        "- brand: ONE primary maker ONLY when that maker clearly applies to all pieces OR one dominant branded piece; "
+        "otherwise leave empty and use specification_lines for legible marks per item.\n"
+        "- Treat 'Czechoslovakia' / country text as origin unless a specific maker hallmark is visible.\n"
         "- If no manufacturer mark is clearly visible or confirmed, leave brand empty (do not guess).\n"
         "- For metal items, read and quote visible hallmark text in specs; metal type must follow hallmark-first rules.\n"
-        "- professional_description: Flowing prose; **bold** confirmed makers at first mention. Omit guesses.\n"
+        "- professional_description: Cover each distinct visible piece or row where relevant; **bold** makers only when "
+        "confirmed on that piece.\n"
         "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
         "  * NEW: no signs of wear; may include tags/packaging.\n"
         "  * LIKE NEW: clearly unused, but tags may be missing.\n"
         "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
-        "- specification_lines: 'Label: value' — Material, Style, Finish, Era, Subject, **and dimensions from a visible "
-        "yellow tape or ruler** (e.g. Overall width (set): ~10 in.; Height (tallest): ~4.5 in.). "
-        "Never use colored **estate** tape (purple/lavender/green/yellow lot tape) numbers as dimensions. "
-        "For multi-piece lots, include one 'Components:' line with the major visible pieces and counts (e.g., "
-        "1 jug/flagon, 1 tray, 6 cups). "
-        "In the specification lines, provide only one 'Subject' and one 'Form' that most accurately describes the item. "
-        "Do not provide alternatives or related keywords. "
+        "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, **and dimensions** "
+        "from a visible yellow tape or ruler. "
+        "Never use colored **estate** tape numbers as dimensions. "
+        "For multi-piece lots: include 'Components: …' AND separate lines per distinct item or position when pieces differ "
+        "(e.g. 'Figurine 1 (left): Mickey…', 'Figurine 2: Pluto…'). "
+        "Use multiple Subject/Form lines when multiple distinct subjects appear — do NOT reduce to a single Subject when "
+        "several different items are clearly visible. "
         "Never include a Markings line or stamp/mold-number transcription.\n"
         "- sku: Lot marking on purple, lavender, bright green, or bright yellow estate masking tape ONLY "
         "(same code you would read from image 2 when provided). null if not on tape.\n"
