@@ -899,8 +899,63 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
             "envelopes",
             "envelope",
             "cards",
+            "lace",
+            "laces",
+            "runner",
+            "runners",
+            "textile",
+            "textiles",
+            "doily",
+            "doilies",
+            "valance",
+            "valances",
+            "embroidery",
+            "embroidered",
+            "crochet",
+            "needlework",
+            "openwork",
+            "dresser scarf",
+            "table runner",
+            "linen",
+            "tapestry",
         )
     )
+
+
+def _dimension_spec_line_count(specification_lines: list[str]) -> int:
+    return sum(
+        1
+        for line in specification_lines
+        if re.match(r"(?i)^\s*dimensions?\s*:", clean_listing_text(line).strip())
+    )
+
+
+def _spec_lines_indicate_multi_textile_piece(specification_lines: list[str]) -> bool:
+    """Several measuring-tape spans on lace/linen/textile lots usually mean **distinct fabric pieces** in one SKU."""
+    blob = " ".join(specification_lines).lower()
+    if not any(
+        k in blob
+        for k in (
+            "lace",
+            "textile",
+            "textiles",
+            "runner",
+            "linen",
+            "embroider",
+            "crochet",
+            "needlework",
+            "openwork",
+            "doily",
+            "valance",
+            "dresser scarf",
+            "table runner",
+            "tapestry",
+        )
+    ):
+        return False
+    if _dimension_spec_line_count(specification_lines) >= 2:
+        return True
+    return len(re.findall(r"\b\d{1,3}\s*[\"']?\s*(?:in|inch|inches)\b", blob, re.I)) >= 2
 
 
 _INVENTORY_TITLE_CATEGORY_MAP: tuple[tuple[str, str], ...] = (
@@ -920,6 +975,19 @@ _INVENTORY_TITLE_CATEGORY_MAP: tuple[tuple[str, str], ...] = (
     ("dragon", "dragon"),
     ("striker", "striker"),
     ("gong", "gong"),
+    ("lace", "lace"),
+    ("openwork", "lace"),
+    ("crochet", "lace"),
+    ("runner", "textile_runner"),
+    ("runners", "textile_runner"),
+    ("textile", "textile"),
+    ("textiles", "textile"),
+    ("doily", "textile"),
+    ("valance", "textile"),
+    ("linen", "textile"),
+    ("tapestry", "textile"),
+    ("embroidery", "textile"),
+    ("needlework", "textile"),
 )
 
 
@@ -937,10 +1005,19 @@ def _title_narrows_multi_component_lot(title: str, specification_lines: list[str
     (e.g. \"Two-Piece Incense Censer\" while Components also list ewer, bell, dragon stand).
     """
     comp = _components_spec_text(specification_lines)
-    if not comp or not _components_indicate_multi_piece(comp):
+    blob = " ".join(specification_lines).lower()
+    tl = (title or "").lower()
+    multi_dim_textile = _spec_lines_indicate_multi_textile_piece(specification_lines)
+    if multi_dim_textile and not any(
+        w in tl for w in ("lot", "group", "collection", "pieces", "multiple", "assorted", "set")
+    ):
+        return True
+    if not (comp and _components_indicate_multi_piece(comp)) and not _spec_lines_indicate_multi_textile_piece(
+        specification_lines
+    ):
         return False
-    cl, tl = comp.lower(), (title or "").lower()
-    c_cats = _distinct_inventory_categories(cl)
+    cl = (comp or "").lower()
+    c_cats = _distinct_inventory_categories(cl) | _distinct_inventory_categories(blob)
     t_cats = _distinct_inventory_categories(tl)
     if len(c_cats) < 2:
         return False
@@ -976,6 +1053,16 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
     t = (title or "").strip()
     if not t or not _title_narrows_multi_component_lot(t, specification_lines):
         return t
+    blob = " ".join(specification_lines).lower()
+    if _spec_lines_indicate_multi_textile_piece(specification_lines):
+        fiber = "Cotton"
+        if "linen" in blob and "cotton" not in blob:
+            fiber = "Linen"
+        elif "silk" in blob:
+            fiber = "Silk"
+        elif "wool" in blob:
+            fiber = "Wool"
+        return f"{fiber} lace and textile lot - multiple pieces; dimensions vary by photo (refer to tape reads)"[:500]
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
     out = f"{mat} decorative table lot - multiple pieces (see Components)"
     return out[:500]
@@ -1166,6 +1253,29 @@ def _synthesize_numismatic_multi_cent_prose(
     return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
 
+def _synthesize_textile_measurement_lot_prose(
+    description: str, specification_lines: list[str], photo_count: int
+) -> str:
+    """
+    After ``merge_detail``, when several photos show **different** lace/textile spans on the tape but prose still
+    reads like **one** rectangle, replace with a short honest lot overview.
+    """
+    if photo_count < 2:
+        return description
+    if not _spec_lines_indicate_multi_textile_piece(specification_lines):
+        return description
+    if len(_inventory_coin_years(specification_lines)) >= 2:
+        return description
+    low = (description or "").lower()
+    if "this estate u.s. coin lot" in low or "coin lot spans" in low:
+        return description
+    out = (
+        "This lot brings together several vintage lace and cotton textile pieces—not one single swatch. "
+        "Measuring tapes in the photos often show different spans for different panels; rely on the images for the clearest look at size, holes, fraying, and edge condition."
+    )
+    return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
+
+
 def _trim_prose_at_limit(text: str, max_chars: int) -> str:
     """Trim at sentence boundary when possible; otherwise at word boundary."""
     t = (text or "").strip()
@@ -1301,21 +1411,30 @@ def _merge_auction_title_for_lot(old: str, new: str, specification_lines: list[s
     return o
 
 
+def _listing_should_have_multi_piece_cue(specification_lines: list[str]) -> bool:
+    comp = _components_spec_text(specification_lines) or ""
+    return bool(comp and _components_indicate_multi_piece(comp)) or _spec_lines_indicate_multi_textile_piece(
+        specification_lines
+    )
+
+
 def _ensure_multi_piece_description(description: str, specification_lines: list[str]) -> str:
-    comp = _components_spec_text(specification_lines)
-    if not comp or not _components_indicate_multi_piece(comp):
+    if not _listing_should_have_multi_piece_cue(specification_lines):
         return description
+    comp = _components_spec_text(specification_lines) or ""
     desc = clean_listing_text(description)
     low = desc.lower()
     if (
         "this lot includes multiple pieces" in low
         or "includes multiple pieces" in low
         or "see components" in low
-        or comp.lower() in low
+        or "several distinct pieces" in low
+        or "several vintage lace" in low
+        or (comp and comp.lower() in low)
     ):
         return desc
-    # Keep prose short — full inventory belongs in **Components**, not pasted again here.
-    extra = "Includes multiple pieces; see Components."
+    # Keep prose short — inventory detail belongs in **specification_lines**, not a second essay here.
+    extra = "Several distinct pieces in this lot—refer to the photos for layout, size, and condition."
     if not desc:
         return extra
     joiner = " " if desc.endswith((".", "!", "?")) else ". "
@@ -1719,6 +1838,9 @@ class LotOutput:
         )
         self.photo_count += 1
         self.professional_description = _synthesize_numismatic_multi_cent_prose(
+            self.professional_description, self.specification_lines, self.photo_count
+        )
+        self.professional_description = _synthesize_textile_measurement_lot_prose(
             self.professional_description, self.specification_lines, self.photo_count
         )
         self.professional_description = _trim_prose_to_max_words(
