@@ -81,7 +81,15 @@ class InventoryTableEntry(BaseModel):
             "and any **Material:** line in **specification_lines**."
         ),
     )
-    condition_notes: str = ""
+    condition_notes: str = Field(
+        default="",
+        validation_alias=AliasChoices("condition_notes", "ConditionNotes", "Condition"),
+        description=(
+            "Exactly **one** allowed condition tier for the whole lot: NEW, LIKE NEW, VERY GOOD, GOOD, or FAIR — "
+            "per the rubric in the system prompt. This is the **official** condition field for the listing; do **not** "
+            "replace it with a long prose condition report in **professional_description**."
+        ),
+    )
     era: str = ""
     sku: str | None = Field(
         default=None,
@@ -100,12 +108,12 @@ class InventoryTableEntry(BaseModel):
         default="",
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
         description=(
-            "Warm, human estate-sale prose: inviting and readable, **max ~50 words** for this field (**exactly one short "
-            "paragraph** — no second paragraph that re-describes the same pieces). Lead with what the shopper gets and how it displays; "
-            "one honest line on overall condition. "
-            "For multi-piece lots give a lively **overview** (grouping + character) — put per-piece nitpicks, measurements, "
-            "and micro-surface notes in **specification_lines**, not here. **Bold** confirmed makers once when legible. "
-            "Avoid museum/conservation jargon and long chains of adjectives. Omit unknown makers entirely."
+            "Warm, human estate-sale prose: inviting and readable, **max ~50 words** (**exactly one short paragraph** — "
+            "no second paragraph, no alternate 'draft' of the same text). Lead with what the shopper gets and how it displays. "
+            "**Do not** write detailed condition here (no patina/oxidation/verdigris essays, scratch inventories, or "
+            "re-stating the grade — that belongs in **condition_notes** plus optional brief **Condition note:** in "
+            "**specification_lines**). For multi-piece lots give a lively **overview** only — per-piece nitpicks and "
+            "measurements go in **specification_lines**. **Bold** confirmed makers once when legible. Omit unknown makers."
         ),
     )
     specification_lines: list[str] = Field(
@@ -164,16 +172,27 @@ SYSTEM_INSTRUCTION = (
     "- Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine' (not '... Bird Flower Frog' unless a real flower frog is visible).\n\n"
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
-    "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
+    "- **professional_description**: appearance, style, and **why the lot is appealing** — not a condition report "
+    "(see **CONDITION VS PROSE** below).\n\n"
+    "### CONDITION VS PROSE (CRITICAL):\n"
+    "- **condition_notes** must be exactly **one** of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR — that single token is the "
+    "**official** condition tier for the listing.\n"
+    "- **professional_description** must **not** narrate condition in detail: **no** multi-sentence patina/oxidation/"
+    "verdigris/\"character wear\"/scratch or dent inventories, and **no** re-explaining the grade. Shoppers have photos "
+    "and the tier field.\n"
+    "- At most **one short** optional clause in prose (e.g. \"ready to display\") **or** skip wear talk entirely. "
+    "Factual quirks that matter (small dent, loose lid) → one compact **Condition note:** line in **specification_lines**, "
+    "not prose paragraphs.\n\n"
     "### ESTATE SALE VOICE & LENGTH (CRITICAL):\n"
     "- Write like a friendly estate specialist on CTBids: **warm, clear, and scannable** — not a lab report or appraisal.\n"
     "- **professional_description** hard cap: **~50 words max** (**one paragraph only**). Do **not** stack multiple "
     "paragraphs or restate the same ewer/censer/bell/stand details in different wording — say it once, warmly, then stop. "
     "If you have more to say, put it in **specification_lines** (Components, per-item lines, Finish, etc.).\n"
-    "- **Do not** pack every micro-detail (lathe rings, every scratch, exhaustive metal grain) into prose — one or two "
-    "honest condition touches are enough; buyers still have photos.\n"
+    "- **Do not** pack micro-surface or wear detail into prose (lathe rings, every scratch, grain, patina layers) — "
+    "that belongs in **specification_lines** if at all, not in **professional_description**.\n"
     "- Prefer **you / we / this lot** sparingly or neutral third person; avoid stiff phrases like 'The present object exhibits'.\n"
-    "- Opening hook: what it is + why it is appealing; then material/era/condition in plain English.\n\n"
+    "- Opening hook: what it is + why it is appealing; material/era in plain English — **not** a second hook that "
+    "re-describes the same objects or their wear.\n\n"
     "### METAL IDENTIFICATION (HALLMARK-FIRST):\n"
     "- Read hallmark/stamp text from the item bottom/underside when visible and use that as primary evidence.\n"
     "- If stamp shows '925', 'STERLING', or Lion Passant: identify as Sterling Silver.\n"
@@ -225,7 +244,8 @@ SYSTEM_INSTRUCTION = (
     "'Collection of decorative brass table pieces (multiple forms)'.\n"
     "- **professional_description**: one **warm overview** of the grouping (what is on the table, the vibe, who might love it) "
     "— still mention that several brass forms are included, but **do not** write a separate mini-paragraph for every single "
-    "piece here; use **specification_lines** + **Components:** for the inventory list.\n"
+    "piece here, and **do not** paste another full condition pass — use **specification_lines** + **Components:** for inventory "
+    "and **condition_notes** for the tier.\n"
     "- **specification_lines**: required **Components:** line listing **every** salient separate object "
     "(e.g. 'Components: 1 dragon-form brass stand with striker, 2 small footed incense censers with pierced lids, "
     "1 bell with clapper, 1 slender spouted ewer, 1 thin brass rod'). Count only what you see.\n"
@@ -258,7 +278,7 @@ SYSTEM_INSTRUCTION = (
     "- Assign DITMAR-URBACH only when hallmark evidence supports it (e.g., known red circular Ditmar-style stamp with matching wording/mark structure), not from 'Czechoslovakia' text alone.\n"
     "- 'MZ Altrohlau' = Moritz Zdekauer factory.\n"
     "- DECISIVENESS: Return exactly ONE primary brand. Do not provide a list of competing guesses (no Brand Soup).\n\n"
-    "Identify brand, model, material, condition flaws, and era from the image. Tone: **warm estate-sale listing**, concise, "
+    "Identify brand, model, material, the **condition tier** (condition_notes), and era from the image. Tone: **warm estate-sale listing**, concise, "
     "never word-splurging. "
     "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of colored estate lot tape "
     "(purple, lavender, neon green, or yellow masking tape) — prioritize image 2 for SKU. "
@@ -295,16 +315,18 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "clear cool-gray pewter metal. Same value must match **Material:** in specification_lines.\n"
         "- **Material:** must match **item_name** and **professional_description** (no brass prose + pewter Material line). "
         "Brass/bronze decorative metalware is not pewter unless marks or clear pewter-gray luster say so.\n"
-        "- professional_description: Estate-sale warmth; **~50 words max**, **one paragraph only** (no re-stating the "
-        "same inventory in new paragraphs). Overview + appeal + honest condition; **bold** makers only when confirmed. "
-        "Details → specification_lines.\n"
-        "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
+        "- professional_description: Estate-sale warmth; **~50 words max**, **one paragraph only**. Overview + appeal — "
+        "**not** detailed condition (no patina/oxidation/wear essays; that is **condition_notes** + optional **Condition note:** "
+        "spec bullet). **bold** makers only when confirmed. Inventory → specification_lines.\n"
+        "- condition_notes: Exactly **one** value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR — the official grade; do not "
+        "duplicate that story again in professional_description.\n"
         "  * NEW: no signs of wear; may include tags/packaging.\n"
         "  * LIKE NEW: clearly unused, but tags may be missing.\n"
         "  * VERY GOOD: minor signs of wear (light scuffs/scratches).\n"
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
-        "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, **and dimensions** "
+        "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, optional single "
+        "**Condition note:** (brief factual quirk only), **and dimensions** "
         "from a visible yellow tape or ruler. "
         "Never use colored **estate** tape numbers as dimensions. "
         "For multi-piece lots: include 'Components: …' AND at most **one** line per distinct piece when you use numbered "
