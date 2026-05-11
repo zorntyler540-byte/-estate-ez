@@ -22,11 +22,11 @@ async def save_uploaded_files(
     dest_root: Path,
     files: list[UploadFile],
     *,
-    concurrency: int = 5,
+    concurrency: int = 12,
 ) -> None:
     """
     Save uploaded parts under dest_root in parallel (bounded by ``concurrency``).
-    Image files are resized/compressed with Pillow in a worker thread before writing.
+    Image files may be passed through or resized/compressed with Pillow in a worker thread before writing.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
