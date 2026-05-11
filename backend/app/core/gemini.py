@@ -71,7 +71,16 @@ class InventoryTableEntry(BaseModel):
             "never use Unknown, Unidentified, Unbranded, N/A, or similar placeholders."
         ),
     )
-    material: str = ""
+    material: str = Field(
+        default="",
+        description=(
+            "Primary material visible for the lot. For **warm-toned cast, spun, or lathe-turned decorative metal** "
+            "(e.g. censers, bells, ewers, dragon stands, strikers in one brass-style grouping), use **Brass** or **Bronze** "
+            "when that matches the color and form — **do not** default those to Pewter. Use **Pewter** only with legible "
+            "pewter/zinn/étain marks or clear cool gray pewter luster. Must match **item_name**, **professional_description**, "
+            "and any **Material:** line in **specification_lines**."
+        ),
+    )
     condition_notes: str = ""
     era: str = ""
     sku: str | None = Field(
@@ -91,8 +100,8 @@ class InventoryTableEntry(BaseModel):
         default="",
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
         description=(
-            "Warm, human estate-sale prose: inviting and readable, **max ~130 words** for this field (about 2 short "
-            "paragraphs). Lead with what the shopper gets and how it displays; one honest line on overall condition. "
+            "Warm, human estate-sale prose: inviting and readable, **max ~95 words** for this field (about 1 short "
+            "paragraph, two only if needed). Lead with what the shopper gets and how it displays; one honest line on overall condition. "
             "For multi-piece lots give a lively **overview** (grouping + character) — put per-piece nitpicks, measurements, "
             "and micro-surface notes in **specification_lines**, not here. **Bold** confirmed makers once when legible. "
             "Avoid museum/conservation jargon and long chains of adjectives. Omit unknown makers entirely."
@@ -157,7 +166,7 @@ SYSTEM_INSTRUCTION = (
     "- Professional description: focus on appearance, style, and visible condition; avoid long stamp or number inventories.\n\n"
     "### ESTATE SALE VOICE & LENGTH (CRITICAL):\n"
     "- Write like a friendly estate specialist on CTBids: **warm, clear, and scannable** — not a lab report or appraisal.\n"
-    "- **professional_description** hard cap: **~130 words max** (roughly 2 short paragraphs). If you have more to say, "
+    "- **professional_description** hard cap: **~95 words max** (one tight paragraph; two only if truly needed). If you have more to say, "
     "put the rest in **specification_lines** as short bullets (Components, Condition note, Finish, etc.).\n"
     "- **Do not** pack every micro-detail (lathe rings, every scratch, exhaustive metal grain) into prose — one or two "
     "honest condition touches are enough; buyers still have photos.\n"
@@ -169,10 +178,22 @@ SYSTEM_INSTRUCTION = (
     "- If stamp shows 'EPNS', 'Silver Plate', or 'Plate': identify as Silver Plate.\n"
     "- If stamp shows 'Pewter' or 'Zinn': identify as Pewter.\n"
     "- If no hallmark is clearly visible or confirmable, do **not** call it Sterling; use 'silver-tone metal' or "
-    "'pewter' only when surface/luster supports that call.\n"
+    "**pewter** only when a pewter/zinn mark or unmistakable **cool gray pewter** luster is visible — **not** as a guess "
+    "for dark satin **brass/bronze** table metal.\n"
     "- Luster clues: mirror-like often suggests plate; soft/dull often suggests pewter; warm-white can support sterling "
     "only with hallmark confirmation.\n"
-    "- Condition clues: pitting can indicate pewter; base-metal bleed/wear-through can indicate plate.\n\n"
+    "- Condition clues: pitting can indicate pewter; base-metal bleed/wear-through can indicate plate.\n"
+    "- **Brass / bronze:** warm gold-brown castings, spun or lathe-turned **brass/bronze** tableware often read darker in "
+    "photos than shiny yellow brass — do **not** default those lots to pewter. Say **brass**, **bronze**, or "
+    "**brass-tone / dark metal** when that is what you see; reserve **pewter** for softer gray-pewter luster or legible "
+    "pewter/zinn marks.\n\n"
+    "### MATERIAL CONSISTENCY (CRITICAL):\n"
+    "- **item_name**, **professional_description**, and **Material:** in **specification_lines** must agree on the base "
+    "metal or material (e.g. do not write 'vintage brassware' in prose and **Material: Pewter** in specs).\n"
+    "- Pick **one** reading from visible color, weight cues, and any marks; use the same wording (or clear synonyms) "
+    "everywhere.\n"
+    "- If unsure between brass and pewter, use neutral **metalware**, **dark-toned metal**, or **non-precious metal** "
+    "instead of contradicting yourself.\n\n"
     "### MULTI-PIECE LOT COVERAGE (CRITICAL):\n"
     "- When a lot includes multiple distinct forms, cover ALL major visible components in **item_name** + **specification_lines** "
     "(and a short warm **professional_description** overview — not a blow-by-blow of every piece).\n"
@@ -189,6 +210,9 @@ SYSTEM_INSTRUCTION = (
     "(e.g. 'Visible mark (3rd from left): …' only if legible).\n"
     "- Never invent a single brand to cover different sculpts, eras, or mismatched bases.\n\n"
     "### BRASS / BRONZE METALWARE — SAME TABLE, MANY OBJECTS (CRITICAL):\n"
+    "- In these **multi-object brass-lot** table scenes (censers, bells, ewers, dragon stands, strikers together), "
+    "**brass or bronze is the usual correct material** — set the JSON **material** field, **item_name**, prose, and "
+    "**Material:** spec line all to that (or 'Brass / bronze') unless you **see** pewter/zinn text or true pewter-gray metal.\n"
     "- A group shot may show an ornate **dragon / serpent stand**, **incense burners / censers** (lid + bowl), **bells**, "
     "**ewers / pitchers**, **striker or mallet rods**, and small lids or bases **all at once**. These are **different "
     "inventory lines**, not one object.\n"
@@ -203,6 +227,10 @@ SYSTEM_INSTRUCTION = (
     "- **specification_lines**: required **Components:** line listing **every** salient separate object "
     "(e.g. 'Components: 1 dragon-form brass stand with striker, 2 small footed incense censers with pierced lids, "
     "1 bell with clapper, 1 slender spouted ewer, 1 thin brass rod'). Count only what you see.\n"
+    "- **One inventory pass only:** if you add **Item 1:** … **Item n:** bullets (or a full **Components:** list), "
+    "do **not** start a second block that re-lists the same pieces (no duplicate Item rows, no extra **Subject:** / "
+    "**Form:** lines that only regroup the same inventory — use Subject/Form only for a true lot-wide theme not already "
+    "covered by those bullets).\n"
     "- Detail-only frames (inside of bell, lid next to bowl): still add facts about **that** component; "
     "do not assume the reader knows it belongs with the stand from another photo.\n\n"
     "### FINISHES AND SURFACES (DO NOT DEFAULT TO DECOR STYLES):\n"
@@ -246,7 +274,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
         + "Analyze this catalog photo for an estate inventory row.\n"
         + "If several distinct salable pieces are visible, put the **inventory breakdown** in **specification_lines** "
         "(Components + short per-item bullets). In **professional_description** give only a **tight, warm overview** "
-        "(~130 words max) — do not repeat every bullet in prose.\n"
+        "(~95 words max) — do not repeat every bullet in prose.\n"
         + "Surface / finish: describe visible sheen and material (e.g. glazed ceramic, polished vs satin metal). "
         "Only call out **Lusterware**, **Faux Bois**, or strong **Art Deco** styling when clearly visible; "
         "otherwise use neutral accurate terms — do not guess a decorative finish label.\n"
@@ -260,8 +288,13 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- Treat 'Czechoslovakia' / country text as origin unless a specific maker hallmark is visible.\n"
         "- If no manufacturer mark is clearly visible or confirmed, leave brand empty (do not guess).\n"
         "- For metal items, read and quote visible hallmark text in specs; metal type must follow hallmark-first rules.\n"
-        "- professional_description: Estate-sale warmth; **~130 words max**, 2 short paragraphs. Overview + appeal + "
-        "honest condition; **bold** makers only when confirmed. Details → specification_lines.\n"
+        "- **material** (JSON field): For the usual **warm-toned brass-lot** layouts (censers, bells, ewers, stands), "
+        "put **Brass** or **Bronze** when that matches what you see — **not Pewter** unless you read pewter/zinn or see "
+        "clear cool-gray pewter metal. Same value must match **Material:** in specification_lines.\n"
+        "- **Material:** must match **item_name** and **professional_description** (no brass prose + pewter Material line). "
+        "Brass/bronze decorative metalware is not pewter unless marks or clear pewter-gray luster say so.\n"
+        "- professional_description: Estate-sale warmth; **~95 words max**, one short paragraph (two only if needed). "
+        "Overview + appeal + honest condition; **bold** makers only when confirmed. Details → specification_lines.\n"
         "- condition_notes: Choose exactly one value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR.\n"
         "  * NEW: no signs of wear; may include tags/packaging.\n"
         "  * LIKE NEW: clearly unused, but tags may be missing.\n"
@@ -271,10 +304,10 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- specification_lines: 'Label: value' — Material, Style, **Finish** (surface sheen/texture), Era, **and dimensions** "
         "from a visible yellow tape or ruler. "
         "Never use colored **estate** tape numbers as dimensions. "
-        "For multi-piece lots: include 'Components: …' AND separate lines per distinct item or position when pieces differ "
-        "(e.g. 'Figurine 1 (left): Mickey…', 'Figurine 2: Pluto…'). "
-        "Use multiple Subject/Form lines when multiple distinct subjects appear — do NOT reduce to a single Subject when "
-        "several different items are clearly visible. "
+        "For multi-piece lots: include 'Components: …' AND at most **one** line per distinct piece when you use numbered "
+        "items (e.g. 'Item 1: …', 'Item 2: …' — do not re-run Item 1..n or add Subject/Form rows that only repeat that list). "
+        "If you skip per-item lines, you may use one Subject and/or one Form for the lot — not both a full item list and "
+        "a second pass under other headings. "
         "Never include a Markings line or stamp/mold-number transcription.\n"
         "- sku: Lot marking on purple, lavender, bright green, or bright yellow estate masking tape ONLY "
         "(same code you would read from image 2 when provided). null if not on tape.\n"
@@ -312,11 +345,47 @@ def _normalize_condition_label(raw: str) -> str:
     return "GOOD"
 
 
-def _infer_metal_material(*, material: str, specs: list[str], description: str) -> str | None:
-    blob = " ".join([material, description, *specs]).lower()
-    has_pewter = any(k in blob for k in ("pewter", "zinn", "etain"))
-    has_plate = any(k in blob for k in ("silver plate", "silverplate", "epns"))
-    has_sterling = any(k in blob for k in (" sterling", "sterling ", " 925", "925 "))
+_BRASS_NARRATIVE_RE = re.compile(
+    r"\b(brass|brassware|bronze|ormolu|gilt\s*metal|spelter)\b",
+    re.I,
+)
+_PEWTER_TOKEN_RE = re.compile(r"\b(pewter|zinn|étain|etain)\b", re.I)
+
+
+def _spec_lines_without_material_label(specs: list[str]) -> list[str]:
+    return [s for s in specs if not re.match(r"^\s*material\s*:", s.strip(), re.I)]
+
+
+def _infer_metal_material(
+    *, material: str, specs: list[str], description: str, title: str
+) -> str | None:
+    """
+    Infer a single Material: upsert value. Excludes existing ``Material:`` spec lines from the blob so a wrong
+    model-only pewter bullet cannot self-reinforce; resolves brass-in-prose vs pewter-in-schema contradictions when
+    pewter is not repeated on non-Material spec lines.
+    """
+    narrative = f"{description} {title}".strip().lower()
+    specs_non_mat = _spec_lines_without_material_label(specs)
+    body_no_mat_specs = " ".join(specs_non_mat).lower()
+    mat_low = (material or "").strip().lower()
+
+    brass_in_narrative = bool(_BRASS_NARRATIVE_RE.search(narrative))
+    pewter_in_non_material_specs = bool(_PEWTER_TOKEN_RE.search(body_no_mat_specs))
+    pewter_in_material_field = bool(_PEWTER_TOKEN_RE.search(mat_low))
+    pewter_in_material_spec_lines = any(
+        _PEWTER_TOKEN_RE.search(s)
+        for s in specs
+        if re.match(r"^\s*material\s*:", s.strip(), re.I)
+    )
+
+    if brass_in_narrative and (pewter_in_material_field or pewter_in_material_spec_lines) and not pewter_in_non_material_specs:
+        # Pewter only came from the structured material field and/or a ``Material:`` line — prose/title says brass.
+        return "Brass"
+
+    evidence = " ".join([material, description, title, *specs_non_mat]).lower()
+    has_pewter = bool(_PEWTER_TOKEN_RE.search(evidence))
+    has_plate = any(k in evidence for k in ("silver plate", "silverplate", "epns"))
+    has_sterling = any(k in evidence for k in (" sterling", "sterling ", " 925", "925 "))
 
     # Hallmark-first preference: explicit pewter/zinn/etain should override loose silver-plate wording.
     if has_pewter:
@@ -343,17 +412,22 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         for s in row.specification_lines
         if s.strip() and not re.match(r"^\s*markings?\s*:", s.strip(), re.I)
     ]
+    title = row.item_name.strip()
+    desc = row.professional_description.strip()
     metal_material = _infer_metal_material(
         material=row.material.strip(),
         specs=specs,
-        description=row.professional_description.strip(),
+        description=desc,
+        title=title,
     )
     material_value = metal_material or row.material.strip() or None
+    if not material_value and _BRASS_NARRATIVE_RE.search(f"{desc} {title}".strip().lower()):
+        material_value = "Brass"
     specs = _upsert_material_spec(specs, material_value)
     if row.era.strip() and not any(s.lower().startswith("era:") for s in specs):
         specs.append(f"Era: {row.era.strip()}")
     
-    desc = row.professional_description.strip() or title
+    desc = desc or title
     return {
         "SKU": sku_clean or None,
         "AuctionTitle": title,

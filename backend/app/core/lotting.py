@@ -224,6 +224,32 @@ def _normalize_subject_form_line_for_bucket(line: str, bucket: str) -> str:
     return f"{label}: {rhs}"
 
 
+_ITEM_LABEL_RE = re.compile(
+    r"(?i)^\s*item\s*#?\s*(\d+)\b(?:\s*\([^)]{0,120}\))?\s*$",
+)
+
+
+def _normalize_item_line_for_bucket(line: str, bucket: str) -> str:
+    """Canonical ``Item n:`` label after merge (drops parenthetical position tags on the label)."""
+    m_b = re.match(r"^spec__item_(\d+)$", bucket)
+    if not m_b:
+        return line
+    n = int(m_b.group(1))
+    m = re.match(r"^([^:]+):\s*(.+)$", clean_listing_text(line).strip())
+    if not m:
+        return line
+    rhs = _primary_alt_value(m.group(2))
+    if not rhs:
+        return line
+    return f"Item {n}: {rhs}"
+
+
+def _normalize_spec_line_for_bucket(line: str, bucket: str) -> str:
+    if bucket.startswith("spec__item_"):
+        return _normalize_item_line_for_bucket(line, bucket)
+    return _normalize_subject_form_line_for_bucket(line, bucket)
+
+
 def _semantic_spec_bucket(line: str) -> str | None:
     """
     Map a spec line to a merge bucket, or None when the line should only use exact-string dedupe
@@ -239,6 +265,14 @@ def _semantic_spec_bucket(line: str) -> str | None:
     raw_label = m.group(1).strip()
     if len(raw_label) > 56:
         return None
+    m_item = _ITEM_LABEL_RE.match(raw_label)
+    if m_item:
+        return f"spec__item_{int(m_item.group(1))}"
+    # ``Subject (Bells):`` / ``Form (primary):`` — same merge bucket as plain Subject/Form.
+    if re.match(r"(?i)^(subject|subjects)\b", raw_label):
+        return "spec__subject"
+    if re.match(r"(?i)^(form|forms)\b", raw_label):
+        return "spec__form"
     label_key = re.sub(r"\s+", " ", raw_label.lower())
     canon = _SPEC_LABEL_TO_CANON.get(label_key)
     if canon is not None:
@@ -422,8 +456,30 @@ def _collapse_semantic_spec_lines(lines: list[str]) -> list[str]:
             out.append(line)
             continue
         if i == first_idx[b]:
-            out.append(_normalize_subject_form_line_for_bucket(winner[b], b))
+            out.append(_normalize_spec_line_for_bucket(winner[b], b))
         # else: skip duplicate bucket member
+    return out
+
+
+def _prune_subject_form_when_item_bullets_present(lines: list[str]) -> list[str]:
+    """
+    When the model already enumerated pieces with **three or more** ``Item n:`` bullets, drop **Subject:** / **Form:**
+    rows that usually repeat the same inventory under another heading (pairs/small lots keep Form/Subject).
+    """
+    item_n = 0
+    for line in lines:
+        s = clean_listing_text(line).strip()
+        if re.match(r"(?i)^item\s*#?\s*\d+\s*:", s):
+            item_n += 1
+    if item_n < 3:
+        return lines
+    out: list[str] = []
+    for line in lines:
+        s = clean_listing_text(line).strip()
+        m = re.match(r"^([^:]+):", s)
+        if m and re.match(r"(?i)^(subject|subjects|form|forms)\b", m.group(1).strip()):
+            continue
+        out.append(line)
     return out
 
 
@@ -447,7 +503,8 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
             continue
         seen.add(key)
         first.append(line)
-    return consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
+    merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
+    return _prune_subject_form_when_item_bullets_present(merged)
 
 
 def _components_spec_text(specification_lines: list[str]) -> str | None:
