@@ -457,6 +457,53 @@ def _scrub_condition_note_rhs(rhs: str) -> str:
     return "; ".join(parts[:8]).strip(" ;")
 
 
+def _dedupe_dealer_card_vs_narrative_coin_grade_rhs(rhs: str) -> str:
+    """
+    When one clause quotes the **dealer card / flip** grade (e.g. Very Good (VG)) and another clause assigns a
+    **different** standard letter grade (e.g. Fine), drop the conflicting narrative clause — merged frames often double-grade.
+    """
+    s = clean_listing_text(rhs).strip()
+    if not s or ";" not in s:
+        return s
+    low = s.lower()
+    if not any(k in low for k in ("dealer card", "dealer flip", "on the card", "holder reads", "card reads")):
+        return s
+    parts = [clean_listing_text(p).strip() for p in s.split(";") if clean_listing_text(p).strip()]
+    if len(parts) < 2:
+        return s
+    ref = next((p for p in parts if any(k in p.lower() for k in ("card", "flip", "holder"))), None)
+    if not ref:
+        return s
+    if not re.search(r"(?i)\b(vg|vf|xf|f|g|ag|au|unc|ms|pr)\b|very good|very\s+fine|extra fine|about unc|uncirculated|fine", ref):
+        return s
+
+    def _mentions_vg(t: str) -> bool:
+        tl = t.lower()
+        return "very good" in tl or re.search(r"(?<![a-z])vg(?![a-z])", tl) is not None or "(vg)" in tl
+
+    def _mentions_fine(t: str) -> bool:
+        tl = t.lower()
+        if "very fine" in tl:
+            return False
+        return re.search(r"(?<![a-z])fine(?![a-z])", tl) is not None
+
+    ref_vg = _mentions_vg(ref)
+    ref_f = _mentions_fine(ref) and not ref_vg
+
+    out: list[str] = []
+    for p in parts:
+        pl = p.lower()
+        if p == ref:
+            out.append(p)
+            continue
+        if ref_vg and _mentions_fine(p) and not _mentions_vg(p):
+            continue
+        if ref_f and _mentions_vg(p):
+            continue
+        out.append(p)
+    return "; ".join(out).strip(" ;")
+
+
 def _collapse_redundant_condition_clauses(rhs: str) -> str:
     """
     When many near-duplicate wear clauses were joined with semicolons (often from merged frames), replace with one
@@ -504,6 +551,7 @@ def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
         body = vals[0]
     body = clean_listing_text(re.sub(r"\s*;\s*", "; ", body)).strip(" ;")
     body = _scrub_condition_note_rhs(body)
+    body = _dedupe_dealer_card_vs_narrative_coin_grade_rhs(body)
     body = _collapse_redundant_condition_clauses(body)
     if len(body) > 260:
         body = _trim_prose_at_limit(body, 260).rstrip(" ,;.")
