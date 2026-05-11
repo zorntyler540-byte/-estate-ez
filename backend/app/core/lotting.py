@@ -759,6 +759,39 @@ def sort_specification_lines_canonical(lines: list[str]) -> list[str]:
     return [line for _, line in indexed]
 
 
+def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
+    """
+    Merge several ``Components:`` rows from merged catalog photos into **one** line.
+
+    ``_collapse_semantic_spec_lines`` buckets every ``Components:`` into ``spec__components`` and keeps only the
+    **longest** value — so a later frame (e.g. only 1908) can **erase** earlier dates (1904, 1906, 1910-S) from the lot.
+    """
+    hits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
+        if m:
+            rhs = m.group(1).strip().rstrip(";.")
+            if rhs:
+                hits.append((i, rhs))
+    if len(hits) <= 1:
+        return lines
+    bodies = [rhs for _, rhs in hits]
+    merged_rhs = "; ".join(_unique_semicolon_phrases(bodies))
+    if len(merged_rhs) > 900:
+        merged_rhs = merged_rhs[:897] + "…"
+    merged_line = f"Components: {merged_rhs}"
+    skip = {i for i, _ in hits}
+    out: list[str] = []
+    first_i = min(i for i, _ in hits)
+    for i, line in enumerate(lines):
+        if i in skip:
+            if i == first_i:
+                out.append(merged_line)
+            continue
+        out.append(line)
+    return out
+
+
 def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     """
     Drop repeated spec bullets across merged photo frames.
@@ -779,6 +812,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
             continue
         seen.add(key)
         first.append(line)
+    first = consolidate_multi_frame_components_lines(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
