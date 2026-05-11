@@ -16,6 +16,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from app.config import settings
 from app.core.lotting import (
     _broaden_auction_title_for_components,
+    _drop_prose_sentences_conflicting_with_components,
     dedupe_specification_lines_preserve_order,
     sku_digits,
     tape_marking_canonical,
@@ -119,8 +120,10 @@ class InventoryTableEntry(BaseModel):
             "no second paragraph, no alternate 'draft' of the same text). Lead with what the shopper gets and how it displays. "
             "**Do not** write detailed condition here (no patina/oxidation/verdigris essays, scratch inventories, or "
             "re-stating the grade — that belongs in **condition_notes** plus optional brief **Condition note:** in "
-            "**specification_lines**). For multi-piece lots give a lively **overview** only — per-piece nitpicks and "
-            "measurements go in **specification_lines**. **Bold** confirmed makers once when legible. Omit unknown makers."
+            "**specification_lines**). For multi-piece lots give **one** short **lot-level** overview that reflects "
+            "**Components** / **Item n:** (e.g. censer + bell together) — **not** two sentences that only deep-dive one "
+            "object type that is not the sole piece in the lot. Per-piece nitpicks and measurements go in **specification_lines**. "
+            "**Bold** confirmed makers once when legible. Omit unknown makers."
         ),
     )
     specification_lines: list[str] = Field(
@@ -231,6 +234,9 @@ SYSTEM_INSTRUCTION = (
     "### MULTI-PIECE LOT COVERAGE (CRITICAL):\n"
     "- When a lot includes multiple distinct forms, cover ALL major visible components in **item_name** + **specification_lines** "
     "(and a short warm **professional_description** overview — not a blow-by-blow of every piece).\n"
+    "- **professional_description** must **match the same inventory** as **Components:** / **Item n:** — if those list "
+    "a censer and a hand bell, the prose must summarize **that grouping** (or neutrally say 'this brass lot' and nod to "
+    "both), **not** a long passage about an ewer or another form that is **not** in the Components line.\n"
     "- Do not collapse the lot to only one repeated subset (e.g., cups/tumblers) if larger or unique pieces are present.\n"
     "- Prioritize the dominant/structural pieces in wording: e.g., flagon/jug, serving tray/platter, then cups/goblets.\n"
     "- Add one concise components line in specification_lines, such as: "
@@ -258,10 +264,11 @@ SYSTEM_INSTRUCTION = (
     "- **item_name** for the hero frame must signal quantity or variety: e.g. "
     "'Vintage brass lot: dragon-form stand, incense censers, bell, ewer, striker' — or "
     "'Collection of decorative brass table pieces (multiple forms)'.\n"
-    "- **professional_description**: one **warm overview** of the grouping (what is on the table, the vibe, who might love it) "
-    "— still mention that several brass forms are included, but **do not** write a separate mini-paragraph for every single "
-    "piece here, and **do not** paste another full condition pass — use **specification_lines** + **Components:** for inventory "
-    "and **condition_notes** for the tier.\n"
+    "- **professional_description**: one **warm overview** of the **whole visible lot** (what is on the table together, "
+    "the vibe, who might love it) — name-check the **main mix** that matches **Components** (e.g. etched censer + hand bell), "
+    "not a zoom-in on one object type only. **Do not** write a separate mini-paragraph for every single piece, and **do not** "
+    "paste another full condition pass — use **specification_lines** + **Components:** for inventory and **condition_notes** "
+    "for the tier.\n"
     "- **specification_lines**: required **Components:** line listing **every** salient separate object "
     "(e.g. 'Components: 1 dragon-form brass stand with striker, 2 small footed incense censers with pierced lids, "
     "1 bell with clapper, 1 slender spouted ewer, 1 thin brass rod'). Count only what you see.\n"
@@ -332,9 +339,10 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "clear cool-gray pewter metal. Same value must match **Material:** in specification_lines.\n"
         "- **Material:** must match **item_name** and **professional_description** (no brass prose + pewter Material line). "
         "Brass/bronze decorative metalware is not pewter unless marks or clear pewter-gray luster say so.\n"
-        "- professional_description: Estate-sale warmth; **~50 words max**, **one paragraph only**. Overview + appeal — "
-        "**not** detailed condition (no patina/oxidation/wear essays; that is **condition_notes** + optional **Condition note:** "
-        "spec bullet). **bold** makers only when confirmed. Inventory → specification_lines.\n"
+        "- professional_description: Estate-sale warmth; **~50 words max**, **one paragraph only**. **Lot-level** overview "
+        "that matches **Components** / **Item n:** (e.g. mention censer + bell together if that is the lot) — **not** only "
+        "one object type. **not** detailed condition (no patina/oxidation/wear essays; that is **condition_notes** + optional "
+        "**Condition note:** spec bullet). **bold** makers only when confirmed. Inventory → specification_lines.\n"
         "- condition_notes: Exactly **one** value from NEW, LIKE NEW, VERY GOOD, GOOD, FAIR — the official grade; do not "
         "duplicate that story again in professional_description.\n"
         "  * NEW: no signs of wear; may include tags/packaging.\n"
@@ -469,6 +477,7 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         specs.append(f"Era: {row.era.strip()}")
     specs = dedupe_specification_lines_preserve_order(specs)
     title = _broaden_auction_title_for_components(title, specs)
+    desc = _drop_prose_sentences_conflicting_with_components(desc, specs)
 
     desc = desc or title
     return {

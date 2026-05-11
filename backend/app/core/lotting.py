@@ -431,10 +431,26 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
     return out
 
 
+def _collapse_redundant_condition_clauses(rhs: str) -> str:
+    """
+    When many near-duplicate wear clauses were joined with semicolons (often from merged frames), replace with one
+    readable estate sentence.
+    """
+    s = clean_listing_text(rhs).strip().strip(" .;")
+    if not s:
+        return s
+    parts = [clean_listing_text(p).strip(" .;") for p in s.split(";") if clean_listing_text(p).strip(" .;")]
+    if len(parts) < 3:
+        return s
+    wear_kw = ("oxidation", "tarnish", "patina", "wear", "vintage", "age", "surface", "moderate", "light", "honest")
+    if all(any(k in p.lower() for k in wear_kw) for p in parts):
+        return "Surface oxidation and tarnish consistent with age"
+    return s
+
+
 def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
     """
-    Merge multiple ``Condition note:`` / ``Condition notes:`` rows (common after multi-photo merges) into **one**
-    summary line; de-duplicates clauses so wording stays like a single estate note instead of a stack.
+    Merge ``Condition note:`` / ``Condition notes:`` rows into **one** line; collapse long stacks of similar wear text.
     """
     hits: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
@@ -444,25 +460,64 @@ def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
             rhs = m.group(1).strip().strip(" .;")
             if rhs:
                 hits.append((i, rhs))
-    if len(hits) < 2:
+    if not hits:
         return lines
-    first_i = hits[0][0]
+    first_i = min(i for i, _ in hits)
     vals = [rhs.replace("..", ".") for _, rhs in hits]
-    uniq = _unique_semicolon_phrases(vals)
-    combined = "; ".join(uniq)
-    combined = clean_listing_text(re.sub(r"\s*;\s*", "; ", combined)).strip(" ;")
-    if len(combined) > 260:
-        combined = _trim_prose_at_limit(combined, 260).rstrip(" ,;.")
-    if combined and not combined.endswith((".", "!", "?")):
-        combined += "."
+    if len(vals) >= 2:
+        body = "; ".join(_unique_semicolon_phrases(vals))
+    else:
+        body = vals[0]
+    body = clean_listing_text(re.sub(r"\s*;\s*", "; ", body)).strip(" ;")
+    body = _collapse_redundant_condition_clauses(body)
+    if len(body) > 260:
+        body = _trim_prose_at_limit(body, 260).rstrip(" ,;.")
+    if body and not body.endswith((".", "!", "?")):
+        body += "."
     skip_idx = {i for i, _ in hits}
     out: list[str] = []
     for i, line in enumerate(lines):
         if i in skip_idx:
             if i == first_i:
-                out.append(f"Condition note: {combined}")
+                out.append(f"Condition note: {body}")
             continue
         out.append(line)
+    return out
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Light sentence split for prose cleanup (handles common closers)."""
+    s = clean_listing_text(text).strip()
+    if not s:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", s)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _drop_prose_sentences_conflicting_with_components(prof: str, specification_lines: list[str]) -> str:
+    """
+    Remove sentences that obsess over an object **category** (ewer, bell, censer, dragon, …) not supported by the
+    **Components:** / Item lines, so multi-piece prose matches the actual lot inventory.
+    """
+    comp = _components_spec_text(specification_lines)
+    if not comp:
+        return prof
+    cl = comp.lower()
+    blob = " ".join(specification_lines).lower()
+    comp_cats = _distinct_inventory_categories(cl) | _distinct_inventory_categories(blob)
+    if len(comp_cats) < 2:
+        return prof
+    kept: list[str] = []
+    for sent in _split_into_sentences(prof):
+        sl = sent.lower()
+        sent_cats = _distinct_inventory_categories(sl)
+        if sent_cats and not sent_cats <= comp_cats:
+            continue
+        kept.append(sent)
+    out = " ".join(kept).strip()
+    if len(out) < 18:
+        mat = _material_lead_word_from_title_and_specs(prof, specification_lines)
+        return f"{mat} grouping with the pieces listed in Components - a warm display lot."
     return out
 
 
@@ -1088,6 +1143,7 @@ class LotOutput:
         )
         move_unmentioned_brands_to_specs(brands, prof, spec_lines)
         spec_lines = dedupe_specification_lines_preserve_order(spec_lines)
+        prof = _drop_prose_sentences_conflicting_with_components(prof, spec_lines)
         prof = _trim_prose_to_max_words(prof, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8))
         prof = _ensure_multi_piece_description(prof, spec_lines)
         prof = _trim_prose_to_max_words(prof, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
@@ -1165,6 +1221,9 @@ class LotOutput:
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
         self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
+        self.professional_description = _drop_prose_sentences_conflicting_with_components(
+            self.professional_description, self.specification_lines
+        )
         self.professional_description = _trim_prose_to_max_words(
             self.professional_description, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8)
         )
