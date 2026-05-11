@@ -486,6 +486,32 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
     )
 
 
+MERGED_PRO_DESCRIPTION_MAX_CHARS = 4200
+"""Cap merged lot prose so many photo passes do not stack into an unreadable wall."""
+
+
+def _trim_prose_at_limit(text: str, max_chars: int) -> str:
+    """Trim at sentence boundary when possible; otherwise at word boundary."""
+    t = (text or "").strip()
+    if len(t) <= max_chars:
+        return t
+    budget = max_chars - 1
+    cut = t[:budget].rstrip()
+    for sep in (".\n\n", ".\n", ". ", "?", "!"):
+        idx = cut.rfind(sep)
+        if idx >= int(max_chars * 0.45):
+            return cut[: idx + len(sep)].strip()
+    sp = cut.rfind(" ")
+    if sp >= int(max_chars * 0.35):
+        return cut[:sp].strip() + "…"
+    return cut.strip() + "…"
+
+
+def _trim_block_for_merge_append(block: str, max_chars: int = 1100) -> str:
+    """Each merged frame contributes at most a short addendum; details belong in specification_lines."""
+    return _trim_prose_at_limit(block.strip(), max_chars)
+
+
 def _prose_substantially_new(existing: str, new_block: str) -> bool:
     """True when ``new_block`` is worth appending (not a near-duplicate of ``existing``)."""
     e, n = (existing or "").strip().lower(), (new_block or "").strip().lower()
@@ -894,11 +920,12 @@ class LotOutput:
                 or ""
             )
         ).strip()
+        if new_prof:
+            new_prof = _trim_block_for_merge_append(new_prof)
         if new_prof and _prose_substantially_new(self.professional_description, new_prof):
             cur = (self.professional_description or "").strip()
             joined = f"{cur}\n\n{new_prof}".strip()
-            if len(joined) <= 14000:
-                self.professional_description = joined
+            self.professional_description = _trim_prose_at_limit(joined, MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
         new_title_raw = (
             str(
@@ -925,6 +952,9 @@ class LotOutput:
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
         self.professional_description = _ensure_multi_piece_description(
             self.professional_description, self.specification_lines
+        )
+        self.professional_description = _trim_prose_at_limit(
+            self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
         )
         self.photo_count += 1
         if payload_suggests_sku_review(detail_payload):
