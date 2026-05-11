@@ -15,9 +15,15 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.core.lotting import (
+    MERGED_PRO_DESCRIPTION_MAX_CHARS,
+    PROFESSIONAL_DESCRIPTION_MAX_WORDS,
     _broaden_auction_title_for_components,
     _drop_prose_sentences_conflicting_with_components,
+    _ensure_multi_piece_description,
+    _trim_prose_at_limit,
+    _trim_prose_to_max_words,
     dedupe_specification_lines_preserve_order,
+    sanitize_description_unknowns,
     sku_digits,
     tape_marking_canonical,
 )
@@ -531,7 +537,12 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         specs.append(f"Era: {row.era.strip()}")
     specs = dedupe_specification_lines_preserve_order(specs)
     title = _broaden_auction_title_for_components(title, specs)
+    desc = sanitize_description_unknowns(desc)
     desc = _drop_prose_sentences_conflicting_with_components(desc, specs)
+    desc = _trim_prose_to_max_words(desc, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8))
+    desc = _ensure_multi_piece_description(desc, specs)
+    desc = _trim_prose_to_max_words(desc, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
+    desc = _trim_prose_at_limit(desc, MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
     desc = desc or title
     return {

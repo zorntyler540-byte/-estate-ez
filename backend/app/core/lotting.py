@@ -52,6 +52,9 @@ def clean_listing_text(raw: str) -> str:
     s = s.replace("**", "").replace("__", "").replace("`", "")
     # Long runs of periods are usually spurious model filler (not our single-character ellipsis trim).
     s = re.sub(r"\.{4,}", " ", s)
+    # ``...; ....`` style noise between condition clauses.
+    s = re.sub(r";\s*\.{2,}", "; ", s)
+    s = re.sub(r"\.{2,}\s*;", ";", s)
     # Normalize multiline bullets into a sentence-like flow for CT Seller.
     s = re.sub(r"\s*[\r\n]+\s*", " ", s)
     s = re.sub(r"\s{2,}", " ", s).strip()
@@ -433,6 +436,27 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
     return out
 
 
+def _scrub_condition_note_rhs(rhs: str) -> str:
+    """Drop empty/dot-only fragments and near-empty semicolon pieces from merged condition notes."""
+    s = clean_listing_text(rhs).strip(" ;")
+    if not s:
+        return s
+    s = re.sub(r";\s*\.+", "; ", s)
+    s = re.sub(r"\.{4,}", " ", s)
+    parts: list[str] = []
+    seen: set[str] = set()
+    for piece in s.split(";"):
+        f = clean_listing_text(piece).strip(" .;")
+        if len(f) < 5 or re.fullmatch(r"\.+", f):
+            continue
+        key = f.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(f)
+    return "; ".join(parts[:8]).strip(" ;")
+
+
 def _collapse_redundant_condition_clauses(rhs: str) -> str:
     """
     When many near-duplicate wear clauses were joined with semicolons (often from merged frames), replace with one
@@ -447,6 +471,14 @@ def _collapse_redundant_condition_clauses(rhs: str) -> str:
     wear_kw = ("oxidation", "tarnish", "patina", "wear", "vintage", "age", "surface", "moderate", "light", "honest")
     if all(any(k in p.lower() for k in wear_kw) for p in parts):
         return "Surface oxidation and tarnish consistent with age"
+    coin_kw = ("uncirculated", "mint", "sealed", "quarter", "map", "folder", "sleeve", "circulation", "handling")
+    if len(parts) >= 4 and sum(1 for p in parts if any(k in p.lower() for k in coin_kw)) >= 3:
+        sealed = next((p for p in parts if "seal" in p.lower() or "uncirculated" in p.lower()), "")
+        loose = next((p for p in parts if "circulation" in p.lower() or "loose" in p.lower()), "")
+        pack = next((p for p in parts if "map" in p.lower() or "folder" in p.lower() or "packaging" in p.lower()), "")
+        bits = [b for b in (sealed, pack, loose) if b]
+        if len(bits) >= 2:
+            return "; ".join(dict.fromkeys(bits))
     return s
 
 
@@ -471,6 +503,7 @@ def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
     else:
         body = vals[0]
     body = clean_listing_text(re.sub(r"\s*;\s*", "; ", body)).strip(" ;")
+    body = _scrub_condition_note_rhs(body)
     body = _collapse_redundant_condition_clauses(body)
     if len(body) > 260:
         body = _trim_prose_at_limit(body, 260).rstrip(" ,;.")
@@ -575,6 +608,109 @@ def _prune_subject_form_when_item_bullets_present(lines: list[str]) -> list[str]
     return out
 
 
+def _rhs_looks_like_mint_set_inventory(rhs: str) -> bool:
+    """True when an ``Item n:`` line summarizes a full mint set / denomination row, not one display quarter."""
+    low = rhs.lower()
+    if re.search(r"\b(?:two|three|four|five|six|seven|eight|nine|ten|one|\d+)\s+\d{4}\b", low):
+        return True
+    if any(
+        p in low
+        for p in (
+            "mint sleeve",
+            "original mint",
+            "uncirculated set",
+            "denominations in",
+            "standard denominations",
+            "kennedy half",
+            "sacagawea",
+        )
+    ):
+        return True
+    if sum(1 for k in ("dime", "nickel", "cent", "penny", "half dollar") if k in low) >= 2:
+        return True
+    return False
+
+
+def _collapse_loose_display_quarter_item_rows(lines: list[str]) -> list[str]:
+    """
+    Replace several ``Item n:`` rows that each name one commemorative/state quarter with a single summary line
+    when the lot clearly includes a map or mint sets (those rows are display/slot noise, not separate SKUs).
+    """
+    blob = " ".join(lines).lower()
+    if not any(
+        k in blob for k in ("map", "state quarter", "mint set", "uncirculated", "folder", "collector", "50 state")
+    ):
+        return lines
+    remove_idx: set[int] = set()
+    snippets: list[str] = []
+    for i, line in enumerate(lines):
+        s = clean_listing_text(line).strip()
+        m = re.match(r"(?i)^\s*item\s*#?\s*\d+\s*:\s*(.+)$", s)
+        if not m:
+            continue
+        rhs = m.group(1).strip()
+        if "quarter" not in rhs.lower():
+            continue
+        if _rhs_looks_like_mint_set_inventory(rhs):
+            continue
+        remove_idx.add(i)
+        snippets.append(rhs.rstrip("."))
+    if len(remove_idx) < 2:
+        return lines
+    out = [line for i, line in enumerate(lines) if i not in remove_idx]
+    summary_rhs = "; ".join(snippets[:8])
+    if len(summary_rhs) > 210:
+        summary_rhs = summary_rhs[:207] + "…"
+    summary = f"Display quarters (examples): {summary_rhs}"
+    insert_at = 0
+    for j, line in enumerate(out):
+        if re.match(r"(?i)^\s*item\s*#?\s*\d+\s*:", clean_listing_text(line).strip()):
+            insert_at = j + 1
+    out.insert(insert_at, summary)
+    return out
+
+
+def _spec_line_sort_rank(line: str) -> tuple[int, int]:
+    """Stable ordering: Components and condition near the top; Brand near the end; ``Item n`` numeric block together."""
+    s = clean_listing_text(line).strip()
+    m = re.match(r"^([^:]+):", s)
+    if not m:
+        return (55, 0)
+    raw = m.group(1).strip()
+    lab = raw.lower()
+    if lab.startswith("components"):
+        return (0, 0)
+    if re.match(r"condition\s*notes?", lab):
+        return (5, 0)
+    if lab == "style":
+        return (10, 0)
+    if lab == "finish":
+        return (15, 0)
+    if lab == "era":
+        return (20, 0)
+    m_item = re.match(r"(?i)^item\s*#?\s*(\d+)", raw)
+    if m_item:
+        return (30, int(m_item.group(1)))
+    if lab.startswith("display quarter"):
+        return (32, 0)
+    if "denomination" in lab:
+        return (35, 0)
+    if lab == "material":
+        return (40, 0)
+    if lab in ("brand", "maker", "manufacturer"):
+        return (90, 0)
+    return (50, 0)
+
+
+def sort_specification_lines_canonical(lines: list[str]) -> list[str]:
+    """Reorder ``Label:`` rows into a predictable auction spec order (fixes Brand between Item bullets)."""
+    if len(lines) < 2:
+        return lines
+    indexed = list(enumerate(lines))
+    indexed.sort(key=lambda it: (_spec_line_sort_rank(it[1]), it[0]))
+    return [line for _, line in indexed]
+
+
 def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     """
     Drop repeated spec bullets across merged photo frames.
@@ -597,6 +733,8 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         first.append(line)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
+    merged = _collapse_loose_display_quarter_item_rows(merged)
+    merged = sort_specification_lines_canonical(merged)
     return _prune_subject_form_when_item_bullets_present(merged)
 
 
@@ -741,6 +879,33 @@ def _trim_prose_at_limit(text: str, max_chars: int) -> str:
     return cut.strip() + "…"
 
 
+def _drop_incomplete_sentence_after_last_period(text: str) -> str:
+    """
+    When the model or word-cap leaves a dangling tail (e.g. ``… see Components. This official U.S.``),
+    keep text through the last complete sentence-ending clause.
+    """
+    t = clean_listing_text(text).strip()
+    if not t:
+        return t
+    # ``U.S.`` sets ``endswith('.')`` true even when the sentence is an obvious truncation stub.
+    t = re.sub(r"\s+This official(?:\s+U\.?S\.?)?$", "", t, flags=re.I).strip()
+    if t.endswith((".", "!", "?")):
+        return t
+    best = -1
+    for needle in (". ", "? ", "! ", ".\n"):
+        pos = 0
+        while True:
+            j = t.find(needle, pos)
+            if j == -1:
+                break
+            if j >= int(len(t) * 0.28):
+                best = max(best, j + len(needle.rstrip("\n")))
+            pos = j + 1
+    if best > 0:
+        return t[:best].strip()
+    return t
+
+
 def _trim_prose_to_max_words(text: str, max_words: int) -> str:
     """Keep the opening of the description; prefer cutting at a sentence boundary."""
     t = clean_listing_text(text or "").strip()
@@ -748,13 +913,19 @@ def _trim_prose_to_max_words(text: str, max_words: int) -> str:
         return t
     words = t.split()
     if len(words) <= max_words:
-        return t
+        return _drop_incomplete_sentence_after_last_period(t)
     chunk = " ".join(words[:max_words])
     for sep in (". ", "? ", "! ", ".\n"):
         idx = chunk.rfind(sep)
         if idx >= int(len(chunk) * 0.45):
-            return chunk[: idx + 1].strip()
-    return chunk.rstrip(",;:") + "…"
+            candidate = chunk[: idx + len(sep)].strip()
+            if len(candidate.split()) >= max(6, int(max_words * 0.28)):
+                return _drop_incomplete_sentence_after_last_period(candidate)
+    trimmed = chunk.rstrip(",;:").strip()
+    trimmed = _drop_incomplete_sentence_after_last_period(trimmed)
+    if not trimmed.endswith((".", "!", "?")):
+        trimmed += "…"
+    return trimmed
 
 
 def _trim_block_for_merge_append(block: str, max_chars: int = 480) -> str:

@@ -138,6 +138,43 @@ function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
+/**
+ * Decode a file for canvas drawing with phone/camera EXIF orientation applied when possible.
+ * Plain ``Image`` + ``drawImage`` often ignores EXIF, so saved JPEGs could stay sideways; this matches
+ * what the server already does via Pillow ``exif_transpose`` on upload.
+ */
+async function decodeImageForCanvas(
+  file: File
+): Promise<{ source: CanvasImageSource; width: number; height: number; release?: () => void } | null> {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      return {
+        source: bmp,
+        width: bmp.width,
+        height: bmp.height,
+        release: () => {
+          try {
+            bmp.close();
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+    } catch {
+      /* older engines or odd formats — fall back */
+    }
+  }
+  try {
+    const img = await loadImageFromFile(file);
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+    return { source: img, width, height };
+  } catch {
+    return null;
+  }
+}
+
 /** Basic tone controls; values are CSS ``filter`` percentages (100 = unchanged). */
 type RasterizeBasicAdjust = {
   brightnessPct: number;
@@ -184,28 +221,32 @@ async function rasterizeLotCameraEdit(
   const rot = (((rotationDeg % 360) + 360) % 360) as 0 | 90 | 180 | 270;
   if (rot !== 0 && rot !== 90 && rot !== 180 && rot !== 270) return null;
 
-  let img: HTMLImageElement;
-  try {
-    img = await loadImageFromFile(file);
-  } catch {
+  const decoded = await decodeImageForCanvas(file);
+  if (!decoded) return null;
+  const { source, width: w0, height: h0, release } = decoded;
+  if (w0 < 2 || h0 < 2) {
+    release?.();
     return null;
   }
-  const w0 = img.naturalWidth;
-  const h0 = img.naturalHeight;
-  if (w0 < 2 || h0 < 2) return null;
 
   const sx = Math.floor((w0 * trim) / 100);
   const sy = Math.floor((h0 * trim) / 100);
   const sw = Math.floor(w0 - (2 * w0 * trim) / 100);
   const sh = Math.floor(h0 - (2 * h0 * trim) / 100);
-  if (sw < 2 || sh < 2) return null;
+  if (sw < 2 || sh < 2) {
+    release?.();
+    return null;
+  }
 
   const c1 = document.createElement("canvas");
   c1.width = sw;
   c1.height = sh;
   const g1 = c1.getContext("2d");
-  if (!g1) return null;
-  g1.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  if (!g1) {
+    release?.();
+    return null;
+  }
+  g1.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
 
   const rad = (rot * Math.PI) / 180;
   const outW = rot % 180 === 0 ? sw : sh;
@@ -214,7 +255,10 @@ async function rasterizeLotCameraEdit(
   c2.width = outW;
   c2.height = outH;
   const g2 = c2.getContext("2d");
-  if (!g2) return null;
+  if (!g2) {
+    release?.();
+    return null;
+  }
   if (!isRasterAdjustDefault(adjust)) {
     g2.filter = rasterAdjustCssFilter(adjust);
   }
@@ -228,6 +272,7 @@ async function rasterizeLotCameraEdit(
   return new Promise((resolve) => {
     c2.toBlob(
       (blob) => {
+        release?.();
         if (!blob) {
           resolve(null);
           return;
