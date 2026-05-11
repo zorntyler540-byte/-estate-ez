@@ -272,7 +272,9 @@ def _semantic_spec_bucket(line: str) -> str | None:
         return None
     m_item = _ITEM_LABEL_RE.match(raw_label)
     if m_item:
-        return f"spec__item_{int(m_item.group(1))}"
+        # Do **not** bucket ``Item n:`` for semantic collapse: each merged photo often repeats **Item 1:** for a
+        # different coin — bucketing kept only the **longest** row and dropped other dates (1906, 1910-S, etc.).
+        return None
     # ``Subject (Bells):`` / ``Form (primary):`` — same merge bucket as plain Subject/Form.
     if re.match(r"(?i)^(subject|subjects)\b", raw_label):
         return "spec__subject"
@@ -759,6 +761,27 @@ def sort_specification_lines_canonical(lines: list[str]) -> list[str]:
     return [line for _, line in indexed]
 
 
+_ITEM_LINE_BODY_RE = re.compile(r"(?i)^\s*item\s*#?\s*\d+\s*:\s*(.+)$")
+
+
+def renumber_item_spec_lines_sequentially(lines: list[str]) -> list[str]:
+    """
+    After merge, many frames may each emit ``Item 1:`` for a different coin. With semantic buckets disabled for
+    items, renumber into ``Item 1:`` … ``Item n:`` in list order so the listing reads cleanly.
+    """
+    out: list[str] = []
+    seq = 0
+    for line in lines:
+        m = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if not m:
+            out.append(line)
+            continue
+        seq += 1
+        rhs = m.group(1).strip()
+        out.append(f"Item {seq}: {rhs}")
+    return out
+
+
 def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
     """
     Merge several ``Components:`` rows from merged catalog photos into **one** line.
@@ -817,6 +840,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
     merged = sort_specification_lines_canonical(merged)
+    merged = renumber_item_spec_lines_sequentially(merged)
     return _prune_subject_form_when_item_bullets_present(merged)
 
 
@@ -1002,7 +1026,7 @@ def _broaden_auction_title_for_numismatic_multi_year(
     if len(years) < 2:
         return t
     title_years = _coin_years_in_text(t)
-    if len(title_years) >= 2:
+    if years <= title_years:
         return t
     bits: list[str] = []
     if "lincoln" in blob or "wheat" in blob:
@@ -1037,6 +1061,52 @@ MERGED_PRO_DESCRIPTION_MAX_CHARS = 1000
 
 PROFESSIONAL_DESCRIPTION_MAX_WORDS = 50
 """Estate prose stays scannable (~half prior ~95-word guidance); inventory belongs in specification_lines."""
+
+
+def _synthesize_numismatic_multi_cent_prose(
+    description: str, specification_lines: list[str], photo_count: int
+) -> str:
+    """
+    After ``merge_detail``, replace stitched single-coin paragraphs with one **lot-level** overview that names
+    **all** cent dates found in specs when several photos were merged.
+    """
+    if photo_count < 2:
+        return description
+    full = " ".join(specification_lines)
+    years = _coin_years_in_text(full)
+    if len(years) < 2:
+        return description
+    blob = full.lower()
+    if not any(
+        k in blob
+        for k in (
+            " cent",
+            "cents",
+            "penny",
+            "pennies",
+            "indian head",
+            "lincoln",
+            "littleton",
+            "wheat",
+        )
+    ):
+        return description
+    y_sorted = sorted(years)
+    y_disp = ", ".join(str(y) for y in y_sorted)
+    bits: list[str] = []
+    if "folder" in blob or "album" in blob:
+        bits.append("collector folders (Lincoln and/or Indian Head themes)")
+    if any(
+        k in blob
+        for k in ("littleton", "flip", "envelope", "dealer card", " holder", "holders", "collector's envelope")
+    ):
+        bits.append("Littleton-style dealer cards or holders")
+    pack = "; ".join(bits) if bits else "items as shown in the photos"
+    out = (
+        f"This estate lot groups multiple U.S. small cents with dates {y_disp}, together with {pack}. "
+        "See Components for the item-by-item breakdown; follow handwritten grades and prices on the cards when visible."
+    )
+    return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
 
 def _trim_prose_at_limit(text: str, max_chars: int) -> str:
@@ -1591,6 +1661,12 @@ class LotOutput:
             self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
         )
         self.photo_count += 1
+        self.professional_description = _synthesize_numismatic_multi_cent_prose(
+            self.professional_description, self.specification_lines, self.photo_count
+        )
+        self.professional_description = _trim_prose_to_max_words(
+            self.professional_description, PROFESSIONAL_DESCRIPTION_MAX_WORDS
+        )
         if payload_suggests_sku_review(detail_payload):
             self.sku_needs_review = True
 
