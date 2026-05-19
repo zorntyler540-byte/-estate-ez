@@ -286,6 +286,8 @@ a.ct-btn:hover {
 .ct-textarea {
   width: 100%;
   font: inherit;
+  /* 16px+ avoids iOS Safari zooming the whole page when focusing inputs */
+  font-size: max(16px, 1rem);
   padding: 0.55rem 0.75rem;
   border-radius: var(--ct-radius-sm);
   border: 1px solid var(--ct-border-strong);

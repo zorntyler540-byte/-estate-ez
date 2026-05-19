@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "../lib/api";
+import { API_BASE, apiFetch, isApiBaseMisconfiguredForHost } from "../lib/api";
 
 export default function HomePage() {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -10,22 +10,45 @@ export default function HomePage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [configWarning, setConfigWarning] = useState("");
   const [busy, setBusy] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (isApiBaseMisconfiguredForHost(window.location.hostname)) {
+      setConfigWarning(
+        `This page is on ${window.location.origin} but the app is configured to call ${API_BASE}. Sign-in will fail on phones and other devices until the web app is rebuilt with NEXT_PUBLIC_API_BASE set to your public API URL (see DEPLOY.md).`
+      );
+    }
+  }, []);
 
   async function submit() {
     setBusy(true);
     setError("");
+    const trimmedEmail = email.trim().toLowerCase();
     try {
       const payload =
         mode === "register"
-          ? { account_name: accountName, email, password }
-          : { email, password };
-      const data = await apiFetch(`/auth/${mode}`, undefined, {
+          ? { account_name: accountName, email: trimmedEmail, password }
+          : { email: trimmedEmail, password };
+      const data = (await apiFetch(`/auth/${mode}`, undefined, {
         method: "POST",
         body: JSON.stringify(payload)
-      });
-      localStorage.setItem("token", data.access_token);
+      })) as { access_token?: string };
+      const token = data?.access_token;
+      if (!token || typeof token !== "string") {
+        setError("Server did not return a sign-in token. Check API configuration.");
+        return;
+      }
+      try {
+        localStorage.setItem("token", token);
+      } catch {
+        setError(
+          "Could not save your session in this browser (private mode or storage blocked). Try a normal browser tab or turn off strict tracking prevention for this site."
+        );
+        return;
+      }
       router.push("/dashboard");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Login failed");
@@ -104,11 +127,24 @@ export default function HomePage() {
               autoComplete={mode === "register" ? "new-password" : "current-password"}
             />
           </div>
-          <button type="submit" className="ct-btn ct-btn--primary" disabled={busy || !email || !password}>
+          <button
+            type="submit"
+            className="ct-btn ct-btn--primary"
+            disabled={busy || !email.trim() || !password}
+          >
             {busy ? "Working…" : mode === "register" ? "Create account" : "Sign in"}
           </button>
         </form>
-        {error ? <p className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>{error}</p> : null}
+        {configWarning ? (
+          <p className="ct-banner ct-banner--error" style={{ marginBottom: 0, fontSize: "0.88rem" }}>
+            {configWarning}
+          </p>
+        ) : null}
+        {error ? (
+          <p className="ct-banner ct-banner--error" style={{ marginBottom: 0, fontSize: "0.88rem" }}>
+            {error}
+          </p>
+        ) : null}
       </div>
     </main>
   );

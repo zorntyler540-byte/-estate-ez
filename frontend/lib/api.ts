@@ -1,5 +1,40 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
+/** Turn FastAPI / fetch failures into a short string for banners. */
+export function parseApiErrorMessage(raw: string, fallback = "Request failed"): string {
+  const t = raw.trim();
+  if (!t) return fallback;
+  try {
+    const j = JSON.parse(t) as { detail?: unknown };
+    const d = j.detail;
+    if (typeof d === "string" && d.trim()) return d.trim();
+    if (Array.isArray(d)) {
+      const parts = d
+        .map((x) => {
+          if (typeof x === "string") return x;
+          if (x && typeof x === "object" && "msg" in x) return String((x as { msg: unknown }).msg);
+          return "";
+        })
+        .filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+  } catch {
+    /* not JSON */
+  }
+  return t.length > 280 ? `${t.slice(0, 277)}…` : t;
+}
+
+/** True when the built API URL points at localhost but the page is opened on a real host (common deploy mistake). */
+export function isApiBaseMisconfiguredForHost(hostname: string): boolean {
+  if (!hostname || hostname === "localhost" || hostname === "127.0.0.1") return false;
+  try {
+    const u = new URL(API_BASE);
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
 /** Rough byte size of file parts only (multipart overhead is ignored). */
 function estimateFormDataFileBytes(fd: FormData): number {
   let n = 0;
@@ -107,14 +142,26 @@ export async function apiFetch(path: string, token?: string, init?: RequestInit)
   if (init?.body != null && typeof init.body === "string") {
     headers["Content-Type"] = "application/json";
   }
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
+      cache: "no-store"
+    });
+  } catch (e) {
+    const hint =
+      typeof window !== "undefined" && isApiBaseMisconfiguredForHost(window.location.hostname)
+        ? " This site is trying to reach a localhost API — redeploy the web app with NEXT_PUBLIC_API_BASE set to your public API URL."
+        : " Check Wi‑Fi/cellular, VPN, and that the API service is up.";
+    if (e instanceof TypeError) {
+      throw new Error(`Cannot reach the server at ${API_BASE}.${hint}`);
+    }
+    throw e;
+  }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `API error ${response.status}`);
+    throw new Error(parseApiErrorMessage(text, `API error ${response.status}`));
   }
   if (response.status === 204) return null;
   const ct = response.headers.get("content-type") || "";
