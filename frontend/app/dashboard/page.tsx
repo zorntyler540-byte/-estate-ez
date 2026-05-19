@@ -67,6 +67,11 @@ const LOT_CAMERA_ZOOM_MIN = 1;
 const LOT_CAMERA_ZOOM_MAX = 4;
 const LOT_CAMERA_ZOOM_STEP = 0.25;
 
+type VideoTrackCaps = MediaTrackCapabilities & {
+  focusMode?: string[];
+  pointsOfInterest?: boolean;
+};
+
 function lotCameraPinchDistance(e: TouchEvent): number {
   if (e.touches.length < 2) return 0;
   const a = e.touches[0];
@@ -568,6 +573,12 @@ export default function DashboardPage() {
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
+  const lotCameraTapStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const [lotCameraFocusRing, setLotCameraFocusRing] = useState<{
+    xPct: number;
+    yPct: number;
+    key: number;
+  } | null>(null);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   /** Scrollable column inside the camera modal — kept at bottom so Snap/Done stay in view on mobile. */
   const lotCameraScrollRef = useRef<HTMLDivElement | null>(null);
@@ -1260,6 +1271,12 @@ export default function DashboardPage() {
     strip.scrollLeft = strip.scrollWidth;
   }, [lotCameraSnapThumbUrls.length]);
 
+  useEffect(() => {
+    if (!lotCameraFocusRing) return;
+    const t = window.setTimeout(() => setLotCameraFocusRing(null), 1400);
+    return () => window.clearTimeout(t);
+  }, [lotCameraFocusRing?.key]);
+
   /** Center the live photo preview in the scroll panel so it stays fully in view (actions sit in a fixed bottom bar). */
   useEffect(() => {
     if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady) return;
@@ -1348,6 +1365,63 @@ export default function DashboardPage() {
       Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, next)) * 100) / 100;
     lotCameraZoomRef.current = z;
     setLotCameraZoom(z);
+  }
+
+  async function applyLotCameraTapFocus(clientX: number, clientY: number) {
+    const wrap = lotCameraZoomWrapRef.current;
+    const stream = lotCameraStreamRef.current;
+    if (!wrap || !stream) return;
+    const rect = wrap.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return;
+    const x = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+    setLotCameraFocusRing({ xPct: x * 100, yPct: y * 100, key: Date.now() });
+
+    const track = stream.getVideoTracks()[0];
+    if (!track?.applyConstraints) return;
+
+    const caps = track.getCapabilities?.() as VideoTrackCaps | undefined;
+    const advanced: Record<string, unknown>[] = [];
+    if (caps?.pointsOfInterest) {
+      advanced.push({ pointsOfInterest: [{ x, y }] });
+    }
+    if (caps?.focusMode?.includes("single-shot")) {
+      advanced.push({ focusMode: "single-shot" });
+    } else if (caps?.focusMode?.includes("continuous")) {
+      advanced.push({ focusMode: "continuous" });
+    }
+
+    try {
+      if (advanced.length) {
+        await track.applyConstraints({ advanced } as MediaTrackConstraints);
+      }
+    } catch {
+      try {
+        await track.applyConstraints({
+          // Safari / WebKit: top-level pointsOfInterest
+          pointsOfInterest: [{ x, y }]
+        } as MediaTrackConstraints);
+      } catch {
+        /* device may not support tap-to-focus */
+      }
+    }
+  }
+
+  function onLotCameraPreviewPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    lotCameraTapStartRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
+  }
+
+  function onLotCameraPreviewPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const start = lotCameraTapStartRef.current;
+    lotCameraTapStartRef.current = null;
+    if (!start || lotCameraPinchRef.current) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (dx * dx + dy * dy > 24 * 24) return;
+    if (Date.now() - start.t > 700) return;
+    void applyLotCameraTapFocus(e.clientX, e.clientY);
   }
 
   function clearFolderPick() {
@@ -1478,6 +1552,8 @@ export default function DashboardPage() {
     lotCameraPinchRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
+    setLotCameraFocusRing(null);
+    lotCameraTapStartRef.current = null;
   }
 
   function cancelLotCameraSession() {
@@ -3394,6 +3470,7 @@ export default function DashboardPage() {
 
       {lotCameraOpen ? (
         <div
+          className="ct-lot-camera-dialog"
           role="dialog"
           aria-modal="true"
           aria-label="Snap photos for one lot"
@@ -3433,9 +3510,9 @@ export default function DashboardPage() {
             >
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload. Pinch or use +/− to zoom the live view; the saved photo matches what you see. Tap a thumbnail to
-              preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation when needed;
-              use the trash control to remove one shot.
+              upload. Tap the live preview to focus; pinch or use +/− to zoom (saved photos match what you see). Tap a
+              thumbnail to preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation
+              when needed; use the trash control to remove one shot.
             </p>
             <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
@@ -3456,15 +3533,19 @@ export default function DashboardPage() {
                 <div
                   ref={lotCameraZoomWrapRef}
                   className="ct-lot-camera-live"
-                  style={{
-                    width: "100%",
-                    maxHeight: "min(56dvh, 560px)",
-                    height: "min(56dvh, 560px)",
-                    marginTop: "0.65rem",
-                    borderRadius: 8,
-                    overflow: "hidden",
-                    background: "#111",
-                    touchAction: "none"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Camera preview — tap to focus"
+                  onPointerDown={onLotCameraPreviewPointerDown}
+                  onPointerUp={onLotCameraPreviewPointerUp}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      const wrap = lotCameraZoomWrapRef.current;
+                      if (!wrap) return;
+                      const rect = wrap.getBoundingClientRect();
+                      void applyLotCameraTapFocus(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                    }
                   }}
                 >
                   <video
@@ -3479,9 +3560,21 @@ export default function DashboardPage() {
                       display: "block",
                       objectFit: "cover",
                       transform: `scale(${lotCameraZoom})`,
-                      transformOrigin: "center center"
+                      transformOrigin: "center center",
+                      pointerEvents: "none"
                     }}
                   />
+                  {lotCameraFocusRing ? (
+                    <span
+                      key={lotCameraFocusRing.key}
+                      className="ct-lot-camera-focus-ring"
+                      style={{
+                        left: `${lotCameraFocusRing.xPct}%`,
+                        top: `${lotCameraFocusRing.yPct}%`
+                      }}
+                      aria-hidden
+                    />
+                  ) : null}
                 </div>
                 <div
                   className="ct-row"
@@ -3542,52 +3635,16 @@ export default function DashboardPage() {
                 >
                   Captured (scroll sideways) — tap to preview, pencil to edit
                 </p>
-                <div
-                  ref={lotCameraStripRef}
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    overflowX: "auto",
-                    overflowY: "hidden",
-                    padding: "10px 4px 12px",
-                    WebkitOverflowScrolling: "touch",
-                    scrollSnapType: "x proximity"
-                  }}
-                >
+                <div ref={lotCameraStripRef} className="ct-lot-camera-strip">
                   {lotCameraSnapThumbUrls.map((url, i) => (
-                    <div
-                      key={url}
-                      style={{
-                        position: "relative",
-                        flex: "0 0 auto",
-                        width: 56,
-                        height: 56,
-                        scrollSnapAlign: "start"
-                      }}
-                    >
+                    <div key={url} className="ct-lot-camera-strip-item">
                       <button
                         type="button"
+                        className="ct-lot-camera-strip-thumb"
                         onClick={() => setLotCameraViewerIndex(i)}
                         aria-label={`Preview captured photo ${i + 1}`}
-                        style={{
-                          display: "block",
-                          width: 56,
-                          height: 56,
-                          padding: 0,
-                          border: "1px solid rgba(255,255,255,0.25)",
-                          borderRadius: 6,
-                          overflow: "hidden",
-                          cursor: "pointer",
-                          background: "#111"
-                        }}
                       >
-                        <img
-                          src={url}
-                          alt=""
-                          width={56}
-                          height={56}
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                        />
+                        <img src={url} alt="" />
                       </button>
                       <button
                         type="button"
@@ -3596,27 +3653,9 @@ export default function DashboardPage() {
                           e.stopPropagation();
                           openLotCameraEdit(i);
                         }}
-                        className="ct-btn ct-btn--ghost"
-                        style={{
-                          position: "absolute",
-                          bottom: -4,
-                          left: -4,
-                          minWidth: 36,
-                          minHeight: 36,
-                          width: 36,
-                          height: 36,
-                          padding: 0,
-                          borderRadius: "50%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "rgba(12,15,18,0.92)",
-                          border: "1px solid rgba(255,255,255,0.35)",
-                          color: "#c8d4ff",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
-                        }}
+                        className="ct-btn ct-btn--ghost ct-lot-camera-strip-edit"
                       >
-                        <Pencil size={16} aria-hidden />
+                        <Pencil size={18} aria-hidden />
                       </button>
                       <button
                         type="button"
@@ -3625,27 +3664,9 @@ export default function DashboardPage() {
                           e.stopPropagation();
                           removeLotCameraSnap(i);
                         }}
-                        className="ct-btn ct-btn--ghost"
-                        style={{
-                          position: "absolute",
-                          top: -4,
-                          right: -4,
-                          minWidth: 36,
-                          minHeight: 36,
-                          width: 36,
-                          height: 36,
-                          padding: 0,
-                          borderRadius: "50%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "rgba(12,15,18,0.92)",
-                          border: "1px solid rgba(255,255,255,0.35)",
-                          color: "#f5a5a5",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.45)"
-                        }}
+                        className="ct-btn ct-btn--ghost ct-lot-camera-strip-delete"
                       >
-                        <Trash2 size={16} aria-hidden />
+                        <Trash2 size={18} aria-hidden />
                       </button>
                     </div>
                   ))}

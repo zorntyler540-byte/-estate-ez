@@ -540,7 +540,131 @@ a.ct-btn:hover {
   }
 }
 
-/* Create-one-lot camera live view: use more vertical space when the phone is sideways (short dvh). */
+/* Create-one-lot camera (Add one lot on touch devices). */
+.ct-lot-camera-dialog {
+  --ct-lot-camera-thumb: 56px;
+}
+
+.ct-lot-camera-live {
+  position: relative;
+  width: 100%;
+  max-height: min(56dvh, 560px);
+  height: min(56dvh, 560px);
+  margin-top: 0.65rem;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.ct-lot-camera-live:focus-visible {
+  outline: 2px solid rgba(120, 160, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.ct-lot-camera-focus-ring {
+  position: absolute;
+  z-index: 2;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: -2.25rem 0 0 -2.25rem;
+  border: 2px solid rgba(255, 220, 120, 0.95);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  animation: ct-lot-camera-focus-pulse 1.35s ease-out forwards;
+}
+
+@keyframes ct-lot-camera-focus-pulse {
+  0% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.25;
+  }
+}
+
+.ct-lot-camera-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 12px 6px 14px;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+
+.ct-lot-camera-strip-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--ct-lot-camera-thumb);
+  height: var(--ct-lot-camera-thumb);
+  scroll-snap-align: start;
+}
+
+.ct-lot-camera-strip-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #111;
+}
+
+.ct-lot-camera-strip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ct-lot-camera-strip-edit,
+.ct-lot-camera-strip-delete {
+  position: absolute;
+  min-width: 40px;
+  min-height: 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 15, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.ct-lot-camera-strip-edit {
+  bottom: -6px;
+  left: -6px;
+  color: #c8d4ff;
+}
+
+.ct-lot-camera-strip-delete {
+  top: -6px;
+  right: -6px;
+  color: #f5a5a5;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .ct-lot-camera-dialog {
+    --ct-lot-camera-thumb: min(26vw, 108px);
+  }
+
+  .ct-lot-camera-dialog .ct-lot-camera-live {
+    height: min(58dvh, 600px);
+    max-height: min(58dvh, 600px);
+  }
+}
+
+/* Landscape phone: more vertical space for live view (short dvh). */
 @media (orientation: landscape) and (max-height: 540px) {
   .ct-lot-camera-live {
     height: min(78dvh, 560px) !important;
