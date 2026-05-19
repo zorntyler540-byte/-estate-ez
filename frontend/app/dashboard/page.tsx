@@ -421,6 +421,18 @@ type Job = {
   single_lot_manual_sku?: string | null;
 };
 
+/** Short label for job folder / upload batch (avoids full UUID rows in the UI). */
+function jobInputLabel(folder: string): string {
+  const raw = (folder || "").trim();
+  if (!raw) return "—";
+  const base = raw.replace(/\\/g, "/").split("/").pop() || raw;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(base)) {
+    return `Batch ${base.slice(0, 8)}…`;
+  }
+  if (base.length > 52) return `${base.slice(0, 49)}…`;
+  return base;
+}
+
 type SaleZipExport = {
   id: string;
   sale_id: string;
@@ -590,6 +602,7 @@ export default function DashboardPage() {
   const inventorySkuFlagFilterRef = useRef<"" | "duplicate" | "text_mismatch" | "any">("");
   inventorySkuFlagFilterRef.current = inventorySkuFlagFilter;
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [completedJobsExpanded, setCompletedJobsExpanded] = useState(false);
   const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -638,6 +651,15 @@ export default function DashboardPage() {
     () => jobs.find((j) => j.status === "processing")?.id ?? null,
     [jobs]
   );
+  const { activeJobs, completedJobs } = useMemo(() => {
+    const active: Job[] = [];
+    const completed: Job[] = [];
+    for (const j of jobs) {
+      if (j.status === "completed") completed.push(j);
+      else active.push(j);
+    }
+    return { activeJobs: active, completedJobs: completed };
+  }, [jobs]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
   const filteredAdminAccounts = useMemo(() => {
@@ -1966,6 +1988,23 @@ export default function DashboardPage() {
     }
   }
 
+  async function deleteAllCompletedJobs() {
+    if (!completedJobs.length) return;
+    const n = completedJobs.length;
+    if (!window.confirm(`Remove ${n} completed job record${n === 1 ? "" : "s"} (and uploaded folders if any)?`)) return;
+    setError("");
+    const ids = completedJobs.map((j) => j.id);
+    try {
+      for (const id of ids) {
+        await apiFetch(`/jobs/${id}`, token, { method: "DELETE" });
+      }
+      setJobs((prev) => prev.filter((j) => j.status !== "completed"));
+      setCompletedJobsExpanded(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
   async function createSale() {
     const name = newSaleName.trim();
     if (!name || !token) return;
@@ -2914,52 +2953,117 @@ export default function DashboardPage() {
       </div>
 
       <h2 className="ct-section-title">Jobs</h2>
-      <ul className="ct-job-list">
-        {jobs.map((job) => (
-          <li key={job.id}>
-            <span className="ct-job-status">{job.status}</span>
-            <span className="ct-job-path">{job.input_folder}</span>
-            {job.inherit_sku_from_subfolder ? (
-              <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Lot SKUs taken from digit folder names">
-                SKU←folders
+      {activeJobs.length === 0 && completedJobs.length === 0 ? (
+        <p className="ct-muted" style={{ margin: "0 0 1.25rem", fontSize: "0.9rem" }}>
+          No jobs yet.
+        </p>
+      ) : null}
+      {activeJobs.length > 0 ? (
+        <ul className="ct-job-list">
+          {activeJobs.map((job) => (
+            <li key={job.id}>
+              <span className="ct-job-status">{job.status}</span>
+              <span className="ct-job-path" title={job.input_folder}>
+                {jobInputLabel(job.input_folder)}
               </span>
-            ) : null}
-            {job.single_lot_mode ? (
-              <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
-                1 lot
+              {job.inherit_sku_from_subfolder ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Lot SKUs taken from digit folder names">
+                  SKU←folders
+                </span>
+              ) : null}
+              {job.single_lot_mode ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
+                  1 lot
+                </span>
+              ) : null}
+              {job.single_lot_manual_sku ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Manual SKU on this job">
+                  SKU:{job.single_lot_manual_sku}
+                </span>
+              ) : null}
+              {(job.status === "queued" || job.status === "failed") && (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  onClick={() => void runJob(job.id)}
+                  disabled={busyProcessing}
+                >
+                  {job.status === "failed" ? "Run again" : "Run now"}
+                </button>
+              )}
+              {job.status === "processing" && (
+                <button type="button" className="ct-btn" onClick={() => void cancelRun(job.id)}>
+                  Cancel
+                </button>
+              )}
+              {job.error_message ? (
+                <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
+              ) : null}
+              {job.status !== "processing" && (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() => void deleteJobRow(job.id)}
+                  disabled={busyProcessing}
+                >
+                  Delete job
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {completedJobs.length > 0 ? (
+        <div className="ct-jobs-completed">
+          <div className="ct-jobs-completed-bar">
+            <button
+              type="button"
+              className="ct-jobs-completed-toggle"
+              onClick={() => setCompletedJobsExpanded((v) => !v)}
+              aria-expanded={completedJobsExpanded}
+            >
+              {completedJobsExpanded ? (
+                <ChevronDown size={16} aria-hidden />
+              ) : (
+                <ChevronRight size={16} aria-hidden />
+              )}
+              <span>
+                {completedJobs.length} completed {completedJobs.length === 1 ? "job" : "jobs"}
               </span>
-            ) : null}
-            {job.single_lot_manual_sku ? (
-              <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Manual SKU on this job">
-                SKU:{job.single_lot_manual_sku}
-              </span>
-            ) : null}
-            {(job.status === "queued" || job.status === "failed") && (
-              <button
-                type="button"
-                className="ct-btn ct-btn--primary"
-                onClick={() => void runJob(job.id)}
-                disabled={busyProcessing}
-              >
-                {job.status === "failed" ? "Run again" : "Run now"}
-              </button>
-            )}
-            {job.status === "processing" && (
-              <button type="button" className="ct-btn" onClick={() => void cancelRun(job.id)}>
-                Cancel
-              </button>
-            )}
-            {job.error_message ? (
-              <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
-            ) : null}
-            {job.status !== "processing" && (
-              <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void deleteJobRow(job.id)} disabled={busyProcessing}>
-                Delete job
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+            </button>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost"
+              style={{ fontSize: "0.82rem", padding: "0.25rem 0.55rem" }}
+              onClick={() => void deleteAllCompletedJobs()}
+              disabled={busyProcessing}
+            >
+              Clear all
+            </button>
+          </div>
+          {completedJobsExpanded ? (
+            <ul className="ct-job-list ct-job-list--compact">
+              {completedJobs.map((job) => (
+                <li key={job.id}>
+                  <span className="ct-job-status ct-job-status--done">{job.status}</span>
+                  <span className="ct-job-path" title={job.input_folder}>
+                    {jobInputLabel(job.input_folder)}
+                  </span>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    style={{ fontSize: "0.8rem", padding: "0.2rem 0.45rem", marginLeft: "auto" }}
+                    onClick={() => void deleteJobRow(job.id)}
+                    disabled={busyProcessing}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 className="ct-section-title" style={{ margin: 0 }}>

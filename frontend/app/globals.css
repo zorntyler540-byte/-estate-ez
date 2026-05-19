@@ -385,6 +385,65 @@ a.ct-btn:hover {
   word-break: break-all;
 }
 
+.ct-jobs-completed {
+  margin: 0 0 1.25rem;
+}
+
+.ct-jobs-completed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+}
+
+.ct-jobs-completed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.25rem;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--ct-text-muted);
+  font-size: 0.88rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--ct-radius-sm);
+}
+
+.ct-jobs-completed-toggle:hover {
+  color: var(--ct-text);
+}
+
+.ct-job-list--compact {
+  margin-top: 0.35rem;
+  gap: 0.25rem;
+}
+
+.ct-job-list--compact li {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.84rem;
+  flex-wrap: nowrap;
+}
+
+.ct-job-list--compact .ct-job-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.ct-job-status--done {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--ct-success);
+}
+
 /* Table */
 .ct-table-wrap {
   width: 100%;
