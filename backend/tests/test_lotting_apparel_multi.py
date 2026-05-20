@@ -6,8 +6,9 @@ import unittest
 
 from app.core.lotting import (
     LotOutput,
-    collapse_duplicate_item_spec_lines,
+    _scrub_misapplied_mary_jane_phrasing,
     dedupe_specification_lines_preserve_order,
+    drop_components_lines_for_apparel_inventory,
 )
 
 
@@ -45,8 +46,30 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
                 sigs.add("shoes")
         self.assertIn("jacket", sigs)
         self.assertIn("cardigan", sigs)
-        comp = next(l for l in merged if l.lower().startswith("components:"))
-        self.assertLess(len(comp), 500)
+        self.assertFalse(any(l.lower().startswith("components:") for l in merged))
+
+    def test_drops_components_when_item_rows_present(self) -> None:
+        lines = [
+            "Components: Tribal jacket; Alfred Dunner cardigan; White Mountain clogs",
+            "Item 1: Tribal utility jacket L/G",
+            "Item 2: Alfred Dunner floral cardigan PS",
+            "Item 3: White Mountain tan laser-cut open-toe clogs",
+        ]
+        out = drop_components_lines_for_apparel_inventory(lines)
+        self.assertFalse(any(l.lower().startswith("components:") for l in out))
+        self.assertEqual(len([l for l in out if l.lower().startswith("item ")]), 3)
+
+    def test_scrubs_mary_jane_when_lot_is_open_toe_clogs(self) -> None:
+        blob = (
+            "white mountain tan laser-cut open-toe clogs wedge "
+            "item 3: white mountain tan laser-cut open-toe clogs"
+        )
+        prose = (
+            "Charming tan leather Mary Jane wedge clogs featuring laser-cut floral perforations."
+        )
+        fixed = _scrub_misapplied_mary_jane_phrasing(prose, blob)
+        self.assertNotIn("mary jane", fixed.lower())
+        self.assertIn("clogs", fixed.lower())
 
     def test_merge_detail_does_not_flood_size_tag_lines(self) -> None:
         lot = LotOutput.from_model(

@@ -910,8 +910,51 @@ def collapse_duplicate_item_spec_lines(lines: list[str]) -> list[str]:
     return out
 
 
+def _count_item_spec_lines(lines: list[str]) -> int:
+    return sum(
+        1
+        for line in lines
+        if _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+    )
+
+
+def _spec_lines_indicate_wardrobe_apparel(lines: list[str], blob: str) -> bool:
+    """Clothing/shoes lots that should use ``Item n:`` inventory instead of ``Components:``."""
+    if _APPAREL_GARMENT_RE.search(blob):
+        return True
+    item_bodies = [
+        _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip()).group(1)
+        for line in lines
+        if _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+    ]
+    if len(item_bodies) >= 2 and any(
+        any(p.search(body) for p, _ in _APPAREL_GARMENT_HINTS) for body in item_bodies
+    ):
+        return True
+    return bool(item_bodies) and _OPEN_TOE_FOOTWEAR_RE.search(blob)
+
+
+def drop_components_lines_for_apparel_inventory(
+    lines: list[str], blob: str = ""
+) -> list[str]:
+    """When wardrobe lots already have ``Item 1..n``, drop redundant ``Components:`` rows."""
+    if _count_item_spec_lines(lines) < 2:
+        return lines
+    inventory_blob = blob or " ".join(lines).lower()
+    if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
+        return lines
+    return [
+        line
+        for line in lines
+        if not re.match(r"(?i)^\s*components\s*:", clean_listing_text(line).strip())
+    ]
+
+
 def rebuild_components_from_unique_items(lines: list[str]) -> list[str]:
     """Replace bloated multi-frame ``Components:`` with one line built from collapsed ``Item n:`` rows."""
+    blob = " ".join(lines).lower()
+    if _spec_lines_indicate_wardrobe_apparel(lines, blob) and _count_item_spec_lines(lines) >= 2:
+        return lines
     item_bodies: list[str] = []
     comp_indices: list[int] = []
     for i, line in enumerate(lines):
@@ -1055,6 +1098,9 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     merged = _collapse_loose_display_quarter_item_rows(merged)
     merged = sort_specification_lines_canonical(merged)
     merged = renumber_item_spec_lines_sequentially(merged)
+    merged = drop_components_lines_for_apparel_inventory(
+        merged, " ".join(merged).lower()
+    )
     return _prune_subject_form_when_item_bullets_present(merged)
 
 
@@ -1973,7 +2019,13 @@ _GARMENT_TAG_SIGNAL_RE = re.compile(
 
 _APPAREL_GARMENT_RE = re.compile(
     r"(?i)\b(jacket|coat|windbreaker|blazer|shirt|dress|blouse|pants|trousers|"
-    r"skirt|vest|hoodie|sweater|cardigan|garment|apparel)\b"
+    r"skirt|vest|hoodie|sweater|cardigan|garment|apparel|clog|mule|wedge\s+shoe|"
+    r"footwear|sandal)\b"
+)
+
+_MARY_JANE_RE = re.compile(r"(?i)\bmary\s*jane\b")
+_OPEN_TOE_FOOTWEAR_RE = re.compile(
+    r"(?i)\b(open[- ]?toe|peep[- ]?toe|mules?|clogs?|slides?|slip[- ]?on)\b"
 )
 
 _COLLECTIBLE_CONDITION_RE = re.compile(r"(?i)\b(oxidation|tarnish|verdigris|patina layers)\b")
@@ -2060,7 +2112,7 @@ _APPAREL_GARMENT_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(cardigan|sweater|knit\s+top|knit\s+layer)\b"), "cardigan"),
     (re.compile(r"(?i)\b(jacket|coat|blazer|utility\s+jacket|trucker)\b"), "jacket"),
     (re.compile(r"(?i)\b(trouser|pants?|slacks)\b"), "trousers"),
-    (re.compile(r"(?i)\b(wedge|mule|shoe|sandal|heel|footwear)\b"), "shoes"),
+    (re.compile(r"(?i)\b(wedge|mule|clog|shoe|sandal|heel|footwear)\b"), "shoes"),
     (re.compile(r"(?i)\b(shirt|blouse|top)\b"), "top"),
 )
 
@@ -2223,6 +2275,61 @@ def _collapse_repeated_prose_paragraphs(text: str) -> str:
     return _drop_truncated_prose_tail(best)
 
 
+def _preferred_open_footwear_term(blob: str) -> str:
+    if re.search(r"(?i)\bclogs?\b", blob):
+        return "clogs"
+    if re.search(r"(?i)\bmules?\b", blob):
+        return "mules"
+    if re.search(r"(?i)\bwedge", blob):
+        return "wedge clogs"
+    if re.search(r"(?i)\bslip[- ]?on", blob):
+        return "slip-on shoes"
+    return "shoes"
+
+
+def _scrub_misapplied_mary_jane_phrasing(text: str, blob: str) -> str:
+    """
+    Drop ``Mary Jane`` when inventory describes open-toe clogs/mules/slip-ons (closed strap ≠ Mary Jane).
+    """
+    if not text or not _MARY_JANE_RE.search(text):
+        return text
+    if not _OPEN_TOE_FOOTWEAR_RE.search(blob):
+        return text
+    term = _preferred_open_footwear_term(blob)
+    s = text
+    for pat, repl in (
+        (re.compile(r"(?i)\bpeep-toe\s+mary\s*jane\s+wedge\s+mules?\b"), f"peep-toe wedge {term}"),
+        (re.compile(r"(?i)\bmary\s*jane\s+wedge\s+clogs?\b"), "wedge clogs"),
+        (re.compile(r"(?i)\bmary\s*jane\s+wedge\s+mules?\b"), "wedge mules"),
+        (re.compile(r"(?i)\bmary\s*jane\s+wedge\b"), "wedge"),
+        (re.compile(r"(?i)\btan\s+mary\s*jane\b"), f"tan {term}"),
+        (_MARY_JANE_RE, term),
+    ):
+        s = pat.sub(repl, s)
+    s = re.sub(r"\s{2,}", " ", s)
+    s = re.sub(r"\s+,", ",", s)
+    s = re.sub(r"\s+\.", ".", s)
+    return clean_listing_text(s)
+
+
+def _scrub_misapplied_mary_jane_in_listing(
+    professional_description: str,
+    specification_lines: list[str],
+    blob: str,
+) -> tuple[str, list[str]]:
+    desc = _scrub_misapplied_mary_jane_phrasing(professional_description, blob)
+    out: list[str] = []
+    for line in specification_lines:
+        parts = _spec_label_value_parts(line)
+        if parts and parts[0] == "style":
+            label = line.split(":", 1)[0]
+            rhs = _scrub_misapplied_mary_jane_phrasing(parts[1], blob)
+            out.append(f"{label}: {rhs}" if rhs else line)
+            continue
+        out.append(line)
+    return desc, out
+
+
 def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str) -> list[str]:
     """Drop coin/metal condition language from apparel lots (common per-frame bleed)."""
     if not _APPAREL_GARMENT_RE.search(blob):
@@ -2325,6 +2432,9 @@ class LotOutput:
             professional_description=self.professional_description,
         )
         self.professional_description = _collapse_repeated_prose_paragraphs(self.professional_description)
+        self.professional_description, self.specification_lines = _scrub_misapplied_mary_jane_in_listing(
+            self.professional_description, self.specification_lines, blob
+        )
         self.specification_lines = _scrub_misapplied_collectible_specs_for_apparel(
             self.specification_lines, blob
         )
