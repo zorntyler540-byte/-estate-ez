@@ -982,6 +982,22 @@ def _count_item_spec_lines(lines: list[str]) -> int:
     )
 
 
+def _item_spec_bodies(lines: list[str]) -> list[str]:
+    bodies: list[str] = []
+    for line in lines:
+        m = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if m:
+            bodies.append(m.group(1).strip())
+    return bodies
+
+
+def _count_unique_wardrobe_items(lines: list[str]) -> int:
+    bodies = _item_spec_bodies(lines)
+    if not bodies:
+        return 0
+    return len(set(_refine_wardrobe_item_signatures(bodies)))
+
+
 def _spec_lines_indicate_wardrobe_apparel(lines: list[str], blob: str) -> bool:
     """Clothing/shoes lots that should use ``Item n:`` inventory instead of ``Components:``."""
     if _APPAREL_GARMENT_RE.search(blob):
@@ -1024,9 +1040,7 @@ def drop_redundant_apparel_size_lines(lines: list[str], blob: str = "") -> list[
 def drop_components_lines_for_apparel_inventory(
     lines: list[str], blob: str = ""
 ) -> list[str]:
-    """When wardrobe lots already have ``Item 1..n``, drop redundant ``Components:`` rows."""
-    if _count_item_spec_lines(lines) < 2:
-        return lines
+    """Wardrobe lots use ``Item n:`` only — drop per-photo ``Components:`` feature laundry lists."""
     inventory_blob = blob or " ".join(lines).lower()
     if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
         return lines
@@ -1035,6 +1049,47 @@ def drop_components_lines_for_apparel_inventory(
         for line in lines
         if not re.match(r"(?i)^\s*components\s*:", clean_listing_text(line).strip())
     ]
+
+
+def synthesize_wardrobe_item_lines_when_sparse(lines: list[str], blob: str = "") -> list[str]:
+    """
+    When many photos merged without ``Item n:`` rows, infer one line per distinct garment (e.g. jacket + vest).
+    """
+    inventory_blob = blob or " ".join(lines).lower()
+    if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
+        return lines
+    if _count_unique_wardrobe_items(lines) >= 2:
+        return lines
+    phrases: list[str] = []
+    size_m = re.search(r"(?i)\bsize\s*:?\s*(xl|xxl|l|m|s|xs)\b", inventory_blob)
+    size_suffix = f", size {size_m.group(1).upper()}" if size_m else ""
+    if re.search(r"(?i)\bcolumbia\b", inventory_blob) and re.search(
+        r"(?i)\b(jacket|softshell|fleece|outerwear)\b", inventory_blob
+    ):
+        style = (
+            "softshell jacket"
+            if "softshell" in inventory_blob
+            else "fleece jacket"
+            if "fleece" in inventory_blob and "softshell" not in inventory_blob
+            else "jacket"
+        )
+        phrases.append(f"Columbia {style}{size_suffix}")
+    elif re.search(r"(?i)\b(jacket|softshell|fleece)\b", inventory_blob):
+        phrases.append(f"Outerwear jacket{size_suffix}")
+    if re.search(r"(?i)\b(vest|gilet|sleeveless|quilted\s+liner)\b", inventory_blob):
+        vest = "green quilted vest" if "quilt" in inventory_blob else "sleeveless vest"
+        if "green" in inventory_blob:
+            vest = "green quilted vest" if "quilt" in inventory_blob else "green sleeveless vest"
+        phrases.append(vest.capitalize())
+    if len(phrases) < 2:
+        return lines
+    other = [
+        line
+        for line in lines
+        if not _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        and not re.match(r"(?i)^\s*components\s*:", clean_listing_text(line).strip())
+    ]
+    return other + [f"Item {i + 1}: {p}" for i, p in enumerate(phrases[:4])]
 
 
 def rebuild_components_from_unique_items(lines: list[str]) -> list[str]:
@@ -1126,6 +1181,8 @@ def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
     ``_collapse_semantic_spec_lines`` buckets every ``Components:`` into ``spec__components`` and keeps only the
     **longest** value — so a later frame (e.g. only 1908) can **erase** earlier dates (1904, 1906, 1910-S) from the lot.
     """
+    if _spec_lines_indicate_wardrobe_apparel(lines, " ".join(lines).lower()):
+        return lines
     hits: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
         m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
@@ -1178,6 +1235,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         seen.add(key)
         first.append(line)
     first = collapse_duplicate_item_spec_lines(first)
+    first = synthesize_wardrobe_item_lines_when_sparse(first, " ".join(first).lower())
     first = consolidate_multi_frame_components_lines(first)
     first = rebuild_components_from_unique_items(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
@@ -1210,7 +1268,17 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
     ``Includes multiple pieces`` for a single cent plus a paper tag.
     """
     raw = components_text or ""
-    nums = [int(x) for x in re.findall(r"\b\d+\b", raw)]
+    low = raw.lower()
+    if _APPAREL_GARMENT_RE.search(low) and raw.count(",") >= 3:
+        if not re.search(r"(?i)\b\d+\s*(?:piece|item|garment)s?\b", raw):
+            return False
+    nums: list[int] = []
+    for m in re.finditer(r"\b(\d+)\b", raw):
+        n = int(m.group(1))
+        ctx = low[max(0, m.start() - 10) : m.end() + 14]
+        if re.search(r"(?:tone|quarter|way|ply|panel|mm|inch|in\b)", ctx):
+            continue
+        nums.append(n)
     coin_year = frozenset(range(1700, 2040))
     years = [n for n in nums if n in coin_year]
     if len(set(years)) >= 2:
@@ -1218,7 +1286,6 @@ def _components_indicate_multi_piece(components_text: str) -> bool:
     countish = [n for n in nums if n not in coin_year and 2 <= n <= 500]
     if countish and sum(countish) >= 2:
         return True
-    low = raw.lower()
     return any(
         k in low
         for k in (
@@ -1874,17 +1941,74 @@ def _merge_auction_title_for_lot(
 
 
 def _listing_should_have_multi_piece_cue(specification_lines: list[str]) -> bool:
+    blob = " ".join(specification_lines).lower()
+    if _spec_lines_indicate_wardrobe_apparel(specification_lines, blob):
+        return _count_unique_wardrobe_items(specification_lines) >= 3
     comp = _components_spec_text(specification_lines) or ""
     return bool(comp and _components_indicate_multi_piece(comp)) or _spec_lines_indicate_multi_textile_piece(
         specification_lines
     )
 
 
-def _ensure_multi_piece_description(description: str, specification_lines: list[str]) -> str:
-    if not _listing_should_have_multi_piece_cue(specification_lines):
-        return description
-    comp = _components_spec_text(specification_lines) or ""
+def _collapse_conflicting_apparel_prose(
+    description: str, specification_lines: list[str]
+) -> str:
+    """One short paragraph; drop per-photo jacket variants and bogus 'several pieces' lines."""
     desc = clean_listing_text(description)
+    if not desc:
+        return desc
+    desc = re.sub(
+        r"(?i)\s*several distinct pieces[^.!?]*[.!?]?\s*",
+        " ",
+        desc,
+    ).strip()
+    desc = re.sub(
+        r"(?i)\s*refer to the photos for layout[^.!?]*[.!?]?\s*",
+        " ",
+        desc,
+    ).strip()
+    blob = " ".join(specification_lines).lower()
+    items_blob = " ".join(_item_spec_bodies(specification_lines)).lower()
+    inv = items_blob or blob
+    sents = _split_into_sentences(desc)
+    if len(sents) <= 1:
+        return desc
+    kept: list[str] = []
+    has_jacket = bool(re.search(r"(?i)\b(jacket|softshell|fleece)\b", inv))
+    has_vest = bool(re.search(r"(?i)\b(vest|sleeveless|gilet)\b", inv))
+    for sent in sents:
+        sl = sent.lower()
+        if "several distinct" in sl or "multiple pieces" in sl:
+            continue
+        if has_jacket and has_vest and len(kept) >= 2:
+            break
+        if has_jacket and "fleece" in sl and "softshell" in inv and "fleece" not in inv:
+            continue
+        if has_jacket and "softshell" in sl and "fleece" in inv and "softshell" not in inv:
+            continue
+        kept.append(sent)
+    out = " ".join(kept[:2]).strip()
+    return out or desc
+
+
+def _ensure_multi_piece_description(description: str, specification_lines: list[str]) -> str:
+    blob = " ".join(specification_lines).lower()
+    desc = _collapse_conflicting_apparel_prose(description, specification_lines)
+    if _spec_lines_indicate_wardrobe_apparel(specification_lines, blob):
+        n = _count_unique_wardrobe_items(specification_lines)
+        if n == 2:
+            low = desc.lower()
+            if "two-piece" in low or "2-piece" in low or "two piece" in low:
+                return desc
+            if not desc:
+                return "Two-piece outerwear lot—see Item lines for each garment."
+            joiner = " " if desc.endswith((".", "!", "?")) else ". "
+            return f"{desc}{joiner}Two-piece lot—see Item lines for each garment."
+        if n < 3:
+            return desc
+    if not _listing_should_have_multi_piece_cue(specification_lines):
+        return desc
+    comp = _components_spec_text(specification_lines) or ""
     low = desc.lower()
     if (
         "this lot includes multiple pieces" in low
@@ -1895,7 +2019,6 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
         or (comp and comp.lower() in low)
     ):
         return desc
-    # Keep prose short — inventory detail belongs in **specification_lines**, not a second essay here.
     extra = "Several distinct pieces in this lot—refer to the photos for layout, size, and condition."
     if not desc:
         return extra
@@ -2107,8 +2230,8 @@ _GARMENT_TAG_SIGNAL_RE = re.compile(
 
 _APPAREL_GARMENT_RE = re.compile(
     r"(?i)\b(jacket|coat|windbreaker|blazer|shirt|dress|blouse|pants|trousers|"
-    r"skirt|vest|hoodie|sweater|cardigan|garment|apparel|clog|mule|wedge\s+shoe|"
-    r"footwear|sandal)\b"
+    r"skirt|vest|gilet|sleeveless|hoodie|sweater|cardigan|garment|apparel|clog|"
+    r"mule|wedge\s+shoe|footwear|sandal|softshell|fleece)\b"
 )
 
 _MARY_JANE_RE = re.compile(r"(?i)\bmary\s*jane\b")
@@ -2227,7 +2350,8 @@ _KNOWN_LABEL_BRAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 # Apparel garment tokens for collapsing per-photo ``Item n:`` rows across merged frames.
 _APPAREL_GARMENT_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(cardigan|sweater|knit\s+top|knit\s+layer)\b"), "cardigan"),
-    (re.compile(r"(?i)\b(jacket|coat|blazer|utility\s+jacket|trucker)\b"), "jacket"),
+    (re.compile(r"(?i)\b(vest|gilet|sleeveless)\b"), "vest"),
+    (re.compile(r"(?i)\b(jacket|coat|blazer|utility\s+jacket|trucker|softshell|fleece)\b"), "jacket"),
     (re.compile(r"(?i)\b(trouser|pants?|slacks)\b"), "trousers"),
     (re.compile(r"(?i)\b(clogs?|mules?|wedge|shoe|sandal|heel|footwear)\b"), "footwear"),
     (re.compile(r"(?i)\b(shirt|blouse|top)\b"), "top"),
@@ -2459,6 +2583,7 @@ def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str)
     """Drop coin/metal condition language from apparel lots (common per-frame bleed)."""
     if not _APPAREL_GARMENT_RE.search(blob):
         return lines
+    items_blob = " ".join(_item_spec_bodies(lines)).lower()
     out: list[str] = []
     for line in lines:
         parts = _spec_label_value_parts(line)
@@ -2467,6 +2592,13 @@ def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str)
             continue
         if lk == "components" and re.search(r"(?i)\bslip pocket\b", line) and "interior" in line.lower():
             continue
+        if lk == "style" and _count_unique_wardrobe_items(lines) >= 2:
+            rhs = parts[1] if parts else ""
+            if re.search(r"(?i)\bvest\b", rhs) and re.search(
+                r"(?i)\b(jacket|softshell|fleece)\b", items_blob
+            ):
+                out.append("Style: Two-piece outerwear lot (jacket and vest)")
+                continue
         out.append(line)
     return out
 

@@ -7,6 +7,8 @@ import unittest
 
 from app.core.lotting import (
     LotOutput,
+    _collapse_conflicting_apparel_prose,
+    _ensure_multi_piece_description,
     _scrub_misapplied_mary_jane_phrasing,
     dedupe_specification_lines_preserve_order,
     drop_components_lines_for_apparel_inventory,
@@ -136,6 +138,34 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         self.assertLessEqual(len(size_lines), 2)
         item_lines = [l for l in lot.specification_lines if l.lower().startswith("item ")]
         self.assertLessEqual(len(item_lines), 4)
+
+
+    def test_columbia_jacket_plus_vest_two_items_not_many(self) -> None:
+        lines = [
+            "Components: Full-zip front, zippered chest pocket, fleece-lined collar, mock collar, "
+            "two-tone grey and black Columbia softshell jacket, ribbed V-neck, green sleeveless vest",
+            "Style: V-neck pullover golf vest",
+            "Material: Polyester blend",
+            "Size: XL",
+            "Brand: Columbia",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        self.assertFalse(any(l.lower().startswith("components:") for l in merged))
+        item_lines = [l for l in merged if l.lower().startswith("item ")]
+        self.assertEqual(len(item_lines), 2)
+        bodies = " ".join(item_lines).lower()
+        self.assertIn("columbia", bodies)
+        self.assertIn("vest", bodies)
+        prose = (
+            "A two-tone grey and black Columbia softshell jacket. "
+            "A classic black Columbia fleece jacket. "
+            "Several distinct pieces in this lot—refer to the photos."
+        )
+        fixed = _ensure_multi_piece_description(
+            _collapse_conflicting_apparel_prose(prose, merged), merged
+        )
+        self.assertNotIn("several distinct", fixed.lower())
+        self.assertNotIn("fleece jacket", fixed.lower())
 
 
 if __name__ == "__main__":
