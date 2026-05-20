@@ -782,6 +782,213 @@ def renumber_item_spec_lines_sequentially(lines: list[str]) -> list[str]:
     return out
 
 
+def _garment_line_signature(text: str) -> str:
+    """Stable key for duplicate jacket/cardigan rows across photo angles."""
+    s = clean_listing_text(text)
+    if not s:
+        return ""
+    low = s.lower()
+    brand = ""
+    for pat, name in _KNOWN_LABEL_BRAND_PATTERNS:
+        if pat.search(s):
+            brand = name.lower()
+            break
+    if not brand:
+        for token in ("tribal", "alfred dunner", "white mountain"):
+            if token in low:
+                brand = token
+                break
+    garment = ""
+    for pat, label in _APPAREL_GARMENT_HINTS:
+        if pat.search(s):
+            garment = label
+            break
+    if brand and garment:
+        return f"{brand}|{garment}"
+    if brand:
+        return brand
+    if garment:
+        return garment
+    return re.sub(r"\s+", " ", low[:72]).strip()
+
+
+def _pick_better_item_body(a: str, b: str) -> str:
+    """Prefer the row that names a label brand; otherwise the shorter clear summary."""
+    a_has = any(p.search(a) for p, _ in _KNOWN_LABEL_BRAND_PATTERNS) or re.search(
+        r"(?i)\b(tribal|alfred\s+dunner|white\s+mountain)\b", a
+    )
+    b_has = any(p.search(b) for p, _ in _KNOWN_LABEL_BRAND_PATTERNS) or re.search(
+        r"(?i)\b(tribal|alfred\s+dunner|white\s+mountain)\b", b
+    )
+    if a_has and not b_has:
+        return a
+    if b_has and not a_has:
+        return b
+    return a if len(a) <= len(b) * 1.2 else b
+
+
+def _short_deliverable_phrase(body: str, max_len: int = 110) -> str:
+    s = clean_listing_text(body).strip()
+    if not s:
+        return ""
+    head = re.split(r"\s*;\s*", s, maxsplit=1)[0].strip()
+    s = head if len(head) >= 16 else s
+    if len(s) <= max_len:
+        return s
+    cut = s[: max_len - 1].rsplit(" ", 1)[0].strip()
+    return (cut or s[: max_len - 1]) + "…"
+
+
+def _unique_deliverable_phrases_from_items_and_components(
+    bodies: list[str], lines: list[str]
+) -> list[str]:
+    """One short phrase per distinct garment (brand + type), not per catalog photo."""
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        m = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if not m:
+            continue
+        body = m.group(1).strip()
+        sig = _garment_line_signature(body)
+        if not sig or sig in seen:
+            continue
+        seen.add(sig)
+        phrases.append(_short_deliverable_phrase(body))
+    for block in bodies:
+        for piece in re.split(r"[;]|(?:\band\b)", str(block or ""), flags=re.I):
+            frag = clean_listing_text(piece).strip()
+            if len(frag) < 14:
+                continue
+            sig = _garment_line_signature(frag)
+            if not sig or sig in seen:
+                continue
+            if not any(p.search(frag) for p, _ in _APPAREL_GARMENT_HINTS):
+                continue
+            seen.add(sig)
+            phrases.append(_short_deliverable_phrase(frag))
+    return phrases[:8]
+
+
+def collapse_duplicate_item_spec_lines(lines: list[str]) -> list[str]:
+    """
+    Merged apparel lots often repeat ``Item 1:`` on every photo angle. Collapse to one row per garment signature.
+    """
+    bodies: list[str] = []
+    other: list[str] = []
+    for line in lines:
+        m = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if m:
+            bodies.append(m.group(1).strip())
+        else:
+            other.append(line)
+    if len(bodies) <= 1:
+        return lines
+    by_sig: dict[str, str] = {}
+    order: list[str] = []
+    for body in bodies:
+        sig = _garment_line_signature(body)
+        if sig not in by_sig:
+            order.append(sig)
+            by_sig[sig] = body
+        else:
+            by_sig[sig] = _pick_better_item_body(by_sig[sig], body)
+    if len(order) >= len(bodies):
+        return lines
+    rebuilt = [f"Item {i + 1}: {by_sig[s]}" for i, s in enumerate(order)]
+    out: list[str] = []
+    inserted = False
+    for line in other:
+        out.append(line)
+        if not inserted and re.match(
+            r"(?i)^\s*components\s*:", clean_listing_text(line).strip()
+        ):
+            out.extend(rebuilt)
+            inserted = True
+    if not inserted:
+        out.extend(rebuilt)
+    return out
+
+
+def rebuild_components_from_unique_items(lines: list[str]) -> list[str]:
+    """Replace bloated multi-frame ``Components:`` with one line built from collapsed ``Item n:`` rows."""
+    item_bodies: list[str] = []
+    comp_indices: list[int] = []
+    for i, line in enumerate(lines):
+        m_item = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if m_item:
+            item_bodies.append(m_item.group(1).strip())
+        m_comp = re.match(
+            r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip()
+        )
+        if m_comp and m_comp.group(1).strip():
+            comp_indices.append(i)
+    if len(item_bodies) < 2 or not comp_indices:
+        return lines
+    comp_text = " ".join(
+        clean_listing_text(lines[i]).split(":", 1)[-1] for i in comp_indices
+    )
+    if len(item_bodies) < 4 and len(comp_text) < 380:
+        return lines
+    phrases = [_short_deliverable_phrase(b) for b in item_bodies]
+    merged_rhs = "; ".join(p for p in phrases if p)
+    if len(merged_rhs) > 420:
+        merged_rhs = merged_rhs[:417] + "…"
+    new_line = f"Components: {merged_rhs}"
+    skip = set(comp_indices)
+    out: list[str] = []
+    first_i = min(comp_indices)
+    for i, line in enumerate(lines):
+        if i in skip:
+            if i == first_i:
+                out.append(new_line)
+            continue
+        out.append(line)
+    return out
+
+
+def consolidate_frame_size_tag_lines(
+    lines: list[str], labels_and_tags: list[str] | None = None
+) -> list[str]:
+    """One ``Size / tags:`` line instead of one row per merged photo frame."""
+    tag_parts: list[str] = []
+    other: list[str] = []
+    frame_tag_count = 0
+    for line in lines:
+        m = _FRAME_SIZE_TAG_RE.match(clean_listing_text(line).strip())
+        if m:
+            frame_tag_count += 1
+            rhs = m.group(1).strip()
+            if rhs:
+                tag_parts.extend(_unique_semicolon_phrases([rhs]))
+        else:
+            other.append(line)
+    if labels_and_tags:
+        for lab in labels_and_tags:
+            t = clean_listing_text(lab).strip()
+            if t and len(t) <= 120:
+                tag_parts.append(t)
+    if not tag_parts:
+        return lines
+    seen: set[str] = set()
+    unique: list[str] = []
+    for t in tag_parts:
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(t)
+    needs_merge = frame_tag_count > 1 or len(unique) > 3
+    if not needs_merge and labels_and_tags and len(unique) >= 2:
+        needs_merge = True
+    if not needs_merge:
+        return lines
+    summary = "; ".join(unique[:8])
+    if len(summary) > 320:
+        summary = summary[:317] + "…"
+    return other + [f"Size / tags: {summary}"]
+
+
 def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
     """
     Merge several ``Components:`` rows from merged catalog photos into **one** line.
@@ -799,9 +1006,14 @@ def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
     if len(hits) <= 1:
         return lines
     bodies = [rhs for _, rhs in hits]
-    merged_rhs = "; ".join(_unique_semicolon_phrases(bodies))
-    if len(merged_rhs) > 900:
-        merged_rhs = merged_rhs[:897] + "…"
+    deliverables = _unique_deliverable_phrases_from_items_and_components(bodies, lines)
+    if deliverables:
+        merged_rhs = "; ".join(deliverables)
+    else:
+        merged_rhs = "; ".join(_unique_semicolon_phrases(bodies))
+    cap = 420 if deliverables else 900
+    if len(merged_rhs) > cap:
+        merged_rhs = merged_rhs[: cap - 1] + "…"
     merged_line = f"Components: {merged_rhs}"
     skip = {i for i, _ in hits}
     out: list[str] = []
@@ -835,7 +1047,9 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
             continue
         seen.add(key)
         first.append(line)
+    first = collapse_duplicate_item_spec_lines(first)
     first = consolidate_multi_frame_components_lines(first)
+    first = rebuild_components_from_unique_items(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
@@ -1836,6 +2050,22 @@ _KNOWN_LABEL_BRAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\bspartina\s+449\b"), "Spartina 449"),
     (re.compile(r"(?i)\btravelers\b"), "Travelers"),
     (re.compile(r"(?i)\bcoldwater\s+creek\b"), "Coldwater Creek"),
+    (re.compile(r"(?i)\btribal\b"), "Tribal"),
+    (re.compile(r"(?i)\balfred\s+dunner\b"), "Alfred Dunner"),
+    (re.compile(r"(?i)\bwhite\s+mountain\b"), "White Mountain"),
+)
+
+# Apparel garment tokens for collapsing per-photo ``Item n:`` rows across merged frames.
+_APPAREL_GARMENT_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)\b(cardigan|sweater|knit\s+top|knit\s+layer)\b"), "cardigan"),
+    (re.compile(r"(?i)\b(jacket|coat|blazer|utility\s+jacket|trucker)\b"), "jacket"),
+    (re.compile(r"(?i)\b(trouser|pants?|slacks)\b"), "trousers"),
+    (re.compile(r"(?i)\b(wedge|mule|shoe|sandal|heel|footwear)\b"), "shoes"),
+    (re.compile(r"(?i)\b(shirt|blouse|top)\b"), "top"),
+)
+
+_FRAME_SIZE_TAG_RE = re.compile(
+    r"(?i)^\s*size\s*/\s*tags?\s*(?:\([^)]{0,80}\))?\s*:\s*(.+)$"
 )
 
 
@@ -2123,6 +2353,9 @@ class LotOutput:
         self.professional_description = sanitize_description_unknowns(self.professional_description)
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.specification_lines = consolidate_frame_size_tag_lines(
+            self.specification_lines, self.labels_and_tags
+        )
         self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
         self.auction_title = _broaden_auction_title_for_numismatic_multi_year(
             self.auction_title, self.specification_lines
@@ -2258,12 +2491,6 @@ class LotOutput:
                 brands=self.brands,
             )
             self.auction_title = _sanitize_gendered_title(merged, detail_payload)
-
-        if added_labels:
-            for lab in added_labels:
-                extra = f"Size / tag (from another frame in this lot): {lab}"
-                if extra.lower() not in {x.lower() for x in self.specification_lines}:
-                    self.specification_lines.append(extra)
 
         self.photo_count += 1
         self.professional_description = _synthesize_numismatic_multi_cent_prose(
