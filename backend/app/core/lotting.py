@@ -1617,6 +1617,208 @@ def normalize_tape_sku_input(raw: str | None) -> str | None:
     return d or None
 
 
+# Often hallucinated from zipper pulls / generic hardware — not sewn-in garment labels.
+_HARDWARE_MISREAD_BRANDS: frozenset[str] = frozenset(
+    {
+        "prada",
+        "gucci",
+        "louis vuitton",
+        "chanel",
+        "hermès",
+        "hermes",
+        "versace",
+        "dolce & gabbana",
+        "dior",
+        "fendi",
+        "burberry",
+        "armani",
+        "balenciaga",
+        "london fog",
+    }
+)
+
+_GARMENT_TAG_SIGNAL_RE = re.compile(
+    r"(?i)\b(authentic|established\s+\d{4}|made in|hecho en|size\s*:|"
+    r"rn\s*#|wpl\s*\d|traditional fit|neck label|care label|woven label|"
+    r"printed label|interior label|size tag)\b"
+)
+
+_APPAREL_GARMENT_RE = re.compile(
+    r"(?i)\b(jacket|coat|windbreaker|blazer|shirt|dress|blouse|pants|trousers|"
+    r"skirt|vest|hoodie|sweater|cardigan|garment|apparel)\b"
+)
+
+_COLLECTIBLE_CONDITION_RE = re.compile(r"(?i)\b(oxidation|tarnish|verdigris|patina layers)\b")
+
+
+def _lot_listing_blob(
+    *,
+    labels_and_tags: list[str],
+    specification_lines: list[str],
+    auction_title: str,
+    professional_description: str,
+) -> str:
+    return clean_listing_text(
+        " ".join(
+            [
+                auction_title,
+                professional_description,
+                " ".join(labels_and_tags),
+                " ".join(specification_lines),
+            ]
+        )
+    ).lower()
+
+
+def _brand_token_key(brand: str) -> str:
+    return re.sub(r"\s+", " ", clean_listing_text(brand)).strip().lower()
+
+
+def _brand_appears_in_blob(brand: str, blob: str) -> bool:
+    if not brand or not blob:
+        return False
+    key = _brand_token_key(brand)
+    if key and key in blob:
+        return True
+    if "st. john" in key or "st john" in key:
+        return "st. john" in blob or "st john" in blob
+    return brand_appears_in_prose(brand, blob)
+
+
+def _is_hardware_misread_brand(brand: str, blob: str) -> bool:
+    key = _brand_token_key(brand)
+    if key not in _HARDWARE_MISREAD_BRANDS:
+        return False
+    return not _brand_appears_in_blob(brand, blob)
+
+
+def _brands_from_spec_lines(specification_lines: list[str]) -> list[str]:
+    found: list[str] = []
+    for line in specification_lines:
+        parts = _spec_label_value_parts(line)
+        if parts and parts[0] in _BRAND_MERGE_LABEL_KEYS:
+            found.extend(_unique_semicolon_phrases([parts[1]]))
+    return normalize_brand_list(found)
+
+
+def _pick_primary_brand(candidates: list[str], auction_title: str, blob: str) -> str:
+    if not candidates:
+        return ""
+    for c in candidates:
+        if brand_appears_in_prose(c, auction_title):
+            return c
+    evidenced = [c for c in candidates if _brand_appears_in_blob(c, blob)]
+    if len(evidenced) == 1:
+        return evidenced[0]
+    if evidenced:
+        return max(evidenced, key=len)
+    return candidates[0]
+
+
+def resolve_lot_brands(
+    brands: list[str],
+    labels_and_tags: list[str],
+    specification_lines: list[str],
+    auction_title: str,
+    professional_description: str,
+) -> tuple[list[str], bool]:
+    """
+    Label-first brand resolution: drop hardware-only luxury guesses when garment tag evidence exists.
+    Returns at most one primary brand and whether staff should review (conflict was dropped).
+    """
+    merged = normalize_brand_list(brands + _brands_from_spec_lines(specification_lines))
+    if not merged:
+        return [], False
+
+    blob = _lot_listing_blob(
+        labels_and_tags=labels_and_tags,
+        specification_lines=specification_lines,
+        auction_title=auction_title,
+        professional_description=professional_description,
+    )
+    garment_context = bool(_GARMENT_TAG_SIGNAL_RE.search(blob)) or bool(_APPAREL_GARMENT_RE.search(blob))
+
+    filtered = (
+        [b for b in merged if not (_is_hardware_misread_brand(b, blob) and garment_context)]
+        if garment_context
+        else list(merged)
+    )
+    dropped = len(filtered) < len(merged)
+
+    if len(filtered) <= 1:
+        return filtered, dropped
+
+    primary = _pick_primary_brand(filtered, auction_title, blob)
+    return ([primary] if primary else []), True
+
+
+def sync_brand_spec_lines_to_resolved_brands(lines: list[str], brands: list[str]) -> list[str]:
+    """Replace merged ``Brand:`` rows with a single resolved maker."""
+    out: list[str] = []
+    for line in lines:
+        parts = _spec_label_value_parts(line)
+        if parts and parts[0] in _BRAND_MERGE_LABEL_KEYS:
+            continue
+        out.append(line)
+    if brands:
+        out.append(f"Brand: {brands[0]}")
+    return consolidate_brand_and_marking_spec_lines(out)
+
+
+def _prose_paragraphs_similar(a: str, b: str) -> bool:
+    al, bl = a.lower().strip(), b.lower().strip()
+    if not al or not bl:
+        return False
+    if al in bl or bl in al:
+        return True
+    aw = set(re.findall(r"[a-z]{5,}", al))
+    bw = set(re.findall(r"[a-z]{5,}", bl))
+    if len(aw) >= 8 and len(bw) >= 8:
+        return len(aw & bw) / max(len(aw), 1) >= 0.55
+    return False
+
+
+def _drop_truncated_prose_tail(text: str) -> str:
+    t = _drop_incomplete_sentence_after_last_period(text)
+    t = re.sub(r"(?i)\s+this classic(?:\s+st\.?)?\s*$", "", t).strip()
+    return t
+
+
+def _collapse_repeated_prose_paragraphs(text: str) -> str:
+    """Multi-frame merge often repeats the same opening paragraph — keep one complete overview."""
+    t = clean_listing_text(text).strip()
+    if not t:
+        return t
+    parts = [p.strip() for p in re.split(r"\n\n+", t) if p.strip()]
+    if len(parts) <= 1:
+        return _drop_truncated_prose_tail(t)
+    kept: list[str] = []
+    for p in parts:
+        if any(_prose_paragraphs_similar(p, k) for k in kept):
+            continue
+        kept.append(p)
+    if not kept:
+        kept = [parts[0]]
+    best = max(kept, key=lambda p: (len(p.split()), len(p)))
+    return _drop_truncated_prose_tail(best)
+
+
+def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str) -> list[str]:
+    """Drop coin/metal condition language from apparel lots (common per-frame bleed)."""
+    if not _APPAREL_GARMENT_RE.search(blob):
+        return lines
+    out: list[str] = []
+    for line in lines:
+        parts = _spec_label_value_parts(line)
+        lk = parts[0] if parts else ""
+        if lk == "conditionnote" and _COLLECTIBLE_CONDITION_RE.search(line):
+            continue
+        if lk == "components" and re.search(r"(?i)\bslip pocket\b", line) and "interior" in line.lower():
+            continue
+        out.append(line)
+    return out
+
+
 def merge_unique_case_insensitive(base: list[str], incoming: list[str]) -> tuple[list[str], list[str]]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -1691,7 +1893,57 @@ class LotOutput:
     starting_price: float | None = None
     photo_count: int = 1
     sku_needs_review: bool = False
+    brand_needs_review: bool = False
     lot_boundary_blank_page: bool = False
+
+    def _finalize_listing_quality(self) -> None:
+        """Label-first brands, apparel spec cleanup, and single-paragraph prose after merge."""
+        blob = _lot_listing_blob(
+            labels_and_tags=self.labels_and_tags,
+            specification_lines=self.specification_lines,
+            auction_title=self.auction_title,
+            professional_description=self.professional_description,
+        )
+        self.professional_description = _collapse_repeated_prose_paragraphs(self.professional_description)
+        self.specification_lines = _scrub_misapplied_collectible_specs_for_apparel(
+            self.specification_lines, blob
+        )
+        resolved, brand_review = resolve_lot_brands(
+            self.brands,
+            self.labels_and_tags,
+            self.specification_lines,
+            self.auction_title,
+            self.professional_description,
+        )
+        if brand_review:
+            self.brand_needs_review = True
+            self.sku_needs_review = True
+        self.brands = resolved
+        self.specification_lines = sync_brand_spec_lines_to_resolved_brands(
+            self.specification_lines, self.brands
+        )
+        self.professional_description = sanitize_description_unknowns(self.professional_description)
+        move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
+        self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
+        self.auction_title = _broaden_auction_title_for_numismatic_multi_year(
+            self.auction_title, self.specification_lines
+        )
+        self.professional_description = _drop_prose_sentences_conflicting_with_components(
+            self.professional_description, self.specification_lines
+        )
+        self.professional_description = _trim_prose_to_max_words(
+            self.professional_description, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8)
+        )
+        self.professional_description = _ensure_multi_piece_description(
+            self.professional_description, self.specification_lines
+        )
+        self.professional_description = _trim_prose_to_max_words(
+            self.professional_description, PROFESSIONAL_DESCRIPTION_MAX_WORDS
+        )
+        self.professional_description = _trim_prose_at_limit(
+            self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
+        )
 
     @classmethod
     def from_model(cls, payload: dict[str, Any]) -> "LotOutput":
@@ -1737,16 +1989,7 @@ class LotOutput:
                 or ""
             )
         )
-        move_unmentioned_brands_to_specs(brands, prof, spec_lines)
-        spec_lines = dedupe_specification_lines_preserve_order(spec_lines)
-        prof = _drop_prose_sentences_conflicting_with_components(prof, spec_lines)
-        prof = _trim_prose_to_max_words(prof, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8))
-        prof = _ensure_multi_piece_description(prof, spec_lines)
-        prof = _trim_prose_to_max_words(prof, PROFESSIONAL_DESCRIPTION_MAX_WORDS)
-        prof = _trim_prose_at_limit(prof, MERGED_PRO_DESCRIPTION_MAX_CHARS)
-        title = _broaden_auction_title_for_components(title, spec_lines)
-        title = _broaden_auction_title_for_numismatic_multi_year(title, spec_lines)
-        return cls(
+        lot = cls(
             sku=sku_normalized or None,
             auction_title=title,
             professional_description=prof,
@@ -1758,6 +2001,10 @@ class LotOutput:
             sku_needs_review=payload_suggests_sku_review(payload),
             lot_boundary_blank_page=False,
         )
+        lot._finalize_listing_quality()
+        if payload_suggests_sku_review(payload):
+            lot.sku_needs_review = True
+        return lot
 
     def merge_detail(self, detail_payload: dict[str, Any]) -> None:
         detail_brands = normalize_brand_list(
@@ -1814,28 +2061,6 @@ class LotOutput:
                 if extra.lower() not in {x.lower() for x in self.specification_lines}:
                     self.specification_lines.append(extra)
 
-        self.professional_description = sanitize_description_unknowns(self.professional_description)
-        move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
-        self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
-        self.auction_title = _broaden_auction_title_for_components(self.auction_title, self.specification_lines)
-        self.auction_title = _broaden_auction_title_for_numismatic_multi_year(
-            self.auction_title, self.specification_lines
-        )
-        self.professional_description = _drop_prose_sentences_conflicting_with_components(
-            self.professional_description, self.specification_lines
-        )
-        self.professional_description = _trim_prose_to_max_words(
-            self.professional_description, max(1, PROFESSIONAL_DESCRIPTION_MAX_WORDS - 8)
-        )
-        self.professional_description = _ensure_multi_piece_description(
-            self.professional_description, self.specification_lines
-        )
-        self.professional_description = _trim_prose_to_max_words(
-            self.professional_description, PROFESSIONAL_DESCRIPTION_MAX_WORDS
-        )
-        self.professional_description = _trim_prose_at_limit(
-            self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
-        )
         self.photo_count += 1
         self.professional_description = _synthesize_numismatic_multi_cent_prose(
             self.professional_description, self.specification_lines, self.photo_count
@@ -1843,9 +2068,7 @@ class LotOutput:
         self.professional_description = _synthesize_textile_measurement_lot_prose(
             self.professional_description, self.specification_lines, self.photo_count
         )
-        self.professional_description = _trim_prose_to_max_words(
-            self.professional_description, PROFESSIONAL_DESCRIPTION_MAX_WORDS
-        )
+        self._finalize_listing_quality()
         if payload_suggests_sku_review(detail_payload):
             self.sku_needs_review = True
 
