@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.lotting import LotOutput, _ensure_branded_auction_title, resolve_lot_brands
+from app.core.lotting import (
+    LotOutput,
+    _ensure_branded_auction_title,
+    infer_brands_from_label_context,
+    resolve_lot_brands,
+)
 
 
 class TestBrandResolution(unittest.TestCase):
@@ -57,6 +62,32 @@ class TestBrandResolution(unittest.TestCase):
         self.assertIn("st. john", low)
         self.assertNotIn("this classic st.\n", low)
         self.assertFalse(low.endswith("this classic st."))
+
+    def test_infers_brand_from_authentic_label_line(self) -> None:
+        brands = infer_brands_from_label_context(
+            ["AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984", "L/G"],
+            ["Components: Zipper closure, interior lining, care label", "Material: Synthetic blend"],
+        )
+        self.assertEqual(brands, ["St. John's Bay"])
+
+    def test_finalize_title_when_only_labels_have_maker(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Synthetic Blend Lined Utility Jacket",
+                "brand": "",
+                "Brands": [],
+                "labels_and_tags": ["AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984", "MADE IN CHINA"],
+                "professional_description": "Classic olive utility jacket with lining and zip front.",
+                "specification_lines": [
+                    "Components: Zipper closure, care label",
+                    "Material: Synthetic blend",
+                    "Style: Utility jacket",
+                ],
+            }
+        )
+        self.assertEqual(lot.brands, ["St. John's Bay"])
+        self.assertIn("St. John's Bay", lot.auction_title)
+        self.assertNotIn("Synthetic Blend Lined Utility", lot.auction_title)
 
     def test_detail_title_replaced_with_branded_title(self) -> None:
         out = _ensure_branded_auction_title(

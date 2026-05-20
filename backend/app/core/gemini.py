@@ -23,6 +23,8 @@ from app.core.lotting import (
     _trim_prose_at_limit,
     _trim_prose_to_max_words,
     dedupe_specification_lines_preserve_order,
+    infer_brands_from_label_context,
+    normalize_brand_list,
     sanitize_description_unknowns,
     sku_digits,
     tape_marking_canonical,
@@ -83,8 +85,10 @@ class InventoryTableEntry(BaseModel):
     brand: str = Field(
         default="",
         description=(
-            "Primary maker on the product or label, plain text. Leave empty when not legibly identified — "
-            "never use Unknown, Unidentified, Unbranded, N/A, or similar placeholders."
+            "Primary maker on the product or label, plain text — **required** when neck/care label text is legible "
+            "(e.g. copy 'St. John's Bay' from 'AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984'). Also copy exact label "
+            "phrases into **labels_and_tags**. Leave empty only when no maker name is readable — never use Unknown, "
+            "Unidentified, Unbranded, N/A, or similar placeholders."
         ),
     )
     material: str = Field(
@@ -161,6 +165,10 @@ class InventoryTableEntry(BaseModel):
     labels_and_tags: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("labels_and_tags", "LabelsAndTags"),
+        description=(
+            "Verbatim short strings from sewn-in or hang tags (e.g. 'AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984', "
+            "'L/G', 'MADE IN CHINA'). Required when any label is readable; used to set **brand**."
+        ),
     )
     starting_price_usd: float | None = Field(
         default=None,
@@ -419,7 +427,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- brand: ONE primary maker ONLY when that maker clearly applies to all pieces OR one dominant branded piece; "
         "otherwise leave empty and use specification_lines for legible marks per item.\n"
         "- **Apparel:** Brand = **sewn-in neck/care label** text only — never Prada/Gucci/etc. from a zipper pull unless the same "
-        "name is on the garment label. Put size/Made in/label facts in **labels_and_tags** when readable.\n"
+        "name is on the garment label. **Copy the maker into the JSON ``brand`` field** and repeat the label line in "
+        "**labels_and_tags** (e.g. AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984). Add **Brand:** in **specification_lines** "
+        "when the label name is readable.\n"
         "- **Apparel condition:** Use the NEW…FAIR tier in **condition_notes**; do not write oxidation/tarnish/patina essays "
         "(those are for metal/coins). **Components** for jackets: closure, pockets, lining, collar — not coin-holder parts.\n"
         "- Treat 'Czechoslovakia' / country text as origin unless a specific maker hallmark is visible.\n"
@@ -586,12 +596,18 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
     desc = _trim_prose_at_limit(desc, MERGED_PRO_DESCRIPTION_MAX_CHARS)
 
     desc = desc or title
+    brand_list = normalize_brand_list([row.brand.strip()] if row.brand.strip() else [])
+    brand_list = normalize_brand_list(
+        brand_list
+        + infer_brands_from_label_context(row.labels_and_tags, specs, title, desc)
+    )
     return {
         "SKU": sku_clean or None,
         "AuctionTitle": title,
         "ProfessionalDescription": desc,
         "SpecificationLines": specs,
-        "Brands": [row.brand.strip()] if row.brand.strip() else [],
+        "Brands": brand_list,
+        "brand": brand_list[0] if brand_list else "",
         "LabelsAndTags": row.labels_and_tags,
         "Condition": _normalize_condition_label(row.condition_notes),
         "StartingPrice": row.starting_price_usd,

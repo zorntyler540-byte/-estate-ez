@@ -1431,6 +1431,9 @@ def _ensure_branded_auction_title(
     t = clean_listing_text(title).strip()
     primary = brands[0] if brands else ""
     if not primary:
+        inferred = infer_brands_from_label_context([], specification_lines, t, "")
+        primary = inferred[0] if inferred else ""
+    if not primary:
         return t
     if brand_appears_in_prose(primary, t) and not _is_low_value_detail_title(t):
         if t.lower().startswith(primary.lower()[: min(10, len(primary))]):
@@ -1812,6 +1815,73 @@ def _brands_from_spec_lines(specification_lines: list[str]) -> list[str]:
     return normalize_brand_list(found)
 
 
+_AUTHENTIC_MAKER_RE = re.compile(
+    r"(?i)\bAUTHENTIC\s+([A-Za-z][A-Za-z0-9'&.\-\s]{2,56}?)"
+    r"(?:\s+(?:ESTABLISHED|SINCE|TRADITIONAL|TM|®)\b|\s*$|[,.;])"
+)
+
+# Common estate-sale apparel makers (label text often partial).
+_KNOWN_LABEL_BRAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)\bst\.?\s*john'?s?\s*bay\b"), "St. John's Bay"),
+    (re.compile(r"(?i)\bchico'?s\b"), "Chico's"),
+    (re.compile(r"(?i)\btalbots\b"), "Talbots"),
+    (re.compile(r"(?i)\bliz\s+claiborne\b"), "Liz Claiborne"),
+    (re.compile(r"(?i)\banne\s+klein\b"), "Anne Klein"),
+    (re.compile(r"(?i)\blands'?s?\s+end\b"), "Lands' End"),
+    (re.compile(r"(?i)\bcolumbia\b"), "Columbia"),
+    (re.compile(r"(?i)\bcarhartt\b"), "Carhartt"),
+    (re.compile(r"(?i)\beddie\s+bauer\b"), "Eddie Bauer"),
+    (re.compile(r"(?i)\blondon\s+fog\b"), "London Fog"),
+    (re.compile(r"(?i)\blevi'?s\b"), "Levi's"),
+    (re.compile(r"(?i)\bspartina\s+449\b"), "Spartina 449"),
+    (re.compile(r"(?i)\btravelers\b"), "Travelers"),
+    (re.compile(r"(?i)\bcoldwater\s+creek\b"), "Coldwater Creek"),
+)
+
+
+def _normalize_inferred_brand_name(raw: str) -> str:
+    s = clean_listing_text(raw).strip(" .,-;")
+    s = re.sub(r"(?i)\s+(?:established|since|traditional|fit|tm|®).*$", "", s).strip()
+    if len(s) < 3 or _placeholder_value(s):
+        return ""
+    return s
+
+
+def infer_brands_from_label_context(
+    labels_and_tags: list[str],
+    specification_lines: list[str],
+    auction_title: str = "",
+    professional_description: str = "",
+) -> list[str]:
+    """
+    Recover maker names Gemini left in ``labels_and_tags`` but omitted from ``brand`` / ``Brands``.
+    """
+    blob = clean_listing_text(
+        " ".join(
+            [
+                " ".join(labels_and_tags),
+                " ".join(specification_lines),
+                auction_title,
+                professional_description,
+            ]
+        )
+    )
+    if not blob:
+        return []
+
+    found: list[str] = []
+    for pat, canonical in _KNOWN_LABEL_BRAND_PATTERNS:
+        if pat.search(blob):
+            found.append(canonical)
+    if found:
+        return normalize_brand_list(found)
+    for m in _AUTHENTIC_MAKER_RE.finditer(blob):
+        name = _normalize_inferred_brand_name(m.group(1))
+        if name:
+            found.append(name)
+    return normalize_brand_list(found)
+
+
 def _pick_primary_brand(candidates: list[str], auction_title: str, blob: str) -> str:
     if not candidates:
         return ""
@@ -1837,7 +1907,16 @@ def resolve_lot_brands(
     Label-first brand resolution: drop hardware-only luxury guesses when garment tag evidence exists.
     Returns at most one primary brand and whether staff should review (conflict was dropped).
     """
-    merged = normalize_brand_list(brands + _brands_from_spec_lines(specification_lines))
+    merged = normalize_brand_list(
+        brands
+        + _brands_from_spec_lines(specification_lines)
+        + infer_brands_from_label_context(
+            labels_and_tags,
+            specification_lines,
+            auction_title,
+            professional_description,
+        )
+    )
     if not merged:
         return [], False
 
@@ -2019,6 +2098,14 @@ class LotOutput:
         self.specification_lines = _scrub_misapplied_collectible_specs_for_apparel(
             self.specification_lines, blob
         )
+        label_inferred = infer_brands_from_label_context(
+            self.labels_and_tags,
+            self.specification_lines,
+            self.auction_title,
+            self.professional_description,
+        )
+        if label_inferred:
+            self.brands = normalize_brand_list(self.brands + label_inferred)
         resolved, brand_review = resolve_lot_brands(
             self.brands,
             self.labels_and_tags,
