@@ -2169,6 +2169,35 @@ def _brands_from_spec_lines(specification_lines: list[str]) -> list[str]:
     return normalize_brand_list(found)
 
 
+def _brands_from_item_spec_lines(specification_lines: list[str]) -> list[str]:
+    """Makers named on ``Item n:`` rows (multi-brand wardrobe lots)."""
+    found: list[str] = []
+    for line in specification_lines:
+        m = _ITEM_LINE_BODY_RE.match(clean_listing_text(line).strip())
+        if not m:
+            continue
+        body = m.group(1)
+        for pat, name in _KNOWN_LABEL_BRAND_PATTERNS:
+            if pat.search(body):
+                found.append(name)
+    return normalize_brand_list(found)
+
+
+def _is_multi_brand_wardrobe_lot(specification_lines: list[str], blob: str) -> bool:
+    """Coordinated outfit with several legible makers — keep all in ``Brand:`` / ``brands[]``."""
+    if not _spec_lines_indicate_wardrobe_apparel(specification_lines, blob):
+        return False
+    item_brands = _brands_from_item_spec_lines(specification_lines)
+    if len(item_brands) >= 2:
+        return True
+    evidenced = [
+        name
+        for pat, name in _KNOWN_LABEL_BRAND_PATTERNS
+        if pat.search(blob)
+    ]
+    return len(normalize_brand_list(evidenced)) >= 2
+
+
 _AUTHENTIC_MAKER_RE = re.compile(
     r"(?i)\bAUTHENTIC\s+([A-Za-z][A-Za-z0-9'&.\-\s]{2,56}?)"
     r"(?:\s+(?:ESTABLISHED|SINCE|TRADITIONAL|TM|®)\b|\s*$|[,.;])"
@@ -2275,11 +2304,14 @@ def resolve_lot_brands(
 ) -> tuple[list[str], bool]:
     """
     Label-first brand resolution: drop hardware-only luxury guesses when garment tag evidence exists.
-    Returns at most one primary brand and whether staff should review (conflict was dropped).
+
+    Single-maker lots return one brand. Multi-brand wardrobe/coordinated outfit lots keep every maker
+    evidenced on items, labels, title, or description.
     """
     merged = normalize_brand_list(
         brands
         + _brands_from_spec_lines(specification_lines)
+        + _brands_from_item_spec_lines(specification_lines)
         + infer_brands_from_label_context(
             labels_and_tags,
             specification_lines,
@@ -2308,12 +2340,17 @@ def resolve_lot_brands(
     if len(filtered) <= 1:
         return filtered, dropped
 
+    if _is_multi_brand_wardrobe_lot(specification_lines, blob):
+        evidenced = [b for b in filtered if _brand_appears_in_blob(b, blob)]
+        keep = normalize_brand_list(evidenced or filtered)
+        return keep, dropped
+
     primary = _pick_primary_brand(filtered, auction_title, blob)
     return ([primary] if primary else []), True
 
 
 def sync_brand_spec_lines_to_resolved_brands(lines: list[str], brands: list[str]) -> list[str]:
-    """Replace merged ``Brand:`` rows with a single resolved maker."""
+    """Replace merged ``Brand:`` rows with resolved maker(s)."""
     out: list[str] = []
     for line in lines:
         parts = _spec_label_value_parts(line)
@@ -2321,7 +2358,7 @@ def sync_brand_spec_lines_to_resolved_brands(lines: list[str], brands: list[str]
             continue
         out.append(line)
     if brands:
-        out.append(f"Brand: {brands[0]}")
+        out.append(f"Brand: {'; '.join(brands)}")
     return consolidate_brand_and_marking_spec_lines(out)
 
 

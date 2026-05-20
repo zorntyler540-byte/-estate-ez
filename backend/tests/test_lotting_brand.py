@@ -104,6 +104,43 @@ class TestBrandResolution(unittest.TestCase):
         self.assertIn("Jacket", out)
         self.assertNotIn("Detail with", out)
 
+    def test_multi_brand_wardrobe_keeps_all_makers_in_brand_spec(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": (
+                    "Tribal Jacket, Alfred Dunner Cardigan, and White Mountain Wedge Clogs Ensemble"
+                ),
+                "brand": "Tribal",
+                "Brands": ["Tribal"],
+                "labels_and_tags": [
+                    "TRIBAL S/P",
+                    "alfred dunner PETITE",
+                    "WHITE MOUNTAIN",
+                ],
+                "professional_description": (
+                    "A coordinated ensemble with a Tribal jacket, Alfred Dunner cardigan, "
+                    "and White Mountain wedge clogs."
+                ),
+                "specification_lines": [
+                    "Item 1: Tribal beige button-front jacket, size S/P",
+                    "Item 2: Alfred Dunner floral cardigan, size Petite",
+                    "Item 3: White Mountain perforated wedge clogs",
+                    "Brand: Tribal",
+                    "Material: Cotton blend",
+                ],
+            }
+        )
+        self.assertEqual(
+            set(lot.brands),
+            {"Tribal", "Alfred Dunner", "White Mountain"},
+        )
+        brand_lines = [l for l in lot.specification_lines if l.lower().startswith("brand:")]
+        self.assertEqual(len(brand_lines), 1)
+        joined = brand_lines[0].lower()
+        self.assertIn("tribal", joined)
+        self.assertIn("alfred dunner", joined)
+        self.assertIn("white mountain", joined)
+
     def test_merge_keeps_branded_title_over_detail_frame(self) -> None:
         lot = LotOutput.from_model(
             {
