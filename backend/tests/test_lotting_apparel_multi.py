@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from app.core.lotting import (
@@ -70,6 +71,34 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         fixed = _scrub_misapplied_mary_jane_phrasing(prose, blob)
         self.assertNotIn("mary jane", fixed.lower())
         self.assertIn("clogs", fixed.lower())
+
+    def test_six_frame_items_collapse_to_four_salable_pieces(self) -> None:
+        """Duplicate jacket, left-shoe fragment, and extra Size: rows from multi-photo merge."""
+        lines = [
+            "Condition note: Excellent pre-owned condition",
+            "Style: Perforated comfort slip-on",
+            "Item 1: Tribal beige button-front utility jacket with zip pockets, size S/P",
+            "Item 2: Left shoe, size 6.5M",
+            "Item 3: Alfred Dunner floral knit button-up cardigan, size Petite",
+            "Item 4: White Mountain perforated tan peep-toe wedge clogs",
+            "Item 5: Beige button-front utility jacket with zippered pockets",
+            "Item 6: Matching beige trousers",
+            "Size: US Women's 8M",
+            "Size: Women's 6.5 M",
+            "Size: L (G/L)",
+            "Brand: Tribal",
+            "Size / tags: TRIBAL; alfred dunner PETITE; WHITE MOUNTAIN",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        item_lines = [l for l in merged if l.lower().startswith("item ")]
+        self.assertLessEqual(len(item_lines), 4)
+        bodies = " ".join(item_lines).lower()
+        self.assertNotIn("left shoe", bodies)
+        self.assertFalse(any(re.match(r"(?i)^\s*size\s*:\s*", l) for l in merged))
+        self.assertIn("tribal", bodies)
+        self.assertIn("alfred", bodies)
+        self.assertIn("clog", bodies)
+        self.assertIn("trouser", bodies)
 
     def test_merge_detail_does_not_flood_size_tag_lines(self) -> None:
         lot = LotOutput.from_model(

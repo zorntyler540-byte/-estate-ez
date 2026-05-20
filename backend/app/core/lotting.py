@@ -788,6 +788,8 @@ def _garment_line_signature(text: str) -> str:
     if not s:
         return ""
     low = s.lower()
+    if re.search(r"(?i)\b(left|right)\s+shoe\b", low):
+        return "footwear|shoe_fragment"
     brand = ""
     for pat, name in _KNOWN_LABEL_BRAND_PATTERNS:
         if pat.search(s):
@@ -803,6 +805,12 @@ def _garment_line_signature(text: str) -> str:
         if pat.search(s):
             garment = label
             break
+    if not garment and re.search(
+        r"(?i)\b(utility\s+jacket|button[- ]?front\s+.*jacket|jacket\s+with)\b", low
+    ):
+        garment = "jacket"
+    if not garment and re.search(r"(?i)\bmatching\s+.*\b(trouser|pants)\b", low):
+        garment = "trousers"
     if brand and garment:
         return f"{brand}|{garment}"
     if brand:
@@ -812,19 +820,75 @@ def _garment_line_signature(text: str) -> str:
     return re.sub(r"\s+", " ", low[:72]).strip()
 
 
+def _refine_wardrobe_item_signatures(bodies: list[str]) -> list[str]:
+    """
+    Map photo-angle duplicates onto one signature per salable unit (pair of shoes = one row).
+    """
+    raw = [_garment_line_signature(b) for b in bodies]
+    branded: dict[str, str] = {}
+    for sig in raw:
+        if "|" not in sig:
+            continue
+        garment = sig.split("|", 1)[1]
+        if garment == "shoe_fragment":
+            continue
+        if garment not in branded or len(sig) > len(branded[garment]):
+            branded[garment] = sig
+
+    has_clogs = any(
+        re.search(r"(?i)\b(clogs?|mules?|wedge|white\s+mountain|perforated)", b)
+        for b in bodies
+    )
+    refined: list[str] = []
+    for body, sig in zip(bodies, raw):
+        low = body.lower()
+        if (
+            sig == "footwear|shoe_fragment"
+            or sig.endswith("|footwear")
+            or re.search(r"(?i)\b(left|right)\s+shoe\b", low)
+        ):
+            if has_clogs:
+                refined.append(
+                    branded.get("footwear", "footwear|clogs")
+                    if "footwear" in branded
+                    else "footwear|clogs"
+                )
+            else:
+                refined.append(branded.get("footwear", "footwear|shoes"))
+            continue
+        garment = sig.split("|", 1)[1] if "|" in sig else sig
+        if "|" not in sig and garment in branded:
+            refined.append(branded[garment])
+            continue
+        if "|" not in sig and garment == "jacket" and "jacket" in branded:
+            refined.append(branded["jacket"])
+            continue
+        if "|" not in sig and garment == "cardigan" and "cardigan" in branded:
+            refined.append(branded["cardigan"])
+            continue
+        if "|" not in sig and garment == "trousers" and "trousers" in branded:
+            refined.append(branded["trousers"])
+            continue
+        refined.append(sig)
+    return refined
+
+
+def _item_body_quality_score(body: str) -> tuple[int, int, int]:
+    """Higher sorts first when picking the keeper row for a signature."""
+    is_fragment = bool(
+        re.search(r"(?i)\b(left|right)\s+shoe\b", body)
+        or re.fullmatch(r"(?i)(left|right)\s+shoe[^.]{0,40}", clean_listing_text(body).strip())
+    )
+    has_brand = bool(
+        any(p.search(body) for p, _ in _KNOWN_LABEL_BRAND_PATTERNS)
+        or re.search(r"(?i)\b(tribal|alfred\s+dunner|white\s+mountain)\b", body)
+    )
+    return (0 if is_fragment else 1, 1 if has_brand else 0, -len(body))
+
+
 def _pick_better_item_body(a: str, b: str) -> str:
-    """Prefer the row that names a label brand; otherwise the shorter clear summary."""
-    a_has = any(p.search(a) for p, _ in _KNOWN_LABEL_BRAND_PATTERNS) or re.search(
-        r"(?i)\b(tribal|alfred\s+dunner|white\s+mountain)\b", a
-    )
-    b_has = any(p.search(b) for p, _ in _KNOWN_LABEL_BRAND_PATTERNS) or re.search(
-        r"(?i)\b(tribal|alfred\s+dunner|white\s+mountain)\b", b
-    )
-    if a_has and not b_has:
-        return a
-    if b_has and not a_has:
-        return b
-    return a if len(a) <= len(b) * 1.2 else b
+    """Prefer branded full-piece rows over angle fragments (e.g. left shoe only)."""
+    return a if _item_body_quality_score(a) >= _item_body_quality_score(b) else b
 
 
 def _short_deliverable_phrase(body: str, max_len: int = 110) -> str:
@@ -884,10 +948,10 @@ def collapse_duplicate_item_spec_lines(lines: list[str]) -> list[str]:
             other.append(line)
     if len(bodies) <= 1:
         return lines
+    signatures = _refine_wardrobe_item_signatures(bodies)
     by_sig: dict[str, str] = {}
     order: list[str] = []
-    for body in bodies:
-        sig = _garment_line_signature(body)
+    for body, sig in zip(bodies, signatures):
         if sig not in by_sig:
             order.append(sig)
             by_sig[sig] = body
@@ -932,6 +996,29 @@ def _spec_lines_indicate_wardrobe_apparel(lines: list[str], blob: str) -> bool:
     ):
         return True
     return bool(item_bodies) and _OPEN_TOE_FOOTWEAR_RE.search(blob)
+
+
+def drop_redundant_apparel_size_lines(lines: list[str], blob: str = "") -> list[str]:
+    """
+    Wardrobe lots carry sizes on **Item** rows and **Size / tags:** — drop stray per-frame ``Size:`` bullets.
+    """
+    inventory_blob = blob or " ".join(lines).lower()
+    if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
+        return lines
+    if _count_item_spec_lines(lines) < 2:
+        return lines
+    size_count = sum(
+        1
+        for line in lines
+        if re.match(r"(?i)^\s*size\s*:\s*", clean_listing_text(line).strip())
+    )
+    if size_count == 0:
+        return lines
+    return [
+        line
+        for line in lines
+        if not re.match(r"(?i)^\s*size\s*:\s*", clean_listing_text(line).strip())
+    ]
 
 
 def drop_components_lines_for_apparel_inventory(
@@ -1101,6 +1188,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     merged = drop_components_lines_for_apparel_inventory(
         merged, " ".join(merged).lower()
     )
+    merged = drop_redundant_apparel_size_lines(merged, " ".join(merged).lower())
     return _prune_subject_form_when_item_bullets_present(merged)
 
 
@@ -2112,7 +2200,7 @@ _APPAREL_GARMENT_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(cardigan|sweater|knit\s+top|knit\s+layer)\b"), "cardigan"),
     (re.compile(r"(?i)\b(jacket|coat|blazer|utility\s+jacket|trucker)\b"), "jacket"),
     (re.compile(r"(?i)\b(trouser|pants?|slacks)\b"), "trousers"),
-    (re.compile(r"(?i)\b(wedge|mule|clog|shoe|sandal|heel|footwear)\b"), "shoes"),
+    (re.compile(r"(?i)\b(clogs?|mules?|wedge|shoe|sandal|heel|footwear)\b"), "footwear"),
     (re.compile(r"(?i)\b(shirt|blouse|top)\b"), "top"),
 )
 
