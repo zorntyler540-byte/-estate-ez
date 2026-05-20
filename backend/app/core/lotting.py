@@ -1367,16 +1367,127 @@ def _prose_substantially_new(existing: str, new_block: str) -> bool:
     return True
 
 
-def _merge_auction_title_for_lot(old: str, new: str, specification_lines: list[str]) -> str:
+_DETAIL_ONLY_TITLE_RE = re.compile(
+    r"(?i)\b(detail with|close[- ]?up|macro view|partial view|fragment of|showing the)\b"
+)
+
+
+def _is_low_value_detail_title(title: str) -> bool:
+    """Macro/feature titles without a maker — poor CTBids search keywords."""
+    t = clean_listing_text(title).strip()
+    if not t:
+        return False
+    if _DETAIL_ONLY_TITLE_RE.search(t):
+        return True
+    low = t.lower()
+    if " with " in low and not re.search(r"(?i)\b(men's|women's|st\.?\s*john|levi|gap|chico|lands' end)\b", t):
+        feature_tail = low.split(" with ", 1)[-1]
+        if any(
+            k in feature_tail
+            for k in ("zippered", "zipper", "pocket", "cuff", "collar", "hem", "closure", "welt")
+        ):
+            return True
+    return False
+
+
+def _spec_value_for_label(specification_lines: list[str], label_key: str) -> str:
+    for line in specification_lines:
+        parts = _spec_label_value_parts(line)
+        if parts and parts[0] == label_key:
+            return clean_listing_text(parts[1]).strip()
+    return ""
+
+
+def _garment_phrase_from_title(title: str) -> str:
+    low = re.sub(r"(?i)\b(detail with|close[- ]?up of|partial|view of|showing|woven|matte|secure)\b", " ", title)
+    low = clean_listing_text(low).lower()
+    phrases = (
+        ("zip-up jacket", "Zip-Up Jacket"),
+        ("utility jacket", "Utility Jacket"),
+        ("windbreaker", "Windbreaker"),
+        ("harrington jacket", "Harrington Jacket"),
+        ("jacket", "Jacket"),
+        ("coat", "Coat"),
+        ("blazer", "Blazer"),
+        ("shirt", "Shirt"),
+        ("dress", "Dress"),
+        ("pants", "Pants"),
+        ("trousers", "Trousers"),
+    )
+    for needle, label in phrases:
+        if needle in low:
+            return label
+    return ""
+
+
+def _ensure_branded_auction_title(
+    title: str,
+    brands: list[str],
+    specification_lines: list[str],
+) -> str:
+    """
+    When a resolved maker exists but the title is a generic detail line, rebuild a shopper-facing title.
+    """
+    t = clean_listing_text(title).strip()
+    primary = brands[0] if brands else ""
+    if not primary:
+        return t
+    if brand_appears_in_prose(primary, t) and not _is_low_value_detail_title(t):
+        if t.lower().startswith(primary.lower()[: min(10, len(primary))]):
+            return t
+        return f"{primary} {t}"[:500]
+
+    material = _spec_value_for_label(specification_lines, "material")
+    style = _spec_value_for_label(specification_lines, "style").split("/")[0].strip()
+    era = _spec_value_for_label(specification_lines, "era")
+    garment = _garment_phrase_from_title(t)
+
+    parts: list[str] = [primary]
+    era_low = era.lower()
+    if era and era_low not in ("contemporary", "modern", "current"):
+        parts.append(era)
+    if material and material.lower() not in ("", "unknown"):
+        parts.append(material)
+    if garment:
+        parts.append(garment)
+    elif style:
+        parts.append(style)
+    else:
+        parts.append("Apparel")
+    out = " ".join(p for p in parts if p).strip()
+    return out[:500] if out else t
+
+
+def _merge_auction_title_for_lot(
+    old: str,
+    new: str,
+    specification_lines: list[str],
+    *,
+    brands: list[str] | None = None,
+) -> str:
     """
     When later frames describe a broader inventory than the first, prefer a more inclusive title.
     First frame often latches onto the most ornate single object (e.g. dragon stand) and omits the rest.
+    Keeps a branded title when a later frame only adds a macro/detail line without the maker.
     """
     o, n = (old or "").strip(), (new or "").strip()
     if not n:
         return o or ""
     if not o:
         return n
+    merged_brands = normalize_brand_list((brands or []) + _brands_from_spec_lines(specification_lines))
+    primary = merged_brands[0] if merged_brands else ""
+    if primary:
+        old_has_brand = brand_appears_in_prose(primary, o)
+        new_has_brand = brand_appears_in_prose(primary, n)
+        new_is_detail = _is_low_value_detail_title(n)
+        old_is_detail = _is_low_value_detail_title(o)
+        if old_has_brand and (new_is_detail or not new_has_brand):
+            return o
+        if new_has_brand and old_is_detail:
+            return n
+        if new_is_detail and not old_is_detail:
+            return o
     multi_kw = (
         "collection",
         "group",
@@ -1929,6 +2040,9 @@ class LotOutput:
         self.auction_title = _broaden_auction_title_for_numismatic_multi_year(
             self.auction_title, self.specification_lines
         )
+        self.auction_title = _ensure_branded_auction_title(
+            self.auction_title, self.brands, self.specification_lines
+        )
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines
         )
@@ -2051,7 +2165,10 @@ class LotOutput:
         )
         if new_title_raw:
             merged = _merge_auction_title_for_lot(
-                self.auction_title, new_title_raw, self.specification_lines
+                self.auction_title,
+                new_title_raw,
+                self.specification_lines,
+                brands=self.brands,
             )
             self.auction_title = _sanitize_gendered_title(merged, detail_payload)
 

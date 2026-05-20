@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.lotting import LotOutput, resolve_lot_brands
+from app.core.lotting import LotOutput, _ensure_branded_auction_title, resolve_lot_brands
 
 
 class TestBrandResolution(unittest.TestCase):
@@ -57,6 +57,40 @@ class TestBrandResolution(unittest.TestCase):
         self.assertIn("st. john", low)
         self.assertNotIn("this classic st.\n", low)
         self.assertFalse(low.endswith("this classic st."))
+
+    def test_detail_title_replaced_with_branded_title(self) -> None:
+        out = _ensure_branded_auction_title(
+            "Woven Utility Jacket Detail with Zippered Pocket",
+            ["St. John's Bay"],
+            [
+                "Brand: St. John's Bay",
+                "Material: Cotton Blend",
+                "Style: Utility / Outerwear",
+                "Era: Contemporary",
+            ],
+        )
+        self.assertIn("St. John's Bay", out)
+        self.assertIn("Jacket", out)
+        self.assertNotIn("Detail with", out)
+
+    def test_merge_keeps_branded_title_over_detail_frame(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "St. John's Bay Cotton-Blend Zip-Up Jacket",
+                "brand": "St. John's Bay",
+                "labels_and_tags": ["AUTHENTIC ST. JOHN'S BAY"],
+                "specification_lines": ["Brand: St. John's Bay", "Material: Cotton"],
+            }
+        )
+        lot.merge_detail(
+            {
+                "item_name": "Woven Utility Jacket Detail with Zippered Pocket",
+                "brand": "",
+                "specification_lines": ["Components: Zippered welt pocket"],
+            }
+        )
+        self.assertIn("St. John's Bay", lot.auction_title)
+        self.assertNotIn("Detail with", lot.auction_title)
 
 
 if __name__ == "__main__":
