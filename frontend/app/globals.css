@@ -717,15 +717,18 @@ a.ct-btn:hover {
 }
 
 /* Landscape on touch devices: live preview eats remaining viewport (not a thin 4:3 sliver). */
-@media (orientation: landscape) and (pointer: coarse) {
+@media (orientation: landscape) and (max-height: 520px),
+  (orientation: landscape) and (pointer: coarse) {
   .ct-lot-camera-dialog {
-    --ct-lot-camera-thumb: min(14dvh, 72px);
+    --ct-lot-camera-thumb: min(12dvh, 64px);
+    --ct-lot-camera-live-min-h: min(62dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 8.25rem));
   }
 
   .ct-lot-camera-scroll {
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     flex: 1 1 0;
     min-height: 0;
     max-width: none;
@@ -772,11 +775,10 @@ a.ct-btn:hover {
 
   .ct-lot-camera-live {
     flex: 1 1 0;
-    min-height: 0;
     width: 100%;
     height: auto !important;
     max-height: none !important;
-    min-height: 0 !important;
+    min-height: var(--ct-lot-camera-live-min-h) !important;
     aspect-ratio: unset;
     margin-top: 0.2rem;
     margin-bottom: 0;
@@ -801,11 +803,12 @@ a.ct-btn:hover {
 }
 
 /* Wide landscape (e.g. phone rotated): optional side rail for thumbs so preview stays huge. */
-@media (orientation: landscape) and (pointer: coarse) and (min-height: 280px) {
+@media (orientation: landscape) and (max-height: 520px) and (min-height: 280px),
+  (orientation: landscape) and (pointer: coarse) and (min-height: 280px) {
   .ct-lot-camera-card:has(.ct-lot-camera-strip-wrap) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) min(var(--ct-lot-camera-thumb), 18vw);
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto minmax(var(--ct-lot-camera-live-min-h), 1fr) auto auto;
     column-gap: 0.45rem;
     align-content: stretch;
   }
@@ -817,6 +820,7 @@ a.ct-btn:hover {
   .ct-lot-camera-live {
     grid-column: 1;
     grid-row: 2;
+    min-height: var(--ct-lot-camera-live-min-h) !important;
   }
 
   .ct-lot-camera-zoom-row {
