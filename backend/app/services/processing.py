@@ -800,6 +800,7 @@ def process_job(
             and bool(lot_candidate.sku)
             and tape_sku_same_marking(current_lot.sku, lot_candidate.sku)
         )
+        tape_verified = False
         # Second-pass tape verify before opening a new lot from a fresh SKU read (single-lot jobs
         # still use this on the first tape frame; merged follow-ups use ``_single_lot_maybe_adopt_tape_sku``).
         if (
@@ -829,6 +830,8 @@ def process_job(
             if verified is not True:
                 lot_candidate.sku = None
                 sku_ok = False
+            else:
+                tape_verified = True
 
         if current_lot is not None and _is_gemini_placeholder_lot(current_lot):
             saved_pc = current_lot.photo_count
@@ -894,8 +897,28 @@ def process_job(
                     pending_photo_ids.append(row.id)
                     db.commit()
                     continue
+                # Detail frames often precede the hero/tape frame. If the open lot has no SKU yet,
+                # keep the lot together but adopt the verified tape marking before merge_detail drops it.
+                if current_lot.sku is None and _likely_same_item(current_lot, lot_candidate):
+                    current_lot.sku = lot_candidate.sku
+                    current_lot.sku_needs_review = False
+                    _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
+                    current_lot.merge_detail(payload)
+                    row = Photo(
+                        account_id=job.account_id,
+                        user_id=job.user_id,
+                        lot_id=None,
+                        original_name=photo_path.name,
+                        storage_path=str(photo_path.resolve()),
+                    )
+                    db.add(row)
+                    db.flush()
+                    pending_photo_ids.append(row.id)
+                    db.commit()
+                    continue
                 # Guard against one-frame false-positive sku flips when content appears continuous.
-                if _likely_same_item(current_lot, lot_candidate):
+                # A different marking that passed tape verify is a real boundary and must not be swallowed.
+                if not tape_verified and _likely_same_item(current_lot, lot_candidate):
                     _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
                     row = Photo(
