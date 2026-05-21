@@ -547,11 +547,62 @@ a.ct-btn:hover {
   --ct-lot-camera-thumb: 56px;
 }
 
+.ct-lot-camera-dialog-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  height: 100dvh;
+  max-height: 100dvh;
+  padding: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) 0
+    max(8px, env(safe-area-inset-left, 0px));
+}
+
+.ct-lot-camera-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.ct-lot-camera-card {
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding-bottom: 1rem;
+}
+
+.ct-lot-camera-actions {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding-top: 10px;
+  padding-left: 8px;
+  padding-right: 8px;
+  padding-bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + 8px));
+  box-sizing: border-box;
+  background: rgba(12, 12, 14, 0.96);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+}
+
 .ct-lot-camera-live {
   position: relative;
   width: 100%;
   max-height: min(56dvh, 560px);
-  height: min(56dvh, 560px);
+  height: auto;
+  min-height: 140px;
+  aspect-ratio: 4 / 3;
   margin-top: 0.65rem;
   border-radius: 8px;
   overflow: hidden;
@@ -660,17 +711,69 @@ a.ct-btn:hover {
     --ct-lot-camera-thumb: min(26vw, 108px);
   }
 
-  .ct-lot-camera-dialog .ct-lot-camera-live {
-    height: min(58dvh, 600px);
-    max-height: min(58dvh, 600px);
+  .ct-lot-camera-live {
+    max-height: min(52dvh, 520px);
   }
 }
 
-/* Landscape phone: more vertical space for live view (short dvh). */
-@media (orientation: landscape) and (max-height: 540px) {
+/* Landscape phone / short viewport: fit preview inside 100dvh (no fixed tall camera box). */
+@media (orientation: landscape) and (max-height: 520px) {
+  .ct-lot-camera-scroll {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .ct-lot-camera-card {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .ct-lot-camera-intro {
+    display: none;
+  }
+
+  .ct-lot-camera-sku {
+    margin-top: 0.25rem !important;
+    flex-shrink: 0;
+  }
+
+  .ct-lot-camera-sku .ct-input {
+    margin-top: 4px !important;
+  }
+
   .ct-lot-camera-live {
-    height: min(78dvh, 560px) !important;
-    max-height: min(78dvh, 560px) !important;
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    height: auto !important;
+    max-height: 100% !important;
+    aspect-ratio: auto;
+    margin-top: 0.35rem;
+  }
+
+  .ct-lot-camera-zoom-row {
+    margin-top: 0.35rem !important;
+    flex-shrink: 0;
+  }
+
+  .ct-lot-camera-meta {
+    margin: 0.35rem 0 0 !important;
+    font-size: 0.85rem !important;
+    flex-shrink: 0;
+  }
+
+  .ct-lot-camera-strip-wrap {
+    margin-top: 0.35rem !important;
+    flex-shrink: 0;
+    max-height: min(22dvh, 120px);
+  }
+
+  .ct-lot-camera-strip {
+    padding: 6px 4px 8px;
   }
 }
 

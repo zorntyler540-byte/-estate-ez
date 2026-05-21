@@ -3470,51 +3470,23 @@ export default function DashboardPage() {
 
       {lotCameraOpen ? (
         <div
-          className="ct-lot-camera-dialog"
+          className="ct-lot-camera-dialog ct-lot-camera-dialog-shell"
           role="dialog"
           aria-modal="true"
           aria-label="Snap photos for one lot"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10000,
-            background: "rgba(0,0,0,0.82)",
-            display: "flex",
-            flexDirection: "column",
-            padding: "8px 8px 0",
-            boxSizing: "border-box",
-            overflow: "hidden",
-            height: "100dvh",
-            maxHeight: "100dvh"
-          }}
         >
-          <div
-            ref={lotCameraScrollRef}
-            style={{
-              // flex:1 + minHeight:0 lets this shrink so the action bar stays in view; do not set height:100% or it
-              // consumes the full dialog and pins the footer below the clipped edge (bad in landscape).
-              flex: "1 1 0",
-              minHeight: 0,
-              width: "100%",
-              maxWidth: 520,
-              margin: "0 auto",
-              overflowY: "auto",
-              overflowX: "hidden",
-              WebkitOverflowScrolling: "touch",
-              overscrollBehavior: "contain"
-            }}
-          >
-            <div
-              className="ct-card ct-card--padded"
-              style={{ width: "100%", margin: "0 auto", boxSizing: "border-box", paddingBottom: "1rem" }}
-            >
-            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+          <div ref={lotCameraScrollRef} className="ct-lot-camera-scroll">
+            <div className="ct-card ct-card--padded ct-lot-camera-card">
+            <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
               upload. Tap the live preview to focus; pinch or use +/− to zoom (saved photos match what you see). Tap a
               thumbnail to preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation
               when needed; use the trash control to remove one shot.
             </p>
-            <label className="ct-muted" style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}>
+            <label
+              className="ct-muted ct-lot-camera-sku"
+              style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}
+            >
               SKU for this lot <span style={{ fontWeight: 400 }}>(optional)</span>
               <input
                 className="ct-input"
@@ -3577,7 +3549,7 @@ export default function DashboardPage() {
                   ) : null}
                 </div>
                 <div
-                  className="ct-row"
+                  className="ct-row ct-lot-camera-zoom-row"
                   style={{
                     marginTop: "0.5rem",
                     flexWrap: "wrap",
@@ -3614,7 +3586,7 @@ export default function DashboardPage() {
                 </div>
               </>
             )}
-            <p style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
+            <p className="ct-lot-camera-meta" style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
               <strong>
                 {lotCameraSnaps.length}
                 {CTBIDS_MAX_PHOTOS_PER_LOT != null ? ` / ${CTBIDS_MAX_PHOTOS_PER_LOT}` : ""}
@@ -3628,7 +3600,7 @@ export default function DashboardPage() {
               ) : null}
             </p>
             {lotCameraSnapThumbUrls.length > 0 ? (
-              <div style={{ marginTop: "0.65rem", width: "100%" }}>
+              <div className="ct-lot-camera-strip-wrap" style={{ marginTop: "0.65rem", width: "100%" }}>
                 <p
                   className="ct-muted"
                   style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "rgba(255,255,255,0.75)" }}
@@ -3675,22 +3647,7 @@ export default function DashboardPage() {
             ) : null}
             </div>
           </div>
-          <div
-            style={{
-              flexShrink: 0,
-              width: "100%",
-              maxWidth: 520,
-              margin: "0 auto",
-              paddingTop: "10px",
-              paddingLeft: 8,
-              paddingRight: 8,
-              paddingBottom: "max(12px, calc(env(safe-area-inset-bottom, 0px) + 8px))",
-              boxSizing: "border-box",
-              background: "rgba(12, 12, 14, 0.96)",
-              borderTop: "1px solid rgba(255,255,255,0.12)",
-              backdropFilter: "blur(8px)"
-            }}
-          >
+          <div className="ct-lot-camera-actions">
             <div
               className="ct-row ct-row--gap-lg"
               style={{
