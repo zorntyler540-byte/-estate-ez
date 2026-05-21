@@ -716,71 +716,137 @@ a.ct-btn:hover {
   }
 }
 
-/* Landscape phone: preview fills space between SKU, thumbs, and action bar. */
-@media (orientation: landscape) and (max-height: 600px) {
+/* Landscape on touch devices: live preview eats remaining viewport (not a thin 4:3 sliver). */
+@media (orientation: landscape) and (pointer: coarse) {
   .ct-lot-camera-dialog {
-    --ct-lot-camera-thumb: min(18dvh, 88px);
+    --ct-lot-camera-thumb: min(14dvh, 72px);
   }
 
   .ct-lot-camera-scroll {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    height: 100%;
+    flex: 1 1 0;
+    min-height: 0;
+    max-width: none;
+    width: 100%;
+    margin: 0;
+  }
+
+  .ct-lot-camera-actions {
+    max-width: none;
+    width: 100%;
+    padding-top: 6px;
+    padding-bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) + 6px));
   }
 
   .ct-lot-camera-card {
     flex: 1 1 0;
     min-height: 0;
-    height: 100%;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto auto auto;
-    row-gap: 0.3rem;
-    align-content: stretch;
-    padding-bottom: 0.35rem !important;
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem 0.5rem 0.25rem !important;
+    box-sizing: border-box;
   }
 
-  .ct-lot-camera-intro {
+  .ct-lot-camera-intro,
+  .ct-lot-camera-meta {
+    display: none;
+  }
+
+  .ct-lot-camera-strip-wrap > .ct-muted {
     display: none;
   }
 
   .ct-lot-camera-sku {
+    display: block;
     margin-top: 0 !important;
     flex-shrink: 0;
+    font-size: 0.78rem !important;
   }
 
   .ct-lot-camera-sku .ct-input {
-    margin-top: 4px !important;
+    margin-top: 3px !important;
+    padding: 0.4rem 0.55rem;
   }
 
   .ct-lot-camera-live {
-    align-self: stretch;
+    flex: 1 1 0;
+    min-height: 0;
     width: 100%;
-    height: 100% !important;
-    min-height: min(42dvh, 100%) !important;
+    height: auto !important;
     max-height: none !important;
-    aspect-ratio: auto;
-    margin-top: 0.25rem;
-    flex: none;
+    min-height: 0 !important;
+    aspect-ratio: unset;
+    margin-top: 0.2rem;
+    margin-bottom: 0;
   }
 
   .ct-lot-camera-zoom-row {
-    margin-top: 0 !important;
+    margin-top: 0.15rem !important;
     flex-shrink: 0;
-  }
-
-  .ct-lot-camera-meta {
-    display: none;
   }
 
   .ct-lot-camera-strip-wrap {
     margin-top: 0 !important;
     flex-shrink: 0;
-    max-height: calc(var(--ct-lot-camera-thumb) + 20px);
+    max-height: none;
+    width: 100%;
   }
 
   .ct-lot-camera-strip {
-    padding: 4px 4px 6px;
+    padding: 2px 4px 4px;
+    gap: 6px;
+  }
+}
+
+/* Wide landscape (e.g. phone rotated): optional side rail for thumbs so preview stays huge. */
+@media (orientation: landscape) and (pointer: coarse) and (min-height: 280px) {
+  .ct-lot-camera-card:has(.ct-lot-camera-strip-wrap) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) min(var(--ct-lot-camera-thumb), 18vw);
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    column-gap: 0.45rem;
+    align-content: stretch;
+  }
+
+  .ct-lot-camera-sku {
+    grid-column: 1 / -1;
+  }
+
+  .ct-lot-camera-live {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .ct-lot-camera-zoom-row {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .ct-lot-camera-strip-wrap {
+    grid-column: 2;
+    grid-row: 2 / 4;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-top: 0 !important;
+  }
+
+  .ct-lot-camera-strip {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: 100%;
+    padding: 4px 2px;
+  }
+
+  .ct-lot-camera-strip-item {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    max-height: var(--ct-lot-camera-thumb);
   }
 }
 
