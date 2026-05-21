@@ -599,9 +599,9 @@ a.ct-btn:hover {
 .ct-lot-camera-live {
   position: relative;
   width: 100%;
-  max-height: min(56dvh, 560px);
+  max-height: min(62dvh, 640px);
   height: auto;
-  min-height: 140px;
+  min-height: 200px;
   aspect-ratio: 4 / 3;
   margin-top: 0.65rem;
   border-radius: 8px;
@@ -712,24 +712,32 @@ a.ct-btn:hover {
   }
 
   .ct-lot-camera-live {
-    max-height: min(52dvh, 520px);
+    max-height: min(66dvh, 620px);
   }
 }
 
-/* Landscape phone / short viewport: fit preview inside 100dvh (no fixed tall camera box). */
-@media (orientation: landscape) and (max-height: 520px) {
+/* Landscape phone: preview fills space between SKU, thumbs, and action bar. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .ct-lot-camera-dialog {
+    --ct-lot-camera-thumb: min(18dvh, 88px);
+  }
+
   .ct-lot-camera-scroll {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    height: 100%;
   }
 
   .ct-lot-camera-card {
     flex: 1 1 0;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-    padding-bottom: 0.5rem !important;
+    height: 100%;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+    row-gap: 0.3rem;
+    align-content: stretch;
+    padding-bottom: 0.35rem !important;
   }
 
   .ct-lot-camera-intro {
@@ -737,7 +745,7 @@ a.ct-btn:hover {
   }
 
   .ct-lot-camera-sku {
-    margin-top: 0.25rem !important;
+    margin-top: 0 !important;
     flex-shrink: 0;
   }
 
@@ -746,34 +754,33 @@ a.ct-btn:hover {
   }
 
   .ct-lot-camera-live {
-    flex: 1 1 0;
-    min-height: 0;
+    align-self: stretch;
     width: 100%;
-    height: auto !important;
-    max-height: 100% !important;
+    height: 100% !important;
+    min-height: min(42dvh, 100%) !important;
+    max-height: none !important;
     aspect-ratio: auto;
-    margin-top: 0.35rem;
+    margin-top: 0.25rem;
+    flex: none;
   }
 
   .ct-lot-camera-zoom-row {
-    margin-top: 0.35rem !important;
+    margin-top: 0 !important;
     flex-shrink: 0;
   }
 
   .ct-lot-camera-meta {
-    margin: 0.35rem 0 0 !important;
-    font-size: 0.85rem !important;
-    flex-shrink: 0;
+    display: none;
   }
 
   .ct-lot-camera-strip-wrap {
-    margin-top: 0.35rem !important;
+    margin-top: 0 !important;
     flex-shrink: 0;
-    max-height: min(22dvh, 120px);
+    max-height: calc(var(--ct-lot-camera-thumb) + 20px);
   }
 
   .ct-lot-camera-strip {
-    padding: 6px 4px 8px;
+    padding: 4px 4px 6px;
   }
 }
 
