@@ -35,8 +35,8 @@ class TestProcessingSkuBoundaries(unittest.TestCase):
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
         db = Session()
-        self.addCleanup(db.close)
         self.addCleanup(engine.dispose)
+        self.addCleanup(db.close)
 
         account = Account(name="Test Account")
         db.add(account)
