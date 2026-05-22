@@ -1480,6 +1480,17 @@ export default function DashboardPage() {
     });
   }
 
+  function confirmReplaceBatchStagingWithOneLot(incomingCount: number): boolean {
+    const prev = folderPickRef.current;
+    if (!prev || prev.singleLotMode || !prev.imageFiles.length) return true;
+    const existingText = `${prev.imageFiles.length} staged photo${prev.imageFiles.length === 1 ? "" : "s"}`;
+    const incomingText = `${incomingCount} one-lot photo${incomingCount === 1 ? "" : "s"}`;
+    return window.confirm(
+      `Replace the existing batch (${existingText}) with ${incomingText}? ` +
+        "The current staged photos have not been uploaded yet; upload or clear them first if you want to keep them."
+    );
+  }
+
   function openStagingEdit(i: number) {
     const p = folderPickRef.current;
     if (!p || i < 0 || i >= p.imageFiles.length) return;
@@ -1577,10 +1588,14 @@ export default function DashboardPage() {
 
   function finishLotCameraSession() {
     const files = [...lotCameraSnapsRef.current];
+    if (!files.length) {
+      stopLotCameraTracks();
+      return;
+    }
+    if (!confirmReplaceBatchStagingWithOneLot(files.length)) return;
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
     stopLotCameraTracks();
-    if (!files.length) return;
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
     setFolderPick(pick);
     if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
@@ -1798,6 +1813,12 @@ export default function DashboardPage() {
       imageFiles.length === 1;
 
     if (singleLotMode) {
+      if (!confirmReplaceBatchStagingWithOneLot(imageFiles.length)) {
+        singleLotCaptureChainingRef.current = false;
+        if (folderInputRef.current) folderInputRef.current.value = "";
+        if (photosInputRef.current) photosInputRef.current.value = "";
+        return;
+      }
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
         imageFiles,
