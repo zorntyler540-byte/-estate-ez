@@ -284,6 +284,20 @@ def _likely_same_item(current_lot: LotOutput, candidate: LotOutput) -> bool:
     return False
 
 
+def _should_merge_different_tape_sku_candidate(
+    current_lot: LotOutput, candidate: LotOutput, *, tape_verify_skipped: bool
+) -> bool:
+    """
+    Allow the content-continuity guard only for unverified SKU reads.
+
+    Once the second-pass tape check has verified a different marking, the tape establishes a lot
+    boundary even when two adjacent lots have overlapping titles or brands.
+    """
+    if not tape_verify_skipped:
+        return False
+    return _likely_same_item(current_lot, candidate)
+
+
 def _is_gemini_placeholder_lot(lot: LotOutput) -> bool:
     """
     True when ``current_lot`` was created only to hold catalog files whose Gemini calls returned null.
@@ -895,7 +909,11 @@ def process_job(
                     db.commit()
                     continue
                 # Guard against one-frame false-positive sku flips when content appears continuous.
-                if _likely_same_item(current_lot, lot_candidate):
+                if _should_merge_different_tape_sku_candidate(
+                    current_lot,
+                    lot_candidate,
+                    tape_verify_skipped=settings.skip_tape_verify,
+                ):
                     _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
                     row = Photo(

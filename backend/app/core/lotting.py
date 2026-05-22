@@ -2143,6 +2143,12 @@ def tape_sku_same_marking(a: str | None, b: str | None) -> bool:
     cb = tape_marking_canonical(b)
     if ca is not None and cb is not None and ca == cb:
         return True
+    if not ca or not cb:
+        return False
+    ca_digits_only = ca.isdigit()
+    cb_digits_only = cb.isdigit()
+    if ca_digits_only == cb_digits_only:
+        return False
     da = sku_digits(a)
     db = sku_digits(b)
     # Same numeric tail when one frame is digits-only and another is letter+digit (e.g. 006 vs SR006).
