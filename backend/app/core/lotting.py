@@ -1046,6 +1046,21 @@ def drop_components_spec_lines(lines: list[str]) -> list[str]:
     ]
 
 
+_STYLE_FINISH_SPEC_LABEL_RE = re.compile(
+    r"(?i)^\s*(style|finish|finishes|surface\s+finish|glaze\s+finish|finish\s+type|"
+    r"sheen|luster|lustre|glaze|gloss)\s*:"
+)
+
+
+def drop_style_and_finish_spec_lines(lines: list[str]) -> list[str]:
+    """Listing UI omits **Style:** / **Finish:** — detail lives in Item rows and description."""
+    return [
+        line
+        for line in lines
+        if not _STYLE_FINISH_SPEC_LABEL_RE.match(clean_listing_text(line).strip())
+    ]
+
+
 def drop_components_lines_for_apparel_inventory(
     lines: list[str], blob: str = ""
 ) -> list[str]:
@@ -1256,6 +1271,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     merged = sort_specification_lines_canonical(merged)
     merged = renumber_item_spec_lines_sequentially(merged)
     merged = drop_components_spec_lines(merged)
+    merged = drop_style_and_finish_spec_lines(merged)
     merged = drop_redundant_apparel_size_lines(merged, " ".join(merged).lower())
     return _prune_subject_form_when_item_bullets_present(merged)
 
@@ -2602,7 +2618,6 @@ def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str)
     """Drop coin/metal condition language from apparel lots (common per-frame bleed)."""
     if not _APPAREL_GARMENT_RE.search(blob):
         return lines
-    items_blob = " ".join(_item_spec_bodies(lines)).lower()
     out: list[str] = []
     for line in lines:
         parts = _spec_label_value_parts(line)
@@ -2611,13 +2626,6 @@ def _scrub_misapplied_collectible_specs_for_apparel(lines: list[str], blob: str)
             continue
         if lk == "components" and re.search(r"(?i)\bslip pocket\b", line) and "interior" in line.lower():
             continue
-        if lk == "style" and _count_unique_wardrobe_items(lines) >= 2:
-            rhs = parts[1] if parts else ""
-            if re.search(r"(?i)\bvest\b", rhs) and re.search(
-                r"(?i)\b(jacket|softshell|fleece)\b", items_blob
-            ):
-                out.append("Style: Two-piece outerwear lot (jacket and vest)")
-                continue
         out.append(line)
     return out
 
