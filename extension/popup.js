@@ -31,6 +31,7 @@ const API_BASE = "https://caringtransitions-ai-production.up.railway.app";
 
 const lotBrowser = {
   lots: [],
+  sales: [],
   currentLotId: "",
   preferredSaleId: ""
 };
@@ -128,7 +129,109 @@ function _lotsQueryParams(saleId, offset, pageSize) {
   return p.toString();
 }
 
+function saleOptionLabel(sale) {
+  const name = String(sale?.name || "Sale").trim() || "Sale";
+  return sale?.closed_at ? `${name} (closed)` : name;
+}
+
+async function loadSalesList(apiBase, token) {
+  const res = await fetchWithRetry(`${apiBase}/sales`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Sales API ${res.status}`);
+  }
+  const rows = await res.json();
+  lotBrowser.sales = Array.isArray(rows) ? rows : [];
+  return lotBrowser.sales;
+}
+
+function renderSaleSelect() {
+  const sel = document.getElementById("saleSelect");
+  const hint = document.getElementById("saleHint");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const sales = lotBrowser.sales;
+  if (!sales.length) {
+    sel.disabled = true;
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No sales — add one in Estate app";
+    sel.appendChild(opt);
+    if (hint) hint.textContent = "Create a sale on the web dashboard first.";
+    return;
+  }
+  sel.disabled = false;
+  for (const s of sales) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = saleOptionLabel(s);
+    sel.appendChild(opt);
+  }
+  const preferred = String(lotBrowser.preferredSaleId || "").trim();
+  if (preferred && sales.some((s) => s.id === preferred)) {
+    sel.value = preferred;
+  } else {
+    sel.value = sales[0].id;
+    lotBrowser.preferredSaleId = sales[0].id;
+    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: sales[0].id }).catch(() => {});
+  }
+  const active = sales.find((s) => s.id === sel.value);
+  if (hint && active) {
+    hint.textContent = active.closed_at
+      ? "This sale is closed — you can still browse lots, but uploads may be disabled in the app."
+      : "Lots and CT Seller actions use the selected sale.";
+  }
+}
+
+async function setPreferredSale(saleId, { persist = true } = {}) {
+  const sid = String(saleId || "").trim();
+  lotBrowser.preferredSaleId = sid;
+  lotBrowser.lots = [];
+  lotBrowser.currentLotId = "";
+  if (persist) {
+    if (sid) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.saleId]: sid }).catch(() => {});
+    } else {
+      await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
+    }
+    await chrome.storage.local.remove(Object.values(SESSION_UI_KEYS)).catch(() => {});
+  }
+  const sel = document.getElementById("saleSelect");
+  if (sel && sid) sel.value = sid;
+  renderSaleSelect();
+  const preview = document.getElementById("preview");
+  if (preview) preview.textContent = "";
+  setCurrentLotUI(null, "");
+}
+
+async function ensureSaleSelected(apiBase, token) {
+  if (!lotBrowser.sales.length) {
+    await loadSalesList(apiBase, token);
+    renderSaleSelect();
+  }
+  let sid = String(lotBrowser.preferredSaleId || "").trim();
+  if (!sid && lotBrowser.sales.length === 1) {
+    sid = lotBrowser.sales[0].id;
+    await setPreferredSale(sid);
+  }
+  if (!sid && lotBrowser.sales.length > 1) {
+    throw new Error("Select a sale in the dropdown above.");
+  }
+  if (!lotBrowser.sales.length) {
+    throw new Error("No sales found — create a sale in the Estate app first.");
+  }
+  return sid;
+}
+
+async function refreshSalesUi(apiBase, token) {
+  await loadSalesList(apiBase, token);
+  renderSaleSelect();
+}
+
 async function fetchLots(apiBase, token) {
+  await ensureSaleSelected(apiBase, token);
   const sid = String(lotBrowser.preferredSaleId || "").trim();
 
   async function fetchOnce(queryString) {
@@ -161,27 +264,10 @@ async function fetchLots(apiBase, token) {
     offset += EXTENSION_LOTS_PAGE_SIZE;
   }
 
-  if ((!merged.length || !Array.isArray(merged)) && sid) {
-    lotBrowser.preferredSaleId = "";
-    await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
-    merged = [];
-    offset = 0;
-    for (;;) {
-      const { lots, total } = await fetchOnce(_lotsQueryParams("", offset, EXTENSION_LOTS_PAGE_SIZE));
-      if (!Number.isFinite(total)) {
-        merged = lots;
-        break;
-      }
-      merged.push(...lots);
-      if (lots.length === 0 || merged.length >= total || lots.length < EXTENSION_LOTS_PAGE_SIZE) {
-        break;
-      }
-      offset += EXTENSION_LOTS_PAGE_SIZE;
-    }
-  }
-
   if (!Array.isArray(merged) || merged.length === 0) {
-    throw new Error("No lots returned — create or select inventory in the Estate app first.");
+    const saleName =
+      lotBrowser.sales.find((s) => s.id === sid)?.name || "this sale";
+    throw new Error(`No lots in “${saleName}” — add inventory in the Estate app or pick another sale.`);
   }
   return merged;
 }
@@ -221,11 +307,6 @@ async function resolveCurrentLot(apiBase, token, { preferNextOpen = true } = {})
     selected = idx >= 0 ? lots[idx] : lots[0];
   }
   lotBrowser.currentLotId = selected?.id || "";
-  const saleId = String(selected?.sale_id || "").trim();
-  if (saleId) {
-    lotBrowser.preferredSaleId = saleId;
-    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
-  }
   void persistLotSession();
   return selected;
 }
@@ -237,11 +318,6 @@ function moveCurrentLot(step) {
   const nextIndex = Math.min(Math.max(base + step, 0), lotBrowser.lots.length - 1);
   const lot = lotBrowser.lots[nextIndex];
   lotBrowser.currentLotId = lot?.id || "";
-  const saleId = String(lot?.sale_id || "").trim();
-  if (saleId) {
-    lotBrowser.preferredSaleId = saleId;
-    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
-  }
   return lot;
 }
 
@@ -252,11 +328,6 @@ function moveCurrentLotToBoundary(which) {
   const idx = which === "last" ? last : 0;
   const lot = lotBrowser.lots[idx];
   lotBrowser.currentLotId = lot?.id || "";
-  const saleId = String(lot?.sale_id || "").trim();
-  if (saleId) {
-    lotBrowser.preferredSaleId = saleId;
-    void chrome.storage.local.set({ [STORAGE_KEYS.saleId]: saleId }).catch(() => {});
-  }
   return lot;
 }
 
@@ -377,7 +448,9 @@ function setCurrentLotUI(lot, thumbDataUrl = "") {
   const idx = lotBrowser.lots.findIndex((l) => l?.id === lot?.id);
   const pos = idx >= 0 ? `${idx + 1}/${lotBrowser.lots.length}` : "-/-";
   const done = lot?.is_completed ? "done" : "open";
-  meta.textContent = `#${pos} | ${done} | SKU ${sku} - ${title} (photos: ${photoCount})`;
+  const saleName = lotBrowser.sales.find((s) => s.id === lot?.sale_id)?.name;
+  const salePrefix = saleName ? `${saleName} · ` : "";
+  meta.textContent = `${salePrefix}#${pos} | ${done} | SKU ${sku} - ${title} (photos: ${photoCount})`;
   if (thumbDataUrl) {
     img.src = thumbDataUrl;
     img.style.display = "block";
@@ -540,6 +613,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginBtn = document.getElementById("loginBtn");
   const logoutBtn = document.getElementById("logoutBtn");
   const authState = document.getElementById("authState");
+  const salePanel = document.getElementById("salePanel");
+  const saleSelect = document.getElementById("saleSelect");
   const actionButtonIds = [
     "previewBtn",
     "fillBtn",
@@ -571,12 +646,14 @@ document.addEventListener("DOMContentLoaded", () => {
     loginPasswordEl.style.display = signedIn ? "none" : "block";
     loginBtn.style.display = signedIn ? "none" : "block";
     logoutBtn.style.display = signedIn ? "block" : "none";
+    if (salePanel) salePanel.style.display = signedIn ? "block" : "none";
     const email = loginEmailEl.value.trim();
     authState.textContent = signedIn
       ? `Signed in${email ? ` as ${email}` : ""}.`
       : "Not signed in.";
     setActionButtonsEnabled(signedIn);
     if (!signedIn) {
+      lotBrowser.sales = [];
       setCurrentLotUI(null, "");
     }
   }
@@ -607,6 +684,11 @@ document.addEventListener("DOMContentLoaded", () => {
     renderAuthState();
 
     if (authToken) {
+      try {
+        await refreshSalesUi(API_BASE, authToken);
+      } catch (e) {
+        status.textContent = e instanceof Error ? e.message : "Could not load sales.";
+      }
       const cid = String(data[SESSION_UI_KEYS.currentLotId] || "").trim();
       if (cid) {
         lotBrowser.currentLotId = cid;
@@ -664,7 +746,13 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       loginPasswordEl.value = "";
       renderAuthState();
-      status.textContent = "Signed in.";
+      status.textContent = "Loading sales…";
+      try {
+        await refreshSalesUi(API_BASE, authToken);
+        status.textContent = "Signed in — select a sale, then Preview.";
+      } catch (e) {
+        status.textContent = e instanceof Error ? e.message : "Signed in, but sales failed to load.";
+      }
     } catch (e) {
       console.error(e);
       status.textContent = e instanceof Error ? e.message : "Sign in failed.";
@@ -675,6 +763,7 @@ document.addEventListener("DOMContentLoaded", () => {
     authToken = "";
     await clearSession();
     lotBrowser.preferredSaleId = "";
+    lotBrowser.sales = [];
     lotBrowser.lots = [];
     lotBrowser.currentLotId = "";
     await chrome.storage.local.remove([STORAGE_KEYS.saleId]).catch(() => {});
@@ -829,6 +918,23 @@ document.addEventListener("DOMContentLoaded", () => {
       handleActionError(err);
     }
   });
+
+  if (saleSelect) {
+    saleSelect.addEventListener("change", async () => {
+      const creds = await readCreds(false);
+      if (!creds) return;
+      const nextId = String(saleSelect.value || "").trim();
+      if (!nextId || nextId === lotBrowser.preferredSaleId) return;
+      status.textContent = "Switching sale…";
+      try {
+        await setPreferredSale(nextId);
+        status.textContent = "Sale changed — click Preview current lot.";
+        await appendActivity(`Selected sale ${saleOptionLabel(lotBrowser.sales.find((s) => s.id === nextId) || {})}`);
+      } catch (err) {
+        handleActionError(err);
+      }
+    });
+  }
 
   document.getElementById("previewBtn").addEventListener("click", async () => {
     status.textContent = "Loading preview…";
