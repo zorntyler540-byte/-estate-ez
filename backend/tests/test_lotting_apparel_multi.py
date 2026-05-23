@@ -11,7 +11,7 @@ from app.core.lotting import (
     _ensure_multi_piece_description,
     _scrub_misapplied_mary_jane_phrasing,
     dedupe_specification_lines_preserve_order,
-    drop_components_lines_for_apparel_inventory,
+    drop_components_spec_lines,
 )
 
 
@@ -58,7 +58,7 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
             "Item 2: Alfred Dunner floral cardigan PS",
             "Item 3: White Mountain tan laser-cut open-toe clogs",
         ]
-        out = drop_components_lines_for_apparel_inventory(lines)
+        out = drop_components_spec_lines(lines)
         self.assertFalse(any(l.lower().startswith("components:") for l in out))
         self.assertEqual(len([l for l in out if l.lower().startswith("item ")]), 3)
 

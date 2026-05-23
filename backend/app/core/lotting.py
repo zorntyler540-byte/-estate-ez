@@ -582,9 +582,9 @@ def _split_into_sentences(text: str) -> list[str]:
 def _drop_prose_sentences_conflicting_with_components(prof: str, specification_lines: list[str]) -> str:
     """
     Remove sentences that obsess over an object **category** (ewer, bell, censer, dragon, …) not supported by the
-    **Components:** / Item lines, so multi-piece prose matches the actual lot inventory.
+    **Item** lines (or legacy **Components:**), so multi-piece prose matches the actual lot inventory.
     """
-    comp = _components_spec_text(specification_lines)
+    comp = _inventory_text_from_specification_lines(specification_lines)
     if not comp:
         return prof
     cl = comp.lower()
@@ -602,7 +602,7 @@ def _drop_prose_sentences_conflicting_with_components(prof: str, specification_l
     out = " ".join(kept).strip()
     if len(out) < 18:
         mat = _material_lead_word_from_title_and_specs(prof, specification_lines)
-        return f"{mat} grouping with the pieces listed in Components - a warm display lot."
+        return f"{mat} grouping with the pieces listed in the lot - a warm display lot."
     return out
 
 
@@ -1037,18 +1037,32 @@ def drop_redundant_apparel_size_lines(lines: list[str], blob: str = "") -> list[
     ]
 
 
-def drop_components_lines_for_apparel_inventory(
-    lines: list[str], blob: str = ""
-) -> list[str]:
-    """Wardrobe lots use ``Item n:`` only — drop per-photo ``Components:`` feature laundry lists."""
-    inventory_blob = blob or " ".join(lines).lower()
-    if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
-        return lines
+def drop_components_spec_lines(lines: list[str]) -> list[str]:
+    """Listing UI omits **Components:** — inventory belongs in **Item n:** rows only."""
     return [
         line
         for line in lines
         if not re.match(r"(?i)^\s*components\s*:", clean_listing_text(line).strip())
     ]
+
+
+def drop_components_lines_for_apparel_inventory(
+    lines: list[str], blob: str = ""
+) -> list[str]:
+    """Deprecated alias — all lots drop ``Components:`` via :func:`drop_components_spec_lines`."""
+    _ = blob
+    return drop_components_spec_lines(lines)
+
+
+def _inventory_text_from_specification_lines(specification_lines: list[str]) -> str:
+    """Merged inventory for title/prose alignment (Items first, then legacy Components if any)."""
+    items = _item_spec_bodies(specification_lines)
+    if items:
+        return "; ".join(items)
+    comp = _components_spec_text(specification_lines)
+    if comp:
+        return comp
+    return " ".join(specification_lines)
 
 
 def synthesize_wardrobe_item_lines_when_sparse(lines: list[str], blob: str = "") -> list[str]:
@@ -1236,16 +1250,12 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         first.append(line)
     first = collapse_duplicate_item_spec_lines(first)
     first = synthesize_wardrobe_item_lines_when_sparse(first, " ".join(first).lower())
-    first = consolidate_multi_frame_components_lines(first)
-    first = rebuild_components_from_unique_items(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
     merged = sort_specification_lines_canonical(merged)
     merged = renumber_item_spec_lines_sequentially(merged)
-    merged = drop_components_lines_for_apparel_inventory(
-        merged, " ".join(merged).lower()
-    )
+    merged = drop_components_spec_lines(merged)
     merged = drop_redundant_apparel_size_lines(merged, " ".join(merged).lower())
     return _prune_subject_form_when_item_bullets_present(merged)
 
@@ -1419,7 +1429,7 @@ def _title_narrows_multi_component_lot(title: str, specification_lines: list[str
     True when **Components:** clearly lists several distinct object types but the auction title only signals one
     (e.g. \"Two-Piece Incense Censer\" while Components also list ewer, bell, dragon stand).
     """
-    comp = _components_spec_text(specification_lines)
+    comp = _inventory_text_from_specification_lines(specification_lines)
     blob = " ".join(specification_lines).lower()
     tl = (title or "").lower()
     multi_dim_textile = _spec_lines_indicate_multi_textile_piece(specification_lines)
@@ -1427,6 +1437,12 @@ def _title_narrows_multi_component_lot(title: str, specification_lines: list[str
         w in tl for w in ("lot", "group", "collection", "pieces", "multiple", "assorted", "set")
     ):
         return True
+    if _count_item_spec_lines(specification_lines) >= 2:
+        item_blob = " ".join(_item_spec_bodies(specification_lines)).lower()
+        item_cats = _distinct_inventory_categories(item_blob)
+        t_cats = _distinct_inventory_categories(tl)
+        if len(item_cats) >= 2 and (len(t_cats) <= 1 or len(item_cats - t_cats) >= 1):
+            return True
     if not (comp and _components_indicate_multi_piece(comp)) and not _spec_lines_indicate_multi_textile_piece(
         specification_lines
     ):
@@ -1479,7 +1495,7 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
             fiber = "Wool"
         return f"{fiber} lace and textile lot - multiple pieces; dimensions vary by photo (refer to tape reads)"[:500]
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
-    out = f"{mat} decorative table lot - multiple pieces (see Components)"
+    out = f"{mat} decorative table lot - multiple pieces"
     return out[:500]
 
 
@@ -1944,6 +1960,8 @@ def _listing_should_have_multi_piece_cue(specification_lines: list[str]) -> bool
     blob = " ".join(specification_lines).lower()
     if _spec_lines_indicate_wardrobe_apparel(specification_lines, blob):
         return _count_unique_wardrobe_items(specification_lines) >= 3
+    if _count_item_spec_lines(specification_lines) >= 3:
+        return True
     comp = _components_spec_text(specification_lines) or ""
     return bool(comp and _components_indicate_multi_piece(comp)) or _spec_lines_indicate_multi_textile_piece(
         specification_lines
@@ -2014,6 +2032,7 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
         "this lot includes multiple pieces" in low
         or "includes multiple pieces" in low
         or "see components" in low
+        or "see item" in low
         or "several distinct pieces" in low
         or "several vintage lace" in low
         or (comp and comp.lower() in low)
