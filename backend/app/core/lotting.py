@@ -1044,6 +1044,8 @@ def drop_components_lines_for_apparel_inventory(
     inventory_blob = blob or " ".join(lines).lower()
     if not _spec_lines_indicate_wardrobe_apparel(lines, inventory_blob):
         return lines
+    if _count_item_spec_lines(lines) < 2:
+        return lines
     return [
         line
         for line in lines
