@@ -62,6 +62,19 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         self.assertFalse(any(l.lower().startswith("components:") for l in out))
         self.assertEqual(len([l for l in out if l.lower().startswith("item ")]), 3)
 
+    def test_keeps_components_when_no_item_rows_preserve_inventory(self) -> None:
+        lines = [
+            "Components: Tribal jacket; Alfred Dunner cardigan; matching tan trousers.",
+            "Material: Cotton blend",
+            "Brand: Tribal; Alfred Dunner",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        component_lines = [l for l in merged if l.lower().startswith("components:")]
+        self.assertEqual(len(component_lines), 1)
+        self.assertIn("jacket", component_lines[0].lower())
+        self.assertIn("cardigan", component_lines[0].lower())
+        self.assertIn("trousers", component_lines[0].lower())
+
     def test_scrubs_mary_jane_when_lot_is_open_toe_clogs(self) -> None:
         blob = (
             "white mountain tan laser-cut open-toe clogs wedge "
