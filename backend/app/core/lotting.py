@@ -1069,6 +1069,55 @@ def drop_components_lines_for_apparel_inventory(
     return drop_components_spec_lines(lines)
 
 
+def _split_components_inventory_fragments(components_text: str) -> list[str]:
+    """Turn legacy ``Components:`` inventory into short Item-row bodies before the Components row is hidden."""
+    text = clean_listing_text(components_text).strip(" ;.")
+    if not text:
+        return []
+    pieces = [p.strip(" ;,.") for p in text.split(";") if p.strip(" ;,.")]
+    if len(pieces) <= 1 and re.search(
+        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b[^,]+,\s*",
+        text,
+        re.I,
+    ):
+        pieces = [p.strip(" ;,.") for p in text.split(",") if p.strip(" ;,.")]
+    if len(pieces) <= 1:
+        pieces = [text]
+    out: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        body = _short_deliverable_phrase(piece, max_len=140)
+        key = body.lower()
+        if not body or key in seen:
+            continue
+        seen.add(key)
+        out.append(body)
+    return out[:12]
+
+
+def synthesize_item_lines_from_components_when_missing(lines: list[str]) -> list[str]:
+    """Preserve Components-only inventory as ``Item n:`` rows before dropping the legacy Components label."""
+    if _count_item_spec_lines(lines) > 0:
+        return lines
+    comp = _components_spec_text(lines)
+    if not comp or not _components_indicate_multi_piece(comp):
+        return lines
+    bodies = _split_components_inventory_fragments(comp)
+    if not bodies:
+        return lines
+    items = [f"Item {i + 1}: {body}" for i, body in enumerate(bodies)]
+    out: list[str] = []
+    inserted = False
+    for line in lines:
+        out.append(line)
+        if not inserted and re.match(r"(?i)^\s*components\s*:", clean_listing_text(line).strip()):
+            out.extend(items)
+            inserted = True
+    if not inserted:
+        out.extend(items)
+    return out
+
+
 def _inventory_text_from_specification_lines(specification_lines: list[str]) -> str:
     """Merged inventory for title/prose alignment (Items first, then legacy Components if any)."""
     items = _item_spec_bodies(specification_lines)
@@ -1265,6 +1314,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         first.append(line)
     first = collapse_duplicate_item_spec_lines(first)
     first = synthesize_wardrobe_item_lines_when_sparse(first, " ".join(first).lower())
+    first = synthesize_item_lines_from_components_when_missing(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)

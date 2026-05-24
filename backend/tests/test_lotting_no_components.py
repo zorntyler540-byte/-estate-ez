@@ -34,6 +34,18 @@ class TestNoComponentsSpec(unittest.TestCase):
         labels = [l.split(":", 1)[0].lower() for l in out]
         self.assertEqual(labels, ["material", "era"])
 
+    def test_components_only_inventory_survives_as_items(self) -> None:
+        merged = dedupe_specification_lines_preserve_order(
+            [
+                "Components: 1 brass ewer; 1 bell with clapper; 2 small incense censers",
+                "Material: Brass",
+            ]
+        )
+        self.assertFalse(any(l.lower().startswith("components:") for l in merged))
+        item_lines = [l for l in merged if l.lower().startswith("item ")]
+        self.assertEqual(len(item_lines), 3)
+        self.assertIn("ewer", " ".join(item_lines).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
