@@ -1046,6 +1046,77 @@ def drop_components_spec_lines(lines: list[str]) -> list[str]:
     ]
 
 
+_COUNTED_COMPONENT_SPLIT_RE = re.compile(
+    r",\s+(?=(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)",
+    re.I,
+)
+
+
+def _component_inventory_phrases(text: str) -> list[str]:
+    """Split a Components value conservatively so inventory survives as Item rows."""
+    pieces = _unique_semicolon_phrases([text])
+    if len(pieces) == 1:
+        counted = [
+            clean_listing_text(p).strip()
+            for p in _COUNTED_COMPONENT_SPLIT_RE.split(pieces[0])
+        ]
+        counted = [p for p in counted if p]
+        if len(counted) > 1:
+            pieces = counted
+    out: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        frag = clean_listing_text(piece).strip(" .;")
+        if not frag:
+            continue
+        key = frag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(_short_deliverable_phrase(frag, max_len=180))
+    return out
+
+
+def synthesize_item_lines_from_components_when_missing(lines: list[str]) -> list[str]:
+    """
+    If Gemini still emits only ``Components:``, preserve that inventory as ``Item n:`` before
+    the UI-facing Components strip runs.
+    """
+    if _count_item_spec_lines(lines) > 0:
+        return lines
+    component_hits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
+        if m:
+            rhs = m.group(1).strip().rstrip(";.")
+            if rhs:
+                component_hits.append((i, rhs))
+    if not component_hits:
+        return lines
+
+    item_bodies: list[str] = []
+    seen: set[str] = set()
+    for _, rhs in component_hits:
+        for body in _component_inventory_phrases(rhs):
+            key = body.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            item_bodies.append(body)
+    if not item_bodies:
+        return lines
+
+    first_component_i = component_hits[0][0]
+    out: list[str] = []
+    inserted = False
+    for i, line in enumerate(lines):
+        out.append(line)
+        if i == first_component_i and not inserted:
+            out.extend(f"Item {n + 1}: {body}" for n, body in enumerate(item_bodies[:12]))
+            inserted = True
+    return out
+
+
 _STYLE_FINISH_SPEC_LABEL_RE = re.compile(
     r"(?i)^\s*(style|finish|finishes|surface\s+finish|glaze\s+finish|finish\s+type|"
     r"sheen|luster|lustre|glaze|gloss)\s*:"
@@ -1265,6 +1336,8 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         first.append(line)
     first = collapse_duplicate_item_spec_lines(first)
     first = synthesize_wardrobe_item_lines_when_sparse(first, " ".join(first).lower())
+    first = consolidate_multi_frame_components_lines(first)
+    first = synthesize_item_lines_from_components_when_missing(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
