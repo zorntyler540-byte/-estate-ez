@@ -1243,6 +1243,103 @@ def consolidate_multi_frame_components_lines(lines: list[str]) -> list[str]:
     return out
 
 
+_COMPONENT_INVENTORY_NOUN_RE = re.compile(
+    r"(?i)\b("
+    r"coin|cent|cents|penny|pennies|lincoln|wheat|holder|holders|folder|folders|album|"
+    r"card|cards|envelope|envelopes|notebook|notebooks|sketchbook|sketchbooks|book|books|"
+    r"cup|cups|saucer|saucers|plate|plates|bowl|bowls|glass|glasses|tumbler|tumblers|"
+    r"jar|jars|vase|vases|ewer|ewers|pitcher|pitchers|censer|censers|incense|burner|"
+    r"bell|bells|gong|striker|figurine|figurines|statue|statues|doily|doilies|runner|"
+    r"runners|textile|textiles|linen|lace|valance|valances|scarf|scarves|jacket|vest|"
+    r"cardigan|shirt|pants|trouser|trousers|shoe|shoes|clog|clogs|boot|boots|dress|skirt"
+    r")\b"
+)
+
+
+def _component_parts_look_like_inventory(parts: list[str], full_text: str) -> bool:
+    if not parts:
+        return False
+    if _components_indicate_multi_piece(full_text) and _COMPONENT_INVENTORY_NOUN_RE.search(full_text):
+        return True
+    nounish_parts = sum(1 for part in parts if _COMPONENT_INVENTORY_NOUN_RE.search(part))
+    if len(parts) >= 2 and nounish_parts >= 2:
+        return True
+    return len(_coin_years_in_text(full_text)) >= 2 and _COIN_DATE_CONTEXT_RE.search(full_text) is not None
+
+
+def _inventory_piece_token_set(text: str) -> set[str]:
+    weak = {
+        "and",
+        "the",
+        "with",
+        "for",
+        "one",
+        "two",
+        "three",
+        "piece",
+        "pieces",
+        "lot",
+        "set",
+    }
+    return {t for t in re.findall(r"[a-z0-9]{3,}", text.lower()) if t not in weak}
+
+
+def _component_piece_already_covered(piece: str, item_bodies: list[str]) -> bool:
+    piece_tokens = _inventory_piece_token_set(piece)
+    if not piece_tokens:
+        return False
+    for body in item_bodies:
+        body_tokens = _inventory_piece_token_set(body)
+        if piece_tokens <= body_tokens:
+            return True
+    return False
+
+
+def synthesize_item_lines_from_components_inventory(lines: list[str]) -> list[str]:
+    """
+    Preserve inventory from legacy ``Components:`` rows as ``Item n:`` rows before Components are hidden.
+
+    Detail-only components such as zippers, pockets, and labels should still disappear with the Components row.
+    """
+    hits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
+        if m and m.group(1).strip():
+            hits.append((i, m.group(1).strip()))
+    if not hits:
+        return lines
+    parts = _unique_semicolon_phrases([rhs for _, rhs in hits])
+    if not parts:
+        return lines
+    full_text = "; ".join(parts)
+    if not _component_parts_look_like_inventory(parts, full_text):
+        return lines
+    existing_items = _item_spec_bodies(lines)
+    additions: list[str] = []
+    for part in parts:
+        if not _COMPONENT_INVENTORY_NOUN_RE.search(part) and not _coin_years_in_text(part):
+            continue
+        if _component_piece_already_covered(part, existing_items + additions):
+            continue
+        phrase = _short_deliverable_phrase(part, max_len=140)
+        if phrase:
+            additions.append(phrase)
+        if len(additions) >= 12:
+            break
+    if not additions:
+        return lines
+    first_hit = min(i for i, _ in hits)
+    out: list[str] = []
+    inserted = False
+    for i, line in enumerate(lines):
+        out.append(line)
+        if i == first_hit and not inserted:
+            start = _count_item_spec_lines(lines)
+            out.extend(f"Item {start + j + 1}: {body}" for j, body in enumerate(additions))
+            inserted = True
+    return out
+
+
 def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     """
     Drop repeated spec bullets across merged photo frames.
@@ -1264,7 +1361,9 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
         seen.add(key)
         first.append(line)
     first = collapse_duplicate_item_spec_lines(first)
+    first = consolidate_multi_frame_components_lines(first)
     first = synthesize_wardrobe_item_lines_when_sparse(first, " ".join(first).lower())
+    first = synthesize_item_lines_from_components_inventory(first)
     merged = consolidate_brand_and_marking_spec_lines(_collapse_semantic_spec_lines(first))
     merged = consolidate_condition_note_spec_lines(merged)
     merged = _collapse_loose_display_quarter_item_rows(merged)
@@ -1978,8 +2077,8 @@ def _listing_should_have_multi_piece_cue(specification_lines: list[str]) -> bool
         return _count_unique_wardrobe_items(specification_lines) >= 3
     if _count_item_spec_lines(specification_lines) >= 3:
         return True
-    comp = _components_spec_text(specification_lines) or ""
-    return bool(comp and _components_indicate_multi_piece(comp)) or _spec_lines_indicate_multi_textile_piece(
+    inv = _inventory_text_from_specification_lines(specification_lines)
+    return bool(inv and _components_indicate_multi_piece(inv)) or _spec_lines_indicate_multi_textile_piece(
         specification_lines
     )
 
