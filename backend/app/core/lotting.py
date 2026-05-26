@@ -1301,6 +1301,8 @@ def synthesize_item_lines_from_components_inventory(lines: list[str]) -> list[st
 
     Detail-only components such as zippers, pockets, and labels should still disappear with the Components row.
     """
+    if _spec_lines_indicate_wardrobe_apparel(lines, " ".join(lines).lower()):
+        return lines
     hits: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
         m = re.match(r"(?i)^\s*components\s*:\s*(.+)$", clean_listing_text(line).strip())
