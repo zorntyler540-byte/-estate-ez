@@ -193,6 +193,23 @@ class LotPhotoOut(BaseModel):
     original_name: str
     created_at: datetime
     sort_order: int = 0
+    """False when ``Photo.storage_path`` is missing or not a readable file on the API host."""
+    file_on_disk: bool = True
+
+
+class LotPhotoHealthRow(BaseModel):
+    lot_id: str
+    sku: str | None
+    auction_title: str
+    photo_count: int
+    linked_photo_count: int
+    missing_count: int
+
+
+class SalePhotoHealthOut(BaseModel):
+    """Lots in a sale with at least one linked catalog photo file missing on disk."""
+
+    lots: list[LotPhotoHealthRow]
 
 
 class ReorderLotPhotosIn(BaseModel):

@@ -100,6 +100,8 @@ Images are stored under **`backend/data/uploads`** inside the API container. Man
 
 For a first pilot: avoid redeploying the API unnecessarily, or add a volume in your host’s UI.
 
+**Multiple API replicas:** Catalog photos are stored on the container filesystem. If your host runs more than one API instance without a **shared volume**, uploads can land on instance A while thumbnails and health checks hit instance B — new lots will show photo counts but “missing on server.” Use **one replica** until you add shared storage (volume mount at `/app/backend/data` or S3/R2).
+
 ---
 
 ## 8. Updating after launch

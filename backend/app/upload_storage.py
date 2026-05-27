@@ -6,14 +6,15 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
+from app.catalog_storage import upload_root
 from app.services.image_preprocess import compress_upload_bytes_if_image
 
-UPLOAD_ROOT = Path("data") / "uploads"
+UPLOAD_ROOT = upload_root()
 
 
 def new_batch_dir(account_id: str) -> Path:
     batch_id = str(uuid.uuid4())
-    dest = (UPLOAD_ROOT / account_id / batch_id).resolve()
+    dest = (upload_root() / account_id / batch_id).resolve()
     dest.mkdir(parents=True, exist_ok=True)
     return dest
 
@@ -54,6 +55,22 @@ async def save_uploaded_files(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="Invalid file path") from exc
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() and target.stat().st_size > 0:
+                stem = target.stem
+                suffix = target.suffix
+                n = 2
+                while target.exists():
+                    target = (target.parent / f"{stem}_{n}{suffix}").resolve()
+                    try:
+                        target.relative_to(root)
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail="Invalid file path") from exc
+                    n += 1
+            if not body:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Empty image file: {raw_name!r} (retake or re-export the photo).",
+                )
             target.write_bytes(body)
 
     await asyncio.gather(*[_save_one(uf) for uf in files])

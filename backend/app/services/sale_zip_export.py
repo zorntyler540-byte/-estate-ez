@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.catalog_storage import resolve_catalog_storage_path
 from app.core.lotting import normalize_tape_sku_input, sku_digits
 from app.models import JobStatus, Lot, Photo, SalePhotoZipExport
 
@@ -134,7 +135,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                     .all()
                 )
                 for pi, ph in enumerate(photos, start=1):
-                    src = Path(ph.storage_path).resolve()
+                    src = resolve_catalog_storage_path(ph.storage_path)
                     if not src.is_file():
                         continue
                     base = _arc_base(ph.original_name, pi, used_names)

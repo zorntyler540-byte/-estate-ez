@@ -12,6 +12,25 @@ from io import BytesIO
 from pathlib import Path
 
 
+def thumbnail_jpeg_bytes_first_available(paths: list[Path], max_px: int) -> bytes:
+    """Try each catalog path in order; skip missing or unreadable files (orphaned DB rows)."""
+    last_err: Exception | None = None
+    for src in paths:
+        if not src.is_file():
+            continue
+        try:
+            return thumbnail_jpeg_bytes(src, max_px)
+        except OSError as exc:
+            last_err = exc
+            continue
+        except Exception as exc:
+            last_err = exc
+            continue
+    if last_err is not None:
+        raise last_err
+    raise FileNotFoundError("No displayable catalog image on disk")
+
+
 def thumbnail_jpeg_bytes(src: Path, max_px: int) -> bytes:
     """Resize image to fit within max_px square; output JPEG bytes."""
     from PIL import Image, ImageOps

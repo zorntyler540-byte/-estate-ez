@@ -666,6 +666,26 @@ a.ct-btn:hover {
   }
 }
 
+/* Brief white flash on Snap — works on iOS where vibrate/sound are often muted. */
+.ct-lot-camera-shutter-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: #fff;
+  opacity: 0.75;
+  pointer-events: none;
+  animation: ct-lot-camera-shutter-flash 0.15s ease-out forwards;
+}
+
+@keyframes ct-lot-camera-shutter-flash {
+  0% {
+    opacity: 0.82;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .ct-lot-camera-strip {
   display: flex;
   gap: 10px;
@@ -739,6 +759,34 @@ a.ct-btn:hover {
 
   .ct-lot-camera-live {
     max-height: min(66dvh, 620px);
+  }
+}
+
+/* Portrait on phones: drop long instructions so the live preview can use the height. */
+@media (orientation: portrait) and (max-width: 768px),
+  (orientation: portrait) and (pointer: coarse) {
+  .ct-lot-camera-dialog {
+    --ct-lot-camera-live-portrait-h: min(74dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 11.5rem));
+  }
+
+  .ct-lot-camera-intro {
+    display: none;
+  }
+
+  .ct-lot-camera-strip-wrap > .ct-muted {
+    display: none;
+  }
+
+  .ct-lot-camera-sku {
+    margin-top: 0 !important;
+  }
+
+  .ct-lot-camera-live {
+    margin-top: 0.3rem;
+    max-height: var(--ct-lot-camera-live-portrait-h) !important;
+    min-height: min(46dvh, var(--ct-lot-camera-live-portrait-h)) !important;
+    height: var(--ct-lot-camera-live-portrait-h) !important;
+    aspect-ratio: unset;
   }
 }
 

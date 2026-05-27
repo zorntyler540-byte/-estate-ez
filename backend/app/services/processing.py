@@ -25,6 +25,7 @@ from app.core.lotting import (
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
+from app.catalog_storage import catalog_photo_file_on_disk, catalog_storage_key, resolve_catalog_storage_path
 from app.services.image_preprocess import normalize_job_folder_image
 from app.services import job_events
 
@@ -763,7 +764,7 @@ def process_job(
                 user_id=job.user_id,
                 lot_id=None,
                 original_name=photo_path.name,
-                storage_path=str(photo_path.resolve()),
+                storage_path=catalog_storage_key(photo_path),
             )
             db.add(row)
             db.flush()
@@ -842,7 +843,7 @@ def process_job(
                 user_id=job.user_id,
                 lot_id=None,
                 original_name=photo_path.name,
-                storage_path=str(photo_path.resolve()),
+                storage_path=catalog_storage_key(photo_path),
             )
             db.add(row)
             db.flush()
@@ -866,7 +867,7 @@ def process_job(
                 user_id=job.user_id,
                 lot_id=None,
                 original_name=photo_path.name,
-                storage_path=str(photo_path.resolve()),
+                storage_path=catalog_storage_key(photo_path),
             )
             db.add(row)
             db.flush()
@@ -887,7 +888,7 @@ def process_job(
                         user_id=job.user_id,
                         lot_id=None,
                         original_name=photo_path.name,
-                        storage_path=str(photo_path.resolve()),
+                        storage_path=catalog_storage_key(photo_path),
                     )
                     db.add(row)
                     db.flush()
@@ -903,7 +904,7 @@ def process_job(
                         user_id=job.user_id,
                         lot_id=None,
                         original_name=photo_path.name,
-                        storage_path=str(photo_path.resolve()),
+                        storage_path=catalog_storage_key(photo_path),
                     )
                     db.add(row)
                     db.flush()
@@ -926,7 +927,7 @@ def process_job(
                 user_id=job.user_id,
                 lot_id=None,
                 original_name=photo_path.name,
-                storage_path=str(photo_path.resolve()),
+                storage_path=catalog_storage_key(photo_path),
             )
             db.add(row)
             db.flush()
@@ -943,7 +944,7 @@ def process_job(
                 user_id=job.user_id,
                 lot_id=None,
                 original_name=photo_path.name,
-                storage_path=str(photo_path.resolve()),
+                storage_path=catalog_storage_key(photo_path),
             )
             db.add(row)
             db.flush()
@@ -959,7 +960,7 @@ def process_job(
             user_id=job.user_id,
             lot_id=None,
             original_name=photo_path.name,
-            storage_path=str(photo_path.resolve()),
+            storage_path=catalog_storage_key(photo_path),
         )
         db.add(row)
         db.flush()
@@ -981,10 +982,40 @@ def process_job(
     job.status = JobStatus.completed
     job.cancel_requested = False
     db.commit()
+    _verify_job_catalog_files_on_disk(db, job)
     _emit_job(job, {"type": "status", "status": "completed"})
 
 
 LOT_AI_REGENERATE_MAX_PHOTOS = 80
+
+
+def _verify_job_catalog_files_on_disk(db: Session, job: ProcessingJob) -> None:
+    """Log when this job's upload batch has catalog rows pointing at files not on disk."""
+    folder = Path(job.input_folder).resolve()
+    if not folder.is_dir():
+        return
+    rows = (
+        db.query(Photo.id, Photo.storage_path)
+        .filter(Photo.account_id == job.account_id)
+        .all()
+    )
+    in_batch: list[tuple[str, str]] = []
+    for pid, path in rows:
+        try:
+            resolve_catalog_storage_path(path).relative_to(folder)
+        except (ValueError, OSError):
+            continue
+        in_batch.append((pid, path))
+    missing = [pid for pid, path in in_batch if not catalog_photo_file_on_disk(path)]
+    if missing:
+        _LOG.warning(
+            "job=%s completed but %s/%s catalog photo file(s) missing on disk under %s "
+            "(check upload volume, cwd, or multiple API replicas without shared storage)",
+            job.id,
+            len(missing),
+            len(in_batch),
+            folder,
+        )
 
 
 def _sync_lot_photo_count(db: Session, lot_id: str, account_id: str) -> None:
@@ -1073,7 +1104,7 @@ def run_lot_ai_regenerate_and_save(
 
     paths: list[Path] = []
     for ph in photos:
-        pth = Path(ph.storage_path).resolve()
+        pth = resolve_catalog_storage_path(ph.storage_path)
         if pth.is_file():
             paths.append(pth)
     if not paths:

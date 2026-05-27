@@ -278,15 +278,34 @@ function playLotCameraShutterSound() {
   }
 }
 
-/** Light haptic (Android / some devices) plus shutter sound after a successful snap. */
-function triggerLotCameraSnapFeedback() {
+function pulseLotCameraHaptic() {
   try {
     if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
-      navigator.vibrate(12);
+      navigator.vibrate([14, 28, 14]);
     }
   } catch {
     /* ignore */
   }
+}
+
+/** Unlock Web Audio after the user opens the camera (helps iOS play the shutter on later snaps). */
+function primeLotCameraAudio() {
+  try {
+    const w = window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+    const AC = window.AudioContext ?? w.webkitAudioContext;
+    if (!AC) return;
+    if (!lotCameraShutterAudioCtx || lotCameraShutterAudioCtx.state === "closed") {
+      lotCameraShutterAudioCtx = new AC();
+    }
+    void lotCameraShutterAudioCtx.resume();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Instant tap feedback (haptic + white flash) — visible even when sound is muted. */
+function triggerLotCameraSnapFeedbackImmediate() {
+  pulseLotCameraHaptic();
   playLotCameraShutterSound();
 }
 
@@ -551,6 +570,30 @@ type Lot = {
   sku_text_mismatch: boolean;
 };
 
+type LotPhotoHealthRow = {
+  lot_id: string;
+  sku: string | null;
+  auction_title: string;
+  photo_count: number;
+  linked_photo_count: number;
+  missing_count: number;
+};
+
+function photoHealthMapFromResponse(data: unknown): Record<string, number> {
+  if (!data || typeof data !== "object" || !("lots" in data)) return {};
+  const rows = (data as { lots: unknown }).lots;
+  if (!Array.isArray(rows)) return {};
+  const m: Record<string, number> = {};
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as LotPhotoHealthRow;
+    if (typeof r.lot_id === "string" && typeof r.missing_count === "number" && r.missing_count > 0) {
+      m[r.lot_id] = r.missing_count;
+    }
+  }
+  return m;
+}
+
 /** One inventory row streamed from ``GET /jobs/{id}/events`` (``lot_ready``). */
 type LiveLotRowPayload = Lot;
 
@@ -751,6 +794,8 @@ export default function DashboardPage() {
     yPct: number;
     key: number;
   } | null>(null);
+  const [lotCameraShutterFlash, setLotCameraShutterFlash] = useState(false);
+  const lotCameraShutterFlashTimerRef = useRef<number | null>(null);
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   /** Scrollable column inside the camera modal — kept at bottom so Snap/Done stay in view on mobile. */
   const lotCameraScrollRef = useRef<HTMLDivElement | null>(null);
@@ -778,6 +823,8 @@ export default function DashboardPage() {
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
   const [lots, setLots] = useState<Lot[]>([]);
+  /** ``lot_id`` → count of catalog photos whose files are missing on the API host (from ``GET /sales/{id}/photo-health``). */
+  const [photoHealthMissing, setPhotoHealthMissing] = useState<Record<string, number>>({});
   /** Filter ``GET /lots`` to rows with SKU sanity flags (duplicate digit-SKU in sale, or mixed lot numbers in text). */
   const [inventorySkuFlagFilter, setInventorySkuFlagFilter] = useState<
     "" | "duplicate" | "text_mismatch" | "any"
@@ -834,6 +881,11 @@ export default function DashboardPage() {
     () => jobs.find((j) => j.status === "processing")?.id ?? null,
     [jobs]
   );
+  const photoHealthLotCount = useMemo(
+    () => Object.keys(photoHealthMissing).length,
+    [photoHealthMissing]
+  );
+
   const { activeJobs, completedJobs } = useMemo(() => {
     const active: Job[] = [];
     const completed: Job[] = [];
@@ -1115,6 +1167,15 @@ export default function DashboardPage() {
           setLoading(false);
         }
       });
+    void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/photo-health`, t)
+      .then((d) => {
+        if (loadId !== inventoryLoadId.current) return;
+        setPhotoHealthMissing(photoHealthMapFromResponse(d));
+      })
+      .catch(() => {
+        if (loadId !== inventoryLoadId.current) return;
+        setPhotoHealthMissing({});
+      });
   }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
 
   useEffect(() => {
@@ -1211,6 +1272,11 @@ export default function DashboardPage() {
         });
       void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token)
         .then((d) => setLots(d as Lot[]))
+        .catch(() => {
+          /* ignore */
+        });
+      void apiFetch(`/sales/${encodeURIComponent(sid)}/photo-health`, token)
+        .then((d) => setPhotoHealthMissing(photoHealthMapFromResponse(d)))
         .catch(() => {
           /* ignore */
         });
@@ -1387,6 +1453,11 @@ export default function DashboardPage() {
             void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token).then((lotsData) =>
               setLots(lotsData as Lot[])
             );
+            void apiFetch(`/sales/${encodeURIComponent(sid)}/photo-health`, token)
+              .then((d) => setPhotoHealthMissing(photoHealthMapFromResponse(d)))
+              .catch(() => {
+                /* ignore */
+              });
           }
           return jlist;
         });
@@ -1741,7 +1812,23 @@ export default function DashboardPage() {
     }
   }
 
+  function flashLotCameraShutter() {
+    if (lotCameraShutterFlashTimerRef.current !== null) {
+      window.clearTimeout(lotCameraShutterFlashTimerRef.current);
+    }
+    setLotCameraShutterFlash(true);
+    lotCameraShutterFlashTimerRef.current = window.setTimeout(() => {
+      setLotCameraShutterFlash(false);
+      lotCameraShutterFlashTimerRef.current = null;
+    }, 150);
+  }
+
   function stopLotCameraTracks() {
+    if (lotCameraShutterFlashTimerRef.current !== null) {
+      window.clearTimeout(lotCameraShutterFlashTimerRef.current);
+      lotCameraShutterFlashTimerRef.current = null;
+    }
+    setLotCameraShutterFlash(false);
     lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
@@ -1881,6 +1968,8 @@ export default function DashboardPage() {
     }
     const v = lotCameraVideoRef.current;
     if (!v || v.readyState < 2 || v.videoWidth < 2) return;
+    flashLotCameraShutter();
+    triggerLotCameraSnapFeedbackImmediate();
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
     const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
@@ -1912,7 +2001,11 @@ export default function DashboardPage() {
     ) {
       return;
     }
-    const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
+    const snapId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID().slice(0, 8)
+        : String(Math.random()).slice(2, 10);
+    const file = new File([blob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
     triggerLotCameraSnapFeedback();
@@ -2051,6 +2144,7 @@ export default function DashboardPage() {
         setLotCameraStream(stream);
         lotCameraHardwareZoomRef.current = false;
         setLotCameraHardwareZoom(false);
+        primeLotCameraAudio();
       } catch {
         lotCameraStreamRef.current = null;
         setLotCameraStream(null);
@@ -2174,6 +2268,13 @@ export default function DashboardPage() {
     setStagingEditSaturation(100);
     const files = folderPick.imageFiles;
     const total = files.length;
+    const emptyFiles = files.filter((f) => f.size < 1);
+    if (emptyFiles.length) {
+      setError(
+        `${emptyFiles.length} staged photo${emptyFiles.length === 1 ? "" : "s"} had no image data — retake or re-pick those files before uploading.`
+      );
+      return;
+    }
     if (
       folderPick.singleLotMode &&
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -2326,6 +2427,12 @@ export default function DashboardPage() {
     try {
       await apiFetch(`/lots/${lotId}`, token, { method: "DELETE" });
       setLots((prev) => prev.filter((l) => l.id !== lotId));
+      setPhotoHealthMissing((prev) => {
+        if (!(lotId in prev)) return prev;
+        const next = { ...prev };
+        delete next[lotId];
+        return next;
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     }
@@ -2345,7 +2452,12 @@ export default function DashboardPage() {
   }
 
   async function deleteJobRow(jobId: string) {
-    if (!window.confirm("Remove this job record (and uploaded folder if any)?")) return;
+    if (
+      !window.confirm(
+        "Remove this job from the list?\n\nYour catalog lots are kept. Upload folders that still back lot photos are not deleted."
+      )
+    )
+      return;
     setError("");
     try {
       await apiFetch(`/jobs/${jobId}`, token, { method: "DELETE" });
@@ -2363,7 +2475,12 @@ export default function DashboardPage() {
   async function deleteAllCompletedJobs() {
     if (!completedJobs.length) return;
     const n = completedJobs.length;
-    if (!window.confirm(`Remove ${n} completed job record${n === 1 ? "" : "s"} (and uploaded folders if any)?`)) return;
+    if (
+      !window.confirm(
+        `Remove ${n} completed job record${n === 1 ? "" : "s"} from the list?\n\nYour catalog lots are kept. Upload folders that still back lot photos are not deleted.`
+      )
+    )
+      return;
     setError("");
     const ids = completedJobs.map((j) => j.id);
     try {
@@ -2547,6 +2664,7 @@ export default function DashboardPage() {
     try {
       await apiFetch("/lots/purge-all", token, { method: "POST" });
       setLots([]);
+      setPhotoHealthMissing({});
       setJobs([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Purge failed");
@@ -3410,7 +3528,7 @@ export default function DashboardPage() {
               onClick={() => void deleteAllCompletedJobs()}
               disabled={busyProcessing}
             >
-              Clear all
+              Clear job list
             </button>
           </div>
           {completedJobsExpanded ? (
@@ -3437,6 +3555,15 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
+      {photoHealthLotCount > 0 ? (
+        <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
+          <strong>
+            {photoHealthLotCount} lot{photoHealthLotCount === 1 ? "" : "s"} missing photo files on the server.
+          </strong>{" "}
+          Rows below are flagged — open <strong>Details</strong> to see which frames are gone and use{" "}
+          <strong>Add photos…</strong> to re-upload.
+        </div>
+      ) : null}
       <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 className="ct-section-title" style={{ margin: 0 }}>
           Lots ({lots.length})
@@ -3545,7 +3672,10 @@ export default function DashboardPage() {
           <div
             key={`m-${lot.id}`}
             className={`ct-lot-mobile-card ct-card ct-card--padded${
-              lot.many_photos_review || lot.sku_duplicate_in_sale || lot.sku_text_mismatch
+              lot.many_photos_review ||
+              lot.sku_duplicate_in_sale ||
+              lot.sku_text_mismatch ||
+              (photoHealthMissing[lot.id] ?? 0) > 0
                 ? " ct-lot-mobile-card--warn"
                 : ""
             }`}
@@ -3565,6 +3695,15 @@ export default function DashboardPage() {
                 <div className="ct-muted" style={{ marginTop: "0.5rem", fontSize: "0.88rem", lineHeight: 1.4 }}>
                   <strong style={{ color: "var(--ct-text)" }}>{lot.photo_count}</strong>{" "}
                   photo{lot.photo_count === 1 ? "" : "s"}
+                  {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <strong style={{ color: "var(--ct-error)" }}>
+                        {photoHealthMissing[lot.id]} missing on server
+                      </strong>
+                    </>
+                  ) : null}
                   {lot.starting_price != null ? (
                     <>
                       {" "}
@@ -3707,7 +3846,10 @@ export default function DashboardPage() {
             <tr
               key={lot.id}
               className={
-                lot.many_photos_review || lot.sku_duplicate_in_sale || lot.sku_text_mismatch
+                lot.many_photos_review ||
+                lot.sku_duplicate_in_sale ||
+                lot.sku_text_mismatch ||
+                (photoHealthMissing[lot.id] ?? 0) > 0
                   ? "ct-table-row--photo-outlier"
                   : undefined
               }
@@ -3742,9 +3884,28 @@ export default function DashboardPage() {
                   </span>
                 </label>
               </td>
-              <td>{lot.photo_count}</td>
               <td>
-                <Link href={`/lots/${lot.id}#listing-details`} onClick={rememberDashboardScrollBeforeLotDetails}>
+                {lot.photo_count}
+                {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
+                  <span
+                    className="ct-muted"
+                    style={{ display: "block", fontSize: "0.78rem", color: "var(--ct-error)", marginTop: 2 }}
+                    title="Catalog photo records exist but files are missing on the server — open Details to re-upload."
+                  >
+                    {photoHealthMissing[lot.id]} missing
+                  </span>
+                ) : null}
+              </td>
+              <td>
+                <Link
+                  href={`/lots/${lot.id}#listing-details`}
+                  onClick={rememberDashboardScrollBeforeLotDetails}
+                  title={
+                    (photoHealthMissing[lot.id] ?? 0) > 0
+                      ? "Photos missing on server — open to re-upload"
+                      : undefined
+                  }
+                >
                   Details
                 </Link>
               </td>
@@ -3852,6 +4013,9 @@ export default function DashboardPage() {
                       }}
                       aria-hidden
                     />
+                  ) : null}
+                  {lotCameraShutterFlash ? (
+                    <span className="ct-lot-camera-shutter-flash" aria-hidden />
                   ) : null}
                 </div>
                 <div

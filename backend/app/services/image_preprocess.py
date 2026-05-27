@@ -153,7 +153,16 @@ def normalize_job_folder_image(job_folder: Path, photo_path: Path) -> Path:
     except ValueError:
         return photo_path
     target.parent.mkdir(parents=True, exist_ok=True)
+    if not out_body:
+        return photo_path
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp.write_bytes(out_body)
+        tmp.replace(target)
+    except OSError:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        return photo_path
     if target.resolve() != photo_path.resolve() and photo_path.exists():
         photo_path.unlink(missing_ok=True)
-    target.write_bytes(out_body)
     return target

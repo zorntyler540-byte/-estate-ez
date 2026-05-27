@@ -69,6 +69,7 @@ from app.schemas import (
     LotAiRegenerateIn,
     LotPhotoOut,
     ReorderLotPhotosIn,
+    SalePhotoHealthOut,
     SaleZipExportOut,
     SplitPhotosToNewLotIn,
     SplitPhotosToNewLotOut,
@@ -78,10 +79,13 @@ from app.schemas import (
 from app.services import job_events
 from app.services.serialization import (
     lot_ids_with_linked_photos,
+    lot_photo_out,
     lot_to_schema,
     photo_count_is_sale_outlier,
     photo_count_outlier_by_lot_id,
     sale_lot_photo_counts,
+    sale_lots_with_missing_photo_files,
+    upload_folder_has_linked_photos,
 )
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.services.suggestion_email import (
@@ -92,7 +96,8 @@ from app.services.suggestion_email import (
 )
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
-from app.services.thumbnail_image import thumbnail_jpeg_bytes
+from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
+from app.catalog_storage import catalog_storage_key, resolve_catalog_storage_path, upload_root
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
@@ -702,6 +707,23 @@ def list_sales(current: User = Depends(get_current_user), db: Session = Depends(
     ]
 
 
+@app.get("/sales/{sale_id}/photo-health", response_model=SalePhotoHealthOut)
+def sale_photo_health(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SalePhotoHealthOut:
+    """
+    Lots in this sale whose catalog ``Photo`` rows point at files missing on the API host.
+
+    Use for dashboard repair hints (e.g. after job cleanup or a redeploy without a volume).
+    """
+    sale = db.query(Sale).filter(Sale.id == sale_id, Sale.account_id == current.account_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    return SalePhotoHealthOut(lots=sale_lots_with_missing_photo_files(db, current.account_id, sale_id))
+
+
 @app.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)
 def create_sale(
     payload: SaleCreate, current: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -854,22 +876,22 @@ def lot_thumbnail(
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
-        ph = (
+        photos = (
             db.query(Photo)
             .filter(
                 Photo.lot_id == lot_id,
                 Photo.account_id == user.account_id,
             )
             .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
-            .first()
+            .all()
         )
-        if not ph:
+        if not photos:
             raise HTTPException(status_code=404, detail="No image linked to this lot")
-        src = Path(ph.storage_path).resolve()
-    if not src.is_file():
-        raise HTTPException(status_code=404, detail="Image file missing on disk")
+        paths = [resolve_catalog_storage_path(p.storage_path) for p in photos]
     try:
-        body = thumbnail_jpeg_bytes(src, max_px)
+        body = thumbnail_jpeg_bytes_first_available(paths, max_px)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image file missing on disk") from None
     except OSError:
         raise HTTPException(status_code=404, detail="Image could not be opened") from None
     except Exception:
@@ -905,16 +927,7 @@ def list_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [
-        LotPhotoOut(
-            id=p.id,
-            lot_id=lot_id,
-            original_name=p.original_name,
-            created_at=p.created_at,
-            sort_order=p.sort_order,
-        )
-        for p in photos
-    ]
+    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
 @app.post("/lots/{lot_id}/photos/upload", response_model=list[LotPhotoOut])
@@ -977,7 +990,7 @@ async def upload_lot_photos(
                 user_id=current.id,
                 lot_id=lot_id,
                 original_name=path.name,
-                storage_path=str(path.resolve()),
+                storage_path=catalog_storage_key(path),
                 sort_order=base + i,
             )
         )
@@ -993,16 +1006,7 @@ async def upload_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [
-        LotPhotoOut(
-            id=p.id,
-            lot_id=lot_id,
-            original_name=p.original_name,
-            created_at=p.created_at,
-            sort_order=p.sort_order,
-        )
-        for p in photos
-    ]
+    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
 @app.post("/lots/{lot_id}/photos/delete", response_model=LotOut)
@@ -1038,7 +1042,7 @@ def delete_lot_photos(
             detail=f"Photo id(s) not on this lot: {preview}{more}" if preview else "No matching photos on this lot.",
         )
 
-    paths = [Path(p.storage_path).resolve() for p in to_delete]
+    paths = [resolve_catalog_storage_path(p.storage_path) for p in to_delete]
     for ph in to_delete:
         db.delete(ph)
     renormalize_photo_sort_orders(db, lot_id, current.account_id)
@@ -1091,16 +1095,7 @@ def reorder_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [
-        LotPhotoOut(
-            id=p.id,
-            lot_id=lot_id,
-            original_name=p.original_name,
-            created_at=p.created_at,
-            sort_order=p.sort_order,
-        )
-        for p in photos
-    ]
+    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
 @app.post("/lots/{target_lot_id}/photos/transfer", response_model=TransferPhotosOut)
@@ -1392,7 +1387,7 @@ def lot_photo_thumbnail(
         )
         if not ph:
             raise HTTPException(status_code=404, detail="Photo not found")
-        src = Path(ph.storage_path).resolve()
+        src = resolve_catalog_storage_path(ph.storage_path)
     if not src.is_file():
         raise HTTPException(status_code=404, detail="Image file missing on disk")
     try:
@@ -1423,7 +1418,7 @@ def download_lot_photo(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Photo not found")
-    src = Path(row.storage_path).resolve()
+    src = resolve_catalog_storage_path(row.storage_path)
     if not src.is_file():
         raise HTTPException(status_code=404, detail="Photo file missing on disk")
     media_type, _ = mimetypes.guess_type(str(src))
@@ -1479,7 +1474,7 @@ def download_lot_photos_zip(
     try:
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for i, ph in enumerate(photos):
-                src = Path(ph.storage_path).resolve()
+                src = resolve_catalog_storage_path(ph.storage_path)
                 if not src.is_file():
                     continue
                 arc = _zip_entry_basename(ph.original_name, i + 1, used)
@@ -1654,7 +1649,7 @@ async def create_job_from_upload(
         user_id=current.id,
         sale_id=sale.id,
         status=JobStatus.queued,
-        input_folder=str(dest),
+        input_folder=str(dest.resolve()),
         inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
         single_lot_mode=bool(single_lot_mode),
         single_lot_manual_sku=_manual_sku,
@@ -1853,7 +1848,7 @@ def delete_job(
     root = UPLOAD_ROOT.resolve()
     try:
         folder.relative_to(root)
-        if folder.is_dir():
+        if folder.is_dir() and not upload_folder_has_linked_photos(db, current.account_id, folder):
             shutil.rmtree(folder, ignore_errors=True)
     except ValueError:
         pass

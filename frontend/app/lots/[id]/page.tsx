@@ -15,6 +15,7 @@ type LotPhoto = {
   original_name: string;
   created_at: string;
   sort_order?: number;
+  file_on_disk?: boolean;
 };
 
 type Lot = {
@@ -118,6 +119,12 @@ export default function LotDetailPage() {
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
+
+  const photoFileHealth = useMemo(() => {
+    const total = catalogPhotos.length;
+    const missing = catalogPhotos.filter((p) => p.file_on_disk === false).length;
+    return { total, missing, allMissing: total > 0 && missing === total, someMissing: missing > 0 };
+  }, [catalogPhotos]);
   const lastPhotoSelectAnchorRef = useRef<number | null>(null);
   const dragPhotoIdRef = useRef<string | null>(null);
   const addPhotosInputRef = useRef<HTMLInputElement>(null);
@@ -768,6 +775,24 @@ export default function LotDetailPage() {
           this row&apos;s SKU — you may need to split or move photos.
         </div>
       ) : null}
+      {photoFileHealth.someMissing ? (
+        <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.85rem" }}>
+          <strong>Photo files missing on the server.</strong>{" "}
+          {photoFileHealth.allMissing ? (
+            <>All {photoFileHealth.total} catalog photo{photoFileHealth.total === 1 ? "" : "s"} for this lot are gone</>
+          ) : (
+            <>
+              {photoFileHealth.missing} of {photoFileHealth.total} catalog photo
+              {photoFileHealth.total === 1 ? "" : "s"} cannot be read from disk
+            </>
+          )}
+          {" "}
+          (often after clearing completed upload jobs, an API redeploy without persistent storage, or multiple API
+          servers without a shared upload volume). Use{" "}
+          <strong>Add photos…</strong> below to re-upload; slots marked <strong>Missing on server</strong> have no file
+          left to download or export.
+        </div>
+      ) : null}
       <section className="ct-card ct-card--padded" style={{ marginBottom: "1rem" }}>
         <h2 className="ct-section-title" style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>
           Catalog photos
@@ -1159,6 +1184,7 @@ export default function LotDetailPage() {
                       label={p.original_name}
                       maxPx={960}
                       minHeight={120}
+                      fileOnDisk={p.file_on_disk !== false}
                     />
                   </button>
                 </div>
@@ -1170,8 +1196,15 @@ export default function LotDetailPage() {
                     wordBreak: "break-word",
                     margin: 0
                   }}
-                  title={p.original_name}
+                  title={
+                    p.file_on_disk === false
+                      ? `${p.original_name} — file missing on server`
+                      : p.original_name
+                  }
                 >
+                  {p.file_on_disk === false ? (
+                    <span style={{ color: "var(--ct-error)" }}>Missing on server · </span>
+                  ) : null}
                   {p.original_name}
                 </figcaption>
               </figure>

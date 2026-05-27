@@ -12,17 +12,32 @@ type Props = {
   label: string;
   maxPx?: number;
   minHeight?: number;
+  /** When false, skip fetch — file is not on the API host (orphaned DB row). */
+  fileOnDisk?: boolean;
 };
 
 /**
  * Loads ``/lots/{lotId}/photos/{photoId}/thumbnail`` with Bearer auth (blob URL).
  */
-function LotPhotoThumbInner({ lotId, photoId, token, label, maxPx = 280, minHeight = 120 }: Props) {
+function LotPhotoThumbInner({
+  lotId,
+  photoId,
+  token,
+  label,
+  maxPx = 280,
+  minHeight = 120,
+  fileOnDisk = true
+}: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const urlRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!fileOnDisk) {
+      setSrc(null);
+      setFailed(true);
+      return;
+    }
     if (!token || !photoId) {
       setSrc(null);
       setFailed(false);
@@ -67,7 +82,7 @@ function LotPhotoThumbInner({ lotId, photoId, token, label, maxPx = 280, minHeig
         urlRef.current = null;
       }
     };
-  }, [lotId, photoId, token, maxPx]);
+  }, [lotId, photoId, token, maxPx, fileOnDisk]);
 
   const shell: CSSProperties = {
     borderRadius: "var(--ct-radius-sm)",
@@ -94,7 +109,7 @@ function LotPhotoThumbInner({ lotId, photoId, token, label, maxPx = 280, minHeig
             textAlign: "center"
           }}
         >
-          Could not load
+          {fileOnDisk ? "Could not load" : "Missing on server"}
         </div>
       </div>
     );
