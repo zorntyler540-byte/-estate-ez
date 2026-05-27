@@ -1911,7 +1911,7 @@ export default function DashboardPage() {
     if (dropped > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
     }
-    if (files.length > dropped) triggerLotCameraSnapFeedback();
+    if (files.length > dropped) triggerLotCameraSnapFeedbackImmediate();
   }
 
   function openPhoneCameraForLot() {
@@ -2008,7 +2008,6 @@ export default function DashboardPage() {
     const file = new File([blob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
-    triggerLotCameraSnapFeedback();
   }
 
   function removeLotCameraSnap(index: number) {
