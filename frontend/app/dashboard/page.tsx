@@ -62,15 +62,178 @@ function uploadProgressFromBytes(prefix: string, loaded: number, total: number |
  */
 const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
-/** Digital zoom for one-lot camera preview + JPEG crop; 1 = no zoom. */
+/** UI zoom range: 1 = wide; higher = closer. Uses optical zoom when the device supports it. */
 const LOT_CAMERA_ZOOM_MIN = 1;
 const LOT_CAMERA_ZOOM_MAX = 4;
 const LOT_CAMERA_ZOOM_STEP = 0.25;
+const LOT_CAMERA_JPEG_QUALITY = 0.92;
 
 type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
   pointsOfInterest?: boolean;
+  zoom?: { min: number; max: number; step?: number };
 };
+
+type LotCameraZoomCap = { min: number; max: number; step?: number };
+
+function clampLotCameraUiZoom(z: number): number {
+  return Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
+}
+
+function mapUiZoomToHardware(uiZoom: number, cap: LotCameraZoomCap): number {
+  const span = LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN;
+  const t = span > 0 ? (uiZoom - LOT_CAMERA_ZOOM_MIN) / span : 0;
+  let hz = cap.min + t * (cap.max - cap.min);
+  if (cap.step && cap.step > 0) {
+    hz = Math.round(hz / cap.step) * cap.step;
+  }
+  return Math.min(cap.max, Math.max(cap.min, Math.round(hz * 100) / 100));
+}
+
+function readLotCameraZoomCap(track: MediaStreamTrack): LotCameraZoomCap | null {
+  const raw = track.getCapabilities?.() as VideoTrackCaps | undefined;
+  const z = raw?.zoom;
+  if (!z || typeof z.min !== "number" || typeof z.max !== "number" || z.max <= z.min) return null;
+  return { min: z.min, max: z.max, step: z.step };
+}
+
+/** Ask for the rear camera at the highest resolution the device exposes. */
+async function configureLotCameraTrack(track: MediaStreamTrack): Promise<LotCameraZoomCap | null> {
+  const caps = track.getCapabilities?.();
+  if (!caps || !track.applyConstraints) return readLotCameraZoomCap(track);
+
+  const width = caps.width;
+  const height = caps.height;
+  const target: MediaTrackConstraints = { facingMode: { ideal: "environment" } };
+  if (width && typeof width === "object" && "max" in width && typeof width.max === "number") {
+    target.width = { ideal: width.max };
+  } else {
+    target.width = { ideal: 3840 };
+  }
+  if (height && typeof height === "object" && "max" in height && typeof height.max === "number") {
+    target.height = { ideal: height.max };
+  } else {
+    target.height = { ideal: 2160 };
+  }
+
+  try {
+    await track.applyConstraints(target);
+  } catch {
+    try {
+      await track.applyConstraints({
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      });
+    } catch {
+      /* keep default stream size */
+    }
+  }
+  return readLotCameraZoomCap(track);
+}
+
+async function applyHardwareZoomOnTrack(
+  track: MediaStreamTrack,
+  cap: LotCameraZoomCap,
+  uiZoom: number
+): Promise<boolean> {
+  if (!track.applyConstraints) return false;
+  const hz = mapUiZoomToHardware(uiZoom, cap);
+  try {
+    await track.applyConstraints({ advanced: [{ zoom: hz }] } as unknown as MediaTrackConstraints);
+    return true;
+  } catch {
+    try {
+      await track.applyConstraints({ zoom: hz } as unknown as MediaTrackConstraints);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Digital crop from a full-resolution still (or video frame); 1 = no crop. */
+function drawZoomedFrameToCanvas(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  w: number,
+  h: number,
+  uiZoom: number
+): void {
+  const z = Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  if (z <= LOT_CAMERA_ZOOM_MIN + 0.001) {
+    ctx.drawImage(source, 0, 0, w, h, 0, 0, w, h);
+    return;
+  }
+  const sw = w / z;
+  const sh = h / z;
+  const sx = (w - sw) / 2;
+  const sy = (h - sh) / 2;
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
+}
+
+function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), "image/jpeg", LOT_CAMERA_JPEG_QUALITY);
+  });
+}
+
+async function cropBlobWithDigitalZoom(blob: Blob, uiZoom: number): Promise<Blob | null> {
+  const file = new File([blob], "snap.jpg", { type: blob.type || "image/jpeg" });
+  const decoded = await decodeImageForCanvas(file);
+  if (!decoded) return null;
+  const { source, width: w, height: h, release } = decoded;
+  if (w < 2 || h < 2) {
+    release?.();
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    release?.();
+    return null;
+  }
+  drawZoomedFrameToCanvas(ctx, source, w, h, uiZoom);
+  release?.();
+  return canvasToJpegBlob(canvas);
+}
+
+/** Short label for the zoom row (optical vs digital vs 1×). */
+function lotCameraZoomModeLabel(
+  uiZoom: number,
+  hardwareActive: boolean,
+  opticalAvailable: boolean
+): string {
+  if (uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001) {
+    return opticalAvailable ? "1× — optical zoom available" : "1× — no zoom";
+  }
+  if (hardwareActive) return "Optical zoom (camera lens)";
+  return "Digital zoom — move closer for sharpest detail";
+}
+
+function captureVideoFrameBlob(
+  video: HTMLVideoElement,
+  uiZoom: number,
+  useDigitalCrop: boolean
+): Promise<Blob | null> {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w < 2 || h < 2) return Promise.resolve(null);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.resolve(null);
+  if (useDigitalCrop) {
+    drawZoomedFrameToCanvas(ctx, video, w, h, uiZoom);
+  } else {
+    ctx.drawImage(video, 0, 0, w, h, 0, 0, w, h);
+  }
+  return canvasToJpegBlob(canvas);
+}
 
 function lotCameraPinchDistance(e: TouchEvent): number {
   if (e.touches.length < 2) return 0;
@@ -552,6 +715,9 @@ export default function DashboardPage() {
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
+  const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
+  const lotCameraNativeChainingRef = useRef(false);
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
   const lotCameraSnapsRef = useRef<File[]>([]);
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
@@ -571,6 +737,12 @@ export default function DashboardPage() {
   const [lotCameraEditBusy, setLotCameraEditBusy] = useState(false);
   const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
+  /** When true, zoom is applied on the camera lens — preview uses CSS scale 1. */
+  const [lotCameraHardwareZoom, setLotCameraHardwareZoom] = useState(false);
+  const lotCameraHardwareZoomRef = useRef(false);
+  const [lotCameraOpticalAvailable, setLotCameraOpticalAvailable] = useState(false);
+  const lotCameraZoomCapRef = useRef<LotCameraZoomCap | null>(null);
+  const lotCameraZoomApplyTimerRef = useRef<number | null>(null);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
   const lotCameraTapStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -1320,8 +1492,7 @@ export default function DashboardPage() {
     const el = lotCameraZoomWrapRef.current;
     if (!el || !lotCameraOpen || !lotCameraStream) return;
 
-    const clampZoom = (z: number) =>
-      Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
+    const clampZoom = (z: number) => clampLotCameraUiZoom(z);
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
@@ -1340,12 +1511,16 @@ export default function DashboardPage() {
       const { startDist, startZoom } = lotCameraPinchRef.current;
       if (startDist < 1) return;
       const z = clampZoom(startZoom * (d / startDist));
-      lotCameraZoomRef.current = z;
-      setLotCameraZoom(z);
+      scheduleLotCameraZoomApply(z, true);
     };
 
     const onTouchEnd = () => {
       lotCameraPinchRef.current = null;
+      if (lotCameraZoomApplyTimerRef.current != null) {
+        window.clearTimeout(lotCameraZoomApplyTimerRef.current);
+        lotCameraZoomApplyTimerRef.current = null;
+      }
+      void applyLotCameraZoomLevel(lotCameraZoomRef.current);
     };
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -1360,11 +1535,40 @@ export default function DashboardPage() {
     };
   }, [lotCameraOpen, lotCameraStream]);
 
-  function setLotCameraZoomLevel(next: number) {
-    const z =
-      Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, next)) * 100) / 100;
+  function scheduleLotCameraZoomApply(next: number, duringPinch: boolean) {
+    const z = clampLotCameraUiZoom(next);
     lotCameraZoomRef.current = z;
     setLotCameraZoom(z);
+    if (!duringPinch) {
+      void applyLotCameraZoomLevel(z);
+      return;
+    }
+    if (lotCameraZoomApplyTimerRef.current != null) {
+      window.clearTimeout(lotCameraZoomApplyTimerRef.current);
+    }
+    lotCameraZoomApplyTimerRef.current = window.setTimeout(() => {
+      lotCameraZoomApplyTimerRef.current = null;
+      void applyLotCameraZoomLevel(lotCameraZoomRef.current);
+    }, 80);
+  }
+
+  async function applyLotCameraZoomLevel(next: number) {
+    const z = clampLotCameraUiZoom(next);
+    lotCameraZoomRef.current = z;
+    setLotCameraZoom(z);
+
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+    const cap = lotCameraZoomCapRef.current;
+    let hardware = false;
+    if (track && cap) {
+      hardware = await applyHardwareZoomOnTrack(track, cap, z);
+    }
+    lotCameraHardwareZoomRef.current = hardware;
+    setLotCameraHardwareZoom(hardware);
+  }
+
+  function setLotCameraZoomLevel(next: number) {
+    void applyLotCameraZoomLevel(next);
   }
 
   async function applyLotCameraTapFocus(clientX: number, clientY: number) {
@@ -1550,8 +1754,17 @@ export default function DashboardPage() {
     setLotCameraEditContrast(100);
     setLotCameraEditSaturation(100);
     lotCameraPinchRef.current = null;
+    if (lotCameraZoomApplyTimerRef.current != null) {
+      window.clearTimeout(lotCameraZoomApplyTimerRef.current);
+      lotCameraZoomApplyTimerRef.current = null;
+    }
+    lotCameraZoomCapRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
+    lotCameraHardwareZoomRef.current = false;
+    setLotCameraHardwareZoom(false);
+    setLotCameraOpticalAvailable(false);
+    lotCameraNativeChainingRef.current = false;
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
   }
@@ -1590,7 +1803,75 @@ export default function DashboardPage() {
     }
   }
 
-  function snapLotPhoto() {
+  function appendLotCameraSnapFiles(files: File[]) {
+    if (!files.length) return;
+    let dropped = 0;
+    setLotCameraSnaps((prev) => {
+      let next = [...prev];
+      for (const f of files) {
+        if (
+          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+          next.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+        ) {
+          dropped += 1;
+          continue;
+        }
+        next = [...next, f];
+      }
+      lotCameraSnapsRef.current = next;
+      return next;
+    });
+    if (dropped > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
+    }
+    if (files.length > dropped) triggerLotCameraSnapFeedback();
+  }
+
+  function openPhoneCameraForLot() {
+    if (
+      CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+    ) {
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
+      return;
+    }
+    lotCameraNativeChainingRef.current = true;
+    lotCameraNativeInputRef.current?.click();
+  }
+
+  function onLotCameraNativeInputChange(list: FileList | null) {
+    if (!list?.length) {
+      lotCameraNativeChainingRef.current = false;
+      return;
+    }
+    const imageFiles = Array.from(list).filter(isCatalogImageFile);
+    if (lotCameraNativeInputRef.current) lotCameraNativeInputRef.current.value = "";
+    if (!imageFiles.length) {
+      lotCameraNativeChainingRef.current = false;
+      return;
+    }
+    appendLotCameraSnapFiles(imageFiles);
+    const atCap =
+      CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
+    if (lotCameraNativeChainingRef.current && !atCap && imageFiles.length === 1) {
+      window.setTimeout(() => {
+        if (!lotCameraNativeChainingRef.current) return;
+        if (
+          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+          lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+        ) {
+          lotCameraNativeChainingRef.current = false;
+          return;
+        }
+        lotCameraNativeInputRef.current?.click();
+      }, 320);
+    } else {
+      lotCameraNativeChainingRef.current = false;
+    }
+  }
+
+  async function snapLotPhoto() {
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
@@ -1601,38 +1882,40 @@ export default function DashboardPage() {
     const v = lotCameraVideoRef.current;
     if (!v || v.readyState < 2 || v.videoWidth < 2) return;
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
-    const w = v.videoWidth;
-    const h = v.videoHeight;
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (z <= LOT_CAMERA_ZOOM_MIN + 0.001) {
-      ctx.drawImage(v, 0, 0, w, h, 0, 0, w, h);
-    } else {
-      const sw = w / z;
-      const sh = h / z;
-      const sx = (w - sw) / 2;
-      const sy = (h - sh) / 2;
-      ctx.drawImage(v, sx, sy, sw, sh, 0, 0, w, h);
+    const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+
+    let blob: Blob | null = null;
+    const ImageCaptureCtor =
+      typeof window !== "undefined"
+        ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
+            .ImageCapture
+        : undefined;
+    if (ImageCaptureCtor && track) {
+      try {
+        const ic = new ImageCaptureCtor(track);
+        blob = await ic.takePhoto();
+        if (blob && useDigitalCrop) {
+          blob = (await cropBlobWithDigitalZoom(blob, z)) ?? blob;
+        }
+      } catch {
+        blob = null;
+      }
     }
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        if (
-          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-          lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
-        )
-          return;
-        const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
-        lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
-        setLotCameraSnaps([...lotCameraSnapsRef.current]);
-        triggerLotCameraSnapFeedback();
-      },
-      "image/jpeg",
-      0.88
-    );
+    if (!blob) {
+      blob = await captureVideoFrameBlob(v, z, useDigitalCrop);
+    }
+    if (!blob) return;
+    if (
+      CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+    ) {
+      return;
+    }
+    const file = new File([blob], `lot-${Date.now()}.jpg`, { type: "image/jpeg" });
+    lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
+    setLotCameraSnaps([...lotCameraSnapsRef.current]);
+    triggerLotCameraSnapFeedback();
   }
 
   function removeLotCameraSnap(index: number) {
@@ -1750,11 +2033,24 @@ export default function DashboardPage() {
       setLotCameraOpen(true);
       try {
         const stream = await md.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 3840 },
+            height: { ideal: 2160 }
+          },
           audio: false
         });
+        const track = stream.getVideoTracks()[0];
+        if (track) {
+          lotCameraZoomCapRef.current = await configureLotCameraTrack(track);
+          setLotCameraOpticalAvailable(!!lotCameraZoomCapRef.current);
+        } else {
+          setLotCameraOpticalAvailable(false);
+        }
         lotCameraStreamRef.current = stream;
         setLotCameraStream(stream);
+        lotCameraHardwareZoomRef.current = false;
+        setLotCameraHardwareZoom(false);
       } catch {
         lotCameraStreamRef.current = null;
         setLotCameraStream(null);
@@ -3468,6 +3764,15 @@ export default function DashboardPage() {
         </table>
       </div>
 
+      <input
+        ref={lotCameraNativeInputRef}
+        type="file"
+        accept="image/*,.heic,.heif"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={(e) => onLotCameraNativeInputChange(e.target.files)}
+      />
+
       {lotCameraOpen ? (
         <div
           className="ct-lot-camera-dialog ct-lot-camera-dialog-shell"
@@ -3479,7 +3784,8 @@ export default function DashboardPage() {
             <div className="ct-card ct-card--padded ct-lot-camera-card">
             <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload. Tap the live preview to focus; pinch or use +/− to zoom (saved photos match what you see). Tap a
+              upload. Tap the preview to focus; pinch or +/− to zoom (see the zoom mode label). For maximum sharpness you
+              can use <strong>Phone camera</strong> — same multi-photo session, then <strong>Done</strong>. Tap a
               thumbnail to preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation
               when needed; use the trash control to remove one shot.
             </p>
@@ -3531,7 +3837,7 @@ export default function DashboardPage() {
                       height: "100%",
                       display: "block",
                       objectFit: "cover",
-                      transform: `scale(${lotCameraZoom})`,
+                      transform: `scale(${lotCameraHardwareZoom ? 1 : lotCameraZoom})`,
                       transformOrigin: "center center",
                       pointerEvents: "none"
                     }}
@@ -3558,9 +3864,28 @@ export default function DashboardPage() {
                     justifyContent: "space-between"
                   }}
                 >
-                  <span className="ct-muted" style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.8)" }}>
-                    Zoom {lotCameraZoom.toFixed(2)}×
-                  </span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                    <span className="ct-muted" style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.8)" }}>
+                      Zoom {lotCameraZoom.toFixed(2)}×
+                    </span>
+                    <span
+                      className={`ct-lot-camera-zoom-mode${
+                        lotCameraHardwareZoom && lotCameraZoom > LOT_CAMERA_ZOOM_MIN + 0.001
+                          ? " ct-lot-camera-zoom-mode--optical"
+                          : lotCameraZoom > LOT_CAMERA_ZOOM_MIN + 0.001
+                            ? " ct-lot-camera-zoom-mode--digital"
+                            : ""
+                      }`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {lotCameraZoomModeLabel(
+                        lotCameraZoom,
+                        lotCameraHardwareZoom,
+                        lotCameraOpticalAvailable
+                      )}
+                    </span>
+                  </div>
                   <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
                     <button
                       type="button"
@@ -3664,8 +3989,20 @@ export default function DashboardPage() {
               <div className="ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                 <button
                   type="button"
+                  className="ct-btn"
+                  title="Use your phone’s built-in camera app (full quality); returns here after each shot"
+                  onClick={() => openPhoneCameraForLot()}
+                  disabled={
+                    CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                    lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                  }
+                >
+                  Phone camera
+                </button>
+                <button
+                  type="button"
                   className="ct-btn ct-btn--primary"
-                  onClick={() => snapLotPhoto()}
+                  onClick={() => void snapLotPhoto()}
                   disabled={
                     !lotCameraStream ||
                     !lotCameraPreviewReady ||

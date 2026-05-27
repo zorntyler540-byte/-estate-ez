@@ -148,6 +148,18 @@ document.addEventListener(
   true
 );
 
+function selectOptionMatches(optionText, candidate) {
+  const o = normalizeText(optionText);
+  const c = normalizeText(candidate);
+  if (!c || !o) return false;
+  if (o === c) return true;
+  if (o.startsWith(`${c} `) || o.startsWith(`${c}*`)) return true;
+  // Short labels (e.g. "Art") must match exactly — never "art" inside "miscellaneous".
+  if (c.length <= 4) return false;
+  if (c.length >= 5 && (o.startsWith(c) || c.startsWith(o))) return true;
+  return o.includes(c) || c.includes(o);
+}
+
 function setSelectByTextOrValue(el, candidates) {
   if (!el || el.tagName.toLowerCase() !== "select") return false;
   const list = (Array.isArray(candidates) ? candidates : [candidates])
@@ -160,7 +172,7 @@ function setSelectByTextOrValue(el, candidates) {
     const c = norm(cand);
     let match = options.find((o) => norm(o.text) === c || norm(o.value) === c);
     if (!match) {
-      match = options.find((o) => norm(o.text).includes(c) || c.includes(norm(o.text)));
+      match = options.find((o) => selectOptionMatches(o.text, cand) || selectOptionMatches(o.value, cand));
     }
     if (match) {
       el.value = match.value;
@@ -312,6 +324,24 @@ const CATEGORY_RULES = [
   { category: "Men's", keywords: ["men", "mens", "necktie", "tie", "fedora", "hat", "akubra", "shirt"] },
   { category: "Earrings", keywords: ["earring", "stud earring", "hoop earring"] },
   { category: "Bracelets", keywords: ["bracelet", "bangle", "cuff bracelet", "figaro"] },
+  {
+    category: "Art",
+    keywords: [
+      "colored pencil",
+      "colour pencil",
+      "prismacolor",
+      "sketchpad",
+      "sketch pad",
+      "sketchbook",
+      "drawing pencil",
+      "watercolor pencil",
+      "art supplies",
+      "art supply",
+      "moleskine",
+      "charcoal pencil",
+      "pastel pencil"
+    ]
+  },
   { category: "Rings", keywords: ["ring", "band ring", "engagement ring"] },
   { category: "Jewelry Other", keywords: ["jewelry", "brooch", "necklace", "pendant", "tie clip", "cufflink"] },
   { category: "Luxury & Designer Items", keywords: ["louis vuitton", "gucci", "prada", "michael kors", "coach", "designer"] },
@@ -327,11 +357,19 @@ const CATEGORY_RULES = [
   { category: "Kitchen & Home", keywords: ["kitchen", "cookware", "dish", "plate", "glassware", "mug", "vase"] },
   { category: "Bedroom Goods", keywords: ["bedding", "linen", "bedspread", "comforter", "sheet", "pillowcase"] },
   { category: "Music Other", keywords: ["speaker", "stereo", "record player", "turntable", "audio", "music"] },
-  { category: "Art Other", keywords: ["art", "framed art", "wall art", "print", "decor art"] },
+  { category: "Art Other", keywords: ["framed art", "wall art", "print", "decor art", "fine art"] },
   { category: "Antiques Other", keywords: ["antique", "vintage", "heirloom", "collectible antique"] },
   { category: "Accessories", keywords: ["belt", "scarf", "hat", "accessory"] },
   { category: "Household Goods Other", keywords: ["household", "home goods", "furniture", "lamp"] }
 ];
+
+function hayKeywordMatch(hay, kw) {
+  const k = String(kw || "").trim().toLowerCase();
+  if (!k) return false;
+  if (/\s/.test(k)) return hay.includes(k);
+  const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(hay);
+}
 
 function inferCategory(lot, description) {
   const specs = Array.isArray(lot?.specification_lines) ? lot.specification_lines.join(" ") : "";
@@ -341,7 +379,7 @@ function inferCategory(lot, description) {
   for (const rule of CATEGORY_RULES) {
     let score = 0;
     for (const kw of rule.keywords) {
-      if (hay.includes(kw)) score += kw.length;
+      if (hayKeywordMatch(hay, kw)) score += kw.length;
     }
     if (score > best.score) {
       best = { category: rule.category, score };
@@ -478,7 +516,7 @@ async function setDropdownByLabel(labelText, candidates, warnings) {
     for (const cand of list) {
       const c = normalizeText(cand);
       let hit = normalizedOptions.find((o) => o.text === c);
-      if (!hit) hit = normalizedOptions.find((o) => o.text.includes(c) || c.includes(o.text));
+      if (!hit) hit = normalizedOptions.find((o) => selectOptionMatches(o.text, cand));
       if (hit) {
         hit.el.click();
         hit.el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
@@ -509,6 +547,7 @@ function mapConditionOptions(conditionText) {
 
 const CTSELLER_ALLOWED_CATEGORIES = [
   "Antiques Other",
+  "Art",
   "Coins",
   "Costume Jewelry",
   "Crystal",
@@ -540,7 +579,10 @@ function mapCategoryCandidates(category) {
     "men's": "Men's",
     "decorative collectible": "Decorative Collectibles",
     "decorative collectibles": "Decorative Collectibles",
-    "art other": "Paintings",
+    art: "Art",
+    "art other": "Art",
+    "art supplies": "Art",
+    paintings: "Paintings",
     "housewares": "Household Goods Other",
     "furniture": "Household Goods Other",
     "home": "Household Goods Other",
@@ -878,7 +920,15 @@ async function fillFromLot(lot) {
   const price = lot.starting_price != null ? String(lot.starting_price) : "";
   const condition = lot.condition_text || "";
   const inferredCategoryRaw = String(lot.ct_category || "").trim();
-  const inferredCategory = inferredCategoryRaw || inferCategory(lot, description);
+  let inferredCategory = inferredCategoryRaw || inferCategory(lot, description);
+  let categoryCandidates = mapCategoryCandidates(inferredCategory);
+  if (!categoryCandidates.length) {
+    const fallback = inferCategory(lot, description);
+    if (fallback) {
+      categoryCandidates = mapCategoryCandidates(fallback);
+      if (categoryCandidates.length) inferredCategory = fallback;
+    }
+  }
   const inferredSubcategory = lot.ct_subcategory || "";
   const inferredArea = inferAreaFromCategory(inferredCategory);
 
@@ -913,7 +963,6 @@ async function fillFromLot(lot) {
   }
 
   if (inferredCategory) {
-    const categoryCandidates = mapCategoryCandidates(inferredCategory);
     const categorySelect = getExactSelect("category");
     if (categorySelect && setSelectByTextOrValue(categorySelect, categoryCandidates)) {
       filled.push("category");

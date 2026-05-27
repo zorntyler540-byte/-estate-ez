@@ -616,6 +616,32 @@ a.ct-btn:hover {
   outline-offset: 2px;
 }
 
+.ct-lot-camera-zoom-mode {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.ct-lot-camera-zoom-mode--optical {
+  color: #b8f0d4;
+  background: rgba(40, 120, 80, 0.35);
+  border-color: rgba(120, 220, 160, 0.45);
+}
+
+.ct-lot-camera-zoom-mode--digital {
+  color: #ffe4b8;
+  background: rgba(140, 90, 20, 0.35);
+  border-color: rgba(255, 200, 100, 0.45);
+}
+
 .ct-lot-camera-focus-ring {
   position: absolute;
   z-index: 2;
