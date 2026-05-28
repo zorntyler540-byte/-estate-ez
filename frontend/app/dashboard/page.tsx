@@ -35,6 +35,8 @@ const SALE_STORAGE_KEY = "ct_selected_sale_id";
 const STAGING_AWAIT_GEMINI_JOB_KEY = "ct_staging_await_gemini_job";
 const STAGING_AWAIT_GEMINI_TOTAL_KEY = "ct_staging_await_gemini_total";
 const STAGING_AWAIT_GEMINI_SEEN_KEY = "ct_staging_await_gemini_seen";
+const STAGING_AWAITING_GEMINI_MESSAGE =
+  "Catalog is already processing the staged upload. Wait for Gemini to finish, or use Clear selection before staging different photos.";
 
 /** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
 const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
@@ -960,6 +962,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [stagingSuccess, setStagingSuccess] = useState("");
+  const [stagingAwaitingGeminiJobId, setStagingAwaitingGeminiJobId] = useState<string | null>(null);
   const stagingDraftRestoredRef = useRef(false);
   /** Shown during multi-request folder uploads (large batches). */
   const [uploadProgress, setUploadProgress] = useState("");
@@ -1001,6 +1004,7 @@ export default function DashboardPage() {
   const busyProcessing = jobs.some((j) => j.status === "processing");
   const busyProcessingRef = useRef(false);
   busyProcessingRef.current = busyProcessing;
+  const stagingAwaitingGemini = stagingAwaitingGeminiJobId !== null;
   const processingJobId = useMemo(
     () => jobs.find((j) => j.status === "processing")?.id ?? null,
     [jobs]
@@ -1055,7 +1059,10 @@ export default function DashboardPage() {
     if (stagingAwaitingGeminiJobIdRef.current) return stagingAwaitingGeminiJobIdRef.current;
     try {
       const id = sessionStorage.getItem(STAGING_AWAIT_GEMINI_JOB_KEY);
-      if (id) stagingAwaitingGeminiJobIdRef.current = id;
+      if (id) {
+        stagingAwaitingGeminiJobIdRef.current = id;
+        setStagingAwaitingGeminiJobId(id);
+      }
       return id;
     } catch {
       return null;
@@ -1064,6 +1071,7 @@ export default function DashboardPage() {
 
   function persistStagingAwaitingGemini(jobId: string, totalPhotos: number) {
     stagingAwaitingGeminiJobIdRef.current = jobId;
+    setStagingAwaitingGeminiJobId(jobId);
     stagingAwaitingGeminiTotalRef.current = totalPhotos;
     stagingAwaitingGeminiSeenRef.current = new Set();
     try {
@@ -1080,6 +1088,7 @@ export default function DashboardPage() {
       const jobId = sessionStorage.getItem(STAGING_AWAIT_GEMINI_JOB_KEY);
       if (!jobId) return;
       stagingAwaitingGeminiJobIdRef.current = jobId;
+      setStagingAwaitingGeminiJobId(jobId);
       const total = parseInt(sessionStorage.getItem(STAGING_AWAIT_GEMINI_TOTAL_KEY) || "0", 10);
       stagingAwaitingGeminiTotalRef.current = Number.isFinite(total) ? total : 0;
       const seenRaw = sessionStorage.getItem(STAGING_AWAIT_GEMINI_SEEN_KEY) || "";
@@ -1105,6 +1114,7 @@ export default function DashboardPage() {
 
   function clearStagingAwaitingGeminiJobId() {
     stagingAwaitingGeminiJobIdRef.current = null;
+    setStagingAwaitingGeminiJobId(null);
     stagingAwaitingGeminiTotalRef.current = 0;
     stagingAwaitingGeminiSeenRef.current = new Set();
     try {
@@ -1114,6 +1124,12 @@ export default function DashboardPage() {
     } catch {
       /* private mode */
     }
+  }
+
+  function warnIfStagingAwaitingGemini(): boolean {
+    if (!readStagingAwaitingGeminiJobId()) return false;
+    setError(STAGING_AWAITING_GEMINI_MESSAGE);
+    return true;
   }
 
   function clearStagingAfterAllGeminiPhotos() {
@@ -1159,40 +1175,44 @@ export default function DashboardPage() {
       );
       return;
     }
-    if (status === "completed" && folderPickRef.current) {
+    if (status === "completed") {
       clearStagingAfterAllGeminiPhotos();
     }
   }
 
   useEffect(() => {
-    if (!token) return;
-    restoreStagingAwaitingGeminiFromSession();
-    const awaiting = readStagingAwaitingGeminiJobId();
-    if (!awaiting) return;
-    const total = stagingAwaitingGeminiTotalRef.current;
-    const seen = stagingAwaitingGeminiSeenRef.current;
-    if (total > 0 && seen.size >= total) {
-      clearStagingAfterAllGeminiPhotos();
-      stagingDraftRestoredRef.current = true;
-      return;
-    }
-    void apiFetch(`/jobs/${encodeURIComponent(awaiting)}`, token)
-      .then((row) => {
-        const job = row as Job;
-        if (job.status === "failed") {
-          maybeClearStagingAfterJobTerminal(job.id, "failed");
-          stagingDraftRestoredRef.current = true;
-        }
-      })
-      .catch(() => {
-        /* job row may be gone */
-      });
-  }, [token]);
-
-  useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
     stagingDraftRestoredRef.current = true;
-    void loadStagingDraft().then((draft) => {
+    let cancelled = false;
+
+    void (async () => {
+      restoreStagingAwaitingGeminiFromSession();
+      const awaiting = readStagingAwaitingGeminiJobId();
+      if (awaiting) {
+        const total = stagingAwaitingGeminiTotalRef.current;
+        const seen = stagingAwaitingGeminiSeenRef.current;
+        if (total > 0 && seen.size >= total) {
+          clearStagingAfterAllGeminiPhotos();
+          return;
+        }
+        try {
+          const job = (await apiFetch(`/jobs/${encodeURIComponent(awaiting)}`, token)) as Job;
+          if (cancelled) return;
+          if (job.status === "completed") {
+            maybeClearStagingAfterJobTerminal(job.id, "completed");
+            return;
+          }
+          if (job.status === "failed") {
+            maybeClearStagingAfterJobTerminal(job.id, "failed");
+          }
+        } catch {
+          /* job row may be gone; keep the local draft so the user can decide */
+        }
+      }
+
+      if (cancelled) return;
+      const draft = await loadStagingDraft();
+      if (cancelled) return;
       if (!draft?.imageFiles.length) return;
       setFolderPick({
         folderLabel: draft.folderLabel,
@@ -1213,7 +1233,11 @@ export default function DashboardPage() {
       setStagingSuccess(
         `Restored ${draft.imageFiles.length} staged photo${draft.imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
       );
-    });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [token, folderPick]);
 
   useEffect(() => {
@@ -2084,6 +2108,7 @@ export default function DashboardPage() {
   }
 
   function tryRemoveStagingImage(index: number) {
+    if (warnIfStagingAwaitingGemini()) return;
     const p = folderPickRef.current;
     if (!p || index < 0 || index >= p.imageFiles.length) return;
     const name = p.imageFiles[index]?.name || `photo ${index + 1}`;
@@ -2098,6 +2123,7 @@ export default function DashboardPage() {
   }
 
   function removeStagingImage(index: number) {
+    if (warnIfStagingAwaitingGemini()) return;
     setStagingSuccess("");
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
@@ -2127,6 +2153,7 @@ export default function DashboardPage() {
   }
 
   function replaceStagingImageFile(index: number, file: File) {
+    if (warnIfStagingAwaitingGemini()) return;
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
       if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
@@ -2138,6 +2165,7 @@ export default function DashboardPage() {
   }
 
   function openStagingEdit(i: number) {
+    if (warnIfStagingAwaitingGemini()) return;
     const p = folderPickRef.current;
     if (!p || i < 0 || i >= p.imageFiles.length) return;
     setStagingViewerIndex(null);
@@ -2155,6 +2183,7 @@ export default function DashboardPage() {
   }
 
   async function applyStagingEdit() {
+    if (warnIfStagingAwaitingGemini()) return;
     const i = stagingEditIndex;
     if (i === null) return;
     const p = folderPickRef.current;
@@ -2258,6 +2287,7 @@ export default function DashboardPage() {
   }
 
   function finishLotCameraSession() {
+    if (warnIfStagingAwaitingGemini()) return;
     const files = [...lotCameraSnapsRef.current];
     if (!files.length) {
       stopLotCameraTracks();
@@ -2502,6 +2532,7 @@ export default function DashboardPage() {
   /** Desktop: open multi-file picker as one listing. Touch devices: camera when available, else picker. */
   async function openAddOneLotFlow() {
     if (typeof window === "undefined") return;
+    if (warnIfStagingAwaitingGemini()) return;
     const coarse =
       typeof window.matchMedia === "function" &&
       window.matchMedia("(pointer: coarse)").matches;
@@ -2516,6 +2547,7 @@ export default function DashboardPage() {
 
   async function openCreateOneLotCameraFlow() {
     if (typeof window === "undefined") return;
+    if (warnIfStagingAwaitingGemini()) return;
     const md = navigator.mediaDevices;
     if (window.isSecureContext && md?.getUserMedia) {
       setLotCameraSnaps([]);
@@ -2571,6 +2603,13 @@ export default function DashboardPage() {
       if (singleLotCaptureChainingRef.current) {
         singleLotCaptureChainingRef.current = false;
       }
+      return;
+    }
+    if (warnIfStagingAwaitingGemini()) {
+      if (folderInputRef.current) folderInputRef.current.value = "";
+      if (photosInputRef.current) photosInputRef.current.value = "";
+      singleLotCaptureChainingRef.current = false;
+      uploadPickModeRef.current = "batch";
       return;
     }
     const pickMode = uploadPickModeRef.current;
@@ -2684,6 +2723,7 @@ export default function DashboardPage() {
 
   async function uploadStagedFolder() {
     if (!folderPick?.imageFiles.length) return;
+    if (warnIfStagingAwaitingGemini()) return;
     if (!selectedSaleId) {
       setError("Select or create a sale first.");
       return;
@@ -2828,7 +2868,12 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
-    if (folderPickRef.current?.imageFiles.length) {
+    const awaiting = readStagingAwaitingGeminiJobId();
+    if (awaiting && awaiting !== jobId) {
+      setError(STAGING_AWAITING_GEMINI_MESSAGE);
+      return;
+    }
+    if (awaiting === jobId && folderPickRef.current?.imageFiles.length) {
       const n = folderPickRef.current.imageFiles.length;
       persistStagingAwaitingGemini(jobId, n);
       setStagingSuccess(
@@ -3645,11 +3690,12 @@ export default function DashboardPage() {
           type="button"
           className="ct-btn ct-btn--primary"
           onClick={() => {
+            if (warnIfStagingAwaitingGemini()) return;
             singleLotCaptureChainingRef.current = false;
             uploadPickModeRef.current = "batch";
             folderInputRef.current?.click();
           }}
-          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          disabled={uploading || stagingAwaitingGemini || !selectedSaleId || selectedSaleClosed}
         >
           Choose photo folder…
         </button>
@@ -3661,11 +3707,12 @@ export default function DashboardPage() {
           className="ct-btn"
           style={{ marginLeft: "0.6rem" }}
           onClick={() => {
+            if (warnIfStagingAwaitingGemini()) return;
             singleLotCaptureChainingRef.current = false;
             uploadPickModeRef.current = "batch";
             photosInputRef.current?.click();
           }}
-          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          disabled={uploading || stagingAwaitingGemini || !selectedSaleId || selectedSaleClosed}
         >
           Choose photos…
         </button>
@@ -3675,7 +3722,7 @@ export default function DashboardPage() {
           style={{ marginLeft: "0.6rem" }}
           title="All selected images become one catalog row; SKU from estate tape in the photos when detected"
           onClick={() => void openAddOneLotFlow()}
-          disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          disabled={uploading || stagingAwaitingGemini || !selectedSaleId || selectedSaleClosed}
         >
           Add one lot…
         </button>
@@ -3702,6 +3749,7 @@ export default function DashboardPage() {
                     style={{ width: "100%", maxWidth: 360, marginTop: 6, display: "block" }}
                     value={singleLotManualSku}
                     onChange={(e) => setSingleLotManualSku(e.target.value)}
+                    disabled={stagingAwaitingGemini}
                     placeholder="e.g. 035 or Lot #042"
                     autoComplete="off"
                     enterKeyHint="done"
@@ -3731,7 +3779,7 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Staged photos stay until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)
+                Staged photos stay locked until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)
                 {stagingDraftSupported() ? " (also saved on this device if you refresh)" : ""}. Tap to enlarge;
                 pencil = edit; trash = remove (asks to confirm). Use Clear selection to empty early.
               </p>
@@ -3781,7 +3829,7 @@ export default function DashboardPage() {
                     <button
                       type="button"
                       aria-label={`Edit staged image ${i + 1}`}
-                      disabled={uploading}
+                      disabled={uploading || stagingAwaitingGemini}
                       onClick={(e) => {
                         e.stopPropagation();
                         openStagingEdit(i);
@@ -3811,7 +3859,7 @@ export default function DashboardPage() {
                     <button
                       type="button"
                       aria-label={`Remove staged image ${i + 1}`}
-                      disabled={uploading}
+                      disabled={uploading || stagingAwaitingGemini}
                       onClick={(e) => {
                         e.stopPropagation();
                         tryRemoveStagingImage(i);
@@ -3847,7 +3895,7 @@ export default function DashboardPage() {
                 type="button"
                 className="ct-btn ct-btn--primary"
                 onClick={() => void uploadStagedFolder()}
-                disabled={uploading || !folderPick.imageFiles.length || !selectedSaleId || selectedSaleClosed}
+                disabled={uploading || stagingAwaitingGemini || !folderPick.imageFiles.length || !selectedSaleId || selectedSaleClosed}
               >
                 {uploading
                   ? "Uploading…"
@@ -5171,7 +5219,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className="ct-btn ct-btn--ghost"
-                disabled={uploading}
+                disabled={uploading || stagingAwaitingGemini}
                 onClick={() => {
                   const idx = stagingViewerIndex;
                   if (idx !== null) openStagingEdit(idx);
@@ -5184,7 +5232,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className="ct-btn ct-btn--danger"
-                disabled={uploading}
+                disabled={uploading || stagingAwaitingGemini}
                 onClick={() => {
                   const idx = stagingViewerIndex;
                   if (idx !== null) tryRemoveStagingImage(idx);
