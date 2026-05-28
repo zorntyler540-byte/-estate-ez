@@ -90,14 +90,57 @@ function clampLotCameraUiZoom(z: number): number {
   return Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
 }
 
+/** Optical zoom span used by the UI (not the device's full telephoto range). */
+const LOT_CAMERA_HARDWARE_SPAN_MAX = 3;
+
+function effectiveHardwareZoomRange(cap: LotCameraZoomCap): LotCameraZoomCap | null {
+  // Some devices report min > 1 (already zoomed); optical +/- is jumpy there — use digital only.
+  if (cap.min > 1.2) return null;
+  const min = cap.min;
+  let max = Math.min(cap.max, min + LOT_CAMERA_HARDWARE_SPAN_MAX);
+  if (cap.step && cap.step > 0) {
+    max = min + Math.floor((max - min) / cap.step) * cap.step;
+  }
+  if (max <= min + 0.01) return null;
+  return { min, max, step: cap.step };
+}
+
+function readTrackZoom(track: MediaStreamTrack): number | null {
+  const z = (track.getSettings?.() as { zoom?: number } | undefined)?.zoom;
+  return typeof z === "number" && Number.isFinite(z) ? z : null;
+}
+
 function mapUiZoomToHardware(uiZoom: number, cap: LotCameraZoomCap): number {
+  const eff = effectiveHardwareZoomRange(cap);
+  if (!eff) return cap.min;
   const span = LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN;
   const t = span > 0 ? (uiZoom - LOT_CAMERA_ZOOM_MIN) / span : 0;
-  let hz = cap.min + t * (cap.max - cap.min);
-  if (cap.step && cap.step > 0) {
-    hz = Math.round(hz / cap.step) * cap.step;
+  let hz = eff.min + t * (eff.max - eff.min);
+  if (eff.step && eff.step > 0) {
+    hz = Math.round(hz / eff.step) * eff.step;
   }
-  return Math.min(cap.max, Math.max(cap.min, Math.round(hz * 100) / 100));
+  return Math.min(eff.max, Math.max(eff.min, Math.round(hz * 100) / 100));
+}
+
+function mapHardwareToUiZoom(hz: number, cap: LotCameraZoomCap): number {
+  const eff = effectiveHardwareZoomRange(cap);
+  if (!eff) return LOT_CAMERA_ZOOM_MIN;
+  const span = LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN;
+  const t = (hz - eff.min) / (eff.max - eff.min);
+  return clampLotCameraUiZoom(LOT_CAMERA_ZOOM_MIN + t * span);
+}
+
+/** One +/- tap on hardware — small fraction of the capped optical span. */
+function hardwareZoomNudgeAmount(cap: LotCameraZoomCap): number {
+  const eff = effectiveHardwareZoomRange(cap);
+  if (!eff) return 0;
+  const span = eff.max - eff.min;
+  const uiSteps = (LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN) / LOT_CAMERA_ZOOM_STEP;
+  const perTap = span / Math.max(4, uiSteps);
+  if (eff.step && eff.step > 0 && eff.step < perTap * 1.5) {
+    return eff.step;
+  }
+  return Math.max(0.08, Math.round(perTap * 100) / 100);
 }
 
 function readLotCameraZoomCap(track: MediaStreamTrack): LotCameraZoomCap | null {
@@ -141,24 +184,34 @@ async function configureLotCameraTrack(track: MediaStreamTrack): Promise<LotCame
   return readLotCameraZoomCap(track);
 }
 
-async function applyHardwareZoomOnTrack(
+async function applyHardwareZoomValue(
   track: MediaStreamTrack,
-  cap: LotCameraZoomCap,
-  uiZoom: number
+  hz: number,
+  cap: LotCameraZoomCap
 ): Promise<boolean> {
   if (!track.applyConstraints) return false;
-  const hz = mapUiZoomToHardware(uiZoom, cap);
+  const eff = effectiveHardwareZoomRange(cap);
+  if (!eff) return false;
+  const clamped = Math.min(eff.max, Math.max(eff.min, Math.round(hz * 100) / 100));
   try {
-    await track.applyConstraints({ advanced: [{ zoom: hz }] } as unknown as MediaTrackConstraints);
+    await track.applyConstraints({ advanced: [{ zoom: clamped }] } as unknown as MediaTrackConstraints);
     return true;
   } catch {
     try {
-      await track.applyConstraints({ zoom: hz } as unknown as MediaTrackConstraints);
+      await track.applyConstraints({ zoom: clamped } as unknown as MediaTrackConstraints);
       return true;
     } catch {
       return false;
     }
   }
+}
+
+async function applyHardwareZoomOnTrack(
+  track: MediaStreamTrack,
+  cap: LotCameraZoomCap,
+  uiZoom: number
+): Promise<boolean> {
+  return applyHardwareZoomValue(track, mapUiZoomToHardware(uiZoom, cap), cap);
 }
 
 /** Digital crop from a full-resolution still (or video frame); 1 = no crop. */
@@ -1914,11 +1967,39 @@ export default function DashboardPage() {
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
     const cap = lotCameraZoomCapRef.current;
     let hardware = false;
-    if (track && cap) {
+    if (track && cap && effectiveHardwareZoomRange(cap)) {
       hardware = await applyHardwareZoomOnTrack(track, cap, z);
     }
     lotCameraHardwareZoomRef.current = hardware;
     setLotCameraHardwareZoom(hardware);
+  }
+
+  /** +/- buttons: nudge optical zoom in small device steps instead of remapping 1–4 to full telephoto range. */
+  async function nudgeLotCameraZoom(direction: -1 | 1) {
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+    const cap = lotCameraZoomCapRef.current;
+    const eff = cap ? effectiveHardwareZoomRange(cap) : null;
+
+    if (track && cap && eff) {
+      const cur = readTrackZoom(track) ?? eff.min;
+      const delta = hardwareZoomNudgeAmount(cap) * direction;
+      const nextHz = Math.min(eff.max, Math.max(eff.min, cur + delta));
+      const hardware = await applyHardwareZoomValue(track, nextHz, cap);
+      if (hardware) {
+        const ui = mapHardwareToUiZoom(readTrackZoom(track) ?? nextHz, cap);
+        lotCameraZoomRef.current = ui;
+        setLotCameraZoom(ui);
+        lotCameraHardwareZoomRef.current = true;
+        setLotCameraHardwareZoom(true);
+        return;
+      }
+    }
+
+    const z = clampLotCameraUiZoom(lotCameraZoomRef.current + direction * LOT_CAMERA_ZOOM_STEP);
+    lotCameraZoomRef.current = z;
+    setLotCameraZoom(z);
+    lotCameraHardwareZoomRef.current = false;
+    setLotCameraHardwareZoom(false);
   }
 
   function setLotCameraZoomLevel(next: number) {
@@ -4432,7 +4513,7 @@ export default function DashboardPage() {
                       className="ct-btn ct-btn--ghost"
                       aria-label="Zoom out"
                       disabled={lotCameraZoom <= LOT_CAMERA_ZOOM_MIN + 0.001}
-                      onClick={() => setLotCameraZoomLevel(lotCameraZoom - LOT_CAMERA_ZOOM_STEP)}
+                      onClick={() => void nudgeLotCameraZoom(-1)}
                       style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
                     >
                       <Minus size={22} aria-hidden />
@@ -4442,7 +4523,7 @@ export default function DashboardPage() {
                       className="ct-btn ct-btn--ghost"
                       aria-label="Zoom in"
                       disabled={lotCameraZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
-                      onClick={() => setLotCameraZoomLevel(lotCameraZoom + LOT_CAMERA_ZOOM_STEP)}
+                      onClick={() => void nudgeLotCameraZoom(1)}
                       style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
                     >
                       <Plus size={22} aria-hidden />
