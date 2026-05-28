@@ -23,10 +23,14 @@ import {
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { SiteHeader } from "../../components/SiteHeader";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
+import {
+  clearStagingDraft,
+  loadStagingDraft,
+  saveStagingDraft,
+  stagingDraftSupported
+} from "../../lib/stagingDraft";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
-/** Set while photos are staged so a refresh can explain why the upload box is empty. */
-const STAGING_DRAFT_COUNT_KEY = "ct_staging_draft_count";
 
 /** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
 const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
@@ -699,6 +703,15 @@ function revokeObjectUrls(urls: string[]) {
   urls.forEach((u) => URL.revokeObjectURL(u));
 }
 
+/** Ask before replacing or clearing staged photos in the upload box. */
+function confirmStagingOverwrite(prev: FolderPickPreview | null, detail: string): boolean {
+  const n = prev?.imageFiles.length ?? 0;
+  if (!n) return true;
+  return window.confirm(
+    `The upload box already has ${n} staged photo${n === 1 ? "" : "s"}.\n\n${detail}`
+  );
+}
+
 type FolderPickPreview = {
   folderLabel: string;
   imageFiles: File[];
@@ -850,6 +863,8 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [stagingSuccess, setStagingSuccess] = useState("");
+  const stagingDraftRestoredRef = useRef(false);
   /** Shown during multi-request folder uploads (large batches). */
   const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
@@ -935,29 +950,52 @@ export default function DashboardPage() {
         setToken(localStorage.getItem("token") || "");
         setDataReloadNonce((n) => n + 1);
       }
-      const staged = sessionStorage.getItem(STAGING_DRAFT_COUNT_KEY);
-      if (staged) {
-        const n = parseInt(staged, 10);
-        sessionStorage.removeItem(STAGING_DRAFT_COUNT_KEY);
-        if (n > 0) {
-          setError(
-            `You had ${n} staged photo${n === 1 ? "" : "s"} before this page loaded — refreshing clears the upload box before photos reach the server. Capture or pick them again, then wait for “Uploading…” to finish.`
-          );
-        }
-      }
     } catch {
       /* private mode */
     }
   }, []);
 
   useEffect(() => {
-    if (!folderPick?.imageFiles.length) return;
-    try {
-      sessionStorage.setItem(STAGING_DRAFT_COUNT_KEY, String(folderPick.imageFiles.length));
-    } catch {
-      /* private mode */
+    if (!token || folderPick || stagingDraftRestoredRef.current) return;
+    stagingDraftRestoredRef.current = true;
+    void loadStagingDraft().then((draft) => {
+      if (!draft?.imageFiles.length) return;
+      setFolderPick({
+        folderLabel: draft.folderLabel,
+        imageFiles: draft.imageFiles,
+        thumbUrls: draft.thumbUrls,
+        skippedCount: draft.skippedCount,
+        singleLotMode: draft.singleLotMode
+      });
+      if (draft.singleLotManualSku) setSingleLotManualSku(draft.singleLotManualSku);
+      if (draft.saleId) {
+        try {
+          localStorage.setItem(SALE_STORAGE_KEY, draft.saleId);
+        } catch {
+          /* private mode */
+        }
+        setSelectedSaleId(draft.saleId);
+      }
+      setStagingSuccess(
+        `Restored ${draft.imageFiles.length} staged photo${draft.imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
+      );
+    });
+  }, [token, folderPick]);
+
+  useEffect(() => {
+    if (!folderPick?.imageFiles.length) {
+      void clearStagingDraft();
+      return;
     }
-  }, [folderPick?.imageFiles.length]);
+    const pick = folderPick;
+    const t = window.setTimeout(() => {
+      void saveStagingDraft(pick, {
+        saleId: selectedSaleId || undefined,
+        singleLotManualSku: singleLotManualSku.trim() || undefined
+      });
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [folderPick, selectedSaleId, singleLotManualSku]);
 
   useEffect(() => {
     const onPageShow = (e: PageTransitionEvent) => {
@@ -1732,11 +1770,8 @@ export default function DashboardPage() {
   }
 
   function clearFolderPick() {
-    try {
-      sessionStorage.removeItem(STAGING_DRAFT_COUNT_KEY);
-    } catch {
-      /* private mode */
-    }
+    void clearStagingDraft();
+    setStagingSuccess("");
     singleLotCaptureChainingRef.current = false;
     setSingleLotManualSku("");
     setStagingViewerIndex(null);
@@ -1753,7 +1788,22 @@ export default function DashboardPage() {
     });
   }
 
+  function tryRemoveStagingImage(index: number) {
+    const p = folderPickRef.current;
+    if (!p || index < 0 || index >= p.imageFiles.length) return;
+    const name = p.imageFiles[index]?.name || `photo ${index + 1}`;
+    if (
+      !window.confirm(
+        `Remove “${name}” from the upload box?\n\nIt has not been uploaded to the server until you tap Upload.`
+      )
+    ) {
+      return;
+    }
+    removeStagingImage(index);
+  }
+
   function removeStagingImage(index: number) {
+    setStagingSuccess("");
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
       if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
@@ -1914,10 +1964,21 @@ export default function DashboardPage() {
 
   function finishLotCameraSession() {
     const files = [...lotCameraSnapsRef.current];
+    if (!files.length) {
+      stopLotCameraTracks();
+      return;
+    }
+    const prev = folderPickRef.current;
+    const replacing = prev?.imageFiles.length && !prev.singleLotMode;
+    const detail = replacing
+      ? `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} as one lot and replace the current staged set?`
+      : prev?.singleLotMode
+        ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
+        : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
+    if (!confirmStagingOverwrite(prev, detail)) return;
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
     stopLotCameraTracks();
-    if (!files.length) return;
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
     setFolderPick(pick);
     if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
@@ -2045,6 +2106,19 @@ export default function DashboardPage() {
     const file = new File([blob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
+  }
+
+  function tryRemoveLotCameraSnap(index: number) {
+    const file = lotCameraSnapsRef.current[index];
+    if (!file) return;
+    if (
+      !window.confirm(
+        `Delete captured photo “${file.name}”?\n\nIt is not in the upload box until you tap Done.`
+      )
+    ) {
+      return;
+    }
+    removeLotCameraSnap(index);
   }
 
   function removeLotCameraSnap(index: number) {
@@ -2224,18 +2298,40 @@ export default function DashboardPage() {
       imageFiles.length === 1;
 
     if (singleLotMode) {
+      const prev = folderPickRef.current;
+      if (
+        prev?.imageFiles.length &&
+        !prev.singleLotMode &&
+        !confirmStagingOverwrite(
+          prev,
+          `Use ${imageFiles.length} selected photo${imageFiles.length === 1 ? "" : "s"} as one lot and replace what is currently staged?`
+        )
+      ) {
+        if (photosInputRef.current) photosInputRef.current.value = "";
+        return;
+      }
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
         imageFiles,
         skippedCount
       );
       setFolderPick(pick);
+      setStagingSuccess("");
       if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
         setError(
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
     } else {
+      if (
+        !confirmStagingOverwrite(
+          folderPickRef.current,
+          `Use folder “${label}” (${imageFiles.length} photo${imageFiles.length === 1 ? "" : "s"}) and replace what is currently in the upload box?`
+        )
+      ) {
+        if (folderInputRef.current) folderInputRef.current.value = "";
+        return;
+      }
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
         const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
@@ -2247,6 +2343,7 @@ export default function DashboardPage() {
           singleLotMode
         };
       });
+      setStagingSuccess("");
     }
     if (folderInputRef.current) folderInputRef.current.value = "";
     if (photosInputRef.current) photosInputRef.current.value = "";
@@ -2295,6 +2392,7 @@ export default function DashboardPage() {
       return;
     }
     setError("");
+    setStagingSuccess("");
     setUploadProgress("");
     setStagingViewerIndex(null);
     setStagingEditIndex(null);
@@ -2399,9 +2497,11 @@ export default function DashboardPage() {
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
-        clearFolderPick();
         setUploadProgress("");
         setError("");
+        setStagingSuccess(
+          `Uploaded ${total} photo${total === 1 ? "" : "s"} and started the catalog job. Staged previews stay here until you tap Clear selection — they are already on the server.`
+        );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
           runErr instanceof Error ? runErr.message : "",
@@ -2968,6 +3068,7 @@ export default function DashboardPage() {
         </div>
       )}
       {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
+      {stagingSuccess ? <div className="ct-banner ct-banner--success">{stagingSuccess}</div> : null}
       {uploadProgress ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.5rem" }}>
           {uploadProgress}
@@ -3325,7 +3426,9 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Tap a photo to enlarge. Pencil = edit (rotate, trim, color). Trash = remove before upload.
+                Staged photos stay until you tap Clear selection
+                {stagingDraftSupported() ? " (auto-saved on this device if you refresh)" : ""}. Tap to enlarge;
+                pencil = edit; trash = remove (asks to confirm).
               </p>
             ) : null}
             {folderPick.imageFiles.length > 0 && (
@@ -3406,7 +3509,7 @@ export default function DashboardPage() {
                       disabled={uploading}
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeStagingImage(i);
+                        tryRemoveStagingImage(i);
                       }}
                       className="ct-btn ct-btn--ghost"
                       style={{
@@ -4172,7 +4275,7 @@ export default function DashboardPage() {
                         aria-label={`Delete captured photo ${i + 1}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          removeLotCameraSnap(i);
+                          tryRemoveLotCameraSnap(i);
                         }}
                         className="ct-btn ct-btn--ghost ct-lot-camera-strip-delete"
                       >
@@ -4338,7 +4441,7 @@ export default function DashboardPage() {
                     className="ct-btn ct-btn--danger"
                     onClick={() => {
                       const idx = lotCameraViewerIndex;
-                      if (idx !== null) removeLotCameraSnap(idx);
+                      if (idx !== null) tryRemoveLotCameraSnap(idx);
                     }}
                   >
                     Delete this photo
@@ -4779,7 +4882,7 @@ export default function DashboardPage() {
                 disabled={uploading}
                 onClick={() => {
                   const idx = stagingViewerIndex;
-                  if (idx !== null) removeStagingImage(idx);
+                  if (idx !== null) tryRemoveStagingImage(idx);
                 }}
               >
                 Delete this photo
