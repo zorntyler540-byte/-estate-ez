@@ -31,6 +31,8 @@ import {
 } from "../../lib/stagingDraft";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
+/** Job id from last staged upload — upload box clears only when this job finishes Gemini/catalog. */
+const STAGING_AWAIT_GEMINI_JOB_KEY = "ct_staging_await_gemini_job";
 
 /** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
 const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
@@ -782,6 +784,7 @@ export default function DashboardPage() {
   /** True after "Add one lot" camera flow until multi-file pick, upload, clear, or picker cancel. Chains camera opens on mobile. */
   const singleLotCaptureChainingRef = useRef(false);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
+  const stagingAwaitingGeminiJobIdRef = useRef<string | null>(null);
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
@@ -954,6 +957,72 @@ export default function DashboardPage() {
       /* private mode */
     }
   }, []);
+
+  function readStagingAwaitingGeminiJobId(): string | null {
+    if (stagingAwaitingGeminiJobIdRef.current) return stagingAwaitingGeminiJobIdRef.current;
+    try {
+      const id = sessionStorage.getItem(STAGING_AWAIT_GEMINI_JOB_KEY);
+      if (id) stagingAwaitingGeminiJobIdRef.current = id;
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistStagingAwaitingGeminiJobId(jobId: string) {
+    stagingAwaitingGeminiJobIdRef.current = jobId;
+    try {
+      sessionStorage.setItem(STAGING_AWAIT_GEMINI_JOB_KEY, jobId);
+    } catch {
+      /* private mode */
+    }
+  }
+
+  function clearStagingAwaitingGeminiJobId() {
+    stagingAwaitingGeminiJobIdRef.current = null;
+    try {
+      sessionStorage.removeItem(STAGING_AWAIT_GEMINI_JOB_KEY);
+    } catch {
+      /* private mode */
+    }
+  }
+
+  function maybeClearStagingAfterGeminiJob(jobId: string, status: string) {
+    const awaiting = readStagingAwaitingGeminiJobId();
+    if (!awaiting || awaiting !== jobId) return;
+    if (status === "completed") {
+      clearFolderPick();
+      clearStagingAwaitingGeminiJobId();
+      setStagingSuccess(
+        "Catalog finished (Gemini) — upload box cleared so you can stage the next lot."
+      );
+      setError("");
+      return;
+    }
+    if (status === "failed") {
+      setStagingSuccess("");
+      setError(
+        "Catalog job failed — your staged photos are still in the upload box. Fix the issue in Jobs and tap Run again, or use Clear selection."
+      );
+    }
+  }
+
+  useEffect(() => {
+    if (!token) return;
+    const awaiting = readStagingAwaitingGeminiJobId();
+    if (!awaiting) return;
+    void apiFetch(`/jobs/${encodeURIComponent(awaiting)}`, token)
+      .then((row) => {
+        const job = row as Job;
+        if (job.status === "completed" || job.status === "failed") {
+          maybeClearStagingAfterGeminiJob(job.id, job.status);
+          stagingDraftRestoredRef.current = true;
+        }
+      })
+      .catch(() => {
+        /* job row may be gone */
+      });
+  }, [token]);
 
   useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
@@ -1471,6 +1540,13 @@ export default function DashboardPage() {
           setPhotoPendingSlots([]);
           setInInventoryPhase(false);
           setCatalogStepProgress(null);
+          const finishedJobId =
+            typeof msg.job_id === "string" && msg.job_id
+              ? msg.job_id
+              : processingJobId;
+          if (finishedJobId && msg.status) {
+            maybeClearStagingAfterGeminiJob(finishedJobId, msg.status);
+          }
           refreshJobsAndLots();
         }
       } catch {
@@ -1528,6 +1604,13 @@ export default function DashboardPage() {
               .catch(() => {
                 /* ignore */
               });
+            const awaiting = readStagingAwaitingGeminiJobId();
+            if (awaiting) {
+              const finished = jlist.find((j) => j.id === awaiting);
+              if (finished && (finished.status === "completed" || finished.status === "failed")) {
+                maybeClearStagingAfterGeminiJob(finished.id, finished.status);
+              }
+            }
           }
           return jlist;
         });
@@ -1771,6 +1854,7 @@ export default function DashboardPage() {
 
   function clearFolderPick() {
     void clearStagingDraft();
+    clearStagingAwaitingGeminiJobId();
     setStagingSuccess("");
     singleLotCaptureChainingRef.current = false;
     setSingleLotManualSku("");
@@ -2493,6 +2577,7 @@ export default function DashboardPage() {
         setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
       setJobs((prev) => [created, ...prev]);
+      persistStagingAwaitingGeminiJobId(created.id);
       setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
@@ -2500,7 +2585,7 @@ export default function DashboardPage() {
         setUploadProgress("");
         setError("");
         setStagingSuccess(
-          `Uploaded ${total} photo${total === 1 ? "" : "s"} and started the catalog job. Staged previews stay here until you tap Clear selection — they are already on the server.`
+          `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running (Gemini). Staged previews stay until that job finishes successfully, then this box clears automatically.`
         );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
@@ -2508,7 +2593,7 @@ export default function DashboardPage() {
           "Could not start the catalog job"
         );
         setError(
-          `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — find batch “${jobInputLabel(created.input_folder)}” in Jobs and tap Run. Staged previews are kept below until the job starts.`
+          `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”. Staged previews stay until that job finishes successfully (Gemini), then clear automatically.`
         );
       }
     } catch (e) {
@@ -2530,6 +2615,12 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
+    if (folderPickRef.current?.imageFiles.length) {
+      persistStagingAwaitingGeminiJobId(jobId);
+      setStagingSuccess(
+        "Catalog started — staged photos will clear when this job finishes successfully (Gemini)."
+      );
+    }
     try {
       const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
@@ -3426,9 +3517,9 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Staged photos stay until you tap Clear selection
-                {stagingDraftSupported() ? " (auto-saved on this device if you refresh)" : ""}. Tap to enlarge;
-                pencil = edit; trash = remove (asks to confirm).
+                Staged photos stay while catalog runs and clear automatically after Gemini finishes successfully
+                {stagingDraftSupported() ? " (also saved on this device if you refresh)" : ""}. Tap to enlarge;
+                pencil = edit; trash = remove (asks to confirm). Use Clear selection to empty early.
               </p>
             ) : null}
             {folderPick.imageFiles.length > 0 && (
