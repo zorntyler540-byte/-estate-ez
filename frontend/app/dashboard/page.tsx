@@ -245,6 +245,42 @@ function captureVideoFrameBlob(
   return canvasToJpegBlob(canvas);
 }
 
+/**
+ * iOS Safari can hand back camera-capture File handles that become unreadable after reopening
+ * the capture sheet. Clone bytes immediately so staged thumbnails/uploads stay valid.
+ */
+async function stabilizeCapturedFiles(files: File[]): Promise<File[]> {
+  const out: File[] = [];
+  for (const f of files) {
+    try {
+      const bytes = await f.arrayBuffer();
+      const type = (f.type || "image/jpeg").trim() || "image/jpeg";
+      const fallbackExt =
+        type === "image/png"
+          ? "png"
+          : type === "image/webp"
+            ? "webp"
+            : type === "image/heic"
+              ? "heic"
+              : type === "image/heif"
+                ? "heif"
+                : "jpg";
+      const hasExt = /\.[a-z0-9]{2,6}$/i.test(f.name || "");
+      const baseName = (f.name || "").trim() || `capture-${Date.now()}`;
+      const safeName = hasExt ? baseName : `${baseName}.${fallbackExt}`;
+      out.push(
+        new File([bytes], safeName, {
+          type,
+          lastModified: f.lastModified || Date.now()
+        })
+      );
+    } catch {
+      out.push(f);
+    }
+  }
+  return out;
+}
+
 function lotCameraPinchDistance(e: TouchEvent): number {
   if (e.touches.length < 2) return 0;
   const a = e.touches[0];
@@ -2202,7 +2238,7 @@ export default function DashboardPage() {
     lotCameraNativeInputRef.current?.click();
   }
 
-  function onLotCameraNativeInputChange(list: FileList | null) {
+  async function onLotCameraNativeInputChange(list: FileList | null) {
     if (!list?.length) {
       lotCameraNativeChainingRef.current = false;
       return;
@@ -2213,7 +2249,8 @@ export default function DashboardPage() {
       lotCameraNativeChainingRef.current = false;
       return;
     }
-    appendLotCameraSnapFiles(imageFiles);
+    const stableFiles = await stabilizeCapturedFiles(imageFiles);
+    appendLotCameraSnapFiles(stableFiles);
     const atCap =
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
@@ -2448,7 +2485,7 @@ export default function DashboardPage() {
     photosInputRef.current?.click();
   }
 
-  function onFolderInputChange(list: FileList | null) {
+  async function onFolderInputChange(list: FileList | null) {
     if (!list?.length) {
       if (singleLotCaptureChainingRef.current) {
         singleLotCaptureChainingRef.current = false;
@@ -2488,9 +2525,10 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
+      const stableImageFiles = await stabilizeCapturedFiles(imageFiles);
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
-        imageFiles,
+        stableImageFiles,
         skippedCount
       );
       setFolderPick(pick);

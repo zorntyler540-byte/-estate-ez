@@ -50,3 +50,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Pipeline planning (local until approved for commit)
+estate_pipeline_spec.md
