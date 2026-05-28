@@ -22,9 +22,11 @@ import {
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { SiteHeader } from "../../components/SiteHeader";
-import { apiFetch, apiUploadFiles, API_BASE } from "../../lib/api";
+import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
+/** Set while photos are staged so a refresh can explain why the upload box is empty. */
+const STAGING_DRAFT_COUNT_KEY = "ct_staging_draft_count";
 
 /** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
 const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
@@ -632,6 +634,17 @@ type Job = {
   single_lot_manual_sku?: string | null;
 };
 
+function jobFromUploadResponse(data: unknown): Job {
+  if (!data || typeof data !== "object") {
+    throw new Error("Upload finished but the server did not return a job — check the Jobs list or try again.");
+  }
+  const id = (data as Job).id;
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error("Upload finished but the server did not return a job id — check the Jobs list or try again.");
+  }
+  return data as Job;
+}
+
 /** Short label for job folder / upload batch (avoids full UUID rows in the UI). */
 function jobInputLabel(folder: string): string {
   const raw = (folder || "").trim();
@@ -922,10 +935,29 @@ export default function DashboardPage() {
         setToken(localStorage.getItem("token") || "");
         setDataReloadNonce((n) => n + 1);
       }
+      const staged = sessionStorage.getItem(STAGING_DRAFT_COUNT_KEY);
+      if (staged) {
+        const n = parseInt(staged, 10);
+        sessionStorage.removeItem(STAGING_DRAFT_COUNT_KEY);
+        if (n > 0) {
+          setError(
+            `You had ${n} staged photo${n === 1 ? "" : "s"} before this page loaded — refreshing clears the upload box before photos reach the server. Capture or pick them again, then wait for “Uploading…” to finish.`
+          );
+        }
+      }
     } catch {
       /* private mode */
     }
   }, []);
+
+  useEffect(() => {
+    if (!folderPick?.imageFiles.length) return;
+    try {
+      sessionStorage.setItem(STAGING_DRAFT_COUNT_KEY, String(folderPick.imageFiles.length));
+    } catch {
+      /* private mode */
+    }
+  }, [folderPick?.imageFiles.length]);
 
   useEffect(() => {
     const onPageShow = (e: PageTransitionEvent) => {
@@ -1700,6 +1732,11 @@ export default function DashboardPage() {
   }
 
   function clearFolderPick() {
+    try {
+      sessionStorage.removeItem(STAGING_DRAFT_COUNT_KEY);
+    } catch {
+      /* private mode */
+    }
     singleLotCaptureChainingRef.current = false;
     setSingleLotManualSku("");
     setStagingViewerIndex(null);
@@ -2309,24 +2346,28 @@ export default function DashboardPage() {
 
       if (total <= UPLOAD_FILE_CHUNK) {
         setUploadProgress(`Starting upload of ${total} photo${total === 1 ? "" : "s"}…`);
-        created = (await apiUploadFiles(
-          "/jobs/upload",
-          token,
-          buildFormForSlice(files),
-          900_000,
-          onUploadPart(`Upload ${total} photos`)
-        )) as Job;
+        created = jobFromUploadResponse(
+          await apiUploadFiles(
+            "/jobs/upload",
+            token,
+            buildFormForSlice(files),
+            900_000,
+            onUploadPart(`Upload ${total} photos`)
+          )
+        );
       } else {
         const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
         setUploadProgress(`Uploading batch 1/${batchCount} (${Math.min(UPLOAD_FILE_CHUNK, total)} of ${total} files)…`);
         const first = files.slice(0, UPLOAD_FILE_CHUNK);
-        created = (await apiUploadFiles(
-          "/jobs/upload",
-          token,
-          buildFormForSlice(first),
-          900_000,
-          onUploadPart(`Batch 1/${batchCount}`)
-        )) as Job;
+        created = jobFromUploadResponse(
+          await apiUploadFiles(
+            "/jobs/upload",
+            token,
+            buildFormForSlice(first),
+            900_000,
+            onUploadPart(`Batch 1/${batchCount}`)
+          )
+        );
         let uploaded = first.length;
         let batchIndex = 2;
         while (uploaded < total) {
@@ -2339,39 +2380,48 @@ export default function DashboardPage() {
             const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
             form.append("files", file, rel);
           }
-          created = (await apiUploadFiles(
-            `/jobs/${created.id}/upload-files`,
-            token,
-            form,
-            900_000,
-            onUploadPart(`Batch ${batchIndex}/${batchCount}`)
-          )) as Job;
+          created = jobFromUploadResponse(
+            await apiUploadFiles(
+              `/jobs/${created.id}/upload-files`,
+              token,
+              form,
+              900_000,
+              onUploadPart(`Batch ${batchIndex}/${batchCount}`)
+            )
+          );
           uploaded += slice.length;
           batchIndex += 1;
         }
         setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
       setJobs((prev) => [created, ...prev]);
-      clearFolderPick();
-      setUploadProgress("");
+      setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
+        clearFolderPick();
+        setUploadProgress("");
+        setError("");
       } catch (runErr) {
+        const runMsg = parseApiErrorMessage(
+          runErr instanceof Error ? runErr.message : "",
+          "Could not start the catalog job"
+        );
         setError(
-          runErr instanceof Error
-            ? `${runErr.message} (upload saved; use Run now on the job row.)`
-            : "Upload saved but failed to start processing — use Run now on the job row."
+          `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — find batch “${jobInputLabel(created.input_folder)}” in Jobs and tap Run. Staged previews are kept below until the job starts.`
         );
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Upload failed";
+      const raw = e instanceof Error ? e.message : "Upload failed";
+      const msg = parseApiErrorMessage(raw, "Upload failed");
       if (isAuthFailureMessage(msg)) {
         localStorage.removeItem("token");
         router.replace("/");
         return;
       }
-      setError(msg);
+      setError(
+        `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
+      );
     } finally {
       setUploading(false);
       setUploadProgress("");
