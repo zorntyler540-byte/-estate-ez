@@ -251,6 +251,117 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   });
 }
 
+function readScreenOrientationAngle(): number {
+  if (typeof screen !== "undefined" && screen.orientation?.angle != null) {
+    return ((screen.orientation.angle % 360) + 360) % 360;
+  }
+  const legacy = typeof window !== "undefined" ? (window as Window & { orientation?: number }).orientation : undefined;
+  if (typeof legacy === "number" && Number.isFinite(legacy)) {
+    return ((legacy % 360) + 360) % 360;
+  }
+  if (typeof window !== "undefined") {
+    return window.innerWidth > window.innerHeight ? 90 : 0;
+  }
+  return 0;
+}
+
+/** Rotate live frames so preview/capture match how the user holds the phone (iOS back camera). */
+function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  const angle = readScreenOrientationAngle();
+  const screenLandscape = angle === 90 || angle === 270;
+  const framePortrait = vh > vw * 1.05;
+
+  if (!screenLandscape) return 0;
+
+  if (framePortrait) {
+    return angle === 270 ? 90 : -90;
+  }
+
+  return angle === 90 ? 180 : 0;
+}
+
+function lotCameraPreviewTransform(
+  video: HTMLVideoElement | null,
+  uiZoom: number,
+  hardwareZoom: boolean
+): string {
+  const rot = video ? lotCameraFrameRotationDeg(video) : 0;
+  const z = hardwareZoom ? 1 : uiZoom;
+  if (rot === 90 || rot === -90) {
+    const vw = video?.videoWidth ?? 1;
+    const vh = video?.videoHeight ?? 1;
+    const fill = Math.max(vw / vh, vh / vw);
+    return `rotate(${rot}deg) scale(${z * fill})`;
+  }
+  if (rot !== 0) return `rotate(${rot}deg) scale(${z})`;
+  return `scale(${z})`;
+}
+
+function drawOrientedVideoFrameToCanvas(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  rotationDeg: number,
+  uiZoom: number,
+  useDigitalCrop: boolean
+): void {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const rot = ((rotationDeg % 360) + 360) % 360;
+  const swapped = rot === 90 || rot === 270;
+  const cw = swapped ? vh : vw;
+  const ch = swapped ? vw : vh;
+  const canvas = ctx.canvas;
+  canvas.width = cw;
+  canvas.height = ch;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.save();
+  ctx.translate(cw / 2, ch / 2);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+
+  const z = Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom);
+  if (useDigitalCrop && z > LOT_CAMERA_ZOOM_MIN + 0.001) {
+    const sw = vw / z;
+    const sh = vh / z;
+    const sx = (vw - sw) / 2;
+    const sy = (vh - sh) / 2;
+    ctx.drawImage(video, sx, sy, sw, sh, -vw / 2, -vh / 2, vw, vh);
+  } else {
+    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+  }
+  ctx.restore();
+}
+
+async function normalizeCaptureFileOrientation(file: File): Promise<File | null> {
+  const decoded = await decodeImageForCanvas(file);
+  if (!decoded) return null;
+  const { source, width, height, release } = decoded;
+  if (width < 2 || height < 2) {
+    release?.();
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    release?.();
+    return null;
+  }
+  ctx.drawImage(source, 0, 0, width, height);
+  release?.();
+  const blob = await canvasToJpegBlob(canvas);
+  if (!blob) return null;
+  return new File([blob], file.name, { type: "image/jpeg" });
+}
+
 /** Short label for the zoom row (optical vs digital vs 1×). */
 function lotCameraZoomModeLabel(
   uiZoom: number,
@@ -372,15 +483,10 @@ function captureVideoFrameBlob(
   const h = video.videoHeight;
   if (w < 2 || h < 2) return Promise.resolve(null);
   const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) return Promise.resolve(null);
-  if (useDigitalCrop) {
-    drawZoomedFrameToCanvas(ctx, video, w, h, uiZoom);
-  } else {
-    ctx.drawImage(video, 0, 0, w, h, 0, 0, w, h);
-  }
+  const rotationDeg = lotCameraFrameRotationDeg(video);
+  drawOrientedVideoFrameToCanvas(ctx, video, rotationDeg, uiZoom, useDigitalCrop);
   return canvasToJpegBlob(canvas);
 }
 
@@ -979,6 +1085,8 @@ export default function DashboardPage() {
   const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
   const [lotCameraSnapThumbUrls, setLotCameraSnapThumbUrls] = useState<string[]>([]);
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
+  /** Bumps when orientation or video dimensions change so preview rotation recalculates. */
+  const [lotCameraPreviewLayoutTick, setLotCameraPreviewLayoutTick] = useState(0);
   /** Index into ``lotCameraSnapThumbUrls`` for full-screen preview, or null. */
   const [lotCameraViewerIndex, setLotCameraViewerIndex] = useState<number | null>(null);
   /** In-app delete confirm — avoids ``window.confirm`` which freezes iOS camera preview. */
@@ -1932,8 +2040,9 @@ export default function DashboardPage() {
       el.muted = true;
       try {
         await el.play();
-        if (!cancelled && (el.readyState >= 2 || el.videoWidth > 0)) {
+          if (!cancelled && (el.readyState >= 2 || el.videoWidth > 0)) {
           setLotCameraPreviewReady(true);
+          setLotCameraPreviewLayoutTick((t) => t + 1);
         }
       } catch {
         if (!cancelled && lotCameraOpen) void reinitLotCameraStream();
@@ -1953,13 +2062,21 @@ export default function DashboardPage() {
     const onVisible = () => {
       if (document.visibilityState === "visible") resume();
     };
+    const onOrientation = () => {
+      setLotCameraPreviewLayoutTick((t) => t + 1);
+      scheduleResumeLotCameraPreview();
+    };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pageshow", resume);
     window.addEventListener("focus", resume);
+    window.addEventListener("orientationchange", onOrientation);
+    screen.orientation?.addEventListener("change", onOrientation);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pageshow", resume);
       window.removeEventListener("focus", resume);
+      window.removeEventListener("orientationchange", onOrientation);
+      screen.orientation?.removeEventListener("change", onOrientation);
     };
   }, [lotCameraOpen]);
 
@@ -2676,7 +2793,8 @@ export default function DashboardPage() {
           const hqFile = new File([hqBlob], quickFile.name, {
             type: hqBlob.type || "image/jpeg"
           });
-          replaceLotCameraSnapAt(snapIndex, hqFile);
+          const normalized = await normalizeCaptureFileOrientation(hqFile);
+          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
         } catch {
           /* keep live-frame capture */
         }
@@ -4762,13 +4880,23 @@ export default function DashboardPage() {
                     autoPlay
                     playsInline
                     muted
-                    onLoadedData={() => setLotCameraPreviewReady(true)}
+                    onLoadedData={() => {
+                      setLotCameraPreviewReady(true);
+                      setLotCameraPreviewLayoutTick((t) => t + 1);
+                    }}
                     style={{
                       width: "100%",
                       height: "100%",
                       display: "block",
                       objectFit: "cover",
-                      transform: `scale(${lotCameraHardwareZoom ? 1 : lotCameraZoom})`,
+                      transform: (() => {
+                        void lotCameraPreviewLayoutTick;
+                        return lotCameraPreviewTransform(
+                          lotCameraVideoRef.current,
+                          lotCameraZoom,
+                          lotCameraHardwareZoom
+                        );
+                      })(),
                       transformOrigin: "center center",
                       pointerEvents: "none"
                     }}
