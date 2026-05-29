@@ -867,6 +867,9 @@ export default function DashboardPage() {
   const stagingAwaitingGeminiSeenRef = useRef<Set<number>>(new Set());
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  /** Remount the ``<video>`` after iOS backgrounds the tab (preview black, capture still works). */
+  const [lotCameraVideoMountKey, setLotCameraVideoMountKey] = useState(0);
+  const lotCameraResumeTimerRef = useRef<number | null>(null);
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
   const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
   const lotCameraNativeChainingRef = useRef(false);
@@ -1818,17 +1821,36 @@ export default function DashboardPage() {
     const el = lotCameraVideoRef.current;
     const s = lotCameraStream;
     if (!el || !s) return;
-    el.srcObject = s;
-    void el.play().catch(() => {});
+    let cancelled = false;
+    void (async () => {
+      el.pause();
+      el.srcObject = null;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+      if (cancelled) return;
+      el.srcObject = s;
+      el.muted = true;
+      try {
+        await el.play();
+        if (!cancelled && (el.readyState >= 2 || el.videoWidth > 0)) {
+          setLotCameraPreviewReady(true);
+        }
+      } catch {
+        if (!cancelled && lotCameraOpen) void reinitLotCameraStream();
+      }
+    })();
     return () => {
+      cancelled = true;
+      el.pause();
       el.srcObject = null;
     };
-  }, [lotCameraStream]);
+  }, [lotCameraStream, lotCameraVideoMountKey]);
 
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
   useEffect(() => {
     if (!lotCameraOpen) return;
-    const resume = () => void resumeLotCameraPreview();
+    const resume = () => scheduleResumeLotCameraPreview();
     const onVisible = () => {
       if (document.visibilityState === "visible") resume();
     };
@@ -2240,6 +2262,17 @@ export default function DashboardPage() {
     setLotCameraStream(stream);
   }
 
+  function scheduleResumeLotCameraPreview() {
+    if (!lotCameraOpen) return;
+    if (lotCameraResumeTimerRef.current !== null) {
+      window.clearTimeout(lotCameraResumeTimerRef.current);
+    }
+    lotCameraResumeTimerRef.current = window.setTimeout(() => {
+      lotCameraResumeTimerRef.current = null;
+      void resumeLotCameraPreview();
+    }, 120);
+  }
+
   async function reinitLotCameraStream() {
     if (typeof window === "undefined" || !window.isSecureContext || !lotCameraOpen) return;
     const md = navigator.mediaDevices;
@@ -2251,12 +2284,7 @@ export default function DashboardPage() {
     try {
       const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
       await bindLotCameraStream(stream);
-      const el = lotCameraVideoRef.current;
-      if (el) {
-        el.srcObject = stream;
-        await el.play();
-        setLotCameraPreviewReady(true);
-      }
+      setLotCameraVideoMountKey((k) => k + 1);
     } catch {
       setError("Camera stopped — close this screen and tap Add one lot again.");
     }
@@ -2264,22 +2292,25 @@ export default function DashboardPage() {
 
   async function resumeLotCameraPreview() {
     if (!lotCameraOpen) return;
-    const el = lotCameraVideoRef.current;
     const stream = lotCameraStreamRef.current;
     const track = stream?.getVideoTracks()[0];
+    const coarse =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+
     if (!stream || !track || track.readyState === "ended") {
       await reinitLotCameraStream();
       return;
     }
-    if (el) {
-      if (el.srcObject !== stream) el.srcObject = stream;
-      try {
-        await el.play();
-        setLotCameraPreviewReady(true);
-      } catch {
-        await reinitLotCameraStream();
-      }
+
+    if (coarse) {
+      // iOS keeps the track live (snaps look fine) but the preview layer stays black after app switch.
+      await reinitLotCameraStream();
+      return;
     }
+
+    setLotCameraPreviewReady(false);
+    setLotCameraVideoMountKey((k) => k + 1);
   }
 
   function stopLotCameraTracks() {
@@ -2289,6 +2320,10 @@ export default function DashboardPage() {
     }
     setLotCameraDeleteConfirmIndex(null);
     setLotCameraShutterFlash(false);
+    if (lotCameraResumeTimerRef.current !== null) {
+      window.clearTimeout(lotCameraResumeTimerRef.current);
+      lotCameraResumeTimerRef.current = null;
+    }
     lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
@@ -4623,6 +4658,7 @@ export default function DashboardPage() {
                   }}
                 >
                   <video
+                    key={lotCameraVideoMountKey}
                     ref={lotCameraVideoRef}
                     autoPlay
                     playsInline
