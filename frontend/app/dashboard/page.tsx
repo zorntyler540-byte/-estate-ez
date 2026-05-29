@@ -78,6 +78,15 @@ const LOT_CAMERA_ZOOM_MAX = 4;
 const LOT_CAMERA_ZOOM_STEP = 0.25;
 const LOT_CAMERA_JPEG_QUALITY = 0.92;
 
+const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
+  video: {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 3840 },
+    height: { ideal: 2160 }
+  },
+  audio: false
+};
+
 type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
   pointsOfInterest?: boolean;
@@ -240,28 +249,6 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => {
     canvas.toBlob((blob) => resolve(blob), "image/jpeg", LOT_CAMERA_JPEG_QUALITY);
   });
-}
-
-async function cropBlobWithDigitalZoom(blob: Blob, uiZoom: number): Promise<Blob | null> {
-  const file = new File([blob], "snap.jpg", { type: blob.type || "image/jpeg" });
-  const decoded = await decodeImageForCanvas(file);
-  if (!decoded) return null;
-  const { source, width: w, height: h, release } = decoded;
-  if (w < 2 || h < 2) {
-    release?.();
-    return null;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    release?.();
-    return null;
-  }
-  drawZoomedFrameToCanvas(ctx, source, w, h, uiZoom);
-  release?.();
-  return canvasToJpegBlob(canvas);
 }
 
 /** Short label for the zoom row (optical vs digital vs 1×). */
@@ -834,8 +821,8 @@ function applySingleLotFilesToStaging(
     const { files: cappedIncoming, dropped } = capIncomingSingleLotFiles(prev!.imageFiles.length, incoming);
     const merged = [...prev!.imageFiles, ...cappedIncoming];
     const mergedSkipped = prev!.skippedCount + extraSkipped + dropped;
-    if (prev!.thumbUrls.length) revokeObjectUrls(prev!.thumbUrls);
-    const thumbUrls = merged.map((f) => URL.createObjectURL(f));
+    const newThumbUrls = cappedIncoming.map((f) => URL.createObjectURL(f));
+    const thumbUrls = [...prev!.thumbUrls, ...newThumbUrls];
     return {
       pick: {
         folderLabel:
@@ -892,6 +879,8 @@ export default function DashboardPage() {
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   /** Index into ``lotCameraSnapThumbUrls`` for full-screen preview, or null. */
   const [lotCameraViewerIndex, setLotCameraViewerIndex] = useState<number | null>(null);
+  /** In-app delete confirm — avoids ``window.confirm`` which freezes iOS camera preview. */
+  const [lotCameraDeleteConfirmIndex, setLotCameraDeleteConfirmIndex] = useState<number | null>(null);
   /** Optional post-capture edit (rotate + trim edges); null when editor closed. */
   const [lotCameraEditIndex, setLotCameraEditIndex] = useState<number | null>(null);
   const [lotCameraEditRotation, setLotCameraEditRotation] = useState(0);
@@ -1836,13 +1825,22 @@ export default function DashboardPage() {
     };
   }, [lotCameraStream]);
 
+  /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
   useEffect(() => {
-    const urls = lotCameraSnaps.map((f) => URL.createObjectURL(f));
-    setLotCameraSnapThumbUrls(urls);
-    return () => {
-      urls.forEach((u) => URL.revokeObjectURL(u));
+    if (!lotCameraOpen) return;
+    const resume = () => void resumeLotCameraPreview();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resume();
     };
-  }, [lotCameraSnaps]);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", resume);
+    window.addEventListener("focus", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", resume);
+      window.removeEventListener("focus", resume);
+    };
+  }, [lotCameraOpen]);
 
   useEffect(() => {
     const strip = lotCameraStripRef.current;
@@ -2101,9 +2099,10 @@ export default function DashboardPage() {
     setStagingSuccess("");
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
-      if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+      const oldThumb = prev.thumbUrls[index];
+      if (oldThumb) URL.revokeObjectURL(oldThumb);
       const nextFiles = prev.imageFiles.filter((_, j) => j !== index);
-      const thumbUrls = nextFiles.map((f) => URL.createObjectURL(f));
+      const thumbUrls = prev.thumbUrls.filter((_, j) => j !== index);
       const folderLabel =
         prev.singleLotMode && nextFiles.length > 0
           ? nextFiles.length === 1
@@ -2129,10 +2128,12 @@ export default function DashboardPage() {
   function replaceStagingImageFile(index: number, file: File) {
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
-      if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
       const nextFiles = [...prev.imageFiles];
       nextFiles[index] = file;
-      const thumbUrls = nextFiles.map((f) => URL.createObjectURL(f));
+      const thumbUrls = [...prev.thumbUrls];
+      const oldThumb = thumbUrls[index];
+      if (oldThumb) URL.revokeObjectURL(oldThumb);
+      thumbUrls[index] = URL.createObjectURL(file);
       return { ...prev, imageFiles: nextFiles, thumbUrls };
     });
   }
@@ -2205,11 +2206,74 @@ export default function DashboardPage() {
     }, 150);
   }
 
+  async function bindLotCameraStream(stream: MediaStream) {
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      lotCameraZoomCapRef.current = await configureLotCameraTrack(track);
+      setLotCameraOpticalAvailable(!!lotCameraZoomCapRef.current);
+      const cap = lotCameraZoomCapRef.current;
+      const uiZ = lotCameraZoomRef.current;
+      if (cap && uiZ > LOT_CAMERA_ZOOM_MIN + 0.001) {
+        const hw = await applyHardwareZoomOnTrack(track, cap, uiZ);
+        lotCameraHardwareZoomRef.current = hw;
+        setLotCameraHardwareZoom(hw);
+      }
+    } else {
+      lotCameraZoomCapRef.current = null;
+      setLotCameraOpticalAvailable(false);
+    }
+    lotCameraStreamRef.current = stream;
+    setLotCameraStream(stream);
+  }
+
+  async function reinitLotCameraStream() {
+    if (typeof window === "undefined" || !window.isSecureContext || !lotCameraOpen) return;
+    const md = navigator.mediaDevices;
+    if (!md?.getUserMedia) return;
+    lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+    lotCameraStreamRef.current = null;
+    setLotCameraStream(null);
+    setLotCameraPreviewReady(false);
+    try {
+      const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
+      await bindLotCameraStream(stream);
+      const el = lotCameraVideoRef.current;
+      if (el) {
+        el.srcObject = stream;
+        await el.play();
+        setLotCameraPreviewReady(true);
+      }
+    } catch {
+      setError("Camera stopped — close this screen and tap Add one lot again.");
+    }
+  }
+
+  async function resumeLotCameraPreview() {
+    if (!lotCameraOpen) return;
+    const el = lotCameraVideoRef.current;
+    const stream = lotCameraStreamRef.current;
+    const track = stream?.getVideoTracks()[0];
+    if (!stream || !track || track.readyState === "ended") {
+      await reinitLotCameraStream();
+      return;
+    }
+    if (el) {
+      if (el.srcObject !== stream) el.srcObject = stream;
+      try {
+        await el.play();
+        setLotCameraPreviewReady(true);
+      } catch {
+        await reinitLotCameraStream();
+      }
+    }
+  }
+
   function stopLotCameraTracks() {
     if (lotCameraShutterFlashTimerRef.current !== null) {
       window.clearTimeout(lotCameraShutterFlashTimerRef.current);
       lotCameraShutterFlashTimerRef.current = null;
     }
+    setLotCameraDeleteConfirmIndex(null);
     setLotCameraShutterFlash(false);
     lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     lotCameraStreamRef.current = null;
@@ -2238,9 +2302,44 @@ export default function DashboardPage() {
     lotCameraTapStartRef.current = null;
   }
 
-  function cancelLotCameraSession() {
+  function clearLotCameraSnapsAndThumbs() {
+    setLotCameraSnapThumbUrls((urls) => {
+      urls.forEach((u) => URL.revokeObjectURL(u));
+      return [];
+    });
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
+  }
+
+  function pushLotCameraSnap(file: File): number {
+    const index = lotCameraSnapsRef.current.length;
+    lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
+    setLotCameraSnaps([...lotCameraSnapsRef.current]);
+    setLotCameraSnapThumbUrls((prev) => [...prev, URL.createObjectURL(file)]);
+    return index;
+  }
+
+  function replaceLotCameraSnapAt(index: number, file: File) {
+    if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
+    setLotCameraSnaps((prev) => {
+      if (index < 0 || index >= prev.length) return prev;
+      const next = [...prev];
+      next[index] = file;
+      lotCameraSnapsRef.current = next;
+      return next;
+    });
+    setLotCameraSnapThumbUrls((prev) => {
+      if (index < 0 || index >= prev.length) return prev;
+      const next = [...prev];
+      const old = next[index];
+      if (old) URL.revokeObjectURL(old);
+      next[index] = URL.createObjectURL(file);
+      return next;
+    });
+  }
+
+  function cancelLotCameraSession() {
+    clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
   }
 
@@ -2271,8 +2370,7 @@ export default function DashboardPage() {
         ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
         : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
     if (!confirmStagingOverwrite(prev, detail)) return;
-    lotCameraSnapsRef.current = [];
-    setLotCameraSnaps([]);
+    clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
     setFolderPick(pick);
@@ -2286,6 +2384,8 @@ export default function DashboardPage() {
   function appendLotCameraSnapFiles(files: File[]) {
     if (!files.length) return;
     let dropped = 0;
+    let added = 0;
+    const newThumbs: string[] = [];
     setLotCameraSnaps((prev) => {
       let next = [...prev];
       for (const f of files) {
@@ -2297,14 +2397,43 @@ export default function DashboardPage() {
           continue;
         }
         next = [...next, f];
+        newThumbs.push(URL.createObjectURL(f));
+        added += 1;
       }
       lotCameraSnapsRef.current = next;
       return next;
     });
+    if (newThumbs.length) {
+      setLotCameraSnapThumbUrls((prev) => [...prev, ...newThumbs]);
+    }
     if (dropped > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
     }
-    if (files.length > dropped) triggerLotCameraSnapFeedbackImmediate();
+    if (added > 0) triggerLotCameraSnapFeedbackImmediate();
+  }
+
+  function replaceLotCameraSnapTail(stableFiles: File[], startIndex: number) {
+    if (!stableFiles.length) return;
+    setLotCameraSnaps((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < stableFiles.length; i++) {
+        const idx = startIndex + i;
+        if (idx >= 0 && idx < next.length) next[idx] = stableFiles[i]!;
+      }
+      lotCameraSnapsRef.current = next;
+      return next;
+    });
+    setLotCameraSnapThumbUrls((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < stableFiles.length; i++) {
+        const idx = startIndex + i;
+        if (idx < 0 || idx >= next.length) continue;
+        const old = next[idx];
+        if (old) URL.revokeObjectURL(old);
+        next[idx] = URL.createObjectURL(stableFiles[i]!);
+      }
+      return next;
+    });
   }
 
   function openPhoneCameraForLot() {
@@ -2330,8 +2459,10 @@ export default function DashboardPage() {
       lotCameraNativeChainingRef.current = false;
       return;
     }
+    const startIndex = lotCameraSnapsRef.current.length;
+    appendLotCameraSnapFiles(imageFiles);
     const stableFiles = await stabilizeCapturedFiles(imageFiles);
-    appendLotCameraSnapFiles(stableFiles);
+    replaceLotCameraSnapTail(stableFiles, startIndex);
     const atCap =
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
@@ -2366,29 +2497,9 @@ export default function DashboardPage() {
     triggerLotCameraSnapFeedbackImmediate();
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
     const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
-    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
 
-    let blob: Blob | null = null;
-    const ImageCaptureCtor =
-      typeof window !== "undefined"
-        ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
-            .ImageCapture
-        : undefined;
-    if (ImageCaptureCtor && track) {
-      try {
-        const ic = new ImageCaptureCtor(track);
-        blob = await ic.takePhoto();
-        if (blob && useDigitalCrop) {
-          blob = (await cropBlobWithDigitalZoom(blob, z)) ?? blob;
-        }
-      } catch {
-        blob = null;
-      }
-    }
-    if (!blob) {
-      blob = await captureVideoFrameBlob(v, z, useDigitalCrop);
-    }
-    if (!blob) return;
+    const quickBlob = await captureVideoFrameBlob(v, z, useDigitalCrop);
+    if (!quickBlob) return;
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
@@ -2399,25 +2510,57 @@ export default function DashboardPage() {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID().slice(0, 8)
         : String(Math.random()).slice(2, 10);
-    const file = new File([blob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
-    lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
-    setLotCameraSnaps([...lotCameraSnapsRef.current]);
+    const quickFile = new File([quickBlob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
+    const snapIndex = pushLotCameraSnap(quickFile);
+
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+    const ImageCaptureCtor =
+      typeof window !== "undefined"
+        ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
+            .ImageCapture
+        : undefined;
+    if (ImageCaptureCtor && track && !useDigitalCrop) {
+      void (async () => {
+        try {
+          const ic = new ImageCaptureCtor(track);
+          const hqBlob = await ic.takePhoto();
+          if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
+          const hqFile = new File([hqBlob], quickFile.name, {
+            type: hqBlob.type || "image/jpeg"
+          });
+          replaceLotCameraSnapAt(snapIndex, hqFile);
+        } catch {
+          /* keep live-frame capture */
+        }
+      })();
+    }
   }
 
-  function tryRemoveLotCameraSnap(index: number) {
-    const file = lotCameraSnapsRef.current[index];
-    if (!file) return;
-    if (
-      !window.confirm(
-        `Delete captured photo “${file.name}”?\n\nIt is not in the upload box until you tap Done.`
-      )
-    ) {
-      return;
-    }
-    removeLotCameraSnap(index);
+  function openLotCameraDeleteConfirm(index: number) {
+    if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
+    setLotCameraDeleteConfirmIndex(index);
+  }
+
+  function cancelLotCameraDeleteConfirm() {
+    setLotCameraDeleteConfirmIndex(null);
+    void resumeLotCameraPreview();
+  }
+
+  function confirmLotCameraDeleteSnap() {
+    const i = lotCameraDeleteConfirmIndex;
+    setLotCameraDeleteConfirmIndex(null);
+    if (i === null) return;
+    removeLotCameraSnap(i);
+    void resumeLotCameraPreview();
   }
 
   function removeLotCameraSnap(index: number) {
+    setLotCameraSnapThumbUrls((prev) => {
+      if (index < 0 || index >= prev.length) return prev;
+      const old = prev[index];
+      if (old) URL.revokeObjectURL(old);
+      return prev.filter((_, j) => j !== index);
+    });
     setLotCameraSnaps((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const next = prev.filter((_, j) => j !== index);
@@ -2481,13 +2624,7 @@ export default function DashboardPage() {
         adjust
       );
       if (!out) return;
-      setLotCameraSnaps((prev) => {
-        if (i < 0 || i >= prev.length) return prev;
-        const next = [...prev];
-        next[i] = out;
-        lotCameraSnapsRef.current = next;
-        return next;
-      });
+      replaceLotCameraSnapAt(i, out);
       setLotCameraEditIndex(null);
       setLotCameraEditRotation(0);
       setLotCameraEditTrim(0);
@@ -2518,8 +2655,7 @@ export default function DashboardPage() {
     if (typeof window === "undefined") return;
     const md = navigator.mediaDevices;
     if (window.isSecureContext && md?.getUserMedia) {
-      setLotCameraSnaps([]);
-      lotCameraSnapsRef.current = [];
+      clearLotCameraSnapsAndThumbs();
       setLotCameraPreviewReady(false);
       setLotCameraViewerIndex(null);
       setLotCameraEditIndex(null);
@@ -2531,25 +2667,10 @@ export default function DashboardPage() {
       setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
       setLotCameraOpen(true);
       try {
-        const stream = await md.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 3840 },
-            height: { ideal: 2160 }
-          },
-          audio: false
-        });
-        const track = stream.getVideoTracks()[0];
-        if (track) {
-          lotCameraZoomCapRef.current = await configureLotCameraTrack(track);
-          setLotCameraOpticalAvailable(!!lotCameraZoomCapRef.current);
-        } else {
-          setLotCameraOpticalAvailable(false);
-        }
-        lotCameraStreamRef.current = stream;
-        setLotCameraStream(stream);
+        const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
         lotCameraHardwareZoomRef.current = false;
         setLotCameraHardwareZoom(false);
+        await bindLotCameraStream(stream);
         primeLotCameraAudio();
       } catch {
         lotCameraStreamRef.current = null;
@@ -2606,10 +2727,12 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
-      const stableImageFiles = await stabilizeCapturedFiles(imageFiles);
+      const tailStart = folderPickRef.current?.singleLotMode
+        ? (folderPickRef.current?.imageFiles.length ?? 0)
+        : 0;
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
-        stableImageFiles,
+        imageFiles,
         skippedCount
       );
       setFolderPick(pick);
@@ -2619,6 +2742,23 @@ export default function DashboardPage() {
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
+      void stabilizeCapturedFiles(imageFiles).then((stableImageFiles) => {
+        if (!stableImageFiles.length) return;
+        setFolderPick((p) => {
+          if (!p?.singleLotMode) return p;
+          const nextFiles = [...p.imageFiles];
+          const nextThumbs = [...p.thumbUrls];
+          for (let i = 0; i < stableImageFiles.length; i++) {
+            const idx = tailStart + i;
+            if (idx < 0 || idx >= nextFiles.length) continue;
+            nextFiles[idx] = stableImageFiles[i]!;
+            const oldThumb = nextThumbs[idx];
+            if (oldThumb) URL.revokeObjectURL(oldThumb);
+            nextThumbs[idx] = URL.createObjectURL(stableImageFiles[i]!);
+          }
+          return { ...p, imageFiles: nextFiles, thumbUrls: nextThumbs };
+        });
+      });
     } else {
       if (
         !confirmStagingOverwrite(
@@ -4580,7 +4720,7 @@ export default function DashboardPage() {
                         aria-label={`Delete captured photo ${i + 1}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          tryRemoveLotCameraSnap(i);
+                          openLotCameraDeleteConfirm(i);
                         }}
                         className="ct-btn ct-btn--ghost ct-lot-camera-strip-delete"
                       >
@@ -4639,6 +4779,34 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {lotCameraDeleteConfirmIndex !== null ? (
+            <div
+              className="ct-lot-camera-confirm"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="lot-camera-delete-title"
+              aria-describedby="lot-camera-delete-desc"
+              onClick={cancelLotCameraDeleteConfirm}
+            >
+              <div className="ct-lot-camera-confirm-panel" onClick={(e) => e.stopPropagation()}>
+                <p id="lot-camera-delete-title" style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>
+                  Delete this photo?
+                </p>
+                <p id="lot-camera-delete-desc" className="ct-muted" style={{ margin: "0 0 1rem", fontSize: "0.9rem" }}>
+                  It is not in the upload box until you tap <strong>Done</strong>.
+                </p>
+                <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
+                  <button type="button" className="ct-btn" onClick={cancelLotCameraDeleteConfirm}>
+                    Cancel
+                  </button>
+                  <button type="button" className="ct-btn ct-btn--danger" onClick={confirmLotCameraDeleteSnap}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {lotCameraViewerIndex !== null &&
           lotCameraViewerIndex >= 0 &&
@@ -4746,7 +4914,7 @@ export default function DashboardPage() {
                     className="ct-btn ct-btn--danger"
                     onClick={() => {
                       const idx = lotCameraViewerIndex;
-                      if (idx !== null) tryRemoveLotCameraSnap(idx);
+                      if (idx !== null) openLotCameraDeleteConfirm(idx);
                     }}
                   >
                     Delete this photo

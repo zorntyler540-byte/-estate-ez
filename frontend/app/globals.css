@@ -686,6 +686,27 @@ a.ct-btn:hover {
   }
 }
 
+.ct-lot-camera-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 10004;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.ct-lot-camera-confirm-panel {
+  width: min(100%, 340px);
+  padding: 1.1rem 1.15rem;
+  border-radius: 12px;
+  background: var(--ct-surface, #fff);
+  color: var(--ct-text, #1a1a1a);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
 .ct-lot-camera-strip {
   display: flex;
   gap: 10px;
