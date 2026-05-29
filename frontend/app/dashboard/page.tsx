@@ -264,6 +264,105 @@ function lotCameraZoomModeLabel(
   return "Digital zoom — move closer for sharpest detail";
 }
 
+type LotCameraZoomControlsProps = {
+  variant: "inline" | "actions";
+  uiZoom: number;
+  hardwareActive: boolean;
+  opticalAvailable: boolean;
+  onNudge: (direction: -1 | 1) => void;
+};
+
+function LotCameraZoomControls({
+  variant,
+  uiZoom,
+  hardwareActive,
+  opticalAvailable,
+  onNudge
+}: LotCameraZoomControlsProps) {
+  const compact = variant === "actions";
+  return (
+    <div
+      className={`ct-row ct-lot-camera-zoom-row ct-lot-camera-zoom-row--${variant}`}
+      style={{
+        marginTop: compact ? 0 : "0.5rem",
+        flexWrap: "wrap",
+        gap: compact ? "0.35rem" : "0.45rem",
+        alignItems: "center",
+        justifyContent: compact ? "center" : "space-between"
+      }}
+    >
+      {compact ? (
+        <>
+          <button
+            type="button"
+            className="ct-btn ct-btn--ghost"
+            aria-label="Zoom out"
+            disabled={uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001}
+            onClick={() => onNudge(-1)}
+          >
+            <Minus size={20} aria-hidden />
+          </button>
+          <span className="ct-lot-camera-zoom-actions-label" aria-live="polite">
+            Zoom {uiZoom.toFixed(2)}×
+          </span>
+          <button
+            type="button"
+            className="ct-btn ct-btn--ghost"
+            aria-label="Zoom in"
+            disabled={uiZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
+            onClick={() => onNudge(1)}
+          >
+            <Plus size={20} aria-hidden />
+          </button>
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <span className="ct-muted" style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.8)" }}>
+              Zoom {uiZoom.toFixed(2)}×
+            </span>
+            <span
+              className={`ct-lot-camera-zoom-mode${
+                hardwareActive && uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001
+                  ? " ct-lot-camera-zoom-mode--optical"
+                  : uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001
+                    ? " ct-lot-camera-zoom-mode--digital"
+                    : ""
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              {lotCameraZoomModeLabel(uiZoom, hardwareActive, opticalAvailable)}
+            </span>
+          </div>
+          <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost"
+              aria-label="Zoom out"
+              disabled={uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001}
+              onClick={() => onNudge(-1)}
+              style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
+            >
+              <Minus size={22} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost"
+              aria-label="Zoom in"
+              disabled={uiZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
+              onClick={() => onNudge(1)}
+              style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
+            >
+              <Plus size={22} aria-hidden />
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function captureVideoFrameBlob(
   video: HTMLVideoElement,
   uiZoom: number,
@@ -4689,61 +4788,13 @@ export default function DashboardPage() {
                     <span className="ct-lot-camera-shutter-flash" aria-hidden />
                   ) : null}
                 </div>
-                <div
-                  className="ct-row ct-lot-camera-zoom-row"
-                  style={{
-                    marginTop: "0.5rem",
-                    flexWrap: "wrap",
-                    gap: "0.45rem",
-                    alignItems: "center",
-                    justifyContent: "space-between"
-                  }}
-                >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                    <span className="ct-muted" style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.8)" }}>
-                      Zoom {lotCameraZoom.toFixed(2)}×
-                    </span>
-                    <span
-                      className={`ct-lot-camera-zoom-mode${
-                        lotCameraHardwareZoom && lotCameraZoom > LOT_CAMERA_ZOOM_MIN + 0.001
-                          ? " ct-lot-camera-zoom-mode--optical"
-                          : lotCameraZoom > LOT_CAMERA_ZOOM_MIN + 0.001
-                            ? " ct-lot-camera-zoom-mode--digital"
-                            : ""
-                      }`}
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {lotCameraZoomModeLabel(
-                        lotCameraZoom,
-                        lotCameraHardwareZoom,
-                        lotCameraOpticalAvailable
-                      )}
-                    </span>
-                  </div>
-                  <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      className="ct-btn ct-btn--ghost"
-                      aria-label="Zoom out"
-                      disabled={lotCameraZoom <= LOT_CAMERA_ZOOM_MIN + 0.001}
-                      onClick={() => void nudgeLotCameraZoom(-1)}
-                      style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
-                    >
-                      <Minus size={22} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      className="ct-btn ct-btn--ghost"
-                      aria-label="Zoom in"
-                      disabled={lotCameraZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
-                      onClick={() => void nudgeLotCameraZoom(1)}
-                      style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
-                    >
-                      <Plus size={22} aria-hidden />
-                    </button>
-                  </div>
-                </div>
+                <LotCameraZoomControls
+                  variant="inline"
+                  uiZoom={lotCameraZoom}
+                  hardwareActive={lotCameraHardwareZoom}
+                  opticalAvailable={lotCameraOpticalAvailable}
+                  onNudge={(d) => void nudgeLotCameraZoom(d)}
+                />
               </>
             )}
             <p className="ct-lot-camera-meta" style={{ margin: "0.65rem 0 0", fontSize: "0.95rem" }}>
@@ -4808,20 +4859,20 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="ct-lot-camera-actions">
-            <div
-              className="ct-row ct-row--gap-lg"
-              style={{
-                flexWrap: "wrap",
-                justifyContent: "space-between",
-                gap: "0.5rem",
-                alignItems: "center",
-                width: "100%"
-              }}
-            >
+            <div className="ct-lot-camera-actions-inner">
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => tryCancelLotCameraSession()}>
                 Cancel
               </button>
-              <div className="ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              {lotCameraStream ? (
+                <LotCameraZoomControls
+                  variant="actions"
+                  uiZoom={lotCameraZoom}
+                  hardwareActive={lotCameraHardwareZoom}
+                  opticalAvailable={lotCameraOpticalAvailable}
+                  onNudge={(d) => void nudgeLotCameraZoom(d)}
+                />
+              ) : null}
+              <div className="ct-lot-camera-actions-primary ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                 <button
                   type="button"
                   className="ct-btn"
