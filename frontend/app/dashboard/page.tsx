@@ -2081,6 +2081,20 @@ export default function DashboardPage() {
     });
   }
 
+  function restoreSingleLotStaging(files: File[], manualSku: string, skippedCount: number) {
+    if (!files.length) return;
+    const thumbUrls = files.map((f) => URL.createObjectURL(f));
+    setFolderPick({
+      folderLabel:
+        files.length === 1 ? folderLabelFromFile(files[0]!) : `One lot (${files.length} photos)`,
+      imageFiles: files,
+      thumbUrls,
+      skippedCount,
+      singleLotMode: true
+    });
+    setSingleLotManualSku(manualSku);
+  }
+
   function tryRemoveStagingImage(index: number) {
     const p = folderPickRef.current;
     if (!p || index < 0 || index >= p.imageFiles.length) return;
@@ -2837,7 +2851,10 @@ export default function DashboardPage() {
     setStagingEditBrightness(100);
     setStagingEditContrast(100);
     setStagingEditSaturation(100);
+    const isSingleLot = folderPick.singleLotMode === true;
     const files = folderPick.imageFiles;
+    const manualSkuBackup = singleLotManualSku;
+    const skippedCount = folderPick.skippedCount;
     const total = files.length;
     const emptyFiles = files.filter((f) => f.size < 1);
     if (emptyFiles.length) {
@@ -2847,7 +2864,7 @@ export default function DashboardPage() {
       return;
     }
     if (
-      folderPick.singleLotMode &&
+      isSingleLot &&
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       total > CTBIDS_MAX_PHOTOS_PER_LOT
     ) {
@@ -2856,15 +2873,18 @@ export default function DashboardPage() {
       );
       return;
     }
+    if (isSingleLot) {
+      clearFolderPick();
+    }
     setUploading(true);
     try {
       const buildFormForSlice = (slice: File[]) => {
         const form = new FormData();
         form.append("sale_id", selectedSaleId);
         form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
-        form.append("single_lot_mode", folderPick.singleLotMode ? "true" : "false");
-        if (folderPick.singleLotMode && singleLotManualSku.trim()) {
-          form.append("single_lot_manual_sku", singleLotManualSku.trim());
+        form.append("single_lot_mode", isSingleLot ? "true" : "false");
+        if (isSingleLot && manualSkuBackup.trim()) {
+          form.append("single_lot_manual_sku", manualSkuBackup.trim());
         }
         for (const file of slice) {
           const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
@@ -2930,7 +2950,9 @@ export default function DashboardPage() {
         setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
       setJobs((prev) => [created, ...prev]);
-      persistStagingAwaitingGemini(created.id, total);
+      if (!isSingleLot) {
+        persistStagingAwaitingGemini(created.id, total);
+      }
       setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
@@ -2938,7 +2960,9 @@ export default function DashboardPage() {
         setUploadProgress("");
         setError("");
         setStagingSuccess(
-          `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running. Staged previews clear automatically once all ${total} photo${total === 1 ? " has" : "s have"} been sent to Gemini (catalog may still be building lots).`
+          isSingleLot
+            ? `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
+            : `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running. Staged previews clear automatically once all ${total} photo${total === 1 ? " has" : "s have"} been sent to Gemini (catalog may still be building lots).`
         );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
@@ -2946,7 +2970,9 @@ export default function DashboardPage() {
           "Could not start the catalog job"
         );
         setError(
-          `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”. Staged previews clear after Gemini analyzes them, then you can stage the next lot.`
+          isSingleLot
+            ? `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”.`
+            : `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”. Staged previews clear after Gemini analyzes them, then you can stage the next lot.`
         );
       }
     } catch (e) {
@@ -2957,8 +2983,13 @@ export default function DashboardPage() {
         router.replace("/");
         return;
       }
+      if (isSingleLot) {
+        restoreSingleLotStaging(files, manualSkuBackup, skippedCount);
+      }
       setError(
-        `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
+        isSingleLot
+          ? `${msg} Your staged photos were restored in the upload box — fix the issue and try again without refreshing.`
+          : `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
       );
     } finally {
       setUploading(false);
@@ -2968,8 +2999,13 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
-    if (folderPickRef.current?.imageFiles.length) {
-      const n = folderPickRef.current.imageFiles.length;
+    const pick = folderPickRef.current;
+    const isSingleLot = pick?.singleLotMode === true && (pick?.imageFiles.length ?? 0) > 0;
+    if (isSingleLot) {
+      clearFolderPick();
+      setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
+    } else if (pick?.imageFiles.length) {
+      const n = pick.imageFiles.length;
       persistStagingAwaitingGemini(jobId, n);
       setStagingSuccess(
         `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
@@ -3871,7 +3907,9 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-                Staged photos stay until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)
+                {folderPick.singleLotMode
+                  ? "Tap Upload to send — this box clears right away so you can photograph the next lot while catalog runs"
+                  : "Staged photos stay until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)"}
                 {stagingDraftSupported() ? " (also saved on this device if you refresh)" : ""}. Tap to enlarge;
                 pencil = edit; trash = remove (asks to confirm). Use Clear selection to empty early.
               </p>
