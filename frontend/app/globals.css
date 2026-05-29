@@ -816,14 +816,16 @@ a.ct-btn:hover {
   (orientation: landscape) and (pointer: coarse) {
   .ct-lot-camera-dialog {
     --ct-lot-camera-thumb: min(12dvh, 64px);
-    --ct-lot-camera-live-min-h: min(62dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 8.25rem));
+    --ct-lot-camera-live-min-h: min(
+      72dvh,
+      calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 4.75rem)
+    );
   }
 
   .ct-lot-camera-scroll {
     display: flex;
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
     flex: 1 1 0;
     min-height: 0;
     max-width: none;
@@ -843,29 +845,19 @@ a.ct-btn:hover {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: 0.35rem 0.5rem 0.25rem !important;
+    padding: 0.25rem 0.5rem 0.15rem !important;
     box-sizing: border-box;
+    overflow: hidden;
   }
 
   .ct-lot-camera-intro,
-  .ct-lot-camera-meta {
-    display: none;
+  .ct-lot-camera-meta,
+  .ct-lot-camera-sku {
+    display: none !important;
   }
 
   .ct-lot-camera-strip-wrap > .ct-muted {
     display: none;
-  }
-
-  .ct-lot-camera-sku {
-    display: block;
-    margin-top: 0 !important;
-    flex-shrink: 0;
-    font-size: 0.78rem !important;
-  }
-
-  .ct-lot-camera-sku .ct-input {
-    margin-top: 3px !important;
-    padding: 0.4rem 0.55rem;
   }
 
   .ct-lot-camera-live {
@@ -875,7 +867,7 @@ a.ct-btn:hover {
     max-height: none !important;
     min-height: var(--ct-lot-camera-live-min-h) !important;
     aspect-ratio: unset;
-    margin-top: 0.2rem;
+    margin-top: 0 !important;
     margin-bottom: 0;
   }
 
@@ -897,39 +889,36 @@ a.ct-btn:hover {
   }
 }
 
-/* Wide landscape (e.g. phone rotated): optional side rail for thumbs so preview stays huge. */
+/* Wide landscape (e.g. phone rotated): side rail for thumbs; no scroll — preview fills height. */
 @media (orientation: landscape) and (max-height: 520px) and (min-height: 280px),
   (orientation: landscape) and (pointer: coarse) and (min-height: 280px) {
   .ct-lot-camera-card:has(.ct-lot-camera-strip-wrap) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) min(var(--ct-lot-camera-thumb), 18vw);
-    grid-template-rows: auto minmax(var(--ct-lot-camera-live-min-h), 1fr) auto auto;
+    grid-template-rows: minmax(var(--ct-lot-camera-live-min-h), 1fr) auto;
     column-gap: 0.45rem;
     align-content: stretch;
   }
 
-  .ct-lot-camera-sku {
-    grid-column: 1 / -1;
-  }
-
   .ct-lot-camera-live {
     grid-column: 1;
-    grid-row: 2;
-    min-height: var(--ct-lot-camera-live-min-h) !important;
+    grid-row: 1;
+    min-height: 0 !important;
   }
 
   .ct-lot-camera-zoom-row {
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 2;
   }
 
   .ct-lot-camera-strip-wrap {
     grid-column: 2;
-    grid-row: 2 / 4;
+    grid-row: 1 / 3;
     align-self: stretch;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
+    min-height: 0;
     margin-top: 0 !important;
   }
 
@@ -937,8 +926,11 @@ a.ct-btn:hover {
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
-    max-height: 100%;
+    flex: 1 1 0;
+    min-height: 0;
+    max-height: none;
     padding: 4px 2px;
+    -webkit-overflow-scrolling: touch;
   }
 
   .ct-lot-camera-strip-item {
