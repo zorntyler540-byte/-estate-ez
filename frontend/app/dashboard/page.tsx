@@ -283,6 +283,27 @@ function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
   return angle === 90 ? 0 : 180;
 }
 
+/**
+ * Rotation baked into saved JPEGs. iOS applies its own display correction on the ``<video>`` element,
+ * so canvas ``drawImage(video)`` / ``takePhoto`` need the opposite quarter-turn from CSS preview.
+ */
+function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  const angle = readScreenOrientationAngle();
+  const screenLandscape = angle === 90 || angle === 270;
+  if (!screenLandscape) return 0;
+
+  const framePortrait = vh > vw * 1.05;
+  if (framePortrait) {
+    return angle === 90 ? -90 : 90;
+  }
+
+  return angle === 90 ? 0 : 180;
+}
+
 function lotCameraPreviewTransform(
   video: HTMLVideoElement | null,
   uiZoom: number,
@@ -336,6 +357,65 @@ function drawOrientedVideoFrameToCanvas(
     ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
   }
   ctx.restore();
+}
+
+async function bakeBlobWithRotation(file: File, rotationDeg: number): Promise<File | null> {
+  const rot = ((Math.round(rotationDeg) % 360) + 360) % 360;
+  if (rot === 0) return normalizeCaptureFileOrientation(file);
+
+  let source: CanvasImageSource;
+  let w: number;
+  let h: number;
+  let release: (() => void) | undefined;
+  try {
+    if (typeof createImageBitmap === "function") {
+      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      source = bmp;
+      w = bmp.width;
+      h = bmp.height;
+      release = () => {
+        try {
+          bmp.close();
+        } catch {
+          /* ignore */
+        }
+      };
+    } else {
+      const img = await loadImageFromFile(file);
+      source = img;
+      w = img.naturalWidth;
+      h = img.naturalHeight;
+    }
+  } catch {
+    return normalizeCaptureFileOrientation(file);
+  }
+
+  if (w < 2 || h < 2) {
+    release?.();
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  const swapped = rot === 90 || rot === 270;
+  canvas.width = swapped ? h : w;
+  canvas.height = swapped ? w : h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    release?.();
+    return null;
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.drawImage(source, -w / 2, -h / 2, w, h);
+  ctx.restore();
+  release?.();
+
+  const blob = await canvasToJpegBlob(canvas);
+  if (!blob) return null;
+  return new File([blob], file.name, { type: "image/jpeg" });
 }
 
 async function normalizeCaptureFileOrientation(file: File): Promise<File | null> {
@@ -484,7 +564,7 @@ function captureVideoFrameBlob(
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) return Promise.resolve(null);
-  const rotationDeg = lotCameraFrameRotationDeg(video);
+  const rotationDeg = lotCameraCaptureRotationDeg(video);
   drawOrientedVideoFrameToCanvas(ctx, video, rotationDeg, uiZoom, useDigitalCrop);
   return canvasToJpegBlob(canvas);
 }
@@ -2761,6 +2841,7 @@ export default function DashboardPage() {
     triggerLotCameraSnapFeedbackImmediate();
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
     const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
+    const captureRot = lotCameraCaptureRotationDeg(v);
 
     const quickBlob = await captureVideoFrameBlob(v, z, useDigitalCrop);
     if (!quickBlob) return;
@@ -2792,8 +2873,8 @@ export default function DashboardPage() {
           const hqFile = new File([hqBlob], quickFile.name, {
             type: hqBlob.type || "image/jpeg"
           });
-          const normalized = await normalizeCaptureFileOrientation(hqFile);
-          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
+          const baked = await bakeBlobWithRotation(hqFile, captureRot);
+          replaceLotCameraSnapAt(snapIndex, baked ?? hqFile);
         } catch {
           /* keep live-frame capture */
         }
