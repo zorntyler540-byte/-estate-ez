@@ -4829,28 +4829,30 @@ export default function DashboardPage() {
                       >
                         <img src={url} alt="" />
                       </button>
-                      <button
-                        type="button"
-                        aria-label={`Edit captured photo ${i + 1}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openLotCameraEdit(i);
-                        }}
-                        className="ct-btn ct-btn--ghost ct-lot-camera-strip-edit"
-                      >
-                        <Pencil size={18} aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete captured photo ${i + 1}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openLotCameraDeleteConfirm(i);
-                        }}
-                        className="ct-btn ct-btn--ghost ct-lot-camera-strip-delete"
-                      >
-                        <Trash2 size={18} aria-hidden />
-                      </button>
+                      <div className="ct-lot-camera-strip-item-actions">
+                        <button
+                          type="button"
+                          aria-label={`Edit captured photo ${i + 1}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openLotCameraEdit(i);
+                          }}
+                          className="ct-btn ct-btn--ghost ct-lot-camera-strip-edit"
+                        >
+                          <Pencil size={15} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete captured photo ${i + 1}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openLotCameraDeleteConfirm(i);
+                          }}
+                          className="ct-btn ct-btn--ghost ct-lot-camera-strip-delete"
+                        >
+                          <Trash2 size={15} aria-hidden />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

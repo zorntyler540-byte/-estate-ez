@@ -747,6 +747,10 @@ a.ct-btn:hover {
   scroll-snap-align: start;
 }
 
+.ct-lot-camera-strip-item-actions {
+  display: contents;
+}
+
 .ct-lot-camera-strip-thumb {
   display: block;
   width: 100%;
@@ -837,7 +841,7 @@ a.ct-btn:hover {
 @media (orientation: landscape) and (max-height: 520px),
   (orientation: landscape) and (pointer: coarse) {
   .ct-lot-camera-dialog {
-    --ct-lot-camera-thumb: min(12dvh, 64px);
+    --ct-lot-camera-thumb: min(15dvh, 78px);
   }
 
   .ct-lot-camera-scroll {
@@ -937,7 +941,7 @@ a.ct-btn:hover {
   (orientation: landscape) and (pointer: coarse) and (min-height: 280px) {
   .ct-lot-camera-card:has(.ct-lot-camera-strip-wrap) {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) min(var(--ct-lot-camera-thumb), 18vw);
+    grid-template-columns: minmax(0, 1fr) min(calc(var(--ct-lot-camera-thumb) + 4px), 22vw);
     grid-template-rows: minmax(0, 1fr);
     column-gap: 0.45rem;
     align-content: stretch;
@@ -959,6 +963,7 @@ a.ct-btn:hover {
     justify-content: flex-start;
     min-height: 0;
     margin-top: 0 !important;
+    padding-right: 2px;
   }
 
   .ct-lot-camera-strip {
@@ -969,14 +974,53 @@ a.ct-btn:hover {
     min-height: 0;
     max-height: none;
     padding: 4px 2px;
+    gap: 8px;
     -webkit-overflow-scrolling: touch;
   }
 
   .ct-lot-camera-strip-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
     width: 100%;
     height: auto;
-    aspect-ratio: 1;
-    max-height: var(--ct-lot-camera-thumb);
+    max-height: none;
+    flex: 0 0 auto;
+  }
+
+  .ct-lot-camera-strip-thumb {
+    width: 100%;
+    height: var(--ct-lot-camera-thumb);
+    flex: 0 0 auto;
+  }
+
+  .ct-lot-camera-strip-item-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .ct-lot-camera-strip-edit,
+  .ct-lot-camera-strip-delete {
+    position: static;
+    min-width: 32px;
+    min-height: 32px;
+    width: 32px;
+    height: 32px;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+  }
+
+  .ct-lot-camera-strip-edit svg,
+  .ct-lot-camera-strip-delete svg {
+    width: 14px;
+    height: 14px;
   }
 }
 
