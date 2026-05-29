@@ -273,15 +273,14 @@ function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
 
   const angle = readScreenOrientationAngle();
   const screenLandscape = angle === 90 || angle === 270;
-  const framePortrait = vh > vw * 1.05;
-
   if (!screenLandscape) return 0;
 
+  const framePortrait = vh > vw * 1.05;
   if (framePortrait) {
-    return angle === 270 ? 90 : -90;
+    return angle === 90 ? 90 : -90;
   }
 
-  return angle === 90 ? 180 : 0;
+  return angle === 90 ? 0 : 180;
 }
 
 function lotCameraPreviewTransform(
