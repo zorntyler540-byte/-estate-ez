@@ -359,65 +359,6 @@ function drawOrientedVideoFrameToCanvas(
   ctx.restore();
 }
 
-async function bakeBlobWithRotation(file: File, rotationDeg: number): Promise<File | null> {
-  const rot = ((Math.round(rotationDeg) % 360) + 360) % 360;
-  if (rot === 0) return normalizeCaptureFileOrientation(file);
-
-  let source: CanvasImageSource;
-  let w: number;
-  let h: number;
-  let release: (() => void) | undefined;
-  try {
-    if (typeof createImageBitmap === "function") {
-      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-      source = bmp;
-      w = bmp.width;
-      h = bmp.height;
-      release = () => {
-        try {
-          bmp.close();
-        } catch {
-          /* ignore */
-        }
-      };
-    } else {
-      const img = await loadImageFromFile(file);
-      source = img;
-      w = img.naturalWidth;
-      h = img.naturalHeight;
-    }
-  } catch {
-    return normalizeCaptureFileOrientation(file);
-  }
-
-  if (w < 2 || h < 2) {
-    release?.();
-    return null;
-  }
-
-  const canvas = document.createElement("canvas");
-  const swapped = rot === 90 || rot === 270;
-  canvas.width = swapped ? h : w;
-  canvas.height = swapped ? w : h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    release?.();
-    return null;
-  }
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.save();
-  ctx.translate(canvas.width / 2, canvas.height / 2);
-  ctx.rotate((rotationDeg * Math.PI) / 180);
-  ctx.drawImage(source, -w / 2, -h / 2, w, h);
-  ctx.restore();
-  release?.();
-
-  const blob = await canvasToJpegBlob(canvas);
-  if (!blob) return null;
-  return new File([blob], file.name, { type: "image/jpeg" });
-}
-
 async function normalizeCaptureFileOrientation(file: File): Promise<File | null> {
   const decoded = await decodeImageForCanvas(file);
   if (!decoded) return null;
@@ -2841,7 +2782,6 @@ export default function DashboardPage() {
     triggerLotCameraSnapFeedbackImmediate();
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
     const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
-    const captureRot = lotCameraCaptureRotationDeg(v);
 
     const quickBlob = await captureVideoFrameBlob(v, z, useDigitalCrop);
     if (!quickBlob) return;
@@ -2864,7 +2804,13 @@ export default function DashboardPage() {
         ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
             .ImageCapture
         : undefined;
-    if (ImageCaptureCtor && track && !useDigitalCrop) {
+    const screenLandscape = (() => {
+      const a = readScreenOrientationAngle();
+      return a === 90 || a === 270;
+    })();
+    // Landscape: quick video-frame capture is already upright; takePhoto() JPEGs arrive with
+    // their own EXIF orientation and replacing the thumb makes it flip sideways a moment later.
+    if (ImageCaptureCtor && track && !useDigitalCrop && !screenLandscape) {
       void (async () => {
         try {
           const ic = new ImageCaptureCtor(track);
@@ -2873,8 +2819,8 @@ export default function DashboardPage() {
           const hqFile = new File([hqBlob], quickFile.name, {
             type: hqBlob.type || "image/jpeg"
           });
-          const baked = await bakeBlobWithRotation(hqFile, captureRot);
-          replaceLotCameraSnapAt(snapIndex, baked ?? hqFile);
+          const normalized = await normalizeCaptureFileOrientation(hqFile);
+          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
         } catch {
           /* keep live-frame capture */
         }
