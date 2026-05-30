@@ -1098,12 +1098,14 @@ export default function DashboardPage() {
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
   const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
   const lotCameraNativeChainingRef = useRef(false);
+  const lotCameraStabilizeTasksRef = useRef<Set<Promise<void>>>(new Set());
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
   const lotCameraSnapsRef = useRef<File[]>([]);
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
   const [lotCameraStream, setLotCameraStream] = useState<MediaStream | null>(null);
   const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
   const [lotCameraSnapThumbUrls, setLotCameraSnapThumbUrls] = useState<string[]>([]);
+  const [lotCameraFinalizing, setLotCameraFinalizing] = useState(false);
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   /** Bumps when orientation or video dimensions change so preview rotation recalculates. */
   const [lotCameraPreviewLayoutTick, setLotCameraPreviewLayoutTick] = useState(0);
@@ -2604,15 +2606,13 @@ export default function DashboardPage() {
     return index;
   }
 
-  function replaceLotCameraSnapAt(index: number, file: File) {
-    if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
-    setLotCameraSnaps((prev) => {
-      if (index < 0 || index >= prev.length) return prev;
-      const next = [...prev];
-      next[index] = file;
-      lotCameraSnapsRef.current = next;
-      return next;
-    });
+  function replaceLotCameraSnapFile(expectedFile: File, file: File) {
+    const index = lotCameraSnapsRef.current.findIndex((snap) => snap === expectedFile);
+    if (index < 0) return;
+    const nextFiles = [...lotCameraSnapsRef.current];
+    nextFiles[index] = file;
+    lotCameraSnapsRef.current = nextFiles;
+    setLotCameraSnaps(nextFiles);
     setLotCameraSnapThumbUrls((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const next = [...prev];
@@ -2621,6 +2621,24 @@ export default function DashboardPage() {
       next[index] = URL.createObjectURL(file);
       return next;
     });
+  }
+
+  function trackLotCameraStabilization(task: Promise<void>) {
+    lotCameraStabilizeTasksRef.current.add(task);
+    void task.then(
+      () => {
+        lotCameraStabilizeTasksRef.current.delete(task);
+      },
+      () => {
+        lotCameraStabilizeTasksRef.current.delete(task);
+      }
+    );
+  }
+
+  async function waitForLotCameraStabilization() {
+    while (lotCameraStabilizeTasksRef.current.size > 0) {
+      await Promise.allSettled(Array.from(lotCameraStabilizeTasksRef.current));
+    }
   }
 
   function cancelLotCameraSession() {
@@ -2641,28 +2659,36 @@ export default function DashboardPage() {
     cancelLotCameraSession();
   }
 
-  function finishLotCameraSession() {
-    const files = [...lotCameraSnapsRef.current];
-    if (!files.length) {
+  async function finishLotCameraSession() {
+    if (lotCameraFinalizing) return;
+    lotCameraNativeChainingRef.current = false;
+    setLotCameraFinalizing(true);
+    try {
+      await waitForLotCameraStabilization();
+      const files = [...lotCameraSnapsRef.current];
+      if (!files.length) {
+        stopLotCameraTracks();
+        return;
+      }
+      const prev = folderPickRef.current;
+      const replacing = prev?.imageFiles.length && !prev.singleLotMode;
+      const detail = replacing
+        ? `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} as one lot and replace the current staged set?`
+        : prev?.singleLotMode
+          ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
+          : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
+      if (!confirmStagingOverwrite(prev, detail)) return;
+      clearLotCameraSnapsAndThumbs();
       stopLotCameraTracks();
-      return;
-    }
-    const prev = folderPickRef.current;
-    const replacing = prev?.imageFiles.length && !prev.singleLotMode;
-    const detail = replacing
-      ? `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} as one lot and replace the current staged set?`
-      : prev?.singleLotMode
-        ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
-        : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
-    if (!confirmStagingOverwrite(prev, detail)) return;
-    clearLotCameraSnapsAndThumbs();
-    stopLotCameraTracks();
-    const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
-    setFolderPick(pick);
-    if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
-      setError(
-        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
-      );
+      const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
+      setFolderPick(pick);
+      if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
+        setError(
+          `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
+        );
+      }
+    } finally {
+      setLotCameraFinalizing(false);
     }
   }
 
@@ -2697,25 +2723,29 @@ export default function DashboardPage() {
     if (added > 0) triggerLotCameraSnapFeedbackImmediate();
   }
 
-  function replaceLotCameraSnapTail(stableFiles: File[], startIndex: number) {
+  function replaceLotCameraSnapTail(stableFiles: File[], expectedFiles: File[]) {
     if (!stableFiles.length) return;
-    setLotCameraSnaps((prev) => {
-      const next = [...prev];
-      for (let i = 0; i < stableFiles.length; i++) {
-        const idx = startIndex + i;
-        if (idx >= 0 && idx < next.length) next[idx] = stableFiles[i]!;
-      }
-      lotCameraSnapsRef.current = next;
-      return next;
-    });
+    const nextFiles = [...lotCameraSnapsRef.current];
+    const replacements: Array<{ index: number; file: File }> = [];
+    for (let i = 0; i < stableFiles.length; i++) {
+      const expected = expectedFiles[i];
+      if (!expected) continue;
+      const idx = nextFiles.findIndex((snap) => snap === expected);
+      if (idx < 0) continue;
+      const stableFile = stableFiles[i]!;
+      nextFiles[idx] = stableFile;
+      replacements.push({ index: idx, file: stableFile });
+    }
+    if (!replacements.length) return;
+    lotCameraSnapsRef.current = nextFiles;
+    setLotCameraSnaps(nextFiles);
     setLotCameraSnapThumbUrls((prev) => {
       const next = [...prev];
-      for (let i = 0; i < stableFiles.length; i++) {
-        const idx = startIndex + i;
+      for (const { index: idx, file } of replacements) {
         if (idx < 0 || idx >= next.length) continue;
         const old = next[idx];
         if (old) URL.revokeObjectURL(old);
-        next[idx] = URL.createObjectURL(stableFiles[i]!);
+        next[idx] = URL.createObjectURL(file);
       }
       return next;
     });
@@ -2744,10 +2774,12 @@ export default function DashboardPage() {
       lotCameraNativeChainingRef.current = false;
       return;
     }
-    const startIndex = lotCameraSnapsRef.current.length;
     appendLotCameraSnapFiles(imageFiles);
-    const stableFiles = await stabilizeCapturedFiles(imageFiles);
-    replaceLotCameraSnapTail(stableFiles, startIndex);
+    const stabilizeTask = stabilizeCapturedFiles(imageFiles).then((stableFiles) => {
+      replaceLotCameraSnapTail(stableFiles, imageFiles);
+    });
+    trackLotCameraStabilization(stabilizeTask);
+    await stabilizeTask;
     const atCap =
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
@@ -2796,7 +2828,7 @@ export default function DashboardPage() {
         ? crypto.randomUUID().slice(0, 8)
         : String(Math.random()).slice(2, 10);
     const quickFile = new File([quickBlob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
-    const snapIndex = pushLotCameraSnap(quickFile);
+    pushLotCameraSnap(quickFile);
 
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
     const ImageCaptureCtor =
@@ -2815,12 +2847,12 @@ export default function DashboardPage() {
         try {
           const ic = new ImageCaptureCtor(track);
           const hqBlob = await ic.takePhoto();
-          if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
+          if (!hqBlob || !lotCameraSnapsRef.current.includes(quickFile)) return;
           const hqFile = new File([hqBlob], quickFile.name, {
             type: hqBlob.type || "image/jpeg"
           });
           const normalized = await normalizeCaptureFileOrientation(hqFile);
-          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
+          replaceLotCameraSnapFile(quickFile, normalized ?? hqFile);
         } catch {
           /* keep live-frame capture */
         }
@@ -2916,7 +2948,7 @@ export default function DashboardPage() {
         adjust
       );
       if (!out) return;
-      replaceLotCameraSnapAt(i, out);
+      replaceLotCameraSnapFile(file, out);
       setLotCameraEditIndex(null);
       setLotCameraEditRotation(0);
       setLotCameraEditTrim(0);
@@ -3019,9 +3051,6 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
-      const tailStart = folderPickRef.current?.singleLotMode
-        ? (folderPickRef.current?.imageFiles.length ?? 0)
-        : 0;
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
         imageFiles,
@@ -3041,7 +3070,9 @@ export default function DashboardPage() {
           const nextFiles = [...p.imageFiles];
           const nextThumbs = [...p.thumbUrls];
           for (let i = 0; i < stableImageFiles.length; i++) {
-            const idx = tailStart + i;
+            const expected = imageFiles[i];
+            if (!expected) continue;
+            const idx = nextFiles.findIndex((file) => file === expected);
             if (idx < 0 || idx >= nextFiles.length) continue;
             nextFiles[idx] = stableImageFiles[i]!;
             const oldThumb = nextThumbs[idx];
@@ -5035,6 +5066,7 @@ export default function DashboardPage() {
                   title="Use your phone’s built-in camera app (full quality); returns here after each shot"
                   onClick={() => openPhoneCameraForLot()}
                   disabled={
+                    lotCameraFinalizing ||
                     CTBIDS_MAX_PHOTOS_PER_LOT != null &&
                     lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT
                   }
@@ -5046,6 +5078,7 @@ export default function DashboardPage() {
                   className="ct-btn ct-btn--primary"
                   onClick={() => void snapLotPhoto()}
                   disabled={
+                    lotCameraFinalizing ||
                     !lotCameraStream ||
                     !lotCameraPreviewReady ||
                     (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -5054,8 +5087,13 @@ export default function DashboardPage() {
                 >
                   Snap photo
                 </button>
-                <button type="button" className="ct-btn" onClick={() => finishLotCameraSession()}>
-                  Done
+                <button
+                  type="button"
+                  className="ct-btn"
+                  onClick={() => void finishLotCameraSession()}
+                  disabled={lotCameraFinalizing}
+                >
+                  {lotCameraFinalizing ? "Finishing..." : "Done"}
                 </button>
               </div>
             </div>
