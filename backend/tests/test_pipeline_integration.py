@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import unittest
+
+from app.core.lotting import LotOutput
 from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
+from app.services.pipeline_integration import is_weak_pipeline_lot
 from pipeline.pipeline import _build_pro_image_payload, select_analysis_photos
 
 
@@ -110,3 +114,17 @@ def test_lot_from_flash_draft_uses_brand_audit() -> None:
     lot = _lot_from_flash_draft(flash_draft, brand_audit)
     assert lot.brands == ["Levi's"]
     assert "Levi's" in lot.auction_title or "denim" in lot.auction_title.lower()
+
+
+class TestPipelineIntegration(unittest.TestCase):
+    def test_generic_estate_lot_title_is_weak_even_with_brand_specs(self) -> None:
+        lot = LotOutput(
+            sku=None,
+            auction_title="Estate lot (2 items)",
+            professional_description="Estate lot (2 items)",
+            specification_lines=["Brand: Levi's", "Item 1: Denim jacket"],
+            brands=["Levi's"],
+            labels_and_tags=[],
+        )
+
+        self.assertTrue(is_weak_pipeline_lot(lot))
