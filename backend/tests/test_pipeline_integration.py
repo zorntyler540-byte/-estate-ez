@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.services.pipeline_integration import _lot_from_flash_draft
-from pipeline.pipeline import select_analysis_photos
+from pipeline.pipeline import _build_pro_image_payload, select_analysis_photos
 
 
 def test_select_analysis_photos_picks_hero_and_fronts() -> None:
@@ -42,6 +42,23 @@ def test_select_analysis_photos_picks_hero_and_fronts() -> None:
     assert selected["front_filenames"] == ["front.jpg"]
     assert "angle.jpg" in selected["catalog_only"]
     assert "angle.jpg" not in selected["pro_filenames"]
+    assert selected["hero_triage_metadata"] is not None
+    assert selected["hero_triage_metadata"]["filename"] == "hero.jpg"
+    assert selected["hero_triage_metadata"]["photo_role"] == "hero"
+
+
+def test_build_pro_image_payload_puts_hero_first() -> None:
+    images = {
+        "hero.jpg": b"hero-bytes",
+        "front.jpg": b"front-bytes",
+        "label.jpg": b"label-bytes",
+    }
+    payload = _build_pro_image_payload(
+        images,
+        ["label.jpg", "front.jpg"],
+        hero_filename="hero.jpg",
+    )
+    assert list(payload.keys()) == ["hero.jpg", "label.jpg", "front.jpg"]
 
 
 def test_lot_from_flash_draft_uses_brand_audit() -> None:

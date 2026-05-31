@@ -287,6 +287,12 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         "tape_filenames": tape_filenames,
         "brand_needs_review": brand_needs_review,
         "pro_candidates": [r.filename for r in pro_candidates],
+        "hero_triage_metadata": next(
+            (dict(r.model_dump()) for r in rows if r.filename == hero_filename),
+            None,
+        )
+        if hero_filename
+        else None,
     }
 
 
@@ -412,7 +418,41 @@ BRAND_AUDIT_SYSTEM = (
 )
 
 
-def run_brand_audit_pro(item_specific_images_dict: dict[str, bytes], flash_item_draft_json: dict) -> str:
+def _hero_triage_block(
+    triage_results: list[dict[str, Any]],
+    hero_filename: str,
+) -> dict[str, Any] | None:
+    """Return the Stage 1 triage metadata row for the selected hero filename."""
+    if not hero_filename:
+        return None
+    for row in triage_results:
+        if row.get("filename") == hero_filename:
+            return dict(row)
+    return None
+
+
+def _build_pro_image_payload(
+    user_images_dict: dict[str, bytes],
+    pro_filenames: list[str],
+    *,
+    hero_filename: str,
+) -> dict[str, bytes]:
+    """Pro multimodal bytes: hero first (when present), then label/front pool."""
+    pro_image_order: list[str] = []
+    if hero_filename and hero_filename in user_images_dict:
+        pro_image_order.append(hero_filename)
+    for fn in pro_filenames:
+        if fn and fn not in pro_image_order:
+            pro_image_order.append(fn)
+    return {fn: user_images_dict[fn] for fn in pro_image_order if fn in user_images_dict}
+
+
+def run_brand_audit_pro(
+    item_specific_images_dict: dict[str, bytes],
+    flash_item_draft_json: dict,
+    *,
+    hero_triage_metadata: dict[str, Any] | None = None,
+) -> str:
     """Stage 2: Pro multimodal brand audit with Google Search grounding.
 
     Returns JSON string matching FullyAuditedManifest schema.
@@ -431,21 +471,30 @@ def run_brand_audit_pro(item_specific_images_dict: dict[str, bytes], flash_item_
             "and leave valuation_rationale empty unless grounded search finds strong comparables."
         )
 
+    hero_filename = str((hero_triage_metadata or {}).get("filename") or "").strip()
+
     parts: list[Any] = [
-        "Audit the estate lot using the label/front images and the Flash triage draft JSON below.\n"
+        "Audit the estate lot using the hero context, label/front images, and Flash triage draft JSON below.\n"
         "Tasks:\n"
-        "1. Transcribe visible tags exactly.\n"
-        "2. Confirm primary and additional brands per distinct item.\n"
-        "3. Fix Flash brand errors only when image evidence supports the correction.\n"
-        "4. Leave confirmed_brand empty when no readable maker mark exists.\n"
+        "1. Use the hero wide shot for lot context (distinct items visible on the table/spread).\n"
+        "2. Transcribe visible tags exactly on label/front frames.\n"
+        "3. Confirm primary and additional brands per distinct item.\n"
+        "4. Fix Flash brand errors only when image evidence supports the correction.\n"
+        "5. Leave confirmed_brand empty when no readable maker mark exists.\n"
         f"{valuation_block}\n\n"
         f"Flash draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
     ]
 
     for filename, img_bytes in item_specific_images_dict.items():
         mime_type = _detect_mime_type(img_bytes)
+        if hero_filename and filename == hero_filename and hero_triage_metadata:
+            parts.append(
+                "Stage 1 hero triage metadata (selected wide-shot context for this lot):\n"
+                f"{json.dumps(hero_triage_metadata, indent=2)}"
+            )
         parts.append(_image_part(img_bytes, mime_type))
-        parts.append(f"The preceding image filename is: {filename}")
+        role_note = " (hero shot — whole-lot context)" if hero_filename and filename == hero_filename else ""
+        parts.append(f"The preceding image filename is: {filename}{role_note}")
 
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(
@@ -564,6 +613,8 @@ def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, 
     flash_draft_json = flash_draft.model_dump()
 
     pro_filenames = list(selected.get("pro_filenames") or [])
+    hero_filename = str(selected.get("hero_filename") or "").strip()
+    hero_triage = _hero_triage_block(triage, hero_filename)
     pro_skipped = False
     brand_audit_json = ""
     brand_audit: BrandAuditResult
@@ -586,11 +637,21 @@ def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, 
                 for idx, item in enumerate(flash_draft.items)
             ],
         ).model_dump_json()
-    elif pro_filenames:
-        pro_images = {fn: user_images_dict[fn] for fn in pro_filenames if fn in user_images_dict}
+    elif pro_filenames or (hero_filename and hero_filename in user_images_dict):
+        pro_images = _build_pro_image_payload(
+            user_images_dict,
+            pro_filenames,
+            hero_filename=hero_filename,
+        )
         try:
-            brand_audit_json = run_brand_audit_pro(pro_images, flash_draft_json)
-            brand_audit = _manifest_to_brand_audit(brand_audit_json, pro_filenames, flash_draft)
+            brand_audit_json = run_brand_audit_pro(
+                pro_images,
+                flash_draft_json,
+                hero_triage_metadata=hero_triage,
+            )
+            brand_audit = _manifest_to_brand_audit(
+                brand_audit_json, list(pro_images.keys()), flash_draft
+            )
         except Exception:
             # Section 4E — Pro error: keep Flash draft; no fake prices; no Unknown brand
             brand_audit = _brand_audit_from_flash_draft(flash_draft)
