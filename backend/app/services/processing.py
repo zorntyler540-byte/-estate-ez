@@ -24,7 +24,7 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
-from app.services.pipeline_integration import run_single_lot_pipeline
+from app.services.pipeline_integration import is_weak_pipeline_lot, run_single_lot_pipeline
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import catalog_photo_file_on_disk, catalog_storage_key, resolve_catalog_storage_path
 from app.services.image_preprocess import normalize_job_folder_image
@@ -1241,20 +1241,29 @@ def run_lot_ai_regenerate_and_save(
         raise ValueError("This lot has no catalog photos to analyze.")
 
     paths: list[Path] = []
+    photo_rows: list[Photo] = []
     for ph in photos:
         pth = resolve_catalog_storage_path(ph.storage_path)
         if pth.is_file():
             paths.append(pth)
+            photo_rows.append(ph)
     if not paths:
         raise ValueError("Image files are missing on disk for this lot.")
 
     manifest_tag = f"regen-{lot_id}"
 
     if settings.pipeline_triage_brand_audit:
+        labeled_paths = [
+            (pth, (ph.original_name or pth.name).strip() or pth.name)
+            for ph, pth in zip(photo_rows, paths)
+        ]
         current, _pipeline_result = run_single_lot_pipeline(
-            paths,
+            labeled_paths,
             manifest_tag=manifest_tag,
         )
+        if is_weak_pipeline_lot(current):
+            current = _regenerate_fallback_lot_output(row)
+            current.sku_needs_review = True
     else:
         payloads = _run_photo_analysis_parallel(paths, manifest_tag=manifest_tag)
         _apply_last_known_sku_fallback(payloads)

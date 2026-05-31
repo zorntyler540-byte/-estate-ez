@@ -159,7 +159,7 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
     else:
         raise RuntimeError(f"Triage returned no content for {filename}")
 
-    if not row.filename:
+    if not row.filename or row.filename != filename:
         row = row.model_copy(update={"filename": filename})
     return row.model_dump()
 

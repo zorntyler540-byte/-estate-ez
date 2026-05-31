@@ -12,6 +12,7 @@ from app.core.lotting import LotOutput, normalize_brand_list, tape_marking_canon
 from pipeline import process_incoming_field_lot
 
 EmitFn = Callable[[dict[str, Any]], None]
+PhotoEntry = tuple[Path, str]
 
 # Per-photo triage is small; one listing + optional Pro dominate estimates.
 EST_PIPELINE_INPUT_TOKENS_PER_PHOTO = 450
@@ -20,6 +21,8 @@ EST_PIPELINE_LISTING_INPUT = 1800
 EST_PIPELINE_LISTING_OUTPUT = 280
 EST_PIPELINE_PRO_INPUT = 3200
 EST_PIPELINE_PRO_OUTPUT = 600
+
+_PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
 
 
 def _sync_pipeline_env_from_settings() -> None:
@@ -37,13 +40,42 @@ def _sync_pipeline_env_from_settings() -> None:
     os.environ["TRIAGE_IMAGE_MAX_EDGE"] = str(settings.triage_image_max_edge)
 
 
-def _path_for_filename(photos: list[Path], filename: str) -> Path | None:
-    if not filename:
-        return None
-    for photo in photos:
-        if photo.name == filename:
-            return photo
-    return None
+def _coerce_photo_entries(photos: list[Path] | list[PhotoEntry]) -> tuple[list[PhotoEntry], dict[str, Path]]:
+    """Normalize upload/regenerate inputs to stable triage filename keys mapped to disk paths."""
+    entries: list[PhotoEntry] = []
+    for item in photos:
+        if isinstance(item, Path):
+            path = item
+            key = path.name
+        else:
+            path, key = item
+            key = (key or path.name).strip() or path.name
+        entries.append((path, key))
+
+    path_by_key: dict[str, Path] = {}
+    for path, key in entries:
+        use_key = key
+        suffix = 2
+        while use_key in path_by_key and path_by_key[use_key] != path:
+            use_key = f"{key}#{suffix}"
+            suffix += 1
+        path_by_key[use_key] = path
+
+    normalized = [(path_by_key[k], k) for k in path_by_key]
+    return normalized, path_by_key
+
+
+def is_weak_pipeline_lot(lot: LotOutput) -> bool:
+    """True when pipeline produced no usable listing text (generic placeholder)."""
+    title = (lot.auction_title or "").strip()
+    desc = (lot.professional_description or "").strip()
+    title_low = title.lower()
+    if title_low in _PLACEHOLDER_TITLES or title_low.startswith("estate item ("):
+        if not lot.brands and not lot.specification_lines:
+            return True
+    if not title and not desc and not lot.specification_lines and not lot.brands:
+        return True
+    return False
 
 
 def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, Any]) -> LotOutput:
@@ -116,14 +148,14 @@ def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None
 def _apply_tape_sku_from_paths(
     lot: LotOutput,
     tape_filenames: list[str],
-    photos: list[Path],
+    path_by_key: dict[str, Path],
     *,
     manifest_tag: str,
 ) -> None:
     if lot.sku or not tape_filenames:
         return
     for filename in tape_filenames:
-        tape_path = _path_for_filename(photos, filename)
+        tape_path = path_by_key.get(filename)
         if tape_path is None:
             continue
         payload = analyze_path_with_retries(tape_path, manifest_tag=manifest_tag)
@@ -156,7 +188,7 @@ def _estimate_pipeline_tokens(photo_count: int, *, ran_pro: bool, listing_calls:
 
 
 def run_single_lot_pipeline(
-    photos: list[Path],
+    photos: list[Path] | list[PhotoEntry],
     *,
     manifest_tag: str,
     emit: EmitFn | None = None,
@@ -164,18 +196,19 @@ def run_single_lot_pipeline(
     """
     Stage 1 triage + selection + Stage 2 brand audit, then a capped Flash listing pass
     on hero/front frames only. Returns ``LotOutput`` and raw pipeline diagnostics.
+
+    Pass ``(path, filename_key)`` tuples when catalog files on disk are not named like
+    the original camera filenames (regenerate on stored lots).
     """
     _sync_pipeline_env_from_settings()
 
+    entries, path_by_key = _coerce_photo_entries(photos)
     images: dict[str, bytes] = {}
-    for photo in photos:
-        key = photo.name
-        if key in images:
-            key = str(photo.as_posix())
-        images[key] = photo.read_bytes()
+    for path, key in entries:
+        images[key] = path.read_bytes()
 
     if emit:
-        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": len(photos)})
+        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": len(entries)})
 
     pipeline_result = process_incoming_field_lot(images)
     selected = dict(pipeline_result.get("selected") or {})
@@ -203,10 +236,14 @@ def run_single_lot_pipeline(
             listing_names.append(fn)
     listing_names = listing_names[: max(1, settings.listing_flash_max_frames)]
 
+    # If triage selection missed everything, still run listing on the first few files.
+    if not listing_names:
+        listing_names = list(path_by_key.keys())[: max(1, settings.listing_flash_max_frames)]
+
     lot: LotOutput | None = None
     listing_calls = 0
     for idx, filename in enumerate(listing_names):
-        path = _path_for_filename(photos, filename)
+        path = path_by_key.get(filename)
         if path is None:
             continue
         if emit:
@@ -237,14 +274,15 @@ def run_single_lot_pipeline(
     _apply_tape_sku_from_paths(
         lot,
         list(selected.get("tape_filenames") or []),
-        photos,
+        path_by_key,
         manifest_tag=manifest_tag,
     )
 
     ran_pro = (
         not bool(pipeline_result.get("pro_skipped_due_to_agreement"))
-        and bool(selected.get("pro_filenames"))
+        and bool(selected.get("pro_filenames") or hero_name)
     )
-    est_in, est_out = _estimate_pipeline_tokens(len(photos), ran_pro=ran_pro, listing_calls=listing_calls)
+    est_in, est_out = _estimate_pipeline_tokens(len(entries), ran_pro=ran_pro, listing_calls=listing_calls)
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}
+    pipeline_result["listing_filenames_used"] = listing_names
     return lot, pipeline_result
