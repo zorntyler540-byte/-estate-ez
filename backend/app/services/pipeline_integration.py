@@ -445,6 +445,7 @@ def run_single_lot_pipeline(
 
     pipeline_result["brand_audit"] = brand_audit
     pipeline_result["pro_skipped_due_to_agreement"] = pro_skipped
+    pipeline_result["ran_pro"] = ran_pro
 
     _apply_tape_sku_from_paths(
         lot,

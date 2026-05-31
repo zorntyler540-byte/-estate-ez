@@ -15,6 +15,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from pipeline.gemini_schema import pydantic_model_to_gemini_schema
 from pipeline.schemas import (
     BrandAuditResult,
     FullyAuditedManifest,
@@ -142,7 +143,7 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
 
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=PhotoTriageResult,
+        response_schema=pydantic_model_to_gemini_schema(PhotoTriageResult),
         system_instruction=TRIAGE_SYSTEM_INSTRUCTION,
         temperature=0.1,
     )
@@ -510,7 +511,7 @@ def run_brand_audit_pro(
 
     config_kwargs: dict[str, Any] = {
         "response_mime_type": "application/json",
-        "response_schema": FullyAuditedManifest,
+        "response_schema": pydantic_model_to_gemini_schema(FullyAuditedManifest),
         "system_instruction": BRAND_AUDIT_SYSTEM,
         "temperature": 0.1,
     }

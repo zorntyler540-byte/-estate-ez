@@ -649,6 +649,8 @@ def _analyze_photo_sdk_from_bytes(
     client = _get_genai_client()
     if not client: return None
     from google.genai import types as genai_types
+
+    from pipeline.gemini_schema import pydantic_model_to_gemini_schema
     
     focus_note = (
         "\nA second image follows: high-contrast crop of colored estate lot tape. Read SKU from this crop."
@@ -664,7 +666,7 @@ def _analyze_photo_sdk_from_bytes(
 
     config = genai_types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=InventoryTableEntry,
+        response_schema=pydantic_model_to_gemini_schema(InventoryTableEntry),
         system_instruction=SYSTEM_INSTRUCTION,
     )
 
