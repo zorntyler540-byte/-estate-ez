@@ -24,6 +24,7 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
+from app.services.pipeline_integration import run_single_lot_pipeline
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import catalog_photo_file_on_disk, catalog_storage_key, resolve_catalog_storage_path
 from app.services.image_preprocess import normalize_job_folder_image
@@ -565,6 +566,110 @@ def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_i
     return row
 
 
+def _process_job_single_lot_pipeline(
+    db: Session,
+    job: ProcessingJob,
+    photos: list[Path],
+    *,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    """Single-lot upload using triage + capped listing/Pro instead of full Flash on every photo."""
+    total_photos = len(photos)
+    pending_photo_ids: list[str] = []
+
+    _emit_job(job, {"type": "batch_start", "total_photos": total_photos, "phase": "pipeline"})
+
+    if _cancel_signaled(db, job.id, cancel_event):
+        job.status = JobStatus.failed
+        job.error_message = "Cancelled"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+
+    def _emit(payload: dict) -> None:
+        _emit_job(job, payload)
+
+    lot, pipeline_result = run_single_lot_pipeline(
+        photos,
+        manifest_tag=str(job.id),
+        emit=_emit,
+    )
+
+    for i, triage_row in enumerate(pipeline_result.get("triage") or []):
+        preview = {
+            "auction_title": str(triage_row.get("photo_role") or ""),
+            "sku": triage_row.get("brand_text") or None,
+        }
+        _emit_job(
+            job,
+            {
+                "type": "photo_analyzed",
+                "index": i,
+                "total": total_photos,
+                "file_name": str(triage_row.get("filename") or ""),
+                "preview": preview,
+                "pipeline_role": triage_row.get("photo_role"),
+            },
+        )
+
+    token_est = dict((pipeline_result.get("token_estimates") or {}))
+    job.analyzed_photos = int(total_photos)
+    job.failed_photos = 0
+    job.est_input_tokens = int(token_est.get("input") or total_photos * EST_INPUT_TOKENS_PER_PHOTO)
+    job.est_output_tokens = int(token_est.get("output") or EST_OUTPUT_TOKENS_PER_SUCCESS)
+    db.commit()
+
+    _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
+
+    _apply_single_lot_manual_sku(job, lot)
+    _strip_maker_stamp_misread_as_tape_sku(lot, None)
+
+    for i, photo_path in enumerate(photos):
+        if _cancel_signaled(db, job.id, cancel_event):
+            job.status = JobStatus.failed
+            job.error_message = "Cancelled"
+            job.cancel_requested = False
+            db.commit()
+            _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+            return
+        _emit_job(
+            job,
+            {
+                "type": "inventory_step",
+                "index": i,
+                "total": total_photos,
+                "file_name": photo_path.name,
+            },
+        )
+        row = Photo(
+            account_id=job.account_id,
+            user_id=job.user_id,
+            lot_id=None,
+            original_name=photo_path.name,
+            storage_path=catalog_storage_key(photo_path),
+        )
+        db.add(row)
+        db.flush()
+        pending_photo_ids.append(row.id)
+        db.commit()
+
+    lot.photo_count = len(photos)
+    _, pending_photo_ids, finalized = _finalize_open_lot(
+        db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
+    )
+    db.commit()
+    if finalized is not None:
+        _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(finalized)})
+
+    recompute_sku_sanity_flags_for_sale(db, job.sale_id, job.account_id)
+    job.status = JobStatus.completed
+    job.cancel_requested = False
+    db.commit()
+    _verify_job_catalog_files_on_disk(db, job)
+    _emit_job(job, {"type": "status", "status": "completed"})
+
+
 def process_job(
     db: Session,
     job: ProcessingJob,
@@ -630,6 +735,11 @@ def process_job(
         job.cancel_requested = False
         db.commit()
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+
+    single_lot_mode = bool(getattr(job, "single_lot_mode", False))
+    if single_lot_mode and settings.pipeline_triage_brand_audit:
+        _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
         return
 
     total_photos = len(photos)

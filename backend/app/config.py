@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
     gemini_image_max_edge: int = Field(default=1920, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
+    # Estate pipeline (Phase 1): per-photo triage + capped Pro brand audit for single-lot uploads only.
+    pipeline_triage_brand_audit: bool = Field(default=False, alias="PIPELINE_TRIAGE_BRAND_AUDIT")
+    gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
+    gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")
+    listing_flash_max_frames: int = Field(default=5, ge=1, le=12, alias="LISTING_FLASH_MAX_FRAMES")
+    brand_pro_max_label_frames: int = Field(default=4, ge=1, le=8, alias="BRAND_PRO_MAX_LABEL_FRAMES")
+    brand_skip_pro_if_agreement: bool = Field(default=True, alias="BRAND_SKIP_PRO_IF_AGREEMENT")
+    enable_grounded_valuation: bool = Field(default=False, alias="ENABLE_GROUNDED_VALUATION")
+    triage_image_max_edge: int = Field(default=1024, ge=256, le=4096, alias="TRIAGE_IMAGE_MAX_EDGE")
     # Stored catalog bytes (browser upload + EXIF/HEIC normalize). ZIP + /photos/.../download + extensions use these.
     catalog_upload_max_edge: int = Field(default=4096, ge=512, le=8192, alias="CATALOG_UPLOAD_MAX_EDGE")
     catalog_upload_jpeg_quality: int = Field(default=93, ge=70, le=98, alias="CATALOG_UPLOAD_JPEG_QUALITY")
