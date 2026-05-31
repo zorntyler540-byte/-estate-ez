@@ -1172,6 +1172,34 @@ def _run_photo_analysis_parallel(paths: list[Path], *, manifest_tag: str) -> lis
         return payloads
 
 
+def _safe_json_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(x).strip() for x in parsed if str(x).strip()]
+
+
+def _regenerate_fallback_lot_output(row: Lot) -> LotOutput:
+    """Keep existing listing content when AI returns nothing usable."""
+    return LotOutput(
+        sku=tape_marking_canonical(row.sku),
+        auction_title=(row.auction_title or "").strip(),
+        professional_description=(row.professional_description or "").strip(),
+        specification_lines=_safe_json_list(row.specification_lines_json),
+        brands=_safe_json_list(row.brands_json),
+        labels_and_tags=_safe_json_list(row.labels_and_tags_json),
+        condition=(row.condition_text or "").strip(),
+        starting_price=row.starting_price,
+        sku_needs_review=True,
+        lot_boundary_blank_page=False,
+    )
+
+
 def run_lot_ai_regenerate_and_save(
     db: Session,
     *,
@@ -1220,51 +1248,39 @@ def run_lot_ai_regenerate_and_save(
     if not paths:
         raise ValueError("Image files are missing on disk for this lot.")
 
-    payloads = _run_photo_analysis_parallel(paths, manifest_tag=f"regen-{lot_id}")
-    _apply_last_known_sku_fallback(payloads)
+    manifest_tag = f"regen-{lot_id}"
 
-    current: LotOutput | None = None
-    for payload in payloads:
-        if not payload:
-            continue
-        try:
-            lot_candidate = LotOutput.from_model(payload)
-        except (TypeError, ValueError, KeyError):
-            continue
-        _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
-        if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
-            lot_candidate.sku = None
-            lot_candidate.sku_needs_review = False
-        if current is None:
-            current = lot_candidate
-            continue
-        current.merge_detail(payload)
-
-    if current is None:
-        def _safe_json_list(raw: str | None) -> list[str]:
-            if not raw:
-                return []
-            try:
-                parsed = json.loads(raw)
-            except Exception:
-                return []
-            if not isinstance(parsed, list):
-                return []
-            return [str(x).strip() for x in parsed if str(x).strip()]
-
-        # Fallback instead of hard-failing regenerate: keep existing listing content and mark for review.
-        current = LotOutput(
-            sku=tape_marking_canonical(row.sku),
-            auction_title=(row.auction_title or "").strip(),
-            professional_description=(row.professional_description or "").strip(),
-            specification_lines=_safe_json_list(row.specification_lines_json),
-            brands=_safe_json_list(row.brands_json),
-            labels_and_tags=_safe_json_list(row.labels_and_tags_json),
-            condition=(row.condition_text or "").strip(),
-            starting_price=row.starting_price,
-            sku_needs_review=True,
-            lot_boundary_blank_page=False,
+    if settings.pipeline_triage_brand_audit:
+        current, _pipeline_result = run_single_lot_pipeline(
+            paths,
+            manifest_tag=manifest_tag,
         )
+    else:
+        payloads = _run_photo_analysis_parallel(paths, manifest_tag=manifest_tag)
+        _apply_last_known_sku_fallback(payloads)
+
+        current = None
+        for payload in payloads:
+            if not payload:
+                continue
+            try:
+                lot_candidate = LotOutput.from_model(payload)
+            except (TypeError, ValueError, KeyError):
+                continue
+            _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
+            if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
+                lot_candidate.sku = None
+                lot_candidate.sku_needs_review = False
+            if current is None:
+                current = lot_candidate
+                continue
+            current.merge_detail(payload)
+
+        if current is None:
+            current = _regenerate_fallback_lot_output(row)
+
+    if preserve_sku:
+        current.sku = tape_marking_canonical(row.sku) or row.sku
 
     linked = int(
         db.query(func.count())
