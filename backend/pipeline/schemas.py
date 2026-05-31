@@ -89,9 +89,19 @@ class VerifiedAndPricedItem(BaseModel):
 
 
 class FullyAuditedManifest(BaseModel):
-    """Pro multimodal audit manifest (brand + optional grounded valuation)."""
+    """Pro multimodal audit manifest — proofreads listing text, brands, and item lines."""
 
     model_config = ConfigDict(extra="forbid")
 
+    final_auction_title: str = Field(
+        default="",
+        description="Pro-corrected single-line auction title; lead with confirmed brand when readable.",
+    )
+    final_professional_description: str = Field(
+        default="",
+        description="Pro-corrected lot overview prose grounded in the images.",
+    )
+    listing_was_corrected_by_pro: bool = False
+    listing_correction_details: str | None = None
     total_items_processed: int = 0
     verified_inventory: list[VerifiedAndPricedItem] = Field(default_factory=list)

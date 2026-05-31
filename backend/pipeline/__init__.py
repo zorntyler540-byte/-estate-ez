@@ -7,6 +7,7 @@ from .pipeline import (
     process_incoming_field_lot,
     run_brand_audit_pro,
     select_analysis_photos,
+    triage_and_select_field_lot,
     triage_single_photo,
 )
 from .schemas import (
@@ -28,5 +29,6 @@ __all__ = [
     "process_incoming_field_lot",
     "run_brand_audit_pro",
     "select_analysis_photos",
+    "triage_and_select_field_lot",
     "triage_single_photo",
 ]

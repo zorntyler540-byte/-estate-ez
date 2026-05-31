@@ -411,12 +411,10 @@ def _brand_audit_from_flash_draft(flash_draft: InventoryLotDraft) -> BrandAuditR
 
 
 BRAND_AUDIT_SYSTEM = (
-    "You are a professional estate inventory auditor. Transcribe maker marks and labels exactly. "
-    "Confirm or correct brand names from the Flash draft JSON and label/front images. Never invent brands. "
-    "Never output placeholder tokens like Unknown, Generic, or Unbranded — leave confirmed_brand empty when unbranded. "
-    "For multi-item lots, emit one verified_inventory row per distinct sellable piece with final_title and "
-    "confirmed_brand when a tag is readable on that item or its label photo. "
-    "Output structured JSON only."
+    "You are a senior estate inventory proofreader. Your job is to verify listing accuracy against the "
+    "actual photos — title, description, brands, and per-item lines. Fix Flash errors (wrong category, "
+    "wrong material, wrong object type). Never invent brands or details not visible in the images. "
+    "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
 
 
@@ -454,11 +452,9 @@ def run_brand_audit_pro(
     flash_item_draft_json: dict,
     *,
     hero_triage_metadata: dict[str, Any] | None = None,
+    flash_listing_context: dict[str, Any] | None = None,
 ) -> str:
-    """Stage 2: Pro multimodal brand audit with Google Search grounding.
-
-    Returns JSON string matching FullyAuditedManifest schema.
-    """
+    """Stage 2: Pro proofreads listing + brands using hero, labels, and Flash draft/listing JSON."""
     client = _get_client()
 
     valuation_block = ""
@@ -474,17 +470,27 @@ def run_brand_audit_pro(
         )
 
     hero_filename = str((hero_triage_metadata or {}).get("filename") or "").strip()
+    listing_block = ""
+    if flash_listing_context:
+        listing_block = (
+            "\n\nFlash listing draft to PROOFREAD and correct (fix title/description if wrong vs images):\n"
+            f"{json.dumps(flash_listing_context, indent=2)}\n"
+            "Populate final_auction_title and final_professional_description with your corrected lot-level text. "
+            "Set listing_was_corrected_by_pro true when you change title or description meaningfully."
+        )
 
     parts: list[Any] = [
-        "Audit the estate lot using the hero context, label/front images, and Flash triage draft JSON below.\n"
+        "Audit and proofread this estate lot using the hero, label/front images, and JSON context below.\n"
         "Tasks:\n"
-        "1. Use the hero wide shot for lot context (distinct items visible on the table/spread).\n"
+        "1. Use the hero wide shot for lot context (every distinct sellable piece visible).\n"
         "2. Transcribe visible tags exactly on label/front frames.\n"
-        "3. Confirm primary and additional brands per distinct item.\n"
-        "4. Fix Flash brand errors only when image evidence supports the correction.\n"
+        "3. PROOFREAD the Flash listing title and description — fix wrong category (e.g. apparel vs tableware), "
+        "wrong material, or missing brands. final_auction_title must be accurate shopper-facing search text.\n"
+        "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
         "5. Leave confirmed_brand empty when no readable maker mark exists.\n"
-        f"{valuation_block}\n\n"
-        f"Flash draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
+        f"{valuation_block}"
+        f"{listing_block}\n\n"
+        f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
     ]
 
     for filename, img_bytes in item_specific_images_dict.items():
@@ -558,6 +564,11 @@ def _manifest_to_brand_audit(
         if item.correction_details:
             corrections.append(item.correction_details.strip())
 
+    if manifest.listing_was_corrected_by_pro:
+        corrected = True
+    if manifest.listing_correction_details:
+        corrections.append(manifest.listing_correction_details.strip())
+
     if flash_brands and brands:
         flash_set = {b.lower() for b in flash_brands if b}
         pro_set = {b.lower() for b in brands}
@@ -576,20 +587,8 @@ def _manifest_to_brand_audit(
     )
 
 
-def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, Any]:
-    """Core orchestration: Stage 1 triage + selection + Stage 2 brand audit."""
-    if not user_images_dict:
-        return {
-            "triage": [],
-            "selected": select_analysis_photos([]),
-            "flash_draft": InventoryLotDraft().model_dump(),
-            "brand_audit_json": FullyAuditedManifest().model_dump_json(),
-            "brand_audit": BrandAuditResult(brand_needs_review=True).model_dump(),
-            "catalog_only_count": 0,
-            "pro_skipped_due_to_agreement": False,
-        }
-
-    # Stage 1 — parallel per-photo triage (order-independent)
+def _run_parallel_triage(user_images_dict: dict[str, bytes]) -> list[dict[str, Any]]:
+    """Stage 1 — parallel per-photo triage (order-independent)."""
     triage: list[dict[str, Any]] = []
     max_workers = min(8, max(1, len(user_images_dict)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -611,12 +610,49 @@ def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, 
                         confidence="low",
                     ).model_dump()
                 )
-                _ = exc  # keep triage row; do not fail entire lot
+                _ = exc
+    return triage
 
+
+def triage_and_select_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, Any]:
+    """Stage 1 only: triage every photo + deterministic selection (no Pro, no listing Flash)."""
+    if not user_images_dict:
+        return {
+            "triage": [],
+            "selected": select_analysis_photos([]),
+            "flash_draft": InventoryLotDraft().model_dump(),
+            "catalog_only_count": 0,
+        }
+
+    triage = _run_parallel_triage(user_images_dict)
     selected = select_analysis_photos(triage)
     flash_draft = _build_flash_draft(triage, selected)
-    flash_draft_json = flash_draft.model_dump()
+    return {
+        "triage": triage,
+        "selected": selected,
+        "flash_draft": flash_draft.model_dump(),
+        "catalog_only_count": len(selected.get("catalog_only") or []),
+    }
 
+
+def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, Any]:
+    """Core orchestration: Stage 1 triage + selection + Stage 2 brand audit (Phase 0 / standalone)."""
+    if not user_images_dict:
+        return {
+            "triage": [],
+            "selected": select_analysis_photos([]),
+            "flash_draft": InventoryLotDraft().model_dump(),
+            "brand_audit_json": FullyAuditedManifest().model_dump_json(),
+            "brand_audit": BrandAuditResult(brand_needs_review=True).model_dump(),
+            "catalog_only_count": 0,
+            "pro_skipped_due_to_agreement": False,
+        }
+
+    core = triage_and_select_field_lot(user_images_dict)
+    triage = core["triage"]
+    selected = core["selected"]
+    flash_draft_json = core["flash_draft"]
+    flash_draft = InventoryLotDraft.model_validate(flash_draft_json)
     pro_filenames = list(selected.get("pro_filenames") or [])
     hero_filename = str(selected.get("hero_filename") or "").strip()
     hero_triage = _hero_triage_block(triage, hero_filename)
@@ -691,6 +727,6 @@ def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, 
         "flash_draft": flash_draft_json,
         "brand_audit_json": brand_audit_json,
         "brand_audit": brand_audit.model_dump(),
-        "catalog_only_count": len(selected.get("catalog_only") or []),
+        "catalog_only_count": core["catalog_only_count"],
         "pro_skipped_due_to_agreement": pro_skipped,
     }

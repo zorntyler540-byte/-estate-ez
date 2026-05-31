@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable
@@ -9,7 +10,14 @@ from typing import Any, Callable
 from app.config import settings
 from app.core.gemini import analyze_path_with_retries, verify_tape_sku
 from app.core.lotting import LotOutput, normalize_brand_list, tape_marking_canonical
-from pipeline import process_incoming_field_lot
+from pipeline import triage_and_select_field_lot
+from pipeline.pipeline import (
+    _build_pro_image_payload,
+    _hero_triage_block,
+    _manifest_to_brand_audit,
+    run_brand_audit_pro,
+)
+from pipeline.schemas import FullyAuditedManifest, InventoryLotDraft
 
 EmitFn = Callable[[dict[str, Any]], None]
 PhotoEntry = tuple[Path, str]
@@ -209,6 +217,55 @@ def _apply_tape_sku_from_paths(
         lot.sku_needs_review = True
 
 
+def _apply_pro_manifest_to_lot(
+    lot: LotOutput,
+    manifest_json: str,
+    *,
+    triage: list[dict[str, Any]] | None = None,
+    flash_draft: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply Pro proofread title, description, item lines, and brands onto the Flash listing."""
+    try:
+        manifest = FullyAuditedManifest.model_validate(json.loads(manifest_json))
+    except Exception:
+        _apply_brand_audit(lot, {"brands": [], "brand_needs_review": True}, triage=triage, flash_draft=flash_draft)
+        return {"brands": [], "brand_needs_review": True, "was_corrected_by_pro": False}
+
+    flash_model = InventoryLotDraft.model_validate(flash_draft or {})
+    title = (manifest.final_auction_title or "").strip()
+    desc = (manifest.final_professional_description or "").strip()
+    if title:
+        lot.auction_title = title
+    if desc:
+        lot.professional_description = desc
+
+    if manifest.verified_inventory:
+        item_lines: list[str] = []
+        for row in manifest.verified_inventory:
+            line_title = (row.final_title or "").strip()
+            if not line_title:
+                continue
+            item_lines.append(f"Item {row.line_item_id}: {line_title}")
+        if item_lines:
+            kept = [ln for ln in lot.specification_lines if not ln.lower().startswith("item ")]
+            lot.specification_lines = kept + item_lines
+
+    brand_audit = _manifest_to_brand_audit(manifest_json, [], flash_model)
+    _apply_brand_audit(lot, brand_audit.model_dump(), triage=triage, flash_draft=flash_draft)
+    # Pro title/description are authoritative — finalize must not overwrite them.
+    if title:
+        lot.auction_title = title
+    if desc:
+        lot.professional_description = desc
+    if manifest.listing_was_corrected_by_pro:
+        brand_audit_dict = brand_audit.model_dump()
+        brand_audit_dict["was_corrected_by_pro"] = True
+        if manifest.listing_correction_details:
+            brand_audit_dict["correction_details"] = manifest.listing_correction_details
+        return brand_audit_dict
+    return brand_audit.model_dump()
+
+
 def _estimate_pipeline_tokens(photo_count: int, *, ran_pro: bool, listing_calls: int) -> tuple[int, int]:
     est_in = photo_count * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO
     est_out = photo_count * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO
@@ -227,8 +284,8 @@ def run_single_lot_pipeline(
     emit: EmitFn | None = None,
 ) -> tuple[LotOutput, dict[str, Any]]:
     """
-    Stage 1 triage + selection + Stage 2 brand audit, then a capped Flash listing pass
-    on hero/front frames only. Returns ``LotOutput`` and raw pipeline diagnostics.
+    Stage 1 triage + selection, capped Flash listing, then Pro proofreads title/brands/items.
+    Returns ``LotOutput`` and raw pipeline diagnostics.
 
     Pass ``(path, filename_key)`` tuples when catalog files on disk are not named like
     the original camera filenames (regenerate on stored lots).
@@ -243,10 +300,10 @@ def run_single_lot_pipeline(
     if emit:
         emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": len(entries)})
 
-    pipeline_result = process_incoming_field_lot(images)
+    pipeline_result = triage_and_select_field_lot(images)
     selected = dict(pipeline_result.get("selected") or {})
     flash_draft = dict(pipeline_result.get("flash_draft") or {})
-    brand_audit = dict(pipeline_result.get("brand_audit") or {})
+    triage_rows = list(pipeline_result.get("triage") or [])
 
     if emit:
         emit(
@@ -256,16 +313,15 @@ def run_single_lot_pipeline(
                 "front_filenames": list(selected.get("front_filenames") or []),
                 "pro_filenames": list(selected.get("pro_filenames") or []),
                 "catalog_only_count": int(pipeline_result.get("catalog_only_count") or 0),
-                "pro_skipped_due_to_agreement": bool(pipeline_result.get("pro_skipped_due_to_agreement")),
             }
         )
 
     listing_names: list[str] = []
     hero_name = str(selected.get("hero_filename") or "").strip()
+    pro_filenames = list(selected.get("pro_filenames") or [])
     if hero_name:
         listing_names.append(hero_name)
-    # Label/tag frames carry maker names — include before generic fronts when capped.
-    for fn in list(selected.get("pro_filenames") or []):
+    for fn in pro_filenames:
         if fn and fn not in listing_names:
             listing_names.append(fn)
     for fn in list(selected.get("front_filenames") or []):
@@ -273,7 +329,6 @@ def run_single_lot_pipeline(
             listing_names.append(fn)
     listing_names = listing_names[: max(1, settings.listing_flash_max_frames)]
 
-    # If triage selection missed everything, still run listing on the first few files.
     if not listing_names:
         listing_names = list(path_by_key.keys())[: max(1, settings.listing_flash_max_frames)]
 
@@ -302,22 +357,50 @@ def run_single_lot_pipeline(
         else:
             lot.merge_detail(payload)
 
+    brand_audit: dict[str, Any] = {"brands": [], "brand_needs_review": True}
+    pro_skipped = True
+    ran_pro = False
+
     if lot is None:
         lot = _lot_from_flash_draft(flash_draft, brand_audit)
-        _apply_brand_audit(
-            lot,
-            brand_audit,
-            triage=list(pipeline_result.get("triage") or []),
-            flash_draft=flash_draft,
-        )
     else:
         _merge_flash_item_specs(lot, flash_draft)
-        _apply_brand_audit(
-            lot,
-            brand_audit,
-            triage=list(pipeline_result.get("triage") or []),
-            flash_draft=flash_draft,
-        )
+
+    hero_triage = _hero_triage_block(triage_rows, hero_name)
+    should_run_pro = bool(hero_name or pro_filenames or lot)
+    if should_run_pro:
+        pro_images = _build_pro_image_payload(images, pro_filenames, hero_filename=hero_name)
+        flash_listing_context = {
+            "auction_title": lot.auction_title,
+            "professional_description": lot.professional_description,
+            "specification_lines": list(lot.specification_lines),
+            "brands": list(lot.brands),
+        }
+        if emit:
+            emit({"type": "batch_phase", "phase": "pipeline_pro_proofread", "total_photos": len(entries)})
+        try:
+            manifest_json = run_brand_audit_pro(
+                pro_images,
+                flash_draft,
+                hero_triage_metadata=hero_triage,
+                flash_listing_context=flash_listing_context,
+            )
+            brand_audit = _apply_pro_manifest_to_lot(
+                lot,
+                manifest_json,
+                triage=triage_rows,
+                flash_draft=flash_draft,
+            )
+            pipeline_result["brand_audit_json"] = manifest_json
+            pro_skipped = False
+            ran_pro = True
+        except Exception:
+            _apply_brand_audit(lot, brand_audit, triage=triage_rows, flash_draft=flash_draft)
+    else:
+        _apply_brand_audit(lot, brand_audit, triage=triage_rows, flash_draft=flash_draft)
+
+    pipeline_result["brand_audit"] = brand_audit
+    pipeline_result["pro_skipped_due_to_agreement"] = pro_skipped
 
     _apply_tape_sku_from_paths(
         lot,
@@ -326,10 +409,6 @@ def run_single_lot_pipeline(
         manifest_tag=manifest_tag,
     )
 
-    ran_pro = (
-        not bool(pipeline_result.get("pro_skipped_due_to_agreement"))
-        and bool(selected.get("pro_filenames") or hero_name)
-    )
     est_in, est_out = _estimate_pipeline_tokens(len(entries), ran_pro=ran_pro, listing_calls=listing_calls)
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}
     pipeline_result["listing_filenames_used"] = listing_names
