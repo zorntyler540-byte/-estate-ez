@@ -508,14 +508,16 @@ def run_brand_audit_pro(
         role_note = " (hero shot — whole-lot context)" if hero_filename and filename == hero_filename else ""
         parts.append(f"The preceding image filename is: {filename}{role_note}")
 
-    grounding_tool = types.Tool(google_search=types.GoogleSearch())
-    config = types.GenerateContentConfig(
-        tools=[grounding_tool],
-        response_mime_type="application/json",
-        response_schema=FullyAuditedManifest,
-        system_instruction=BRAND_AUDIT_SYSTEM,
-        temperature=0.1,
-    )
+    config_kwargs: dict[str, Any] = {
+        "response_mime_type": "application/json",
+        "response_schema": FullyAuditedManifest,
+        "system_instruction": BRAND_AUDIT_SYSTEM,
+        "temperature": 0.1,
+    }
+    # Google Search + structured JSON schema returns 400 on 2.5 Pro — only enable for valuation.
+    if ENABLE_GROUNDED_VALUATION:
+        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+    config = types.GenerateContentConfig(**config_kwargs)
 
     response = client.models.generate_content(
         model=GEMINI_PRO_MODEL,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +19,8 @@ from pipeline.pipeline import (
     run_brand_audit_pro,
 )
 from pipeline.schemas import FullyAuditedManifest, InventoryLotDraft
+
+logger = logging.getLogger(__name__)
 
 EmitFn = Callable[[dict[str, Any]], None]
 PhotoEntry = tuple[Path, str]
@@ -428,7 +431,14 @@ def run_single_lot_pipeline(
             pipeline_result["brand_audit_json"] = manifest_json
             pro_skipped = False
             ran_pro = True
-        except Exception:
+            pipeline_result["pro_model"] = settings.gemini_pro_model
+        except Exception as exc:
+            logger.warning(
+                "Pipeline Pro proofread failed (%s); falling back to Flash + triage brands.",
+                exc,
+                exc_info=True,
+            )
+            pipeline_result["pro_error"] = f"{type(exc).__name__}: {exc}"
             _apply_brand_audit(lot, brand_audit, triage=triage_rows, flash_draft=flash_draft)
     else:
         _apply_brand_audit(lot, brand_audit, triage=triage_rows, flash_draft=flash_draft)
