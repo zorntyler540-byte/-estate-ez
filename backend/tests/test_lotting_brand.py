@@ -6,6 +6,7 @@ import unittest
 
 from app.core.lotting import (
     LotOutput,
+    _broaden_auction_title_for_components,
     _ensure_branded_auction_title,
     infer_brands_from_label_context,
     resolve_lot_brands,
@@ -159,6 +160,17 @@ class TestBrandResolution(unittest.TestCase):
         )
         self.assertIn("St. John's Bay", lot.auction_title)
         self.assertNotIn("Detail with", lot.auction_title)
+
+    def test_multi_accessory_item_lines_avoid_brass_table_title(self) -> None:
+        specs = [
+            "Item 1: Black scarf with gold-tone floral embroidery",
+            "Item 2: Black knit headband with feather embellishment",
+            "Item 3: Black fleece winter hat with sherpa-style lining",
+        ]
+        out = _broaden_auction_title_for_components("Single scarf detail", specs)
+        self.assertNotIn("Brass", out)
+        self.assertNotIn("table", out.lower())
+        self.assertIn("accessory", out.lower())
 
 
 if __name__ == "__main__":

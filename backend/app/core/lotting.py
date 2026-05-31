@@ -1493,6 +1493,37 @@ def _material_lead_word_from_title_and_specs(title: str, specification_lines: li
     return "Brass"
 
 
+_ACCESSORY_ITEM_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("scarf", "scarf"),
+    ("pashmina", "scarf"),
+    ("shawl", "scarf"),
+    ("headband", "headband"),
+    ("earmuff", "earmuffs"),
+    ("beanie", "hat"),
+    ("winter hat", "hat"),
+    ("fleece hat", "hat"),
+    ("knit hat", "hat"),
+    ("glove", "gloves"),
+    ("mitten", "mittens"),
+    ("handbag", "handbag"),
+    ("purse", "handbag"),
+)
+
+
+def _accessory_types_from_item_bodies(bodies: list[str]) -> list[str]:
+    """Short garment/accessory nouns from ``Item n:`` bodies for lot-style titles."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for body in bodies:
+        low = body.lower()
+        for needle, label in _ACCESSORY_ITEM_KEYWORDS:
+            if needle in low and label not in seen:
+                seen.add(label)
+                found.append(label)
+                break
+    return found
+
+
 def _broaden_auction_title_for_components(title: str, specification_lines: list[str]) -> str:
     """
     Replace an under-inclusive title with a short lot-style title when **Components:** proves multiple distinct forms.
@@ -1501,6 +1532,17 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
     if not t or not _title_narrows_multi_component_lot(t, specification_lines):
         return t
     blob = " ".join(specification_lines).lower()
+    item_bodies = _item_spec_bodies(specification_lines)
+    if len(item_bodies) >= 2:
+        accessory_types = _accessory_types_from_item_bodies(item_bodies)
+        if len(accessory_types) >= 2 or (
+            len(accessory_types) >= 1
+            and _spec_lines_indicate_wardrobe_apparel(specification_lines, blob)
+        ):
+            if len(accessory_types) >= 2:
+                joined = ", ".join(accessory_types[:4])
+                return f"Fashion accessory lot: {joined}"[:500]
+            return f"Fashion accessory lot ({len(item_bodies)} pieces)"[:500]
     if _spec_lines_indicate_multi_textile_piece(specification_lines):
         fiber = "Cotton"
         if "linen" in blob and "cotton" not in blob:

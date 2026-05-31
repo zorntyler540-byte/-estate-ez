@@ -412,8 +412,10 @@ def _brand_audit_from_flash_draft(flash_draft: InventoryLotDraft) -> BrandAuditR
 
 BRAND_AUDIT_SYSTEM = (
     "You are a professional estate inventory auditor. Transcribe maker marks and labels exactly. "
-    "Confirm or correct brand names from the Flash draft JSON. Never invent brands. "
+    "Confirm or correct brand names from the Flash draft JSON and label/front images. Never invent brands. "
     "Never output placeholder tokens like Unknown, Generic, or Unbranded — leave confirmed_brand empty when unbranded. "
+    "For multi-item lots, emit one verified_inventory row per distinct sellable piece with final_title and "
+    "confirmed_brand when a tag is readable on that item or its label photo. "
     "Output structured JSON only."
 )
 
@@ -561,6 +563,9 @@ def _manifest_to_brand_audit(
         pro_set = {b.lower() for b in brands}
         if flash_set != pro_set:
             corrected = True
+
+    if not brands:
+        return _brand_audit_from_flash_draft(flash_draft)
 
     return BrandAuditResult(
         brands=brands,

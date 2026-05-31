@@ -120,14 +120,47 @@ def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, An
     return lot
 
 
-def _apply_brand_audit(lot: LotOutput, brand_audit: dict[str, Any]) -> None:
-    brands = normalize_brand_list(list(brand_audit.get("brands") or []))
+def _apply_brand_audit(
+    lot: LotOutput,
+    brand_audit: dict[str, Any],
+    *,
+    triage: list[dict[str, Any]] | None = None,
+    flash_draft: dict[str, Any] | None = None,
+) -> None:
+    brands: list[str] = list(brand_audit.get("brands") or [])
+    if triage:
+        for row in triage:
+            if row.get("label_legibility") not in ("clear", "partial"):
+                continue
+            brand = _normalize_brand_from_triage(row.get("brand_text"))
+            if brand:
+                brands.append(brand)
+            tag_text = str(row.get("brand_text") or "").strip()
+            if tag_text and tag_text not in lot.labels_and_tags:
+                lot.labels_and_tags.append(tag_text)
+    if flash_draft:
+        for item in flash_draft.get("items") or []:
+            brand = _normalize_brand_from_triage(item.get("raw_ocr_text_found"))
+            if brand:
+                brands.append(brand)
+
+    brands = normalize_brand_list(brands)
     if brands:
         lot.brands = brands
     if brand_audit.get("brand_needs_review"):
         lot.brand_needs_review = True
         lot.sku_needs_review = True
     lot._finalize_listing_quality()
+
+
+def _normalize_brand_from_triage(text: object) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    placeholders = {"unknown", "generic", "unbranded", "n/a", "none", "unidentified"}
+    if raw.lower() in placeholders:
+        return ""
+    return raw
 
 
 def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None:
@@ -231,6 +264,10 @@ def run_single_lot_pipeline(
     hero_name = str(selected.get("hero_filename") or "").strip()
     if hero_name:
         listing_names.append(hero_name)
+    # Label/tag frames carry maker names — include before generic fronts when capped.
+    for fn in list(selected.get("pro_filenames") or []):
+        if fn and fn not in listing_names:
+            listing_names.append(fn)
     for fn in list(selected.get("front_filenames") or []):
         if fn and fn not in listing_names:
             listing_names.append(fn)
@@ -267,9 +304,20 @@ def run_single_lot_pipeline(
 
     if lot is None:
         lot = _lot_from_flash_draft(flash_draft, brand_audit)
+        _apply_brand_audit(
+            lot,
+            brand_audit,
+            triage=list(pipeline_result.get("triage") or []),
+            flash_draft=flash_draft,
+        )
     else:
         _merge_flash_item_specs(lot, flash_draft)
-        _apply_brand_audit(lot, brand_audit)
+        _apply_brand_audit(
+            lot,
+            brand_audit,
+            triage=list(pipeline_result.get("triage") or []),
+            flash_draft=flash_draft,
+        )
 
     _apply_tape_sku_from_paths(
         lot,
