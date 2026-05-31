@@ -1242,13 +1242,22 @@ def run_lot_ai_regenerate_and_save(
 
     paths: list[Path] = []
     photo_rows: list[Photo] = []
+    missing_files: list[str] = []
     for ph in photos:
         pth = resolve_catalog_storage_path(ph.storage_path)
         if pth.is_file():
             paths.append(pth)
             photo_rows.append(ph)
-    if not paths:
-        raise ValueError("Image files are missing on disk for this lot.")
+        else:
+            label = (ph.original_name or ph.id or ph.storage_path or "").strip()
+            missing_files.append(label or "unknown photo")
+    if missing_files:
+        shown = ", ".join(missing_files[:5])
+        if len(missing_files) > 5:
+            shown += f", +{len(missing_files) - 5} more"
+        raise ValueError(
+            f"Image files are missing on disk for {len(missing_files)} of {len(photos)} selected lot photos: {shown}."
+        )
 
     manifest_tag = f"regen-{lot_id}"
 
@@ -1308,8 +1317,11 @@ def run_lot_ai_regenerate_and_save(
     row.labels_and_tags_json = json.dumps(current.labels_and_tags, ensure_ascii=True)
     row.ct_category = ct_cat
     row.ct_subcategory = ct_sub
-    row.starting_price = current.starting_price
-    row.condition_text = current.condition
+    if current.starting_price is not None:
+        row.starting_price = current.starting_price
+    condition = (current.condition or "").strip()
+    if condition:
+        row.condition_text = condition
     row.sku_needs_review = bool(current.sku_needs_review)
     if not preserve_sku:
         row.sku = current.sku
