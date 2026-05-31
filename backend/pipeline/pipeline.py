@@ -116,13 +116,14 @@ TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 Rules:
 - hero: single best wide shot showing most of the lot (only one file should win hero selection).
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
-- angle_only: side, back, detail, damage close-up — not used for brand or hero listing.
+- angle_only: side, back, detail, damage close-up — not used for hero listing.
+  Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
 - tape: colored estate lot tape / SKU marker visible.
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.
 - Flag every image with any readable tag text (label_legibility clear or partial), even if corner of frame.
-- brand_text: verbatim OCR from labels/tags; empty string if not readable (never use Unknown/Generic/Unbranded).
+- brand_text: verbatim OCR from labels/tags — copy the maker/brand name exactly (e.g. "St. John's Bay", "Mirabeau", "Shiboyuan") even when care/size text is also visible; empty string if not readable (never use Unknown/Generic/Unbranded).
 - duplicate_of_filename: set when this image is a near-duplicate of another file in the lot.
 
 The preceding image filename is: {filename}
@@ -244,16 +245,17 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         if fn not in listing_filenames:
             listing_filenames.append(fn)
 
-    # C. Brand / Pro pool (2–4 label images; never angle_only)
+    # C. Brand / Pro pool (2–4 label images; include legible tag close-ups even when angle_only)
     pro_pool: list[PhotoTriageResult] = []
     for r in rows:
-        if r.photo_role == "angle_only":
+        if r.photo_role == "unusable":
             continue
-        if r.photo_role == "item_front" and r.label_legibility in ("clear", "partial"):
+        if r.label_legibility not in ("clear", "partial"):
+            continue
+        if r.photo_role in ("item_front", "tape"):
             pro_pool.append(r)
-        elif r.photo_role == "tape" and r.label_legibility in ("clear", "partial"):
-            pro_pool.append(r)
-        elif r.photo_role == "tape" and _normalize_brand(r.brand_text):
+        elif r.photo_role == "angle_only":
+            # Tag/label macro shots are often classified angle_only — still send to Pro.
             pro_pool.append(r)
 
     pro_pool.sort(key=_pro_score, reverse=True)
@@ -487,7 +489,9 @@ def run_brand_audit_pro(
         "3. PROOFREAD the Flash listing title and description — fix wrong category (e.g. apparel vs tableware), "
         "wrong material, or missing brands. final_auction_title must be accurate shopper-facing search text.\n"
         "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
-        "5. Leave confirmed_brand empty when no readable maker mark exists.\n"
+        "5. When label/tag images show a maker name, set confirmed_brand on that item (e.g. St. John's Bay, Mirabeau, Shiboyuan).\n"
+        "6. Leave confirmed_brand empty only when no readable maker mark exists on any frame for that piece.\n"
+        "7. When one primary brand is clearly readable, lead final_auction_title with it for search.\n"
         f"{valuation_block}"
         f"{listing_block}\n\n"
         f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",

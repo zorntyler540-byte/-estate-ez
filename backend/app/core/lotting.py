@@ -2402,6 +2402,9 @@ _AUTHENTIC_MAKER_RE = re.compile(
     r"(?i)\bAUTHENTIC\s+([A-Za-z][A-Za-z0-9'&.\-\s]{2,56}?)"
     r"(?:\s+(?:ESTABLISHED|SINCE|TRADITIONAL|TM|®)\b|\s*$|[,.;])"
 )
+_FASHION_BY_MAKER_RE = re.compile(
+    r"(?i)\bfashion(?:\s+accessory)?\s+by\s+([A-Za-z][A-Za-z0-9'&.\-\s]{2,40})"
+)
 
 # Common estate-sale apparel makers (label text often partial).
 _KNOWN_LABEL_BRAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -2422,6 +2425,8 @@ _KNOWN_LABEL_BRAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\btribal\b"), "Tribal"),
     (re.compile(r"(?i)\balfred\s+dunner\b"), "Alfred Dunner"),
     (re.compile(r"(?i)\bwhite\s+mountain\b"), "White Mountain"),
+    (re.compile(r"(?i)\bmirabeau\b"), "Mirabeau"),
+    (re.compile(r"(?i)\bshiboyuan\b"), "Shiboyuan"),
 )
 
 # Apparel garment tokens for collapsing per-photo ``Item n:`` rows across merged frames.
@@ -2475,6 +2480,10 @@ def infer_brands_from_label_context(
             found.append(canonical)
     if found:
         return normalize_brand_list(found)
+    for m in _FASHION_BY_MAKER_RE.finditer(blob):
+        name = _normalize_inferred_brand_name(m.group(1))
+        if name:
+            found.append(name)
     for m in _AUTHENTIC_MAKER_RE.finditer(blob):
         name = _normalize_inferred_brand_name(m.group(1))
         if name:
@@ -2545,6 +2554,12 @@ def resolve_lot_brands(
         evidenced = [b for b in filtered if _brand_appears_in_blob(b, blob)]
         keep = normalize_brand_list(evidenced or filtered)
         return keep, dropped
+
+    if _count_item_spec_lines(specification_lines) >= 2 and len(filtered) >= 2:
+        evidenced = [b for b in filtered if _brand_appears_in_blob(b, blob)]
+        keep = normalize_brand_list(evidenced or filtered)
+        if len(keep) >= 2:
+            return keep, dropped
 
     primary = _pick_primary_brand(filtered, auction_title, blob)
     return ([primary] if primary else []), True

@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from app.config import settings
 from app.core.gemini import analyze_path_with_retries, verify_tape_sku
-from app.core.lotting import LotOutput, normalize_brand_list, tape_marking_canonical
+from app.core.lotting import LotOutput, infer_brands_from_label_context, normalize_brand_list, tape_marking_canonical
 from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
     _build_pro_image_payload,
@@ -128,29 +128,67 @@ def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, An
     return lot
 
 
+def _brands_from_triage_and_draft(
+    triage: list[dict[str, Any]] | None,
+    flash_draft: dict[str, Any] | None,
+) -> list[str]:
+    """Recover maker names from triage OCR and Flash draft using label-context rules."""
+    labels: list[str] = []
+    if triage:
+        for row in triage:
+            if row.get("label_legibility") not in ("clear", "partial"):
+                continue
+            tag_text = str(row.get("brand_text") or "").strip()
+            if tag_text:
+                labels.append(tag_text)
+    spec_lines: list[str] = []
+    if flash_draft:
+        for item in flash_draft.get("items") or []:
+            ocr = str(item.get("raw_ocr_text_found") or "").strip()
+            if ocr:
+                labels.append(ocr)
+        spec_lines = [
+            f"Item {idx}: {str(item.get('suggested_title') or '').strip()}"
+            for idx, item in enumerate(flash_draft.get("items") or [], start=1)
+            if str(item.get("suggested_title") or "").strip()
+        ]
+    return infer_brands_from_label_context(labels, spec_lines)
+
+
+def _brands_from_pro_manifest(manifest: FullyAuditedManifest) -> list[str]:
+    """Infer makers from Pro proofread titles when confirmed_brand is empty."""
+    spec_lines = [
+        f"Item {row.line_item_id}: {(row.final_title or '').strip()}"
+        for row in manifest.verified_inventory
+        if (row.final_title or "").strip()
+    ]
+    return infer_brands_from_label_context(
+        [],
+        spec_lines,
+        manifest.final_auction_title,
+        manifest.final_professional_description,
+    )
+
+
 def _apply_brand_audit(
     lot: LotOutput,
     brand_audit: dict[str, Any],
     *,
     triage: list[dict[str, Any]] | None = None,
     flash_draft: dict[str, Any] | None = None,
+    pro_manifest: FullyAuditedManifest | None = None,
 ) -> None:
     brands: list[str] = list(brand_audit.get("brands") or [])
+    if pro_manifest:
+        brands.extend(_brands_from_pro_manifest(pro_manifest))
+    brands.extend(_brands_from_triage_and_draft(triage, flash_draft))
     if triage:
         for row in triage:
             if row.get("label_legibility") not in ("clear", "partial"):
                 continue
-            brand = _normalize_brand_from_triage(row.get("brand_text"))
-            if brand:
-                brands.append(brand)
             tag_text = str(row.get("brand_text") or "").strip()
             if tag_text and tag_text not in lot.labels_and_tags:
                 lot.labels_and_tags.append(tag_text)
-    if flash_draft:
-        for item in flash_draft.get("items") or []:
-            brand = _normalize_brand_from_triage(item.get("raw_ocr_text_found"))
-            if brand:
-                brands.append(brand)
 
     brands = normalize_brand_list(brands)
     if brands:
@@ -159,16 +197,6 @@ def _apply_brand_audit(
         lot.brand_needs_review = True
         lot.sku_needs_review = True
     lot._finalize_listing_quality()
-
-
-def _normalize_brand_from_triage(text: object) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    placeholders = {"unknown", "generic", "unbranded", "n/a", "none", "unidentified"}
-    if raw.lower() in placeholders:
-        return ""
-    return raw
 
 
 def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None:
@@ -251,7 +279,13 @@ def _apply_pro_manifest_to_lot(
             lot.specification_lines = kept + item_lines
 
     brand_audit = _manifest_to_brand_audit(manifest_json, [], flash_model)
-    _apply_brand_audit(lot, brand_audit.model_dump(), triage=triage, flash_draft=flash_draft)
+    _apply_brand_audit(
+        lot,
+        brand_audit.model_dump(),
+        triage=triage,
+        flash_draft=flash_draft,
+        pro_manifest=manifest,
+    )
     # Pro title/description are authoritative — finalize must not overwrite them.
     if title:
         lot.auction_title = title
