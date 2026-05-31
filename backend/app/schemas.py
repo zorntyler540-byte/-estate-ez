@@ -7,6 +7,9 @@ from pydantic import BaseModel, EmailStr, Field
 
 class HealthResponse(BaseModel):
     status: str
+    pipeline_triage_brand_audit: bool = False
+    gemini_pro_model: str = ""
+    gemini_flash_model: str = ""
 
 
 class RegisterRequest(BaseModel):

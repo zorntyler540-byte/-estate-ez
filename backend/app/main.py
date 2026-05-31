@@ -202,7 +202,12 @@ def startup() -> None:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok")
+    return HealthResponse(
+        status="ok",
+        pipeline_triage_brand_audit=settings.pipeline_triage_brand_audit,
+        gemini_pro_model=settings.gemini_pro_model,
+        gemini_flash_model=settings.gemini_flash_model,
+    )
 
 
 @app.post("/auth/register", response_model=TokenResponse)

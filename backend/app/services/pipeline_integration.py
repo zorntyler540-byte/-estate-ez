@@ -337,6 +337,12 @@ def run_single_lot_pipeline(
     if emit:
         emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": len(entries)})
 
+    logger.info(
+        "Pipeline start: photos=%d pro_model=%s flash_model=%s",
+        len(entries),
+        settings.gemini_pro_model,
+        settings.gemini_flash_model,
+    )
     pipeline_result = triage_and_select_field_lot(images)
     selected = dict(pipeline_result.get("selected") or {})
     flash_draft = dict(pipeline_result.get("flash_draft") or {})
@@ -432,6 +438,7 @@ def run_single_lot_pipeline(
             pro_skipped = False
             ran_pro = True
             pipeline_result["pro_model"] = settings.gemini_pro_model
+            logger.info("Pipeline Pro proofread succeeded model=%s", settings.gemini_pro_model)
         except Exception as exc:
             logger.warning(
                 "Pipeline Pro proofread failed (%s); falling back to Flash + triage brands.",
