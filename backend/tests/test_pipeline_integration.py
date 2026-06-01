@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
+from app.services.pipeline_integration import (
+    _brands_from_triage_and_draft,
+    _lot_from_flash_draft,
+    is_weak_pipeline_lot,
+)
 from pipeline.pipeline import _build_pro_image_payload, select_analysis_photos
 
 
@@ -110,3 +114,33 @@ def test_lot_from_flash_draft_uses_brand_audit() -> None:
     lot = _lot_from_flash_draft(flash_draft, brand_audit)
     assert lot.brands == ["Levi's"]
     assert "Levi's" in lot.auction_title or "denim" in lot.auction_title.lower()
+
+
+def test_pipeline_placeholder_lot_with_specs_is_weak() -> None:
+    flash_draft = {
+        "items": [
+            {"temporary_id": "ITEM_1", "suggested_title": "Blue denim jacket", "raw_ocr_text_found": "Levi's"},
+            {"temporary_id": "ITEM_2", "suggested_title": "Black leather belt", "raw_ocr_text_found": ""},
+        ]
+    }
+    lot = _lot_from_flash_draft(flash_draft, {"brands": ["Levi's"], "brand_needs_review": False})
+
+    assert lot.auction_title == "Estate lot (2 items)"
+    assert lot.brands == ["Levi's"]
+    assert lot.specification_lines
+    assert is_weak_pipeline_lot(lot)
+
+
+def test_pipeline_specific_title_with_specs_is_not_weak() -> None:
+    flash_draft = {
+        "items": [
+            {
+                "temporary_id": "ITEM_1",
+                "suggested_title": "Levi's denim jacket",
+                "raw_ocr_text_found": "Levi's",
+            }
+        ]
+    }
+    lot = _lot_from_flash_draft(flash_draft, {"brands": ["Levi's"], "brand_needs_review": False})
+
+    assert not is_weak_pipeline_lot(lot)

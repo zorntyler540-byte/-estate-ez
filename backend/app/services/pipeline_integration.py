@@ -36,6 +36,18 @@ EST_PIPELINE_PRO_OUTPUT = 600
 _PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
 
 
+def _is_placeholder_pipeline_title(value: str) -> bool:
+    title_low = value.strip().lower()
+    if title_low in _PLACEHOLDER_TITLES or title_low.startswith("estate item ("):
+        return True
+    if title_low.startswith("estate lot (") and title_low.endswith(")"):
+        inner = title_low[len("estate lot (") : -1].strip()
+        parts = inner.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1] in {"item", "items"}:
+            return True
+    return False
+
+
 def _sync_pipeline_env_from_settings() -> None:
     """Ensure the isolated pipeline reads the same API key and model knobs as the app."""
     key = (settings.google_api_key or "").strip()
@@ -80,10 +92,8 @@ def is_weak_pipeline_lot(lot: LotOutput) -> bool:
     """True when pipeline produced no usable listing text (generic placeholder)."""
     title = (lot.auction_title or "").strip()
     desc = (lot.professional_description or "").strip()
-    title_low = title.lower()
-    if title_low in _PLACEHOLDER_TITLES or title_low.startswith("estate item ("):
-        if not lot.brands and not lot.specification_lines:
-            return True
+    if _is_placeholder_pipeline_title(title):
+        return True
     if not title and not desc and not lot.specification_lines and not lot.brands:
         return True
     return False
