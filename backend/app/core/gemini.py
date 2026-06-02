@@ -115,7 +115,7 @@ class InventoryTableEntry(BaseModel):
         default=None,
         validation_alias=AliasChoices("sku", "SKU"),
         description=(
-            "Handwritten or printed lot code on colored estate adhesive tape: PURPLE, LAVENDER, bright NEON GREEN, "
+            "Handwritten or printed lot code on colored estate adhesive tape: PURPLE, LAVENDER, BLUE, bright NEON GREEN, "
             "or bright YELLOW masking/painter tape (lot marker — not yellow measuring tape). Read sku from focused crop "
             "if provided. Never use stamped manufacturer numbers (e.g. 1420) or silverplate pattern numbers as SKU."
         ),
@@ -166,8 +166,10 @@ class InventoryTableEntry(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("labels_and_tags", "LabelsAndTags"),
         description=(
-            "Verbatim short strings from sewn-in or hang tags (e.g. 'AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984', "
-            "'L/G', 'MADE IN CHINA'). Required when any label is readable; used to set **brand**."
+            "**Apparel, footwear, and handbags only:** verbatim short strings from sewn-in or hang tags "
+            "(e.g. 'AUTHENTIC ST. JOHN'S BAY ESTABLISHED 1984', 'L/G', 'MADE IN CHINA', 'Size 2'). "
+            "Leave **empty** for coins, art supplies, home goods, and other non-garment lots — put makers in **brand** "
+            "and product facts in **specification_lines**, not here."
         ),
     )
     starting_price_usd: float | None = Field(
@@ -402,7 +404,7 @@ SYSTEM_INSTRUCTION = (
     "Identify brand, model, material, the **condition tier** (condition_notes), and era from the image. Tone: **warm estate-sale listing**, concise, "
     "never word-splurging. "
     "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of colored estate lot tape "
-    "(purple, lavender, neon green, or yellow masking tape) — prioritize image 2 for SKU. "
+    "(purple, lavender, blue, neon green, or yellow masking tape) — prioritize image 2 for SKU. "
     "SKU must appear on that estate tape only (not yellow measuring tape, not rulers). "
     "Never use sewn tags, size tags, or stamped numbers on the item body as SKU. "
     "Condition must use exactly one of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
@@ -439,7 +441,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "- **Apparel / shoes wardrobe lots:** Use **Item 1:** … **Item n:** only (one row per **salable** piece — "
         "one jacket, one cardigan, one pair of shoes, one pair of trousers). **Never** list a single left/right shoe "
         "as its own Item when the pair is in the lot. **Do not** add **Components:** or extra **Size:** spec lines "
-        "(sizes belong in Item text and **labels_and_tags**). Put label text in **labels_and_tags** only.\n"
+        "(sizes belong in Item text and **labels_and_tags**). Put sewn-in label and size text in **labels_and_tags** only — "
+        "**never** for art supplies, coins, or home goods (leave **labels_and_tags** empty on those lots).\n"
         "- **Footwear style:** Call open-toe perforated shoes **clogs**, **mules**, or **wedge clogs** when visible — "
         "**not** Mary Jane (Mary Jane has a closed strap across the instep; peep-toe / open-toe is different).\n"
         "- Treat 'Czechoslovakia' / country text as origin unless a specific maker hallmark is visible.\n"
@@ -481,7 +484,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "If you skip per-item lines, you may use one Subject and/or one Form for the lot — not both a full item list and "
         "a second pass under other headings. "
         "Never include a Markings line or stamp/mold-number transcription.\n"
-        "- sku: Lot marking on purple, lavender, bright green, or bright yellow estate masking tape ONLY "
+        "- sku: Lot marking on purple, lavender, blue, bright green, or bright yellow estate masking tape ONLY "
         "(same code you would read from image 2 when provided). null if not on tape.\n"
     )
 
@@ -793,7 +796,7 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
         return None
     prompt = (
         f"Audit: Is the lot marking {claim!r} clearly visible on estate lot tape? "
-        "Tape may be PURPLE, LAVENDER, bright NEON GREEN, or bright YELLOW adhesive masking/painter tape "
+        "Tape may be PURPLE, LAVENDER, BLUE, bright NEON GREEN, or bright YELLOW adhesive masking/painter tape "
         "with handwriting or print on its surface. "
         "Set new_lot_from_tape false if the marking is only on a yellow MEASURING tape (inch/cm scale), ruler, "
         "sticker, tag, or item body. "

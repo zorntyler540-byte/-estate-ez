@@ -1161,10 +1161,102 @@ def rebuild_components_from_unique_items(lines: list[str]) -> list[str]:
     return out
 
 
+_NON_APPAREL_SUPPLY_RE = re.compile(
+    r"(?i)\b(sketch\s*pad|sketchbook|watercolor|colored\s+pencil|colour\s+pencil|"
+    r"art\s+suppl|prismacolor|moleskine|easel|canvas\s+pad|"
+    r"acid[- ]?free|cold\s+press|linen[- ]?bound|expandable\s+inner\s+pocket|"
+    r"double[- ]?sided|drawing\s+pencil|ink\s+bottle|marker\s+set)\b"
+)
+
+_WARDROBE_ACCESSORY_FOR_SIZE_TAGS_RE = re.compile(
+    r"(?i)\b(handbag|purse|wallet|crossbody|tote|satchel|clutch)\b"
+)
+
+_SIZE_TAG_TEXT_RE = re.compile(
+    r"(?i)\b("
+    r"size\s*[:\s]?|petite|\bps\b|\bxl\b|\bxxl\b|\bxs\b|\bl/g\b|\bg/l\b|"
+    r"\bwomen'?s\b|\bmen'?s\b|\b\d+\s*[mxlsp]\b|"
+    r"made in|fait en|hecho en|ramie|cotton\s*\d|rn\s*#|"
+    r"traditional fit|established\s+\d{4}|authentic\s+"
+    r")\b"
+)
+
+_PRODUCT_TAG_NOISE_RE = re.compile(
+    r"(?i)\b(cold\s+press|acid[- ]?free|double[- ]?sided|linen[- ]?bound|"
+    r"expandable\s+inner\s+pocket|sketch\s*pad|watercolor|drawing\s+pencil)\b"
+)
+
+
+def lot_accepts_size_tags(
+    *,
+    labels_and_tags: list[str] | None = None,
+    specification_lines: list[str] | None = None,
+    auction_title: str = "",
+    professional_description: str = "",
+) -> bool:
+    """Size / tags and ``labels_and_tags`` apply to apparel, footwear, and tagged accessories only."""
+    blob = _lot_listing_blob(
+        labels_and_tags=list(labels_and_tags or []),
+        specification_lines=list(specification_lines or []),
+        auction_title=auction_title,
+        professional_description=professional_description,
+    )
+    if _spec_lines_indicate_wardrobe_apparel(list(specification_lines or []), blob):
+        return True
+    if _NON_APPAREL_SUPPLY_RE.search(blob):
+        return False
+    if _APPAREL_GARMENT_RE.search(blob):
+        return True
+    if _WARDROBE_ACCESSORY_FOR_SIZE_TAGS_RE.search(blob) and _GARMENT_TAG_SIGNAL_RE.search(blob):
+        return True
+    return False
+
+
+def filter_labels_and_tags_for_lot(
+    labels_and_tags: list[str],
+    specification_lines: list[str],
+    auction_title: str = "",
+    professional_description: str = "",
+) -> list[str]:
+    """Drop size/tag strings for non-garment lots; trim product-marketing OCR on apparel."""
+    if not lot_accepts_size_tags(
+        labels_and_tags=labels_and_tags,
+        specification_lines=specification_lines,
+        auction_title=auction_title,
+        professional_description=professional_description,
+    ):
+        return []
+    kept: list[str] = []
+    for lab in labels_and_tags:
+        t = clean_listing_text(lab).strip()
+        if not t or len(t) > 120:
+            continue
+        if _PRODUCT_TAG_NOISE_RE.search(t) and not _SIZE_TAG_TEXT_RE.search(t):
+            continue
+        if len(t) > 90 and ";" in t and not _SIZE_TAG_TEXT_RE.search(t) and not _GARMENT_TAG_SIGNAL_RE.search(t):
+            continue
+        kept.append(t)
+    return kept
+
+
 def consolidate_frame_size_tag_lines(
     lines: list[str], labels_and_tags: list[str] | None = None
 ) -> list[str]:
-    """One ``Size / tags:`` line instead of one row per merged photo frame."""
+    """One ``Size / tags:`` line instead of one row per merged photo frame (apparel lots only)."""
+    blob = " ".join(lines).lower()
+    if labels_and_tags:
+        blob = f"{blob} {' '.join(labels_and_tags).lower()}"
+    if not lot_accepts_size_tags(
+        labels_and_tags=list(labels_and_tags or []),
+        specification_lines=lines,
+        auction_title="",
+        professional_description=blob,
+    ):
+        return [
+            line
+            for line in lines
+            if not _FRAME_SIZE_TAG_RE.match(clean_listing_text(line).strip())
+        ]
     tag_parts: list[str] = []
     other: list[str] = []
     frame_tag_count = 0
@@ -2804,6 +2896,12 @@ class LotOutput:
         self.professional_description = sanitize_description_unknowns(self.professional_description)
         move_unmentioned_brands_to_specs(self.brands, self.professional_description, self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
+        self.labels_and_tags = filter_labels_and_tags_for_lot(
+            self.labels_and_tags,
+            self.specification_lines,
+            self.auction_title,
+            self.professional_description,
+        )
         self.specification_lines = consolidate_frame_size_tag_lines(
             self.specification_lines, self.labels_and_tags
         )

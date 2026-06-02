@@ -217,6 +217,21 @@ def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None
     lot._finalize_listing_quality()
 
 
+def _sku_candidate_filenames(selected: dict[str, Any]) -> list[str]:
+    """Tape-tagged frames first; fall back to hero when SKU is only visible on the wide shot."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for fn in selected.get("tape_filenames") or []:
+        s = str(fn).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    hero = str(selected.get("hero_filename") or "").strip()
+    if hero and hero not in seen:
+        out.append(hero)
+    return out
+
+
 def _apply_tape_sku_from_paths(
     lot: LotOutput,
     tape_filenames: list[str],
@@ -454,12 +469,14 @@ def run_single_lot_pipeline(
     pipeline_result["pro_skipped_due_to_agreement"] = pro_skipped
     pipeline_result["ran_pro"] = ran_pro
 
+    sku_sources = _sku_candidate_filenames(selected)
     _apply_tape_sku_from_paths(
         lot,
-        list(selected.get("tape_filenames") or []),
+        sku_sources,
         path_by_key,
         manifest_tag=manifest_tag,
     )
+    pipeline_result["sku_source_filenames"] = sku_sources
 
     est_in, est_out = _estimate_pipeline_tokens(len(entries), ran_pro=ran_pro, listing_calls=listing_calls)
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}

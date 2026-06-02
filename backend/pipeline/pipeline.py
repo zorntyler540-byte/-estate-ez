@@ -115,11 +115,11 @@ TRIAGE_SYSTEM_INSTRUCTION = (
 TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 
 Rules:
-- hero: single best wide shot showing most of the lot (only one file should win hero selection).
+- hero: single best wide shot showing most of the lot (only one file should win hero selection). Use hero even when lot tape with SKU is visible at the edge of the frame.
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
 - angle_only: side, back, detail, damage close-up — not used for hero listing.
   Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
-- tape: colored estate lot tape / SKU marker visible.
+- tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image.
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.

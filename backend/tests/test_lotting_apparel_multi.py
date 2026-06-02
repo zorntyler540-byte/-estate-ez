@@ -12,7 +12,52 @@ from app.core.lotting import (
     _scrub_misapplied_mary_jane_phrasing,
     dedupe_specification_lines_preserve_order,
     drop_components_spec_lines,
+    filter_labels_and_tags_for_lot,
+    lot_accepts_size_tags,
 )
+
+
+class TestSizeTagsApparelOnly(unittest.TestCase):
+    def test_art_supplies_lot_clears_labels_and_size_tag_spec(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Arteza A3 Sketch Pad and Art Supplies Lot",
+                "brand": "Arteza",
+                "labels_and_tags": [
+                    "ARTEZA",
+                    "Cold Press Paper / Double-Sided / Acid-Free / Natural Linen-Bound",
+                    "Komorebi",
+                    "Higgins Black Magic",
+                ],
+                "specification_lines": [
+                    "Item 1: A3 sketch pad with colored pencils",
+                    "Size / tags: ARTEZA; Cold Press Paper; Higgins Black Magic",
+                ],
+            }
+        )
+        self.assertFalse(lot_accepts_size_tags(labels_and_tags=lot.labels_and_tags, specification_lines=lot.specification_lines, auction_title=lot.auction_title))
+        self.assertEqual(lot.labels_and_tags, [])
+        self.assertFalse(any(l.lower().startswith("size / tag") for l in lot.specification_lines))
+        self.assertIn("Arteza", " ".join(lot.brands))
+
+    def test_apparel_lot_keeps_size_tags(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Tribal Utility Jacket and Alfred Dunner Cardigan",
+                "brand": "Tribal",
+                "labels_and_tags": ["TRIBAL G/L", "alfred dunner PETITE PS"],
+                "specification_lines": [
+                    "Item 1: Tribal tan utility jacket L/G",
+                    "Item 2: Alfred Dunner floral cardigan PS",
+                ],
+            }
+        )
+        self.assertTrue(lot_accepts_size_tags(labels_and_tags=lot.labels_and_tags, specification_lines=lot.specification_lines, auction_title=lot.auction_title))
+        filtered = filter_labels_and_tags_for_lot(
+            lot.labels_and_tags, lot.specification_lines, lot.auction_title, lot.professional_description
+        )
+        self.assertGreaterEqual(len(filtered), 1)
+        self.assertTrue(any("tribal" in t.lower() for t in filtered))
 
 
 class TestApparelMultiPhotoLot(unittest.TestCase):

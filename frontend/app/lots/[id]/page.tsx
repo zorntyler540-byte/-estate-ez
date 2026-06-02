@@ -1400,7 +1400,7 @@ export default function LotDetailPage() {
         </div>
         <div>
           <label className="ct-label" htmlFor="tags">
-            Sizes / tags (comma separated)
+            Sizes / tags — clothing &amp; shoes only (comma separated)
           </label>
           <input
             id="tags"

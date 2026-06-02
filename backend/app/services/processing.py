@@ -103,6 +103,7 @@ _TAPE_PHRASES = (
     "lot tape",
     "purple tape",
     "lavender tape",
+    "blue tape",
     "green tape",
     "yellow tape",
     "neon green",
@@ -112,7 +113,7 @@ _TAPE_PHRASES = (
 
 def _blob_suggests_purple_tape_language(blob: str) -> bool:
     """True when prose refers to colored *estate* lot tape (not substrings like ``plate`` in ``silverplate``)."""
-    if re.search(r"\b(purple|lavender)\b", blob):
+    if re.search(r"\b(purple|lavender|blue)\b", blob):
         return True
     if re.search(r"\bneon\s+(?:green|yellow)\b", blob):
         return True

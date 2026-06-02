@@ -1,4 +1,4 @@
-"""Detect colored estate lot tape (purple, lavender, neon green, yellow) and build a SKU crop."""
+"""Detect colored estate lot tape (purple, lavender, blue, neon green, yellow) and build a SKU crop."""
 
 from __future__ import annotations
 
@@ -48,6 +48,27 @@ def _is_neon_green_tape_pixel(r: int, g: int, b: int) -> bool:
     return True
 
 
+def _is_blue_masking_tape_pixel(r: int, g: int, b: int) -> bool:
+    """Bright blue / cyan painter's masking tape (common estate lot marker)."""
+    if max(r, g, b) < 55:
+        return False
+    if b < 95:
+        return False
+    spread = max(r, g, b) - min(r, g, b)
+    if spread < 28:
+        return False
+    if b < max(r, g) + 10:
+        return False
+    # Lavender/purple tape: strong red vs green; blue tape is cyan-heavy.
+    if r > 130 and r > g + 35 and b < r + 35:
+        return False
+    if g > r + 40 and b > r + 12:
+        return True
+    if b > r + 22 and b >= g:
+        return True
+    return False
+
+
 def _is_bright_yellow_masking_tape_pixel(r: int, g: int, b: int) -> bool:
     """
     Saturated yellow / chartreuse adhesive tape (lot marker).
@@ -74,6 +95,7 @@ def _is_bright_yellow_masking_tape_pixel(r: int, g: int, b: int) -> bool:
 def _is_estate_tape_pixel(r: int, g: int, b: int) -> bool:
     return (
         _is_lavender_purple_tape_pixel(r, g, b)
+        or _is_blue_masking_tape_pixel(r, g, b)
         or _is_neon_green_tape_pixel(r, g, b)
         or _is_bright_yellow_masking_tape_pixel(r, g, b)
     )
@@ -133,6 +155,7 @@ def estate_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
     candidates: list[tuple[int, tuple[int, int, int, int]]] = []
     for pred in (
         _is_lavender_purple_tape_pixel,
+        _is_blue_masking_tape_pixel,
         _is_neon_green_tape_pixel,
         _is_bright_yellow_masking_tape_pixel,
     ):
