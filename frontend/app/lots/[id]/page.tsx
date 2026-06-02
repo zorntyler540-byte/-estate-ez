@@ -9,6 +9,8 @@ import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { SiteHeader } from "../../../components/SiteHeader";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
+import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
+import { rotateImageBlob } from "../../../lib/photoEdit";
 
 type LotPhoto = {
   id: string;
@@ -104,6 +106,7 @@ export default function LotDetailPage() {
   const [saving, setSaving] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [thumbCacheBust, setThumbCacheBust] = useState<Record<string, number>>({});
+  const [quickRotatingId, setQuickRotatingId] = useState<string | null>(null);
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
@@ -254,6 +257,22 @@ export default function LotDetailPage() {
     setCatalogPhotos((prev) =>
       prev.map((p) => (p.id === photoId ? { ...p, file_on_disk: true } : p))
     );
+  }
+
+  async function quickRotatePhoto(photo: LotPhoto, degrees: 90 | -90) {
+    if (!lot || !token || photo.file_on_disk === false) return;
+    setQuickRotatingId(photo.id);
+    setError("");
+    try {
+      const blob = await fetchLotPhotoBlob(lot.id, photo.id, token);
+      const rotated = await rotateImageBlob(blob, degrees);
+      await replaceLotPhotoBlob(lot.id, photo.id, token, rotated, photo.original_name);
+      handlePhotoSaved(photo.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rotate photo");
+    } finally {
+      setQuickRotatingId(null);
+    }
   }
 
   async function downloadLotPhotosZip() {
@@ -764,8 +783,8 @@ export default function LotDetailPage() {
         </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder, or click a thumbnail to <strong>rotate and crop</strong>. <strong>Add photos</strong> uploads
-          more frames
+          picture to reorder. Use <strong>↺ ↻</strong> on each thumbnail for a quick rotate, or click the image for crop and
+          fine-tune. <strong>Add photos</strong> uploads more frames
           {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
             <>
               {" "}
@@ -834,6 +853,10 @@ export default function LotDetailPage() {
               <li>
                 <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to add or
                 remove one photo.
+              </li>
+              <li>
+                <strong>↺ ↻</strong> on a thumbnail rotates and saves immediately; click the image for crop or multiple
+                edits in the full viewer.
               </li>
             </ul>
           </div>
@@ -1127,15 +1150,75 @@ export default function LotDetailPage() {
                       cursor: "pointer"
                     }}
                   />
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 4,
+                      right: 4,
+                      zIndex: 4,
+                      display: "flex",
+                      gap: "0.2rem"
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="ct-btn"
+                      title="Rotate left 90°"
+                      aria-label="Rotate left"
+                      disabled={
+                        organizeBusy ||
+                        reorderBusy ||
+                        quickRotatingId !== null ||
+                        p.file_on_disk === false
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void quickRotatePhoto(p, -90);
+                      }}
+                      style={{
+                        padding: "0.15rem 0.35rem",
+                        fontSize: "0.72rem",
+                        lineHeight: 1,
+                        minHeight: 0
+                      }}
+                    >
+                      {quickRotatingId === p.id ? "…" : "↺"}
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn"
+                      title="Rotate right 90°"
+                      aria-label="Rotate right"
+                      disabled={
+                        organizeBusy ||
+                        reorderBusy ||
+                        quickRotatingId !== null ||
+                        p.file_on_disk === false
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void quickRotatePhoto(p, 90);
+                      }}
+                      style={{
+                        padding: "0.15rem 0.35rem",
+                        fontSize: "0.72rem",
+                        lineHeight: 1,
+                        minHeight: 0
+                      }}
+                    >
+                      {quickRotatingId === p.id ? "…" : "↻"}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => openPhotoViewer(index)}
-                    title={`Open ${p.original_name}`}
+                    title={`Open ${p.original_name} — crop and fine-tune`}
                     style={{
                       all: "unset",
-                      cursor: "zoom-in",
+                      cursor: quickRotatingId === p.id ? "wait" : "zoom-in",
                       display: "block",
-                      width: "100%"
+                      width: "100%",
+                      opacity: quickRotatingId === p.id ? 0.65 : 1
                     }}
                   >
                     <LotPhotoThumb

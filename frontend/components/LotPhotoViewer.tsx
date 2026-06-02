@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE, apiUploadFiles, parseApiErrorMessage } from "../lib/api";
+import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../lib/lotPhotoReplace";
 import {
   cropImageBlob,
   displayPointToNatural,
@@ -72,18 +72,7 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     workBlobRef.current = null;
     baseBlobRef.current = null;
     try {
-      const res = await fetch(
-        `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photo.id)}/download`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store"
-        }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(parseApiErrorMessage(text, `Photo download failed (${res.status})`));
-      }
-      const blob = await res.blob();
+      const blob = await fetchLotPhotoBlob(lotId, photo.id, token);
       baseBlobRef.current = blob;
       workBlobRef.current = blob;
       const u = URL.createObjectURL(blob);
@@ -176,17 +165,7 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     setSaving(true);
     setError("");
     try {
-      const fd = new FormData();
-      const name = photo.original_name?.toLowerCase().endsWith(".jpg")
-        ? photo.original_name
-        : `${(photo.original_name || "photo").replace(/\.[^.]+$/, "") || "photo"}.jpg`;
-      fd.append("file", blob, name);
-      await apiUploadFiles(
-        `/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photo.id)}/replace`,
-        token,
-        fd,
-        120_000
-      );
+      await replaceLotPhotoBlob(lotId, photo.id, token, blob, photo.original_name);
       baseBlobRef.current = blob;
       setDirty(false);
       onSaved(photo.id);
