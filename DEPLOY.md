@@ -102,6 +102,31 @@ For a first pilot: avoid redeploying the API unnecessarily, or add a volume in y
 
 **Multiple API replicas:** Catalog photos are stored on the container filesystem. If your host runs more than one API instance without a **shared volume**, uploads can land on instance A while thumbnails and health checks hit instance B — new lots will show photo counts but “missing on server.” Use **one replica** until you add shared storage (volume mount at `/app/backend/data` or S3/R2).
 
+New uploads are copied into **`data/uploads/catalog/{account_id}/{photo_id}.jpg`** so catalog JPEGs are **not** tied to temporary job batch folders. Clearing lots in the app removes database rows only — it does not delete files under `catalog/` (you can prune old files manually if needed).
+
+---
+
+## 7b. Backups (photos + database)
+
+Postgres backups and API volume backups protect **different things**:
+
+| What | Where | Railway action |
+|------|--------|----------------|
+| Titles, SKUs, photo rows, paths | **Postgres** | Postgres service → **Backups** → restore / PITR |
+| JPEG files | **API volume** (`caringtransitions-ai-volume` → `/app/backend/data`) | API service → **Volume** → snapshots / restore |
+
+**Recommended on Pro:**
+
+1. **Mount** the API volume at `/app/backend/data` (see §7).
+2. Enable **Postgres** automated backups (daily + point-in-time if available).
+3. Enable **volume snapshots** on `caringtransitions-ai-volume` (or your platform’s equivalent).
+4. Periodically download a **sale photo ZIP** from the dashboard (Exports) after major catalog days.
+5. Keep a copy of original camera/upload folders on your PC until the sale is published.
+
+**Future (not built yet):** cloud object storage (S3 / Cloudflare R2) with versioning so images are off-server and survive any single host failure. The app already documents this in `README_SAAS.md`.
+
+**After a mistake:** Restoring **only** Postgres brings back listing text but not JPEGs if files were deleted from the volume. Restore **both** Postgres and the API volume to the same timestamp, or re-upload photos and keep the restored text.
+
 ---
 
 ## 8. Updating after launch

@@ -97,7 +97,7 @@ from app.services.suggestion_email import (
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
-from app.catalog_storage import catalog_storage_key, resolve_catalog_storage_path, upload_root
+from app.catalog_storage import catalog_storage_key, persist_catalog_photo, resolve_catalog_storage_path, upload_root
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
@@ -1007,13 +1007,15 @@ async def upload_lot_photos(
     )
     base = (int(mx) if mx is not None else -1) + 1
     for i, path in enumerate(paths):
+        photo_id, storage_path = persist_catalog_photo(current.account_id, path)
         db.add(
             Photo(
+                id=photo_id,
                 account_id=current.account_id,
                 user_id=current.id,
                 lot_id=lot_id,
                 original_name=path.name,
-                storage_path=catalog_storage_key(path),
+                storage_path=storage_path,
                 sort_order=base + i,
             )
         )

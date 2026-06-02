@@ -26,11 +26,32 @@ from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
 from app.services.pipeline_integration import is_weak_pipeline_lot, run_single_lot_pipeline
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
-from app.catalog_storage import catalog_photo_file_on_disk, catalog_storage_key, resolve_catalog_storage_path
+from app.catalog_storage import (
+    catalog_photo_file_on_disk,
+    persist_catalog_photo,
+    resolve_catalog_storage_path,
+)
 from app.services.image_preprocess import normalize_job_folder_image
 from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+
+
+def _add_catalog_photo(db: Session, job: ProcessingJob, photo_path: Path) -> Photo:
+    """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
+    photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
+    row = Photo(
+        id=photo_id,
+        account_id=job.account_id,
+        user_id=job.user_id,
+        lot_id=None,
+        original_name=photo_path.name,
+        storage_path=storage_path,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
 
 # Set by ``_apply_last_known_sku_fallback`` when SKU was copied from a prior frame (not read on this image).
 # Must not open lots or run tape verify — otherwise stale digits + new lot SKU causes spurious verify stalls.
@@ -642,15 +663,7 @@ def _process_job_single_lot_pipeline(
                 "file_name": photo_path.name,
             },
         )
-        row = Photo(
-            account_id=job.account_id,
-            user_id=job.user_id,
-            lot_id=None,
-            original_name=photo_path.name,
-            storage_path=catalog_storage_key(photo_path),
-        )
-        db.add(row)
-        db.flush()
+        row = _add_catalog_photo(db, job, photo_path)
         pending_photo_ids.append(row.id)
         db.commit()
 
@@ -869,15 +882,7 @@ def process_job(
                 )
                 current_lot_folder_batch_key = batch_key
             current_lot.photo_count += 1
-            row = Photo(
-                account_id=job.account_id,
-                user_id=job.user_id,
-                lot_id=None,
-                original_name=photo_path.name,
-                storage_path=catalog_storage_key(photo_path),
-            )
-            db.add(row)
-            db.flush()
+            row = _add_catalog_photo(db, job, photo_path)
             pending_photo_ids.append(row.id)
             db.commit()
             continue
@@ -948,15 +953,7 @@ def process_job(
             _emit_inventory_tick(
                 job, index=i, total=total_photos, photo_path=photo_path, stage="promote_after_gemini_failures"
             )
-            row = Photo(
-                account_id=job.account_id,
-                user_id=job.user_id,
-                lot_id=None,
-                original_name=photo_path.name,
-                storage_path=catalog_storage_key(photo_path),
-            )
-            db.add(row)
-            db.flush()
+            row = _add_catalog_photo(db, job, photo_path)
             pending_photo_ids.append(row.id)
             db.commit()
             continue
@@ -972,15 +969,7 @@ def process_job(
             )
             _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
             current_lot.merge_detail(payload)
-            row = Photo(
-                account_id=job.account_id,
-                user_id=job.user_id,
-                lot_id=None,
-                original_name=photo_path.name,
-                storage_path=catalog_storage_key(photo_path),
-            )
-            db.add(row)
-            db.flush()
+            row = _add_catalog_photo(db, job, photo_path)
             pending_photo_ids.append(row.id)
             db.commit()
             continue
@@ -993,15 +982,7 @@ def process_job(
                 if tape_sku_same_marking(current_lot.sku, lot_candidate.sku):
                     _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
-                    row = Photo(
-                        account_id=job.account_id,
-                        user_id=job.user_id,
-                        lot_id=None,
-                        original_name=photo_path.name,
-                        storage_path=catalog_storage_key(photo_path),
-                    )
-                    db.add(row)
-                    db.flush()
+                    row = _add_catalog_photo(db, job, photo_path)
                     pending_photo_ids.append(row.id)
                     db.commit()
                     continue
@@ -1009,15 +990,7 @@ def process_job(
                 if _likely_same_item(current_lot, lot_candidate):
                     _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
-                    row = Photo(
-                        account_id=job.account_id,
-                        user_id=job.user_id,
-                        lot_id=None,
-                        original_name=photo_path.name,
-                        storage_path=catalog_storage_key(photo_path),
-                    )
-                    db.add(row)
-                    db.flush()
+                    row = _add_catalog_photo(db, job, photo_path)
                     pending_photo_ids.append(row.id)
                     db.commit()
                     continue
@@ -1032,15 +1005,7 @@ def process_job(
                 _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(persisted)})
             current_lot = lot_candidate
             current_lot_folder_batch_key = batch_key
-            row = Photo(
-                account_id=job.account_id,
-                user_id=job.user_id,
-                lot_id=None,
-                original_name=photo_path.name,
-                storage_path=catalog_storage_key(photo_path),
-            )
-            db.add(row)
-            db.flush()
+            row = _add_catalog_photo(db, job, photo_path)
             pending_photo_ids.append(row.id)
             db.commit()
             continue
@@ -1049,15 +1014,7 @@ def process_job(
             # First usable frame in this subfolder batch (no tape yet): open a lot so photos are not dropped.
             current_lot = lot_candidate
             current_lot_folder_batch_key = batch_key
-            row = Photo(
-                account_id=job.account_id,
-                user_id=job.user_id,
-                lot_id=None,
-                original_name=photo_path.name,
-                storage_path=catalog_storage_key(photo_path),
-            )
-            db.add(row)
-            db.flush()
+            row = _add_catalog_photo(db, job, photo_path)
             pending_photo_ids.append(row.id)
             db.commit()
             continue
@@ -1065,15 +1022,7 @@ def process_job(
         _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
         current_lot.merge_detail(payload)
         _emit_job_debug(job, f"job={job.id} merged_detail i={i + 1} file={photo_path.name}")
-        row = Photo(
-            account_id=job.account_id,
-            user_id=job.user_id,
-            lot_id=None,
-            original_name=photo_path.name,
-            storage_path=catalog_storage_key(photo_path),
-        )
-        db.add(row)
-        db.flush()
+        row = _add_catalog_photo(db, job, photo_path)
         pending_photo_ids.append(row.id)
         db.commit()
         _emit_job_debug(job, f"job={job.id} committed i={i + 1} file={photo_path.name}")
