@@ -166,7 +166,13 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     setError("");
     try {
       await replaceLotPhotoBlob(lotId, photo.id, token, blob, photo.original_name);
-      baseBlobRef.current = blob;
+      const fresh = await fetchLotPhotoBlob(lotId, photo.id, token);
+      baseBlobRef.current = fresh;
+      workBlobRef.current = fresh;
+      revokePreview();
+      const u = URL.createObjectURL(fresh);
+      previewUrlRef.current = u;
+      setPreviewUrl(u);
       setDirty(false);
       onSaved(photo.id);
     } catch (e) {

@@ -1425,7 +1425,7 @@ def lot_photo_thumbnail(
     return Response(
         content=body,
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={"Cache-Control": "private, no-cache, must-revalidate"},
     )
 
 

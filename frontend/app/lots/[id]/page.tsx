@@ -1222,6 +1222,7 @@ export default function LotDetailPage() {
                     }}
                   >
                     <LotPhotoThumb
+                      key={`${p.id}-${thumbCacheBust[p.id] ?? 0}`}
                       lotId={lot.id}
                       photoId={p.id}
                       token={token}

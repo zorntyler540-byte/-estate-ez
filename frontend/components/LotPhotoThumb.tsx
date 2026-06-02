@@ -54,12 +54,12 @@ function LotPhotoThumbInner({
       setFailed(false);
       setSrc(null);
       try {
-        const vq = cacheBust ? `&v=${encodeURIComponent(String(cacheBust))}` : "";
+        const vq = `&v=${encodeURIComponent(String(cacheBust))}`;
         const res = await fetch(
           `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}${vq}`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            cache: "default",
+            cache: "no-store",
             signal: ac.signal
           }
         );
