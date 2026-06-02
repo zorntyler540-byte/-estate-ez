@@ -14,6 +14,8 @@ type Props = {
   minHeight?: number;
   /** When false, skip fetch — file is not on the API host (orphaned DB row). */
   fileOnDisk?: boolean;
+  /** Bust thumbnail cache after replace/crop/rotate. */
+  cacheBust?: number;
 };
 
 /**
@@ -26,7 +28,8 @@ function LotPhotoThumbInner({
   label,
   maxPx = 280,
   minHeight = 120,
-  fileOnDisk = true
+  fileOnDisk = true,
+  cacheBust = 0
 }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -51,8 +54,9 @@ function LotPhotoThumbInner({
       setFailed(false);
       setSrc(null);
       try {
+        const vq = cacheBust ? `&v=${encodeURIComponent(String(cacheBust))}` : "";
         const res = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}`,
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}${vq}`,
           {
             headers: { Authorization: `Bearer ${token}` },
             cache: "default",
@@ -82,7 +86,7 @@ function LotPhotoThumbInner({
         urlRef.current = null;
       }
     };
-  }, [lotId, photoId, token, maxPx, fileOnDisk]);
+  }, [lotId, photoId, token, maxPx, fileOnDisk, cacheBust]);
 
   const shell: CSSProperties = {
     borderRadius: "var(--ct-radius-sm)",

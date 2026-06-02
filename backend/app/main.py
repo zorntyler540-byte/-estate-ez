@@ -97,7 +97,8 @@ from app.services.suggestion_email import (
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
-from app.catalog_storage import catalog_storage_key, persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.services.image_preprocess import compress_upload_bytes_if_image
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
@@ -1452,6 +1453,55 @@ def download_lot_photo(
         media_type=media_type or "application/octet-stream",
         filename=row.original_name,
     )
+
+
+@app.post("/lots/{lot_id}/photos/{photo_id}/replace", response_model=LotPhotoOut)
+async def replace_lot_photo(
+    lot_id: str,
+    photo_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    file: UploadFile = File(),
+) -> LotPhotoOut:
+    """Overwrite one catalog photo file (after crop/rotate in the lot details viewer)."""
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, lot.sale_id, current)
+    row = (
+        db.query(Photo)
+        .filter(
+            Photo.id == photo_id,
+            Photo.lot_id == lot_id,
+            Photo.account_id == current.account_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image file")
+    try:
+        body, stor_name = await asyncio.to_thread(
+            compress_upload_bytes_if_image,
+            raw,
+            row.original_name or file.filename or "photo.jpg",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    tmp_path = Path(tempfile.mkstemp(suffix=Path(stor_name).suffix or ".jpg")[1])
+    try:
+        tmp_path.write_bytes(body)
+        _, storage_path = persist_catalog_photo(current.account_id, tmp_path, photo_id=row.id)
+        row.storage_path = storage_path
+        if stor_name:
+            row.original_name = Path(stor_name).name
+        db.commit()
+        db.refresh(row)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return lot_photo_out(row, lot_id=lot_id)
 
 
 def _zip_entry_basename(original_name: str, index: int, used: set[str]) -> str:

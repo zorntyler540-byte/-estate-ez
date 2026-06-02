@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
+import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { SiteHeader } from "../../../components/SiteHeader";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
@@ -102,9 +103,7 @@ export default function LotDetailPage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  const [viewerUrl, setViewerUrl] = useState<string>("");
-  const [viewerLoading, setViewerLoading] = useState(false);
-  const [viewerError, setViewerError] = useState("");
+  const [thumbCacheBust, setThumbCacheBust] = useState<Record<string, number>>({});
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
@@ -216,12 +215,6 @@ export default function LotDetailPage() {
   }, [routeLotId]);
 
   useEffect(() => {
-    return () => {
-      if (viewerUrl) URL.revokeObjectURL(viewerUrl);
-    };
-  }, [viewerUrl]);
-
-  useEffect(() => {
     if (typeof window === "undefined" || !lot) return;
     if (window.location.hash !== "#listing-details") return;
     requestAnimationFrame(() => {
@@ -248,34 +241,19 @@ export default function LotDetailPage() {
     };
   }, [lot?.id, catalogPhotos.length]);
 
-  async function loadViewerPhoto(index: number) {
-    if (!lot || !token) return;
-    const photo = catalogPhotos[index];
-    if (!photo) return;
+  function openPhotoViewer(index: number) {
     setViewerIndex(index);
-    setViewerLoading(true);
-    setViewerError("");
-    try {
-      const res = await fetch(
-        `${API_BASE}/lots/${encodeURIComponent(lot.id)}/photos/${encodeURIComponent(photo.id)}/download`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store"
-        }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Photo download failed (${res.status})`);
-      }
-      const blob = await res.blob();
-      if (viewerUrl) URL.revokeObjectURL(viewerUrl);
-      setViewerUrl(URL.createObjectURL(blob));
-    } catch (e) {
-      setViewerError(e instanceof Error ? e.message : "Could not load full-size photo.");
-      setViewerUrl("");
-    } finally {
-      setViewerLoading(false);
-    }
+  }
+
+  function closePhotoViewer() {
+    setViewerIndex(null);
+  }
+
+  function handlePhotoSaved(photoId: string) {
+    setThumbCacheBust((prev) => ({ ...prev, [photoId]: Date.now() }));
+    setCatalogPhotos((prev) =>
+      prev.map((p) => (p.id === photoId ? { ...p, file_on_disk: true } : p))
+    );
   }
 
   async function downloadLotPhotosZip() {
@@ -307,24 +285,6 @@ export default function LotDetailPage() {
     } finally {
       setZipDownloading(false);
     }
-  }
-
-  function closeViewer() {
-    setViewerIndex(null);
-    setViewerLoading(false);
-    setViewerError("");
-    if (viewerUrl) URL.revokeObjectURL(viewerUrl);
-    setViewerUrl("");
-  }
-
-  function showPrevPhoto() {
-    if (viewerIndex === null || viewerIndex <= 0) return;
-    void loadViewerPhoto(viewerIndex - 1);
-  }
-
-  function showNextPhoto() {
-    if (viewerIndex === null || viewerIndex >= catalogPhotos.length - 1) return;
-    void loadViewerPhoto(viewerIndex + 1);
   }
 
   async function regenerateListingWithAi() {
@@ -680,7 +640,7 @@ export default function LotDetailPage() {
         method: "POST",
         body: JSON.stringify({ photo_ids: Array.from(selectedPhotoIds) })
       });
-      closeViewer();
+      closePhotoViewer();
       setSelectedPhotoIds(new Set());
       lastPhotoSelectAnchorRef.current = null;
       await refetchLotAndPhotos();
@@ -804,7 +764,8 @@ export default function LotDetailPage() {
         </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder. <strong>Add photos</strong> uploads more frames
+          picture to reorder, or click a thumbnail to <strong>rotate and crop</strong>. <strong>Add photos</strong> uploads
+          more frames
           {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
             <>
               {" "}
@@ -1168,7 +1129,7 @@ export default function LotDetailPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => void loadViewerPhoto(index)}
+                    onClick={() => openPhotoViewer(index)}
                     title={`Open ${p.original_name}`}
                     style={{
                       all: "unset",
@@ -1185,6 +1146,7 @@ export default function LotDetailPage() {
                       maxPx={960}
                       minHeight={120}
                       fileOnDisk={p.file_on_disk !== false}
+                      cacheBust={thumbCacheBust[p.id] ?? 0}
                     />
                   </button>
                 </div>
@@ -1410,90 +1372,16 @@ export default function LotDetailPage() {
         </div>
         {error ? <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>{error}</div> : null}
       </div>
-      {viewerIndex !== null ? (
-        <div
-          onClick={closeViewer}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            zIndex: 9999,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem"
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(96vw, 1200px)",
-              maxHeight: "92vh",
-              display: "flex",
-              flexDirection: "column",
-              gap: "0.75rem"
-            }}
-          >
-            <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div className="ct-muted" style={{ fontSize: "0.9rem" }}>
-                Photo {viewerIndex + 1}/{catalogPhotos.length}
-                {catalogPhotos[viewerIndex] ? ` · ${catalogPhotos[viewerIndex]!.original_name}` : ""}
-              </div>
-              <button type="button" className="ct-btn ct-btn--ghost" onClick={closeViewer}>
-                Close
-              </button>
-            </div>
-            <div
-              style={{
-                minHeight: "50vh",
-                border: "1px solid var(--ct-border)",
-                borderRadius: "var(--ct-radius)",
-                background: "#0c0f12",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden"
-              }}
-            >
-              {viewerLoading ? (
-                <div className="ct-muted">Loading full-size photo…</div>
-              ) : viewerError ? (
-                <div className="ct-banner ct-banner--error" style={{ margin: "1rem" }}>
-                  {viewerError}
-                </div>
-              ) : viewerUrl ? (
-                <img
-                  src={viewerUrl}
-                  alt={catalogPhotos[viewerIndex]?.original_name || "Lot photo"}
-                  style={{
-                    maxWidth: "100%",
-                    maxHeight: "78vh",
-                    objectFit: "contain",
-                    display: "block"
-                  }}
-                />
-              ) : null}
-            </div>
-            <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between" }}>
-              <button
-                type="button"
-                className="ct-btn"
-                onClick={showPrevPhoto}
-                disabled={viewerLoading || viewerIndex <= 0}
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                className="ct-btn"
-                onClick={showNextPhoto}
-                disabled={viewerLoading || viewerIndex >= catalogPhotos.length - 1}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </div>
+      {viewerIndex !== null && lot && token ? (
+        <LotPhotoViewer
+          lotId={lot.id}
+          token={token}
+          photos={catalogPhotos}
+          index={viewerIndex}
+          onClose={closePhotoViewer}
+          onIndexChange={setViewerIndex}
+          onSaved={handlePhotoSaved}
+        />
       ) : null}
 
       {showScrollJumpNav && viewerIndex === null ? (
