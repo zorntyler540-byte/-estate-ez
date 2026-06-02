@@ -200,13 +200,31 @@ def startup() -> None:
     Base.metadata.create_all(bind=engine)
 
 
+def _count_catalog_image_files(max_scan: int = 200_000) -> int:
+    """Bounded count of catalog image files under ``upload_root()`` (for ops / recovery checks)."""
+    root = upload_root()
+    if not root.is_dir():
+        return 0
+    exts = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+    n = 0
+    for path in root.rglob("*"):
+        if path.is_file() and path.suffix.lower() in exts:
+            n += 1
+            if n >= max_scan:
+                break
+    return n
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    root = upload_root()
     return HealthResponse(
         status="ok",
         pipeline_triage_brand_audit=settings.pipeline_triage_brand_audit,
         gemini_pro_model=settings.gemini_pro_model,
         gemini_flash_model=settings.gemini_flash_model,
+        catalog_upload_root=str(root),
+        catalog_image_files_on_disk=_count_catalog_image_files(),
     )
 
 
@@ -1594,30 +1612,68 @@ def delete_lot(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _purge_catalog_data(
+    db: Session,
+    *,
+    account_id: str,
+    sale_id: str | None = None,
+) -> None:
+    """
+    Delete lots, photos, jobs, and sale ZIP exports for an account or one sale.
+
+    Does not delete ``Sale`` rows. Does **not** remove catalog JPEGs on disk — photos are stored
+    inside job upload batch folders; deleting those folders would permanently destroy images even
+    when Postgres is restored from backup.
+    """
+    lot_filter = [Lot.account_id == account_id]
+    job_filter = [ProcessingJob.account_id == account_id]
+    zip_filter = [SalePhotoZipExport.account_id == account_id]
+    if sale_id is not None:
+        lot_filter.append(Lot.sale_id == sale_id)
+        job_filter.append(ProcessingJob.sale_id == sale_id)
+        zip_filter.append(SalePhotoZipExport.sale_id == sale_id)
+
+    lot_ids = [row[0] for row in db.query(Lot.id).filter(*lot_filter).all()]
+
+    for ex in db.query(SalePhotoZipExport).filter(*zip_filter).all():
+        if ex.zip_path:
+            Path(ex.zip_path).unlink(missing_ok=True)
+    db.query(SalePhotoZipExport).filter(*zip_filter).delete(synchronize_session=False)
+
+    if lot_ids:
+        db.query(Photo).filter(
+            Photo.account_id == account_id,
+            Photo.lot_id.in_(lot_ids),
+        ).delete(synchronize_session=False)
+    elif sale_id is None:
+        db.query(Photo).filter(Photo.account_id == account_id).delete(synchronize_session=False)
+
+    db.query(Lot).filter(*lot_filter).delete(synchronize_session=False)
+    db.query(ProcessingJob).filter(*job_filter).delete(synchronize_session=False)
+    db.commit()
+
+
+@app.post("/sales/{sale_id}/purge-catalog", status_code=status.HTTP_204_NO_CONTENT)
+def purge_sale_catalog(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove lots, photos, and jobs for one sale only (other sales unchanged)."""
+    _require_owner(current)
+    _sale_for_user(sale_id, current, db)
+    _purge_catalog_data(db, account_id=current.account_id, sale_id=sale_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.post("/lots/purge-all", status_code=status.HTTP_204_NO_CONTENT)
 def purge_all_lots(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Remove this user's lots, photos, jobs, and uploaded batch folders under their account (dev reset)."""
+    """Remove all lots, photos, and jobs for this account across every sale (dev / full reset)."""
     _require_owner(current)
-    aid = current.account_id
-    upload_folders = [
-        j.input_folder
-        for j in db.query(ProcessingJob)
-        .filter(ProcessingJob.account_id == aid)
-        .all()
-    ]
-    for ex in db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid).all():
-        if ex.zip_path:
-            Path(ex.zip_path).unlink(missing_ok=True)
-    db.query(SalePhotoZipExport).filter(SalePhotoZipExport.account_id == aid).delete()
-    db.query(Photo).filter(Photo.account_id == aid).delete()
-    db.query(Lot).filter(Lot.account_id == aid).delete()
-    db.query(ProcessingJob).filter(ProcessingJob.account_id == aid).delete()
-    db.commit()
-    for folder in upload_folders:
-        _safe_remove_upload_batch_folder(aid, folder)
+    _purge_catalog_data(db, account_id=current.account_id, sale_id=None)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

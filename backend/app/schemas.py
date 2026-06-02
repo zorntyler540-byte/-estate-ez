@@ -10,6 +10,8 @@ class HealthResponse(BaseModel):
     pipeline_triage_brand_audit: bool = False
     gemini_pro_model: str = ""
     gemini_flash_model: str = ""
+    catalog_upload_root: str = ""
+    catalog_image_files_on_disk: int = 0
 
 
 class RegisterRequest(BaseModel):

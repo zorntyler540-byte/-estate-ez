@@ -3560,12 +3560,37 @@ export default function DashboardPage() {
     }
   }
 
-  async function purgeAll() {
+  async function purgeCurrentSaleCatalog() {
+    if (!selectedSaleId) {
+      setError("Select a sale first.");
+      return;
+    }
+    const saleLabel = selectedSale?.name?.trim() || "this sale";
     if (
       !window.confirm(
-        "Delete ALL lots, photos, jobs, and your browser-uploaded image folders for this login? This cannot be undone."
+        `Delete ALL lots, photos, and upload jobs for "${saleLabel}" only?\n\nOther sales on your account are not affected. This cannot be undone.`
       )
     ) {
+      return;
+    }
+    setError("");
+    try {
+      await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/purge-catalog`, token, {
+        method: "POST"
+      });
+      setLots([]);
+      setPhotoHealthMissing({});
+      setJobs([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not clear this sale");
+    }
+  }
+
+  async function purgeEntireAccountCatalog() {
+    const typed = window.prompt(
+      "Delete ALL lots, photos, and jobs across EVERY sale on this account?\n\nSales names remain but every catalog is emptied.\n\nType PURGE ALL to confirm."
+    );
+    if (typed !== "PURGE ALL") {
       return;
     }
     setError("");
@@ -3575,7 +3600,7 @@ export default function DashboardPage() {
       setPhotoHealthMissing({});
       setJobs([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Purge failed");
+      setError(e instanceof Error ? e.message : "Account purge failed");
     }
   }
 
@@ -4505,8 +4530,28 @@ export default function DashboardPage() {
             <option value="text_mismatch">Mixed lot # in text</option>
           </select>
         </label>
-        <button type="button" className="ct-btn ct-btn--danger" onClick={() => void purgeAll()} disabled={busyProcessing}>
-          Clear all lots & jobs
+        <button
+          type="button"
+          className="ct-btn ct-btn--danger"
+          onClick={() => void purgeCurrentSaleCatalog()}
+          disabled={busyProcessing || !selectedSaleId}
+          title={
+            selectedSaleId
+              ? "Remove lots, photos, and jobs for the selected sale only"
+              : "Select a sale first"
+          }
+        >
+          Clear lots & jobs (this sale)
+        </button>
+        <button
+          type="button"
+          className="ct-btn ct-btn--ghost"
+          style={{ fontSize: "0.82rem", color: "var(--ct-danger, #f87171)" }}
+          onClick={() => void purgeEntireAccountCatalog()}
+          disabled={busyProcessing}
+          title="Removes catalog data for every sale on this account"
+        >
+          Clear entire account…
         </button>
       </div>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
