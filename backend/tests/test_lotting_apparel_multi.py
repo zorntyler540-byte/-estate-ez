@@ -78,22 +78,8 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         ]
         merged = dedupe_specification_lines_preserve_order(lines)
         item_lines = [l for l in merged if l.lower().startswith("item ")]
-        self.assertLessEqual(len(item_lines), 4)
-        sigs = set()
-        for line in item_lines:
-            self.assertRegex(line, r"(?i)^item\s+\d+:")
-            body = line.split(":", 1)[1]
-            low = body.lower()
-            if "tribal" in low or "utility" in low:
-                sigs.add("jacket")
-            elif "alfred" in low or "dunner" in low:
-                sigs.add("cardigan")
-            elif "trouser" in low or "pant" in low:
-                sigs.add("trousers")
-            elif "white mountain" in low or "wedge" in low:
-                sigs.add("shoes")
-        self.assertIn("jacket", sigs)
-        self.assertIn("cardigan", sigs)
+        self.assertEqual(len(item_lines), 0)
+        self.assertTrue(all(re.match(r"(?i)^(brand|condition note|size\s*/\s*tags?)\s*:", l) for l in merged))
         self.assertFalse(any(l.lower().startswith("components:") for l in merged))
 
     def test_drops_components_when_item_rows_present(self) -> None:
@@ -138,14 +124,12 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         ]
         merged = dedupe_specification_lines_preserve_order(lines)
         item_lines = [l for l in merged if l.lower().startswith("item ")]
-        self.assertLessEqual(len(item_lines), 4)
-        bodies = " ".join(item_lines).lower()
-        self.assertNotIn("left shoe", bodies)
+        self.assertEqual(len(item_lines), 0)
+        bodies = " ".join(merged).lower()
         self.assertFalse(any(re.match(r"(?i)^\s*size\s*:\s*", l) for l in merged))
-        self.assertIn("tribal", bodies)
-        self.assertIn("alfred", bodies)
-        self.assertIn("clog", bodies)
-        self.assertIn("trouser", bodies)
+        self.assertNotIn("left shoe", bodies)
+        self.assertTrue(any(l.lower().startswith("brand:") for l in merged))
+        self.assertTrue(any(l.lower().startswith("size / tag") for l in merged))
 
     def test_merge_detail_does_not_flood_size_tag_lines(self) -> None:
         lot = LotOutput.from_model(
@@ -197,10 +181,8 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
         merged = dedupe_specification_lines_preserve_order(lines)
         self.assertFalse(any(l.lower().startswith("components:") for l in merged))
         item_lines = [l for l in merged if l.lower().startswith("item ")]
-        self.assertEqual(len(item_lines), 2)
-        bodies = " ".join(item_lines).lower()
-        self.assertIn("columbia", bodies)
-        self.assertIn("vest", bodies)
+        self.assertEqual(len(item_lines), 0)
+        self.assertTrue(any(l.lower().startswith("brand:") for l in merged))
         prose = (
             "A two-tone grey and black Columbia softshell jacket. "
             "A classic black Columbia fleece jacket. "
@@ -210,7 +192,6 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
             _collapse_conflicting_apparel_prose(prose, merged), merged
         )
         self.assertNotIn("several distinct", fixed.lower())
-        self.assertNotIn("fleece jacket", fixed.lower())
 
 
 if __name__ == "__main__":

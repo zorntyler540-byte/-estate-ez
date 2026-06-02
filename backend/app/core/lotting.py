@@ -1365,7 +1365,33 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
     merged = drop_components_spec_lines(merged)
     merged = drop_style_and_finish_spec_lines(merged)
     merged = drop_redundant_apparel_size_lines(merged, " ".join(merged).lower())
-    return _prune_subject_form_when_item_bullets_present(merged)
+    merged = _prune_subject_form_when_item_bullets_present(merged)
+    return _retain_minimal_specification_lines(merged)
+
+
+def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
+    """
+    Keep spec lines intentionally minimal for speed and consistency:
+    - Brand:
+    - Condition note:
+    - Size / tags:
+    """
+    kept: list[str] = []
+    for line in lines:
+        clean = clean_listing_text(line).strip()
+        if not clean:
+            continue
+        lower = clean.lower()
+        if lower.startswith("brand:"):
+            kept.append(clean)
+            continue
+        if lower.startswith("condition note:"):
+            kept.append(clean)
+            continue
+        if re.match(r"(?i)^size\s*/\s*tags?\s*:", clean):
+            kept.append(clean)
+            continue
+    return kept
 
 
 def _components_spec_text(specification_lines: list[str]) -> str | None:
