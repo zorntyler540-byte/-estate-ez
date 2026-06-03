@@ -919,6 +919,7 @@ def process_job(
         )
         # Second-pass tape verify before opening a new lot from a fresh SKU read (single-lot jobs
         # still use this on the first tape frame; merged follow-ups use ``_single_lot_maybe_adopt_tape_sku``).
+        tape_verify_indeterminate = False
         if (
             sku_ok
             and not continuation_same_tape
@@ -943,9 +944,12 @@ def process_job(
                     (time.monotonic() - t_verify) * 1000.0,
                 ),
             )
-            if verified is not True:
+            if verified is False:
                 lot_candidate.sku = None
                 sku_ok = False
+            elif verified is None:
+                tape_verify_indeterminate = True
+                lot_candidate.sku_needs_review = True
 
         if current_lot is not None and _is_gemini_placeholder_lot(current_lot):
             saved_pc = current_lot.photo_count
@@ -977,7 +981,8 @@ def process_job(
 
         if sku_ok:
             lot_candidate.sku = tape_marking_canonical(lot_candidate.sku) or lot_candidate.sku
-            lot_candidate.sku_needs_review = False
+            if not tape_verify_indeterminate:
+                lot_candidate.sku_needs_review = False
             if current_lot is not None:
                 # Do not split on repeated reads of the same lot tape across adjacent frames.
                 if tape_sku_same_marking(current_lot.sku, lot_candidate.sku):
@@ -988,7 +993,7 @@ def process_job(
                     db.commit()
                     continue
                 # Guard against one-frame false-positive sku flips when content appears continuous.
-                if _likely_same_item(current_lot, lot_candidate):
+                if not tape_verify_indeterminate and _likely_same_item(current_lot, lot_candidate):
                     _emit_inventory_tick(job, index=i, total=total_photos, photo_path=photo_path, stage="merge_detail")
                     current_lot.merge_detail(payload)
                     row = _add_catalog_photo(db, job, photo_path)
