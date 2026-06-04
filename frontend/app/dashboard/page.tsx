@@ -265,22 +265,27 @@ function readScreenOrientationAngle(): number {
   return 0;
 }
 
-/** Rotate live frames so preview/capture match how the user holds the phone (iOS back camera). */
+/** True when the device is held in either landscape orientation. */
+function isScreenLandscape(): boolean {
+  const angle = readScreenOrientationAngle();
+  return angle === 90 || angle === 270;
+}
+
+/**
+ * Rotate live frames so preview/capture match how the user holds the phone (iOS back camera).
+ * In landscape both handednesses need the same correction — mixing +90/-90 or 0/180 flips one side upside down.
+ */
 function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return 0;
-
-  const angle = readScreenOrientationAngle();
-  const screenLandscape = angle === 90 || angle === 270;
-  if (!screenLandscape) return 0;
+  if (!isScreenLandscape()) return 0;
 
   const framePortrait = vh > vw * 1.05;
   if (framePortrait) {
-    return angle === 90 ? 90 : -90;
+    return 90;
   }
-
-  return angle === 90 ? 0 : 180;
+  return 0;
 }
 
 /**
@@ -291,17 +296,13 @@ function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return 0;
-
-  const angle = readScreenOrientationAngle();
-  const screenLandscape = angle === 90 || angle === 270;
-  if (!screenLandscape) return 0;
+  if (!isScreenLandscape()) return 0;
 
   const framePortrait = vh > vw * 1.05;
   if (framePortrait) {
-    return angle === 90 ? -90 : 90;
+    return -90;
   }
-
-  return angle === 90 ? 0 : 180;
+  return 0;
 }
 
 function lotCameraPreviewTransform(
@@ -2817,10 +2818,7 @@ export default function DashboardPage() {
         ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
             .ImageCapture
         : undefined;
-    const screenLandscape = (() => {
-      const a = readScreenOrientationAngle();
-      return a === 90 || a === 270;
-    })();
+    const screenLandscape = isScreenLandscape();
     // Landscape: quick video-frame capture is already upright; takePhoto() JPEGs arrive with
     // their own EXIF orientation and replacing the thumb makes it flip sideways a moment later.
     if (ImageCaptureCtor && track && !useDigitalCrop && !screenLandscape) {
