@@ -59,6 +59,25 @@ class TestSizeTagsApparelOnly(unittest.TestCase):
         self.assertGreaterEqual(len(filtered), 1)
         self.assertTrue(any("tribal" in t.lower() for t in filtered))
 
+    def test_minimal_specs_keep_dimensions_and_weight(self) -> None:
+        lines = [
+            "Brand: Arteza",
+            "Condition note: Good pre-owned condition with light shelf wear.",
+            "Dimensions: Approx. 12 in x 9 in",
+            "Measurement: 30 cm x 24 cm",
+            "Weight: Approx. 2.1 lb",
+            "Components: sketch pad, pencils, notebook",
+            "Item 1: A4 sketch pad",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        self.assertTrue(any(l.lower().startswith("brand:") for l in merged))
+        self.assertTrue(any(l.lower().startswith("condition note:") for l in merged))
+        self.assertTrue(any(l.lower().startswith("dimensions:") for l in merged))
+        self.assertTrue(any(l.lower().startswith("measurement:") for l in merged))
+        self.assertTrue(any(l.lower().startswith("weight:") for l in merged))
+        self.assertFalse(any(l.lower().startswith("components:") for l in merged))
+        self.assertFalse(any(l.lower().startswith("item ") for l in merged))
+
 
 class TestApparelMultiPhotoLot(unittest.TestCase):
     def test_collapses_duplicate_item_rows_to_distinct_garments(self) -> None:

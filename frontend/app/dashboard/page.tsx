@@ -1098,6 +1098,7 @@ export default function DashboardPage() {
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
   const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
   const lotCameraNativeChainingRef = useRef(false);
+  const lotCameraNativeChainTimerRef = useRef<number | null>(null);
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
   const lotCameraSnapsRef = useRef<File[]>([]);
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
@@ -2583,6 +2584,10 @@ export default function DashboardPage() {
     setLotCameraHardwareZoom(false);
     setLotCameraOpticalAvailable(false);
     lotCameraNativeChainingRef.current = false;
+    if (lotCameraNativeChainTimerRef.current != null) {
+      window.clearTimeout(lotCameraNativeChainTimerRef.current);
+      lotCameraNativeChainTimerRef.current = null;
+    }
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
   }
@@ -2641,7 +2646,12 @@ export default function DashboardPage() {
     cancelLotCameraSession();
   }
 
-  function finishLotCameraSession() {
+  async function finishLotCameraSession() {
+    lotCameraNativeChainingRef.current = false;
+    if (lotCameraNativeChainTimerRef.current != null) {
+      window.clearTimeout(lotCameraNativeChainTimerRef.current);
+      lotCameraNativeChainTimerRef.current = null;
+    }
     const files = [...lotCameraSnapsRef.current];
     if (!files.length) {
       stopLotCameraTracks();
@@ -2655,10 +2665,14 @@ export default function DashboardPage() {
         ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
         : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
     if (!confirmStagingOverwrite(prev, detail)) return;
+    const stableFiles = await stabilizeCapturedFiles(files);
     clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
-    const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, files, 0);
+    const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, stableFiles, 0);
     setFolderPick(pick);
+    window.requestAnimationFrame(() => {
+      document.getElementById("staging-upload-box")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
     if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
       setError(
         `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
@@ -2671,23 +2685,18 @@ export default function DashboardPage() {
     let dropped = 0;
     let added = 0;
     const newThumbs: string[] = [];
-    setLotCameraSnaps((prev) => {
-      let next = [...prev];
-      for (const f of files) {
-        if (
-          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-          next.length >= CTBIDS_MAX_PHOTOS_PER_LOT
-        ) {
-          dropped += 1;
-          continue;
-        }
-        next = [...next, f];
-        newThumbs.push(URL.createObjectURL(f));
-        added += 1;
+    const next = [...lotCameraSnapsRef.current];
+    for (const f of files) {
+      if (CTBIDS_MAX_PHOTOS_PER_LOT != null && next.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+        dropped += 1;
+        continue;
       }
-      lotCameraSnapsRef.current = next;
-      return next;
-    });
+      next.push(f);
+      newThumbs.push(URL.createObjectURL(f));
+      added += 1;
+    }
+    lotCameraSnapsRef.current = next;
+    setLotCameraSnaps(next);
     if (newThumbs.length) {
       setLotCameraSnapThumbUrls((prev) => [...prev, ...newThumbs]);
     }
@@ -2699,25 +2708,25 @@ export default function DashboardPage() {
 
   function replaceLotCameraSnapTail(stableFiles: File[], startIndex: number) {
     if (!stableFiles.length) return;
-    setLotCameraSnaps((prev) => {
-      const next = [...prev];
-      for (let i = 0; i < stableFiles.length; i++) {
-        const idx = startIndex + i;
-        if (idx >= 0 && idx < next.length) next[idx] = stableFiles[i]!;
-      }
-      lotCameraSnapsRef.current = next;
-      return next;
-    });
+    const next = [...lotCameraSnapsRef.current];
+    const newThumbs: string[] = [];
+    for (let i = 0; i < stableFiles.length; i++) {
+      const idx = startIndex + i;
+      if (idx < 0 || idx >= next.length) continue;
+      next[idx] = stableFiles[i]!;
+    }
+    lotCameraSnapsRef.current = next;
+    setLotCameraSnaps(next);
     setLotCameraSnapThumbUrls((prev) => {
-      const next = [...prev];
+      const thumbs = [...prev];
       for (let i = 0; i < stableFiles.length; i++) {
         const idx = startIndex + i;
-        if (idx < 0 || idx >= next.length) continue;
-        const old = next[idx];
+        if (idx < 0 || idx >= thumbs.length) continue;
+        const old = thumbs[idx];
         if (old) URL.revokeObjectURL(old);
-        next[idx] = URL.createObjectURL(stableFiles[i]!);
+        thumbs[idx] = URL.createObjectURL(stableFiles[i]!);
       }
-      return next;
+      return thumbs;
     });
   }
 
@@ -2752,7 +2761,11 @@ export default function DashboardPage() {
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
     if (lotCameraNativeChainingRef.current && !atCap && imageFiles.length === 1) {
-      window.setTimeout(() => {
+      if (lotCameraNativeChainTimerRef.current != null) {
+        window.clearTimeout(lotCameraNativeChainTimerRef.current);
+      }
+      lotCameraNativeChainTimerRef.current = window.setTimeout(() => {
+        lotCameraNativeChainTimerRef.current = null;
         if (!lotCameraNativeChainingRef.current) return;
         if (
           CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -4159,7 +4172,11 @@ export default function DashboardPage() {
           Add one lot…
         </button>
         {folderPick && (
-          <div className="ct-card ct-card--padded" style={{ marginTop: "0.85rem", maxWidth: 900 }}>
+          <div
+            id="staging-upload-box"
+            className="ct-card ct-card--padded"
+            style={{ marginTop: "0.85rem", maxWidth: 900 }}
+          >
             {folderPick.singleLotMode ? (
               <div style={{ marginBottom: "0.65rem" }}>
                 <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.88rem" }}>
@@ -5099,7 +5116,7 @@ export default function DashboardPage() {
                 >
                   Snap photo
                 </button>
-                <button type="button" className="ct-btn" onClick={() => finishLotCameraSession()}>
+                <button type="button" className="ct-btn" onClick={() => void finishLotCameraSession()}>
                   Done
                 </button>
               </div>

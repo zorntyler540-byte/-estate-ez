@@ -1375,6 +1375,8 @@ def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
     - Brand:
     - Condition note:
     - Size / tags:
+    - Dimensions / Measurements:
+    - Weight:
     """
     kept: list[str] = []
     for line in lines:
@@ -1389,6 +1391,15 @@ def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
             kept.append(clean)
             continue
         if re.match(r"(?i)^size\s*/\s*tags?\s*:", clean):
+            kept.append(clean)
+            continue
+        if re.match(r"(?i)^dimensions?\s*:", clean):
+            kept.append(clean)
+            continue
+        if re.match(r"(?i)^measurements?\s*:", clean):
+            kept.append(clean)
+            continue
+        if re.match(r"(?i)^weights?\s*:", clean):
             kept.append(clean)
             continue
     return kept

@@ -467,8 +467,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "  * GOOD: moderate signs of wear (moderate scuffs/scratches).\n"
         "  * FAIR: heavy wear and visible scratches/damage.\n"
         "- specification_lines: keep this minimal. Only these labels are allowed: "
-        "**Brand:**, **Condition note:**, and **Size / tags:** (clothing/footwear/handbags only). "
-        "Do **not** output Components, Item rows, Material, Era, Dimensions, Style, Finish, Subject, Form, or Markings.\n"
+        "**Brand:**, **Condition note:**, **Size / tags:** (clothing/footwear/handbags only), "
+        "**Dimensions/Measurement:**, and **Weight:**. "
+        "Do **not** output Components, Item rows, Material, Era, Style, Finish, Subject, Form, or Markings.\n"
         "- sku: Lot marking on purple, lavender, blue, bright green, or bright yellow estate masking tape ONLY "
         "(same code you would read from image 2 when provided). null if not on tape.\n"
     )
