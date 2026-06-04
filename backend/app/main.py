@@ -155,6 +155,23 @@ def _reconcile_lot_photo_count(db: Session, lot_id: str, account_id: str) -> Non
     row.photo_count = int(n or 0)
 
 
+def _unlink_catalog_path_if_unreferenced(db: Session, account_id: str, storage_path: str | None, photo_id: str) -> None:
+    if not storage_path:
+        return
+    refs = (
+        db.query(func.count())
+        .select_from(Photo)
+        .filter(Photo.account_id == account_id, Photo.storage_path == storage_path, Photo.id != photo_id)
+        .scalar()
+    )
+    if int(refs or 0) > 0:
+        return
+    try:
+        resolve_catalog_storage_path(storage_path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
     if not row:
@@ -1491,16 +1508,26 @@ async def replace_lot_photo(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     tmp_path = Path(tempfile.mkstemp(suffix=Path(stor_name).suffix or ".jpg")[1])
+    old_storage_path = row.storage_path
+    new_storage_path: str | None = None
     try:
         tmp_path.write_bytes(body)
-        _, storage_path = persist_catalog_photo(current.account_id, tmp_path, photo_id=row.id)
-        row.storage_path = storage_path
+        _, new_storage_path = persist_catalog_photo(current.account_id, tmp_path)
+        row.storage_path = new_storage_path
         if stor_name:
             row.original_name = Path(stor_name).name
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            if new_storage_path:
+                resolve_catalog_storage_path(new_storage_path).unlink(missing_ok=True)
+            raise
         db.refresh(row)
     finally:
         tmp_path.unlink(missing_ok=True)
+    if old_storage_path != row.storage_path:
+        _unlink_catalog_path_if_unreferenced(db, current.account_id, old_storage_path, row.id)
     return lot_photo_out(row, lot_id=lot_id)
 
 

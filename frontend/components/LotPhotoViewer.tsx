@@ -119,9 +119,9 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     if (pt) setCropCurrent(pt);
   }
 
-  function handleImagePointerUp() {
+  function handleImagePointerUp(e: React.PointerEvent) {
     if (!cropMode) return;
-    setCropAnchor(null);
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
   }
 
   async function applyCrop() {
