@@ -1379,14 +1379,21 @@ def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
     - Dimensions / Measurements:
     - Weight:
     """
+    cleaned_lines = [clean_listing_text(line).strip() for line in lines]
+    cleaned_lines = [line for line in cleaned_lines if line]
+    item_bodies = [
+        m.group(1).strip()
+        for line in cleaned_lines
+        if (m := _ITEM_LINE_BODY_RE.match(line))
+    ]
+    # Preserve real multi-item inventory rows, but keep apparel lots minimal because they use label/size rows.
+    keep_item_lines = len(item_bodies) > 1 and not _APPAREL_GARMENT_RE.search(" ".join(cleaned_lines))
     kept: list[str] = []
-    for line in lines:
-        clean = clean_listing_text(line).strip()
-        if not clean:
-            continue
+    for clean in cleaned_lines:
         lower = clean.lower()
-        if re.match(r"(?i)^item\s+\d+\s*:", clean):
-            kept.append(clean)
+        if _ITEM_LINE_BODY_RE.match(clean):
+            if keep_item_lines:
+                kept.append(clean)
             continue
         if lower.startswith("brand:"):
             kept.append(clean)
