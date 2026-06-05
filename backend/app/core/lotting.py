@@ -1372,6 +1372,7 @@ def dedupe_specification_lines_preserve_order(lines: list[str]) -> list[str]:
 def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
     """
     Keep spec lines intentionally minimal for speed and consistency:
+    - Item N:
     - Brand:
     - Condition note:
     - Size / tags:
@@ -1384,6 +1385,9 @@ def _retain_minimal_specification_lines(lines: list[str]) -> list[str]:
         if not clean:
             continue
         lower = clean.lower()
+        if re.match(r"(?i)^item\s+\d+\s*:", clean):
+            kept.append(clean)
+            continue
         if lower.startswith("brand:"):
             kept.append(clean)
             continue
