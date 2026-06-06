@@ -105,3 +105,39 @@ class FullyAuditedManifest(BaseModel):
     listing_correction_details: str | None = None
     total_items_processed: int = 0
     verified_inventory: list[VerifiedAndPricedItem] = Field(default_factory=list)
+
+
+ListingChannel = Literal["ct_bids", "ebay", "either", "needs_review"]
+
+
+class AppraisalItemLine(BaseModel):
+    """One distinct object visible in a field appraisal check."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    line_item_id: int
+    title: str
+    brand: str = ""
+    estimated_low: float = 0.0
+    estimated_high: float = 0.0
+    notes: str = ""
+
+
+class AppraisalCheckResult(BaseModel):
+    """Structured output for job-site spot appraisal (Pro + search)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = ""
+    recommended_starting_price: float = 0.0
+    price_low: float = 0.0
+    price_high: float = 0.0
+    high_value: bool = False
+    high_value_rationale: str = ""
+    listing_channel: ListingChannel = "needs_review"
+    listing_channel_rationale: str = ""
+    recommended_ct_category: str = ""
+    confidence: ConfidenceLevel = "medium"
+    rationale: str = ""
+    search_summary: str = ""
+    items: list[AppraisalItemLine] = Field(default_factory=list)

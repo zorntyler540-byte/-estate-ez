@@ -48,6 +48,11 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
+def ct_category_names() -> list[str]:
+    """CT Seller top-level categories used for appraiser structured output."""
+    return [name for name, _ in _RULES]
+
+
 def _text_parts(lot: LotOutput) -> Iterable[str]:
     yield lot.auction_title or ""
     yield lot.professional_description or ""

@@ -8,6 +8,8 @@ from pydantic import BaseModel, EmailStr, Field
 class HealthResponse(BaseModel):
     status: str
     pipeline_triage_brand_audit: bool = False
+    enable_appraiser: bool = False
+    appraiser_max_photos: int = 3
     gemini_pro_model: str = ""
     gemini_flash_model: str = ""
     catalog_upload_root: str = ""
@@ -287,4 +289,32 @@ class SaleZipExportOut(BaseModel):
     expires_at: datetime | None
     created_at: datetime
     ready: bool = False
+
+
+class AppraisalResultOut(BaseModel):
+    summary: str = ""
+    recommended_starting_price: float = 0.0
+    price_low: float = 0.0
+    price_high: float = 0.0
+    high_value: bool = False
+    high_value_rationale: str = ""
+    listing_channel: str = "needs_review"
+    listing_channel_rationale: str = ""
+    recommended_ct_category: str = ""
+    confidence: str = "medium"
+    rationale: str = ""
+    search_summary: str = ""
+    items: list[dict] = Field(default_factory=list)
+
+
+class AppraisalCheckOut(BaseModel):
+    id: str
+    sale_id: str
+    status: str
+    scene_note: str | None = None
+    photo_count: int = 0
+    result: AppraisalResultOut | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
 

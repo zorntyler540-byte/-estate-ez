@@ -1180,6 +1180,41 @@ a.ct-btn:hover {
   flex-wrap: wrap;
 }
 
+.ct-site-header__start {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ct-site-header__nav {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ct-site-header__nav-link {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ct-text-muted);
+  text-decoration: none;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ct-site-header__nav-link:hover {
+  color: var(--ct-text);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--ct-border) 45%, transparent);
+}
+
+.ct-site-header__nav-link--active {
+  color: var(--ct-primary);
+  background: color-mix(in srgb, var(--ct-primary) 12%, transparent);
+}
+
 .ct-site-header__brand {
   display: flex;
   flex-direction: column;

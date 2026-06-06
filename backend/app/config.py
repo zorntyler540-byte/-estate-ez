@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     brand_pro_max_label_frames: int = Field(default=4, ge=1, le=8, alias="BRAND_PRO_MAX_LABEL_FRAMES")
     brand_skip_pro_if_agreement: bool = Field(default=True, alias="BRAND_SKIP_PRO_IF_AGREEMENT")
     enable_grounded_valuation: bool = Field(default=False, alias="ENABLE_GROUNDED_VALUATION")
+    enable_appraiser: bool = Field(default=False, alias="ENABLE_APPRAISER")
+    appraiser_max_photos: int = Field(default=3, ge=1, le=3, alias="APPRAISER_MAX_PHOTOS")
     triage_image_max_edge: int = Field(default=1024, ge=256, le=4096, alias="TRIAGE_IMAGE_MAX_EDGE")
     # Stored catalog bytes (browser upload + EXIF/HEIC normalize). ZIP + /photos/.../download + extensions use these.
     catalog_upload_max_edge: int = Field(default=4096, ge=512, le=8192, alias="CATALOG_UPLOAD_MAX_EDGE")

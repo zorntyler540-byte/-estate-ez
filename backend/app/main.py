@@ -38,9 +38,9 @@ from app.auth import (
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
-from app import export_tasks, job_tasks
+from app import appraisal_tasks, export_tasks, job_tasks
 from app.services.processing import run_lot_ai_regenerate_and_save
-from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
+from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
     DeleteLotPhotosIn,
@@ -65,6 +65,8 @@ from app.schemas import (
     AdminAccountUpdateIn,
     AdminUsageAccountOut,
     AdminUsageSummaryOut,
+    AppraisalCheckOut,
+    AppraisalResultOut,
     UserSummary,
     LotAiRegenerateIn,
     LotPhotoOut,
@@ -98,6 +100,7 @@ from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
@@ -222,6 +225,8 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         pipeline_triage_brand_audit=settings.pipeline_triage_brand_audit,
+        enable_appraiser=settings.enable_appraiser,
+        appraiser_max_photos=settings.appraiser_max_photos,
         gemini_pro_model=settings.gemini_pro_model,
         gemini_flash_model=settings.gemini_flash_model,
         catalog_upload_root=str(root),
@@ -2276,4 +2281,181 @@ def download_sale_photos_zip_export(
     sale = db.query(Sale).filter(Sale.id == row.sale_id).first()
     slug = re.sub(r"[^\w\-]+", "_", (sale.name if sale else "sale")[:60]).strip("_") or "sale"
     return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-photos.zip")
+
+
+def _require_appraiser_enabled() -> None:
+    if not settings.enable_appraiser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Appraiser mode is not enabled on this server.",
+        )
+
+
+def _appraisal_result_from_json(raw: str | None) -> AppraisalResultOut | None:
+    if not raw:
+        return None
+    try:
+        return AppraisalResultOut.model_validate(json.loads(raw))
+    except Exception:
+        return None
+
+
+def _appraisal_check_out(row: AppraisalCheck) -> AppraisalCheckOut:
+    paths = json.loads(row.photo_paths_json or "[]")
+    st = row.status.value if isinstance(row.status, JobStatus) else str(row.status)
+    return AppraisalCheckOut(
+        id=row.id,
+        sale_id=row.sale_id,
+        status=st,
+        scene_note=row.scene_note,
+        photo_count=len(paths),
+        result=_appraisal_result_from_json(row.result_json),
+        error_message=row.error_message,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _maybe_restart_queued_appraisal(row: AppraisalCheck, account_id: str) -> None:
+    if row.status != JobStatus.queued:
+        return
+    if appraisal_tasks.is_appraisal_check_running(row.id):
+        return
+    try:
+        appraisal_tasks.start_appraisal_check(row.id, account_id)
+    except RuntimeError:
+        pass
+
+
+@app.get("/appraiser/checks", response_model=list[AppraisalCheckOut])
+def list_appraisal_checks(
+    sale_id: str = Query(..., min_length=1),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[AppraisalCheckOut]:
+    _require_appraiser_enabled()
+    _sale_for_user(sale_id, current, db)
+    rows = (
+        db.query(AppraisalCheck)
+        .filter(AppraisalCheck.account_id == current.account_id, AppraisalCheck.sale_id == sale_id)
+        .order_by(AppraisalCheck.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    for row in rows:
+        _maybe_restart_queued_appraisal(row, current.account_id)
+    return [_appraisal_check_out(r) for r in rows]
+
+
+@app.post("/appraiser/checks", response_model=AppraisalCheckOut, status_code=status.HTTP_201_CREATED)
+async def create_appraisal_check(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    sale_id: str = Form(...),
+    scene_note: str = Form(""),
+    files: list[UploadFile] = File(...),
+) -> AppraisalCheckOut:
+    _require_appraiser_enabled()
+    sale = _sale_for_user(sale_id, current, db)
+    max_photos = settings.appraiser_max_photos
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one photo is required.")
+    if len(files) > max_photos:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Appraiser allows at most {max_photos} photos per check; received {len(files)}.",
+        )
+
+    check_id = str(uuid.uuid4())
+    paths: list[str] = []
+    names: list[str] = []
+    for i, upload in enumerate(files):
+        raw = await upload.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail=f"Empty image file: {upload.filename or i + 1}")
+        orig = upload.filename or f"photo-{i + 1}.jpg"
+        try:
+            body, stor_name = await asyncio.to_thread(compress_upload_bytes_if_image, raw, orig)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        suffix = Path(stor_name or orig).suffix or ".jpg"
+        key = persist_appraisal_photo_bytes(
+            current.account_id,
+            check_id,
+            index=i,
+            data=body,
+            suffix=suffix,
+        )
+        paths.append(key)
+        names.append(Path(stor_name or orig).name)
+
+    row = AppraisalCheck(
+        id=check_id,
+        account_id=current.account_id,
+        user_id=current.id,
+        sale_id=sale.id,
+        status=JobStatus.queued,
+        scene_note=(scene_note or "").strip() or None,
+        photo_paths_json=json.dumps(paths),
+        original_names_json=json.dumps(names),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    try:
+        appraisal_tasks.start_appraisal_check(row.id, current.account_id)
+    except RuntimeError as exc:
+        row.status = JobStatus.failed
+        row.error_message = str(exc)
+        db.commit()
+        db.refresh(row)
+    return _appraisal_check_out(row)
+
+
+@app.get("/appraiser/checks/{check_id}", response_model=AppraisalCheckOut)
+def get_appraisal_check(
+    check_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AppraisalCheckOut:
+    _require_appraiser_enabled()
+    row = (
+        db.query(AppraisalCheck)
+        .filter(AppraisalCheck.id == check_id, AppraisalCheck.account_id == current.account_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Appraisal check not found")
+    _maybe_restart_queued_appraisal(row, current.account_id)
+    db.refresh(row)
+    return _appraisal_check_out(row)
+
+
+@app.get("/appraiser/checks/{check_id}/photos/{photo_index}/thumbnail")
+def appraisal_check_photo_thumbnail(
+    check_id: str,
+    photo_index: int,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    max_px: int = Query(480, ge=64, le=1200),
+) -> Response:
+    _require_appraiser_enabled()
+    row = (
+        db.query(AppraisalCheck)
+        .filter(AppraisalCheck.id == check_id, AppraisalCheck.account_id == current.account_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Appraisal check not found")
+    paths = json.loads(row.photo_paths_json or "[]")
+    if photo_index < 0 or photo_index >= len(paths):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    src = resolve_appraisal_storage_path(paths[photo_index])
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail="Photo file missing")
+    try:
+        body = thumbnail_jpeg_bytes(src, max_px)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Thumbnail generation failed") from exc
+    return Response(content=body, media_type="image/jpeg")
 
