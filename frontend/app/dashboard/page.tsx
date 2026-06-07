@@ -1182,6 +1182,7 @@ export default function DashboardPage() {
   const [uploading, setUploading] = useState(false);
   const [stagingSuccess, setStagingSuccess] = useState("");
   const stagingDraftRestoredRef = useRef(false);
+  const stagingDraftRestorePendingRef = useRef(false);
   /** Shown during multi-request folder uploads (large batches). */
   const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
@@ -1413,31 +1414,37 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
     stagingDraftRestoredRef.current = true;
-    void loadStagingDraft().then((draft) => {
-      if (!draft?.imageFiles.length) return;
-      setFolderPick({
-        folderLabel: draft.folderLabel,
-        imageFiles: draft.imageFiles,
-        thumbUrls: draft.thumbUrls,
-        skippedCount: draft.skippedCount,
-        singleLotMode: draft.singleLotMode
-      });
-      if (draft.singleLotManualSku) setSingleLotManualSku(draft.singleLotManualSku);
-      if (draft.saleId) {
-        try {
-          localStorage.setItem(SALE_STORAGE_KEY, draft.saleId);
-        } catch {
-          /* private mode */
+    stagingDraftRestorePendingRef.current = true;
+    void loadStagingDraft()
+      .then((draft) => {
+        if (!draft?.imageFiles.length) return;
+        setFolderPick({
+          folderLabel: draft.folderLabel,
+          imageFiles: draft.imageFiles,
+          thumbUrls: draft.thumbUrls,
+          skippedCount: draft.skippedCount,
+          singleLotMode: draft.singleLotMode
+        });
+        if (draft.singleLotManualSku) setSingleLotManualSku(draft.singleLotManualSku);
+        if (draft.saleId) {
+          try {
+            localStorage.setItem(SALE_STORAGE_KEY, draft.saleId);
+          } catch {
+            /* private mode */
+          }
+          setSelectedSaleId(draft.saleId);
         }
-        setSelectedSaleId(draft.saleId);
-      }
-      setStagingSuccess(
-        `Restored ${draft.imageFiles.length} staged photo${draft.imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
-      );
-    });
+        setStagingSuccess(
+          `Restored ${draft.imageFiles.length} staged photo${draft.imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
+        );
+      })
+      .finally(() => {
+        stagingDraftRestorePendingRef.current = false;
+      });
   }, [token, folderPick]);
 
   useEffect(() => {
+    if (stagingDraftRestorePendingRef.current) return;
     if (!folderPick?.imageFiles.length) {
       void clearStagingDraft();
       return;

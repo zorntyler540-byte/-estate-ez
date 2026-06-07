@@ -13,6 +13,12 @@ from pipeline.appraiser import run_field_appraisal
 logger = logging.getLogger(__name__)
 
 
+def _appraisal_photo_label(index: int, storage_path: str, names: list[str]) -> str:
+    raw = names[index] if index < len(names) and names[index] else Path(storage_path).name
+    display = Path(str(raw).replace("\\", "/")).name or f"photo-{index + 1}"
+    return f"{index + 1:02d} - {display}"
+
+
 def run_appraisal_for_check(db: Session, check_id: str, account_id: str) -> None:
     row = (
         db.query(AppraisalCheck)
@@ -39,7 +45,7 @@ def run_appraisal_for_check(db: Session, check_id: str, account_id: str) -> None
             src = resolve_appraisal_storage_path(storage_path)
             if not src.is_file():
                 raise FileNotFoundError(f"Appraisal photo missing: {storage_path}")
-            label = names[i] if i < len(names) and names[i] else Path(storage_path).name
+            label = _appraisal_photo_label(i, storage_path, names)
             photo_bytes_by_name[label] = src.read_bytes()
 
         result, tokens = run_field_appraisal(photo_bytes_by_name, scene_note=row.scene_note or "")
