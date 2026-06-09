@@ -19,3 +19,6 @@ def test_appraisal_check_result_gemini_schema() -> None:
     assert "additionalProperties" not in str(schema)
     assert "listing_channel" in schema["properties"]
     assert "recommended_starting_price" in schema["properties"]
+    item_schema = schema["$defs"]["AppraisalItemLine"]
+    assert "title" in item_schema["properties"]
+    assert "title" in item_schema["required"]

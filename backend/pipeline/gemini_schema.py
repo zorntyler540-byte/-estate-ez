@@ -21,7 +21,10 @@ def pydantic_model_to_gemini_schema(model: type[BaseModel]) -> dict[str, Any]:
 def _strip_unsupported_gemini_schema_keys(obj: Any) -> None:
     if isinstance(obj, dict):
         obj.pop("additionalProperties", None)
-        obj.pop("title", None)
+        # Pydantic uses "title" for schema metadata (human label). Do not pop when the
+        # value is a property sub-schema — e.g. properties["title"] for a field named title.
+        if isinstance(obj.get("title"), str):
+            obj.pop("title", None)
         for value in obj.values():
             _strip_unsupported_gemini_schema_keys(value)
     elif isinstance(obj, list):
