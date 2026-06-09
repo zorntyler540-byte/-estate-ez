@@ -31,6 +31,7 @@ def start_lot_regeneration_in_background(
     user_id: str,
     photo_ids: list[str] | None,
     preserve_sku: bool,
+    expected_listing_fingerprint: str | None = None,
 ) -> None:
     with _lock:
         if lot_id in _active:
@@ -48,6 +49,7 @@ def start_lot_regeneration_in_background(
                     lot_id=lot_id,
                     photo_ids=photo_ids,
                     preserve_sku=preserve_sku,
+                    expected_listing_fingerprint=expected_listing_fingerprint,
                 )
         except Exception as exc:
             tb = traceback.format_exc()

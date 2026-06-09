@@ -96,6 +96,7 @@ from app.services.suggestion_email import (
     smtp_configured,
 )
 from app.services.photo_order import renormalize_photo_sort_orders
+from app.services.processing import lot_ai_regenerate_fingerprint
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path, upload_root
@@ -1639,12 +1640,14 @@ def regenerate_lot_with_ai(
     if regeneration_tasks.is_regenerating(lot_id):
         raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.")
     try:
+        expected_listing_fingerprint = lot_ai_regenerate_fingerprint(row, preserve_sku=body.preserve_sku)
         regeneration_tasks.start_lot_regeneration_in_background(
             lot_id=lot_id,
             account_id=current.account_id,
             user_id=current.id,
             photo_ids=body.photo_ids if body.photo_ids else None,
             preserve_sku=body.preserve_sku,
+            expected_listing_fingerprint=expected_listing_fingerprint,
         )
     except RuntimeError as exc:
         if str(exc) == "regenerate_already_running":
