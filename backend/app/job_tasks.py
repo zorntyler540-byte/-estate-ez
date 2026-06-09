@@ -23,14 +23,19 @@ def is_job_running(job_id: str) -> bool:
         return job_id in _job_cancels
 
 
+def _running_count_for_account_unlocked(account_id: str) -> int:
+    return sum(1 for acc in _job_accounts.values() if acc == account_id)
+
+
 def running_count_for_account(account_id: str) -> int:
     with _job_cancels_lock:
-        return sum(1 for acc in _job_accounts.values() if acc == account_id)
+        return _running_count_for_account_unlocked(account_id)
 
 
 def can_start_job_for_account(account_id: str) -> bool:
     cap = max(1, settings.catalog_job_max_concurrent)
-    return running_count_for_account(account_id) < cap
+    with _job_cancels_lock:
+        return _running_count_for_account_unlocked(account_id) < cap
 
 
 def request_cancel(job_id: str) -> bool:
@@ -93,7 +98,8 @@ def start_job_in_background(job_id: str, account_id: str) -> bool:
     with _job_cancels_lock:
         if job_id in _job_cancels:
             raise RuntimeError("job_already_running")
-        if not can_start_job_for_account(account_id):
+        cap = max(1, settings.catalog_job_max_concurrent)
+        if _running_count_for_account_unlocked(account_id) >= cap:
             return False
         cancel_ev = threading.Event()
         _job_cancels[job_id] = cancel_ev
