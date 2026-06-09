@@ -42,15 +42,23 @@ def _processing_job_ids_in_db(account_id: str) -> set[str]:
 
 
 def reconcile_memory_threads_for_account(account_id: str) -> None:
-    """Drop in-memory worker slots that no longer match a DB ``processing`` row (restart / orphan)."""
-    live_ids = _processing_job_ids_in_db(account_id)
+    """Drop in-memory worker slots whose jobs are no longer active (completed/failed/missing)."""
+    with SessionLocal() as db:
+        rows = (
+            db.query(ProcessingJob.id, ProcessingJob.status)
+            .filter(ProcessingJob.account_id == account_id)
+            .all()
+        )
+    status_by_id = {row.id: row.status for row in rows}
     with _job_cancels_lock:
         for job_id in list(_job_accounts.keys()):
             if _job_accounts.get(job_id) != account_id:
                 continue
-            if job_id not in live_ids:
-                _job_cancels.pop(job_id, None)
-                _job_accounts.pop(job_id, None)
+            status = status_by_id.get(job_id)
+            if status in (JobStatus.processing, JobStatus.queued):
+                continue
+            _job_cancels.pop(job_id, None)
+            _job_accounts.pop(job_id, None)
 
 
 def effective_running_count(account_id: str) -> int:

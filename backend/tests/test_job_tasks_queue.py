@@ -43,11 +43,12 @@ class JobTasksQueueTests(unittest.TestCase):
 
     def test_second_start_returns_false_when_at_capacity(self) -> None:
         with patch.object(job_tasks.settings, "catalog_job_max_concurrent", 1):
-            with patch.object(job_tasks, "effective_running_count", return_value=1):
-                with patch.object(job_tasks.threading, "Thread") as mock_thread:
-                    mock_thread.return_value.start = lambda: None
-                    ok1 = job_tasks.start_job_in_background("job-a", "acct-1")
-        self.assertFalse(ok1)
+            with patch.object(job_tasks.threading, "Thread") as mock_thread:
+                mock_thread.return_value.start = lambda: None
+                ok1 = job_tasks.start_job_in_background("job-a", "acct-1")
+                ok2 = job_tasks.start_job_in_background("job-b", "acct-1")
+        self.assertTrue(ok1)
+        self.assertFalse(ok2)
 
     def test_different_accounts_can_run_together(self) -> None:
         with patch.object(job_tasks.settings, "catalog_job_max_concurrent", 1):
