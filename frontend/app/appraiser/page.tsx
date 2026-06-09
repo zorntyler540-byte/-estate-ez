@@ -6,6 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Loader2, Plus, Trash2 } from "lucide-react";
 import { AppraisalPhotoThumb } from "../../components/AppraisalPhotoThumb";
 import { SiteHeader } from "../../components/SiteHeader";
+import {
+  APPRAISER_CAMERA_MEDIA,
+  captureVideoFrameAsJpegFile,
+  isCatalogImageFile,
+  stabilizeCapturedFiles
+} from "../../lib/cameraCapture";
 import { API_BASE, apiFetch, parseApiErrorMessage } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
@@ -94,8 +100,19 @@ export default function AppraiserPage() {
   const [submitBusy, setSubmitBusy] = useState(false);
   const [error, setError] = useState("");
   const [banner, setBanner] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const cameraNativeChainingRef = useRef(false);
+  const cameraNativeChainTimerRef = useRef<number | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraSnapsRef = useRef<File[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraSnaps, setCameraSnaps] = useState<File[]>([]);
+  const [cameraSnapThumbUrls, setCameraSnapThumbUrls] = useState<string[]>([]);
+  const [cameraSnapBusy, setCameraSnapBusy] = useState(false);
 
   const maxPhotos = health?.appraiser_max_photos ?? 3;
   const appraiserEnabled = health?.enable_appraiser === true;
@@ -190,14 +207,210 @@ export default function AppraiserPage() {
     router.replace("/");
   }
 
-  function onFilesPicked(list: FileList | null) {
-    if (!list?.length) return;
-    setPendingFiles((prev) => {
-      const merged = [...prev, ...Array.from(list)].slice(0, maxPhotos);
-      return merged;
-    });
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  async function appendPendingFiles(incoming: File[]) {
+    const imageFiles = incoming.filter((f) => f.size > 0 && isCatalogImageFile(f));
+    if (!imageFiles.length) {
+      setBanner("No usable image was returned from the camera. Try again or pick from gallery.");
+      return;
+    }
+    const stable = await stabilizeCapturedFiles(imageFiles);
+    setPendingFiles((prev) => [...prev, ...stable].slice(0, maxPhotos));
+    setBanner("");
   }
+
+  function clearCameraSnapsAndThumbs() {
+    setCameraSnapThumbUrls((prev) => {
+      prev.forEach((u) => URL.revokeObjectURL(u));
+      return [];
+    });
+    cameraSnapsRef.current = [];
+    setCameraSnaps([]);
+  }
+
+  function stopCameraTracks() {
+    const stream = cameraStreamRef.current;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    cameraStreamRef.current = null;
+    setCameraStream(null);
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+  }
+
+  function cancelCameraSession() {
+    cameraNativeChainingRef.current = false;
+    if (cameraNativeChainTimerRef.current != null) {
+      window.clearTimeout(cameraNativeChainTimerRef.current);
+      cameraNativeChainTimerRef.current = null;
+    }
+    clearCameraSnapsAndThumbs();
+    stopCameraTracks();
+    setCameraOpen(false);
+  }
+
+  async function finishCameraSession() {
+    cameraNativeChainingRef.current = false;
+    if (cameraNativeChainTimerRef.current != null) {
+      window.clearTimeout(cameraNativeChainTimerRef.current);
+      cameraNativeChainTimerRef.current = null;
+    }
+    const files = [...cameraSnapsRef.current];
+    clearCameraSnapsAndThumbs();
+    stopCameraTracks();
+    setCameraOpen(false);
+    if (!files.length) return;
+    await appendPendingFiles(files);
+  }
+
+  async function bindCameraStream(stream: MediaStream) {
+    cameraStreamRef.current = stream;
+    setCameraStream(stream);
+    const v = cameraVideoRef.current;
+    if (v) {
+      v.srcObject = stream;
+      try {
+        await v.play();
+      } catch {
+        /* autoplay policy */
+      }
+    }
+  }
+
+  async function openAppraiserCamera() {
+    if (pendingFiles.length >= maxPhotos) return;
+    clearCameraSnapsAndThumbs();
+    setCameraOpen(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(APPRAISER_CAMERA_MEDIA);
+      await bindCameraStream(stream);
+    } catch {
+      stopCameraTracks();
+      setCameraOpen(false);
+      cameraNativeChainingRef.current = true;
+      cameraInputRef.current?.click();
+    }
+  }
+
+  async function openAddPhotos() {
+    if (pendingFiles.length >= maxPhotos) return;
+    const coarse =
+      typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+    if (coarse && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+      await openAppraiserCamera();
+      return;
+    }
+    if (coarse) {
+      cameraNativeChainingRef.current = true;
+      cameraInputRef.current?.click();
+      return;
+    }
+    galleryInputRef.current?.click();
+  }
+
+  async function onCameraNativeInputChange(list: FileList | null) {
+    if (!list?.length) {
+      cameraNativeChainingRef.current = false;
+      return;
+    }
+    const imageFiles = Array.from(list).filter((f) => f.size > 0 && isCatalogImageFile(f));
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+    if (!imageFiles.length) {
+      cameraNativeChainingRef.current = false;
+      setBanner("No usable image was returned from the camera.");
+      return;
+    }
+    if (cameraOpen) {
+      const startIndex = cameraSnapsRef.current.length;
+      const next = [...cameraSnapsRef.current, ...imageFiles].slice(0, maxPhotos - pendingFiles.length);
+      cameraSnapsRef.current = next;
+      setCameraSnaps(next);
+      setCameraSnapThumbUrls((prev) => [
+        ...prev,
+        ...imageFiles.map((f) => URL.createObjectURL(f))
+      ]);
+      const stable = await stabilizeCapturedFiles(imageFiles);
+      const merged = [...next];
+      for (let i = 0; i < stable.length; i++) {
+        merged[startIndex + i] = stable[i]!;
+      }
+      cameraSnapsRef.current = merged;
+      setCameraSnaps(merged);
+    } else {
+      await appendPendingFiles(imageFiles);
+    }
+    const atCap =
+      pendingFiles.length + (cameraOpen ? cameraSnapsRef.current.length : 0) >= maxPhotos;
+    if (cameraNativeChainingRef.current && !atCap && imageFiles.length === 1) {
+      if (cameraNativeChainTimerRef.current != null) {
+        window.clearTimeout(cameraNativeChainTimerRef.current);
+      }
+      cameraNativeChainTimerRef.current = window.setTimeout(() => {
+        cameraNativeChainTimerRef.current = null;
+        if (!cameraNativeChainingRef.current) return;
+        if (pendingFiles.length + cameraSnapsRef.current.length >= maxPhotos) {
+          cameraNativeChainingRef.current = false;
+          return;
+        }
+        cameraInputRef.current?.click();
+      }, 320);
+    } else {
+      cameraNativeChainingRef.current = false;
+    }
+  }
+
+  async function onGalleryPicked(list: FileList | null) {
+    if (!list?.length) return;
+    const imageFiles = Array.from(list).filter((f) => f.size > 0 && isCatalogImageFile(f));
+    if (galleryInputRef.current) galleryInputRef.current.value = "";
+    if (!imageFiles.length) {
+      setBanner("No image files were selected.");
+      return;
+    }
+    await appendPendingFiles(imageFiles);
+  }
+
+  async function snapCameraPhoto() {
+    if (cameraSnapBusy) return;
+    const room = maxPhotos - pendingFiles.length - cameraSnapsRef.current.length;
+    if (room <= 0) return;
+    const v = cameraVideoRef.current;
+    if (!v || v.readyState < 2 || v.videoWidth < 2) return;
+    setCameraSnapBusy(true);
+    try {
+      const file = await captureVideoFrameAsJpegFile(v, "appraiser");
+      if (!file) return;
+      const stable = (await stabilizeCapturedFiles([file]))[0];
+      if (!stable) return;
+      cameraSnapsRef.current = [...cameraSnapsRef.current, stable];
+      setCameraSnaps(cameraSnapsRef.current);
+      setCameraSnapThumbUrls((prev) => [...prev, URL.createObjectURL(stable)]);
+    } finally {
+      setCameraSnapBusy(false);
+    }
+  }
+
+  function openPhoneCameraFromDialog() {
+    const room = maxPhotos - pendingFiles.length - cameraSnapsRef.current.length;
+    if (room <= 0) return;
+    cameraNativeChainingRef.current = true;
+    cameraInputRef.current?.click();
+  }
+
+  useEffect(() => {
+    return () => {
+      stopCameraTracks();
+      if (cameraNativeChainTimerRef.current != null) {
+        window.clearTimeout(cameraNativeChainTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cameraOpen || !cameraStream) return;
+    const v = cameraVideoRef.current;
+    if (v && v.srcObject !== cameraStream) {
+      v.srcObject = cameraStream;
+      void v.play().catch(() => {});
+    }
+  }, [cameraOpen, cameraStream]);
 
   function removePending(index: number) {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
@@ -339,13 +552,20 @@ export default function AppraiserPage() {
 
           <div style={{ marginTop: "1rem" }}>
             <input
-              ref={fileInputRef}
+              ref={cameraInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.heic,.heif"
               capture="environment"
+              hidden
+              onChange={(e) => void onCameraNativeInputChange(e.target.files)}
+            />
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*,.heic,.heif"
               multiple
               hidden
-              onChange={(e) => onFilesPicked(e.target.files)}
+              onChange={(e) => void onGalleryPicked(e.target.files)}
             />
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
               {previewUrls.map((url, i) => (
@@ -372,7 +592,7 @@ export default function AppraiserPage() {
                 <button
                   type="button"
                   className="ct-btn ct-btn--secondary"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => void openAddPhotos()}
                   disabled={submitBusy}
                 >
                   <Camera size={16} style={{ marginRight: "0.35rem" }} />
@@ -555,6 +775,85 @@ export default function AppraiserPage() {
           </ul>
         )}
       </section>
+
+      {cameraOpen ? (
+        <div
+          className="ct-lot-camera-dialog ct-lot-camera-dialog-shell"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Snap photos for appraisal"
+        >
+          <div className="ct-lot-camera-scroll">
+            <div className="ct-card ct-card--padded ct-lot-camera-card">
+              <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+                Snap up to {maxPhotos} photos for this check, then tap <strong>Done</strong> to add them to the
+                appraisal box. Use <strong>Phone camera</strong> if the in-browser preview is blurry.
+              </p>
+              {!cameraStream ? (
+                <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
+              ) : (
+                <>
+                  <div className="ct-lot-camera-live">
+                    <video
+                      ref={cameraVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        display: "block",
+                        objectFit: "cover",
+                        pointerEvents: "none"
+                      }}
+                    />
+                  </div>
+                  {cameraSnapThumbUrls.length > 0 && (
+                    <div className="ct-lot-camera-thumbs" style={{ marginTop: "0.65rem" }}>
+                      {cameraSnapThumbUrls.map((url, i) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={url} src={url} alt={`Snap ${i + 1}`} className="ct-lot-camera-thumb" />
+                      ))}
+                    </div>
+                  )}
+                  <div className="ct-lot-camera-actions" style={{ marginTop: "0.75rem" }}>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--secondary"
+                      onClick={() => void snapCameraPhoto()}
+                      disabled={
+                        cameraSnapBusy ||
+                        pendingFiles.length + cameraSnaps.length >= maxPhotos
+                      }
+                    >
+                      Snap
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost"
+                      onClick={openPhoneCameraFromDialog}
+                      disabled={pendingFiles.length + cameraSnaps.length >= maxPhotos}
+                    >
+                      Phone camera
+                    </button>
+                    <button type="button" className="ct-btn ct-btn--ghost" onClick={cancelCameraSession}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary"
+                      onClick={() => void finishCameraSession()}
+                      disabled={!cameraSnaps.length}
+                    >
+                      Done
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
