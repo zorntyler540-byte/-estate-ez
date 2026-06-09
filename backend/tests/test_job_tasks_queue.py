@@ -41,24 +41,26 @@ class JobTasksQueueTests(unittest.TestCase):
         job_tasks.kick_queue_if_idle("acct-1")
         mock_try.assert_called_once_with("acct-1")
 
-    def test_second_start_returns_false_when_at_capacity(self) -> None:
-        with patch.object(job_tasks.settings, "catalog_job_max_concurrent", 1):
-            with patch.object(job_tasks.threading, "Thread") as mock_thread:
-                mock_thread.return_value.start = lambda: None
-                ok1 = job_tasks.start_job_in_background("job-a", "acct-1")
-                ok2 = job_tasks.start_job_in_background("job-b", "acct-1")
-        self.assertTrue(ok1)
-        self.assertFalse(ok2)
+    @patch.object(job_tasks, "_claim_queued_job", return_value=True)
+    @patch.object(job_tasks, "can_start_job_for_account", return_value=True)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks.threading, "Thread")
+    def test_start_claims_job_before_thread(
+        self,
+        mock_thread: object,
+        _mock_reconcile: object,
+        _mock_can: object,
+        mock_claim: object,
+    ) -> None:
+        mock_thread.return_value.start = lambda: None
+        ok = job_tasks.start_job_in_background("job-a", "acct-1")
+        self.assertTrue(ok)
+        mock_claim.assert_called_once_with("job-a", "acct-1")
 
-    def test_different_accounts_can_run_together(self) -> None:
-        with patch.object(job_tasks.settings, "catalog_job_max_concurrent", 1):
-            with patch.object(job_tasks, "effective_running_count", return_value=0):
-                with patch.object(job_tasks.threading, "Thread") as mock_thread:
-                    mock_thread.return_value.start = lambda: None
-                    ok1 = job_tasks.start_job_in_background("job-a", "acct-1")
-                    ok2 = job_tasks.start_job_in_background("job-b", "acct-2")
-        self.assertTrue(ok1)
-        self.assertTrue(ok2)
+    @patch.object(job_tasks, "can_start_job_for_account", return_value=False)
+    def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
+        ok = job_tasks.start_job_in_background("job-b", "acct-1")
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":

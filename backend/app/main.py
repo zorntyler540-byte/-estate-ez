@@ -1919,14 +1919,26 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
     job_tasks.kick_queue_if_idle(current.account_id)
+    started = False
     try:
         started = job_tasks.start_job_in_background(job.id, current.account_id)
     except RuntimeError as exc:
         if str(exc) != "job_already_running":
             raise
-        raise HTTPException(status_code=409, detail="Job is already running") from exc
+        job_tasks.reconcile_memory_threads_for_account(current.account_id)
+        try:
+            started = job_tasks.start_job_in_background(job.id, current.account_id)
+        except RuntimeError as retry_exc:
+            if str(retry_exc) != "job_already_running":
+                raise
+            raise HTTPException(status_code=409, detail="Job is already running") from retry_exc
     if not started:
-        return _job_out(job)
+        job_tasks.kick_queue_if_idle(current.account_id)
+        db.refresh(job)
+        if job.status == JobStatus.processing:
+            started = True
+        else:
+            return _job_out(job)
     # Worker sets DB to processing asynchronously; return processing so the client
     # starts status polling immediately instead of waiting on the first GET /jobs refresh.
     db.expire(job)
