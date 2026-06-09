@@ -1146,6 +1146,22 @@ def _regenerate_fallback_lot_output(row: Lot) -> LotOutput:
     )
 
 
+def lot_ai_regenerate_fingerprint(row: Lot, *, preserve_sku: bool) -> str:
+    """Fingerprint lot fields that a background AI regenerate can overwrite."""
+    payload = {
+        "auction_title": row.auction_title or "",
+        "professional_description": row.professional_description or "",
+        "specification_lines_json": row.specification_lines_json or "[]",
+        "brands_json": row.brands_json or "[]",
+        "labels_and_tags_json": row.labels_and_tags_json or "[]",
+        "starting_price": row.starting_price,
+        "condition_text": row.condition_text or "",
+    }
+    if not preserve_sku:
+        payload["sku"] = row.sku or ""
+    return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
 def run_lot_ai_regenerate_and_save(
     db: Session,
     *,
@@ -1154,6 +1170,7 @@ def run_lot_ai_regenerate_and_save(
     lot_id: str,
     photo_ids: list[str] | None,
     preserve_sku: bool,
+    expected_listing_fingerprint: str | None = None,
 ) -> Lot:
     """
     Re-run Gemini on existing catalog files for one lot (or a subset), merge frames like single-lot mode,
@@ -1245,6 +1262,15 @@ def run_lot_ai_regenerate_and_save(
         or 0
     )
     current.photo_count = linked
+
+    db.refresh(row)
+    if (
+        expected_listing_fingerprint is not None
+        and lot_ai_regenerate_fingerprint(row, preserve_sku=preserve_sku) != expected_listing_fingerprint
+    ):
+        raise ValueError(
+            "Lot changed while AI regenerate was running. Saved edits were kept; run AI again to apply AI to the latest lot."
+        )
 
     ct_cat, ct_sub = infer_ct_category(current)
     row.auction_title = current.auction_title
