@@ -193,3 +193,13 @@ def kick_queue_if_idle(account_id: str) -> None:
         )
     if has_queued:
         try_start_next_queued_job(account_id)
+
+
+def kick_queue_if_idle_async(account_id: str) -> None:
+    """Non-blocking wrapper for ``list_jobs`` — must not delay dashboard load."""
+    threading.Thread(
+        target=kick_queue_if_idle,
+        args=(account_id,),
+        daemon=True,
+        name=f"kick-q-{account_id[:8]}",
+    ).start()

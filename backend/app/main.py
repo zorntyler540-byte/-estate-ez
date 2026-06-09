@@ -1888,7 +1888,7 @@ def list_jobs(
             changed = True
     if changed:
         db.commit()
-    job_tasks.kick_queue_if_idle(current.account_id)
+    job_tasks.kick_queue_if_idle_async(current.account_id)
 
     q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
     if sale_id is not None:
