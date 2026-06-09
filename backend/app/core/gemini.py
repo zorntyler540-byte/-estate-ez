@@ -681,10 +681,13 @@ def _model_url() -> str:
 
 
 def _generate_content(payload: dict[str, Any], timeout: int = 120) -> str | None:
+    from app.core.gemini_slots import gemini_slot
+
     headers = {"Content-Type": "application/json", "x-goog-api-key": settings.google_api_key}
     for _ in range(3): # Shorter retry loop for responsiveness
         try:
-            response = requests.post(_model_url(), headers=headers, json=payload, timeout=timeout)
+            with gemini_slot():
+                response = requests.post(_model_url(), headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
         except Exception:

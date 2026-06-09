@@ -39,6 +39,8 @@ type Lot = {
   many_photos_review: boolean;
   sku_duplicate_in_sale: boolean;
   sku_text_mismatch: boolean;
+  ai_regenerating?: boolean;
+  ai_regenerate_error?: string | null;
 };
 
 type SaleLotOption = {
@@ -157,7 +159,9 @@ export default function LotDetailPage() {
       try {
         const d = await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, t);
         if (cancelled) return;
-        setLot(d);
+        const row = d as Lot;
+        setLot(row);
+        setAiRegenerating(Boolean(row.ai_regenerating));
         try {
           const photos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/photos`, t)) as LotPhoto[];
           if (cancelled) return;
@@ -176,6 +180,33 @@ export default function LotDetailPage() {
       cancelled = true;
     };
   }, [routeLotId]);
+
+  useEffect(() => {
+    if (!token || !routeLotId || !lot?.ai_regenerating) return;
+    setAiRegenerating(true);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const row = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, token)) as Lot;
+        if (cancelled) return;
+        setLot(row);
+        if (!row.ai_regenerating) {
+          setAiRegenerating(false);
+          if (row.ai_regenerate_error) {
+            setError(row.ai_regenerate_error);
+          }
+        }
+      } catch {
+        /* keep polling until server reports done */
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [token, routeLotId, lot?.ai_regenerating]);
 
   useEffect(() => {
     if (!token || !lot?.sale_id) return;
@@ -338,9 +369,12 @@ export default function LotDetailPage() {
         body: JSON.stringify(body)
       })) as Lot;
       setLot(updated);
+      setAiRegenerating(Boolean(updated.ai_regenerating));
+      if (!updated.ai_regenerating && updated.ai_regenerate_error) {
+        setError(updated.ai_regenerate_error);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "AI regenerate failed");
-    } finally {
       setAiRegenerating(false);
     }
   }

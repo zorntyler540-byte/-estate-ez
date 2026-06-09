@@ -158,6 +158,8 @@ class LotOut(BaseModel):
     many_photos_review: bool = False
     sku_duplicate_in_sale: bool = False
     sku_text_mismatch: bool = False
+    ai_regenerating: bool = False
+    ai_regenerate_error: str | None = None
 
 
 class LotUpdate(BaseModel):

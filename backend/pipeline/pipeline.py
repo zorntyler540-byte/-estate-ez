@@ -170,11 +170,14 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
         temperature=0.1,
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_FLASH_MODEL,
-        contents=parts,
-        config=config,
-    )
+    from app.core.gemini_slots import gemini_slot
+
+    with gemini_slot():
+        response = client.models.generate_content(
+            model=GEMINI_FLASH_MODEL,
+            contents=parts,
+            config=config,
+        )
 
     if response.parsed is not None:
         row = PhotoTriageResult.model_validate(response.parsed)
@@ -604,11 +607,14 @@ def run_brand_audit_pro(
         config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
     config = types.GenerateContentConfig(**config_kwargs)
 
-    response = client.models.generate_content(
-        model=GEMINI_PRO_MODEL,
-        contents=parts,
-        config=config,
-    )
+    from app.core.gemini_slots import gemini_slot
+
+    with gemini_slot():
+        response = client.models.generate_content(
+            model=GEMINI_PRO_MODEL,
+            contents=parts,
+            config=config,
+        )
 
     if response.text:
         manifest = FullyAuditedManifest.model_validate(json.loads(response.text))

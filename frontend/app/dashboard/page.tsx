@@ -1284,13 +1284,27 @@ export default function DashboardPage() {
   /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
   const [jobSseSession, setJobSseSession] = useState(0);
   const sseRetryAfterErrorRef = useRef(0);
+  /** Dashboard progress table + SSE follow this upload's job, not an older concurrent run. */
+  const liveProgressJobIdRef = useRef<string | null>(null);
+  const [liveProgressJobId, setLiveProgressJobId] = useState<string | null>(null);
   folderPickRef.current = folderPick;
   selectedSaleIdRef.current = selectedSaleId;
 
   const busyProcessing = jobs.some((j) => j.status === "processing");
   const busyProcessingRef = useRef(false);
   busyProcessingRef.current = busyProcessing;
-  const processingJob = useMemo(() => jobs.find((j) => j.status === "processing") ?? null, [jobs]);
+  const processingJob = useMemo(() => {
+    const active = jobs.filter((j) => j.status === "processing");
+    if (!active.length) return null;
+    const preferred = liveProgressJobIdRef.current ?? liveProgressJobId;
+    if (preferred) {
+      const hit = active.find((j) => j.id === preferred);
+      if (hit) return hit;
+    }
+    return (
+      [...active].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0] ?? null
+    );
+  }, [jobs, liveProgressJobId]);
   const processingJobId = processingJob?.id ?? null;
   const photoHealthLotCount = useMemo(
     () => Object.keys(photoHealthMissing).length,
@@ -2056,6 +2070,10 @@ export default function DashboardPage() {
           if (finishedJobId && msg.status) {
             maybeClearStagingAfterJobTerminal(finishedJobId, msg.status);
           }
+          if (finishedJobId && liveProgressJobIdRef.current === finishedJobId) {
+            liveProgressJobIdRef.current = null;
+            setLiveProgressJobId(null);
+          }
           refreshJobsAndLots();
         }
       } catch {
@@ -2085,6 +2103,8 @@ export default function DashboardPage() {
       setPipelinePhotoSelection(null);
       setCatalogStepProgress(null);
       setCancellingJobId(null);
+      liveProgressJobIdRef.current = null;
+      setLiveProgressJobId(null);
     }
   }, [processingJobId]);
 
@@ -3353,6 +3373,8 @@ export default function DashboardPage() {
       setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
+        liveProgressJobIdRef.current = running.id;
+        setLiveProgressJobId(running.id);
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
         setUploadProgress("");
         setError("");
@@ -3939,7 +3961,8 @@ export default function DashboardPage() {
       {busyProcessing && (
         <div className="ct-banner ct-banner--warning">
           <p style={{ margin: 0 }}>
-            <strong>Working on your photos.</strong> New lots will appear in the table below as they are ready. Use{" "}
+            <strong>Working on your photos.</strong> New lots will appear in the table below as they are ready. You can
+            still <strong>Add one lot</strong> or run <strong>Regenerate AI</strong> on another lot at the same time. Use{" "}
             <strong>Cancel</strong> on the job row if you need to stop.
           </p>
           {cancelNotice ? (

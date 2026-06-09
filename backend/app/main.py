@@ -38,8 +38,7 @@ from app.auth import (
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
-from app import appraisal_tasks, export_tasks, job_tasks
-from app.services.processing import run_lot_ai_regenerate_and_save
+from app import appraisal_tasks, export_tasks, job_tasks, regeneration_tasks
 from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
@@ -165,7 +164,12 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     has = lot_id in lot_ids_with_linked_photos(db, account_id, [lot_id])
     peer = sale_lot_photo_counts(db, row.sale_id, account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
-    return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    regen = regeneration_tasks.is_regenerating(lot_id)
+    err = None if regen else regeneration_tasks.pop_regeneration_error(lot_id)
+    if regen or err:
+        return out.model_copy(update={"ai_regenerating": regen, "ai_regenerate_error": err})
+    return out
 
 
 def _job_out(job: ProcessingJob) -> JobOut:
@@ -1632,20 +1636,25 @@ def regenerate_lot_with_ai(
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    if regeneration_tasks.is_regenerating(lot_id):
+        raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.")
     try:
-        run_lot_ai_regenerate_and_save(
-            db,
+        regeneration_tasks.start_lot_regeneration_in_background(
+            lot_id=lot_id,
             account_id=current.account_id,
             user_id=current.id,
-            lot_id=lot_id,
             photo_ids=body.photo_ids if body.photo_ids else None,
             preserve_sku=body.preserve_sku,
         )
+    except RuntimeError as exc:
+        if str(exc) == "regenerate_already_running":
+            raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.") from exc
+        raise
     except ValueError as exc:
         msg = str(exc)
         code = status.HTTP_503_SERVICE_UNAVAILABLE if "GOOGLE_API_KEY" in msg else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=msg) from exc
-    return _lot_out_for_id(db, current.account_id, lot_id)
+    return _lot_out_for_id(db, current.account_id, lot_id).model_copy(update={"ai_regenerating": True})
 
 
 @app.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
