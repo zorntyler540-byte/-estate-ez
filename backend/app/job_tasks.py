@@ -28,9 +28,41 @@ def running_count_for_account(account_id: str) -> int:
         return sum(1 for acc in _job_accounts.values() if acc == account_id)
 
 
+def _processing_job_ids_in_db(account_id: str) -> set[str]:
+    with SessionLocal() as db:
+        rows = (
+            db.query(ProcessingJob.id)
+            .filter(
+                ProcessingJob.account_id == account_id,
+                ProcessingJob.status == JobStatus.processing,
+            )
+            .all()
+        )
+    return {row.id for row in rows}
+
+
+def reconcile_memory_threads_for_account(account_id: str) -> None:
+    """Drop in-memory worker slots that no longer match a DB ``processing`` row (restart / orphan)."""
+    live_ids = _processing_job_ids_in_db(account_id)
+    with _job_cancels_lock:
+        for job_id in list(_job_accounts.keys()):
+            if _job_accounts.get(job_id) != account_id:
+                continue
+            if job_id not in live_ids:
+                _job_cancels.pop(job_id, None)
+                _job_accounts.pop(job_id, None)
+
+
+def effective_running_count(account_id: str) -> int:
+    reconcile_memory_threads_for_account(account_id)
+    db_count = len(_processing_job_ids_in_db(account_id))
+    mem_count = running_count_for_account(account_id)
+    return max(db_count, mem_count)
+
+
 def can_start_job_for_account(account_id: str) -> bool:
     cap = max(1, settings.catalog_job_max_concurrent)
-    return running_count_for_account(account_id) < cap
+    return effective_running_count(account_id) < cap
 
 
 def request_cancel(job_id: str) -> bool:
@@ -108,7 +140,8 @@ def start_job_in_background(job_id: str, account_id: str) -> bool:
 
 
 def try_start_next_queued_job(account_id: str) -> None:
-    """After a job finishes, start the oldest queued job for this account if capacity allows."""
+    """After a job finishes (or the queue was idle), start the oldest queued job for this account."""
+    reconcile_memory_threads_for_account(account_id)
     if not can_start_job_for_account(account_id):
         return
     with SessionLocal() as db:
@@ -130,3 +163,22 @@ def try_start_next_queued_job(account_id: str) -> None:
     except RuntimeError:
         return
     _LOG.info("Started queued catalog job job_id=%s account_id=%s", job_id, account_id)
+
+
+def kick_queue_if_idle(account_id: str) -> None:
+    """Start waiting queued jobs when nothing is processing (e.g. after API restart or stale reconcile)."""
+    reconcile_memory_threads_for_account(account_id)
+    if effective_running_count(account_id) > 0:
+        return
+    with SessionLocal() as db:
+        has_queued = (
+            db.query(ProcessingJob.id)
+            .filter(
+                ProcessingJob.account_id == account_id,
+                ProcessingJob.status == JobStatus.queued,
+            )
+            .first()
+            is not None
+        )
+    if has_queued:
+        try_start_next_queued_job(account_id)

@@ -2117,8 +2117,11 @@ export default function DashboardPage() {
     if (!busyProcessing && queuedJobCount === 0) return;
 
     /** Keep syncing while the phone is locked or Safari is in the background (field use). Slightly slower when hidden to save radio. */
-    const pollMs = () =>
-      typeof document !== "undefined" && document.visibilityState === "hidden" ? 45000 : 12000;
+    const pollMs = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return 45000;
+      if (queuedJobCount > 0 && !busyProcessing) return 4000;
+      return 12000;
+    };
 
     const tick = async () => {
       try {
@@ -3396,6 +3399,12 @@ export default function DashboardPage() {
         if (running.status === "processing") {
           liveProgressJobIdRef.current = running.id;
           setLiveProgressJobId(running.id);
+        } else if (running.status === "queued") {
+          void apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, token)
+            .then((d) => setJobs(d as Job[]))
+            .catch(() => {
+              /* kick_queue runs on GET /jobs */
+            });
         }
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
         setUploadProgress("");

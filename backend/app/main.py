@@ -1888,6 +1888,7 @@ def list_jobs(
             changed = True
     if changed:
         db.commit()
+    job_tasks.kick_queue_if_idle(current.account_id)
 
     q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
     if sale_id is not None:
@@ -1917,6 +1918,7 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         db.refresh(job)
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
+    job_tasks.kick_queue_if_idle(current.account_id)
     try:
         started = job_tasks.start_job_in_background(job.id, current.account_id)
     except RuntimeError as exc:
