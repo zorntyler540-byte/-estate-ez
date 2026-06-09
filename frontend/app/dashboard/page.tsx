@@ -986,6 +986,47 @@ function pipelineTriageRoleLabel(role: string | undefined): string {
   }
 }
 
+type PipelinePhotoSelection = {
+  heroFilename: string | null;
+  proFilenames: Set<string>;
+  listingFilenames: Set<string>;
+  makerStickerFilename: string | null;
+};
+
+function normalizePipelineFilename(filename: string): string {
+  return filename.trim().toLowerCase();
+}
+
+/** After triage selection: show which frames go to Pro, listing Flash, or catalog only. */
+function pipelineSlotLabel(
+  fileName: string | undefined,
+  triageRole: string | undefined,
+  selection: PipelinePhotoSelection | null
+): string {
+  if (!selection) return pipelineTriageRoleLabel(triageRole);
+  const key = fileName ? normalizePipelineFilename(fileName) : "";
+  if (!key) return pipelineTriageRoleLabel(triageRole);
+
+  const matches = (name: string) => normalizePipelineFilename(name) === key;
+
+  if ([...selection.proFilenames].some(matches)) {
+    if (selection.makerStickerFilename && matches(selection.makerStickerFilename)) {
+      return "Brand shot (Pro) · maker sticker";
+    }
+    return "Brand shot (Pro)";
+  }
+  if (selection.heroFilename && matches(selection.heroFilename)) {
+    return "Hero shot (listing)";
+  }
+  if ([...selection.listingFilenames].some(matches)) {
+    return "Listing draft";
+  }
+  if ((triageRole || "").trim().toLowerCase() === "unusable") {
+    return "Not passed to Pro";
+  }
+  return "Catalog only";
+}
+
 type SaleZipExport = {
   id: string;
   sale_id: string;
@@ -1228,6 +1269,10 @@ export default function DashboardPage() {
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
   /** Single-lot pipeline stage from SSE ``batch_phase`` (triage → listing → Pro). */
   const [pipelinePhase, setPipelinePhase] = useState<string | null>(null);
+  /** Post-triage selection: which filenames are sent to Pro / listing Flash (SSE ``pipeline_selection``). */
+  const [pipelinePhotoSelection, setPipelinePhotoSelection] = useState<PipelinePhotoSelection | null>(
+    null
+  );
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [cancelNotice, setCancelNotice] = useState("");
   /** Server-reported position in the post-Gemini catalog merge loop (SSE ``inventory_step``). */
@@ -1854,6 +1899,7 @@ export default function DashboardPage() {
           setInInventoryPhase(false);
           setCatalogStepProgress(null);
           setPipelinePhase(msg.phase === "pipeline" ? "pipeline_triage" : null);
+          setPipelinePhotoSelection(null);
           setCancelNotice("");
           setPhotoPendingSlots(() =>
             Array.from({ length: n }, (_, i) => ({
@@ -1919,6 +1965,26 @@ export default function DashboardPage() {
             noteStagingGeminiPhotoAnalyzed(analyzedJobId, msg.index, msg.total);
           }
         }
+        if (
+          msg.type === "pipeline_selection" &&
+          processingJobId &&
+          (!msg.job_id || msg.job_id === processingJobId)
+        ) {
+          const proRaw = (msg as { pro_filenames?: unknown }).pro_filenames;
+          const listingRaw = (msg as { listing_filenames?: unknown }).listing_filenames;
+          const proList = Array.isArray(proRaw) ? proRaw.filter((x): x is string => typeof x === "string") : [];
+          const listingList = Array.isArray(listingRaw)
+            ? listingRaw.filter((x): x is string => typeof x === "string")
+            : [];
+          const heroRaw = (msg as { hero_filename?: unknown }).hero_filename;
+          const makerRaw = (msg as { maker_sticker_filename?: unknown }).maker_sticker_filename;
+          setPipelinePhotoSelection({
+            heroFilename: typeof heroRaw === "string" && heroRaw ? heroRaw : null,
+            proFilenames: new Set(proList),
+            listingFilenames: new Set(listingList),
+            makerStickerFilename: typeof makerRaw === "string" && makerRaw ? makerRaw : null
+          });
+        }
         if (msg.type === "batch_phase" && typeof msg.phase === "string") {
           const phaseJobId =
             typeof msg.job_id === "string" && msg.job_id ? msg.job_id : processingJobId;
@@ -1979,6 +2045,7 @@ export default function DashboardPage() {
           setPhotoPendingSlots([]);
           setInInventoryPhase(false);
           setPipelinePhase(null);
+          setPipelinePhotoSelection(null);
           setCatalogStepProgress(null);
           setCancellingJobId(null);
           setCancelNotice("");
@@ -2015,6 +2082,7 @@ export default function DashboardPage() {
       setPhotoPendingSlots([]);
       setInInventoryPhase(false);
       setPipelinePhase(null);
+      setPipelinePhotoSelection(null);
       setCatalogStepProgress(null);
       setCancellingJobId(null);
     }
@@ -4694,7 +4762,7 @@ export default function DashboardPage() {
                   {slot.previewTitle ? (
                     <span>
                       {" "}
-                      — <em>{pipelineTriageRoleLabel(slot.previewTitle)}</em>
+                      — <em>{pipelineSlotLabel(slot.fileName, slot.previewTitle, pipelinePhotoSelection)}</em>
                     </span>
                   ) : null}
                   {slot.status !== "queued" && inInventoryPhase ? (
@@ -4865,7 +4933,7 @@ export default function DashboardPage() {
                     {slot.previewTitle ? (
                       <span style={{ color: "var(--ct-text-muted)" }}>
                         {" "}
-                        — <em>{pipelineTriageRoleLabel(slot.previewTitle)}</em>
+                        — <em>{pipelineSlotLabel(slot.fileName, slot.previewTitle, pipelinePhotoSelection)}</em>
                       </span>
                     ) : null}
                     {inInventoryPhase ? (

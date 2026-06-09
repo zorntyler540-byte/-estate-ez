@@ -403,7 +403,9 @@ def run_single_lot_pipeline(
                 "type": "pipeline_selection",
                 "hero_filename": selected.get("hero_filename"),
                 "front_filenames": list(selected.get("front_filenames") or []),
+                "listing_filenames": list(selected.get("listing_filenames") or []),
                 "pro_filenames": list(selected.get("pro_filenames") or []),
+                "maker_sticker_filename": selected.get("maker_sticker_filename"),
                 "catalog_only_count": int(pipeline_result.get("catalog_only_count") or 0),
             }
         )
