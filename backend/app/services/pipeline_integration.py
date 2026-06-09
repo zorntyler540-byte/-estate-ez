@@ -10,7 +10,13 @@ from typing import Any, Callable
 
 from app.config import settings
 from app.core.gemini import analyze_path_with_retries, verify_tape_sku
-from app.core.lotting import LotOutput, infer_brands_from_label_context, normalize_brand_list, tape_marking_canonical
+from app.core.lotting import (
+    LotOutput,
+    filter_brands_to_label_evidence,
+    infer_brands_from_label_context,
+    normalize_brand_list,
+    tape_marking_canonical,
+)
 from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
     _build_pro_image_payload,
@@ -159,18 +165,13 @@ def _brands_from_triage_and_draft(
 
 
 def _brands_from_pro_manifest(manifest: FullyAuditedManifest) -> list[str]:
-    """Infer makers from Pro proofread titles when confirmed_brand is empty."""
-    spec_lines = [
-        f"Item {row.line_item_id}: {(row.final_title or '').strip()}"
-        for row in manifest.verified_inventory
-        if (row.final_title or "").strip()
-    ]
-    return infer_brands_from_label_context(
-        [],
-        spec_lines,
-        manifest.final_auction_title,
-        manifest.final_professional_description,
-    )
+    """Pro confirmed brands only — no inference from proofread titles (avoids hallucination)."""
+    found: list[str] = []
+    for row in manifest.verified_inventory:
+        brand = (row.confirmed_brand or "").strip()
+        if brand:
+            found.append(brand)
+    return normalize_brand_list(found)
 
 
 def _apply_brand_audit(
@@ -181,10 +182,6 @@ def _apply_brand_audit(
     flash_draft: dict[str, Any] | None = None,
     pro_manifest: FullyAuditedManifest | None = None,
 ) -> None:
-    brands: list[str] = list(brand_audit.get("brands") or [])
-    if pro_manifest:
-        brands.extend(_brands_from_pro_manifest(pro_manifest))
-    brands.extend(_brands_from_triage_and_draft(triage, flash_draft))
     if triage:
         for row in triage:
             if row.get("label_legibility") not in ("clear", "partial"):
@@ -193,10 +190,18 @@ def _apply_brand_audit(
             if tag_text and tag_text not in lot.labels_and_tags:
                 lot.labels_and_tags.append(tag_text)
 
-    brands = normalize_brand_list(brands)
-    if brands:
-        lot.brands = brands
-    if brand_audit.get("brand_needs_review"):
+    brands: list[str] = list(brand_audit.get("brands") or [])
+    if pro_manifest:
+        brands.extend(_brands_from_pro_manifest(pro_manifest))
+    brands.extend(_brands_from_triage_and_draft(triage, flash_draft))
+
+    brands = filter_brands_to_label_evidence(
+        normalize_brand_list(brands),
+        lot.labels_and_tags,
+        lot.specification_lines,
+    )
+    lot.brands = brands
+    if brand_audit.get("brand_needs_review") or (not brands and (brand_audit.get("brands") or pro_manifest)):
         lot.brand_needs_review = True
         lot.sku_needs_review = True
     lot._finalize_listing_quality()

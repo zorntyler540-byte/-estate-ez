@@ -57,6 +57,80 @@ def test_select_analysis_photos_picks_hero_and_fronts() -> None:
     assert selected["hero_triage_metadata"]["photo_role"] == "hero"
 
 
+def test_select_analysis_photos_guarantees_maker_foil_sticker_for_pro() -> None:
+    """Bottom foil with 22 KT GOLD must reach Pro even when blue tape ranks higher by OCR length."""
+    triage = [
+        {
+            "filename": "hero.jpg",
+            "photo_role": "hero",
+            "shows_whole_lot": True,
+            "label_legibility": "none",
+            "quality": "sharp",
+            "confidence": "high",
+            "is_primary_front_for_item": False,
+        },
+        {
+            "filename": "tape.jpg",
+            "photo_role": "tape",
+            "label_legibility": "clear",
+            "brand_text": "$22.00 22kt gold estate sale handwritten blue masking tape lot marking",
+            "quality": "sharp",
+            "confidence": "high",
+            "shows_whole_lot": False,
+        },
+        {
+            "filename": "front.jpg",
+            "photo_role": "item_front",
+            "distinct_item_id": "ITEM_1",
+            "is_primary_front_for_item": True,
+            "label_legibility": "partial",
+            "brand_text": "Love Hope Peace Joy",
+            "quality": "sharp",
+            "confidence": "high",
+            "shows_whole_lot": False,
+        },
+        {
+            "filename": "foil_bottom.jpg",
+            "photo_role": "angle_only",
+            "label_legibility": "clear",
+            "brand_text": "Hand-Sculpted Glass 22 KT GOLD UG",
+            "quality": "sharp",
+            "confidence": "high",
+            "shows_whole_lot": False,
+        },
+    ]
+    selected = select_analysis_photos(triage)
+    assert selected["maker_sticker_filename"] == "foil_bottom.jpg"
+    assert "foil_bottom.jpg" in selected["pro_filenames"]
+    assert "foil_bottom.jpg" not in selected["catalog_only"]
+
+
+def test_pro_score_boosts_maker_foil_over_longer_non_maker_ocr() -> None:
+    from pipeline.pipeline import PhotoTriageResult, _pro_score
+
+    tape = PhotoTriageResult.model_validate(
+        {
+            "filename": "tape.jpg",
+            "photo_role": "tape",
+            "label_legibility": "clear",
+            "brand_text": "x" * 80,
+            "quality": "sharp",
+            "confidence": "high",
+        }
+    )
+    foil = PhotoTriageResult.model_validate(
+        {
+            "filename": "foil.jpg",
+            "photo_role": "angle_only",
+            "label_legibility": "clear",
+            "brand_text": "Hand-Sculpted Glass 22 KT GOLD UG",
+            "quality": "sharp",
+            "confidence": "high",
+        }
+    )
+    assert _pro_score(foil) > _pro_score(tape)
+
+
 def test_build_pro_image_payload_puts_hero_first() -> None:
     images = {
         "hero.jpg": b"hero-bytes",

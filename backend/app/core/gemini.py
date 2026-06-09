@@ -598,8 +598,7 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
     desc = desc or title
     brand_list = normalize_brand_list([row.brand.strip()] if row.brand.strip() else [])
     brand_list = normalize_brand_list(
-        brand_list
-        + infer_brands_from_label_context(row.labels_and_tags, specs, title, desc)
+        brand_list + infer_brands_from_label_context(row.labels_and_tags, specs)
     )
     return {
         "SKU": sku_clean or None,

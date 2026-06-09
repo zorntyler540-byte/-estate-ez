@@ -8,8 +8,10 @@ from app.core.lotting import (
     LotOutput,
     _broaden_auction_title_for_components,
     _ensure_branded_auction_title,
+    filter_brands_to_label_evidence,
     infer_brands_from_label_context,
     resolve_lot_brands,
+    strip_leading_brands_from_text,
 )
 
 
@@ -171,6 +173,57 @@ class TestBrandResolution(unittest.TestCase):
         self.assertNotIn("Brass", out)
         self.assertNotIn("table", out.lower())
         self.assertIn("accessory", out.lower())
+
+    def test_drops_brand_only_in_ai_title_not_on_labels(self) -> None:
+        """Hallucinated maker in title/description must not become Brand: spec."""
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Shiboyuan Glass Angel Musical Box with Gold-Tone Accents",
+                "brand": "Shiboyuan",
+                "Brands": ["Shiboyuan"],
+                "labels_and_tags": [
+                    "Hand-Sculpted Glass",
+                    "22 KT GOLD",
+                    "Tune: Amazing Grace",
+                    "WG",
+                ],
+                "professional_description": (
+                    "This lovely Shiboyuan music box features a glass angel with gold-tone accents."
+                ),
+                "specification_lines": [
+                    "Brand: Shiboyuan",
+                    "Condition note: Appears in very good visual condition",
+                ],
+            }
+        )
+        self.assertEqual(lot.brands, [])
+        self.assertNotIn("shiboyuan", lot.auction_title.lower())
+        brand_lines = [ln for ln in lot.specification_lines if ln.lower().startswith("brand:")]
+        self.assertEqual(brand_lines, [])
+
+    def test_infer_brands_ignores_prose_only_hallucination(self) -> None:
+        brands = infer_brands_from_label_context(
+            [],
+            [],
+            "Shiboyuan Glass Angel Music Box",
+            "Shiboyuan decorative music box with gold accents.",
+        )
+        self.assertEqual(brands, [])
+
+    def test_filter_brands_keeps_label_ocr_evidence(self) -> None:
+        kept = filter_brands_to_label_evidence(
+            ["Shiboyuan", "Mirabeau"],
+            ["SHIBOYUAN SCARF", "Fashion Accessory by Mirabeau"],
+            [],
+        )
+        self.assertEqual(set(kept), {"Shiboyuan", "Mirabeau"})
+
+    def test_strip_leading_brand_from_title(self) -> None:
+        out = strip_leading_brands_from_text(
+            "Shiboyuan Glass Angel Musical Box with Gold-Tone Accents",
+            ["Shiboyuan"],
+        )
+        self.assertEqual(out, "Glass Angel Musical Box with Gold-Tone Accents")
 
 
 if __name__ == "__main__":

@@ -2467,6 +2467,60 @@ def _lot_listing_blob(
     ).lower()
 
 
+def label_evidence_blob(
+    labels_and_tags: list[str],
+    specification_lines: list[str] | None = None,
+) -> str:
+    """
+    Text that came from readable tags/labels (OCR), not model-generated title or description.
+    Used to reject hallucinated makers that only appear in listing prose.
+    """
+    parts: list[str] = list(labels_and_tags or [])
+    for line in specification_lines or []:
+        clean = clean_listing_text(line).strip()
+        m = _FRAME_SIZE_TAG_RE.match(clean)
+        if m and m.group(1).strip():
+            parts.append(m.group(1).strip())
+    return clean_listing_text(" ".join(parts)).lower()
+
+
+def brand_has_label_evidence(
+    brand: str,
+    labels_and_tags: list[str],
+    specification_lines: list[str] | None = None,
+) -> bool:
+    if not (brand or "").strip():
+        return False
+    blob = label_evidence_blob(labels_and_tags, specification_lines)
+    return _brand_appears_in_blob(brand, blob)
+
+
+def filter_brands_to_label_evidence(
+    brands: list[str],
+    labels_and_tags: list[str],
+    specification_lines: list[str] | None = None,
+) -> list[str]:
+    """Keep makers only when legible tag/label OCR supports them — never title-only guesses."""
+    kept: list[str] = []
+    for brand in normalize_brand_list(brands):
+        if brand_has_label_evidence(brand, labels_and_tags, specification_lines):
+            kept.append(brand)
+    return normalize_brand_list(kept)
+
+
+def strip_leading_brands_from_text(text: str, brands: list[str]) -> str:
+    """Remove a hallucinated leading maker prefix from title/description after brand drop."""
+    t = clean_listing_text(text).strip()
+    if not t or not brands:
+        return t
+    for brand in sorted(brands, key=len, reverse=True):
+        b = (brand or "").strip()
+        if not b:
+            continue
+        t = re.sub(r"^" + re.escape(b) + r"[\s,–—-]+", "", t, count=1, flags=re.I).strip()
+    return t
+
+
 def _brand_token_key(brand: str) -> str:
     return re.sub(r"\s+", " ", clean_listing_text(brand)).strip().lower()
 
@@ -2586,20 +2640,18 @@ def infer_brands_from_label_context(
     specification_lines: list[str],
     auction_title: str = "",
     professional_description: str = "",
+    *,
+    include_prose: bool = False,
 ) -> list[str]:
     """
-    Recover maker names Gemini left in ``labels_and_tags`` but omitted from ``brand`` / ``Brands``.
+    Recover maker names from legible tag OCR in ``labels_and_tags`` (and size/tag spec lines).
+
+    By default does **not** scan title or description — those are model prose and can hallucinate makers.
     """
-    blob = clean_listing_text(
-        " ".join(
-            [
-                " ".join(labels_and_tags),
-                " ".join(specification_lines),
-                auction_title,
-                professional_description,
-            ]
-        )
-    )
+    parts = [" ".join(labels_and_tags), " ".join(specification_lines)]
+    if include_prose:
+        parts.extend([auction_title, professional_description])
+    blob = clean_listing_text(" ".join(parts))
     if not blob:
         return []
 
@@ -2620,18 +2672,25 @@ def infer_brands_from_label_context(
     return normalize_brand_list(found)
 
 
-def _pick_primary_brand(candidates: list[str], auction_title: str, blob: str) -> str:
+def _pick_primary_brand(
+    candidates: list[str],
+    auction_title: str,
+    blob: str,
+    *,
+    label_blob: str = "",
+) -> str:
     if not candidates:
         return ""
-    for c in candidates:
-        if brand_appears_in_prose(c, auction_title):
-            return c
-    evidenced = [c for c in candidates if _brand_appears_in_blob(c, blob)]
+    evidence = label_blob or blob
+    evidenced = [c for c in candidates if _brand_appears_in_blob(c, evidence)]
     if len(evidenced) == 1:
         return evidenced[0]
     if evidenced:
         return max(evidenced, key=len)
-    return candidates[0]
+    for c in candidates:
+        if brand_appears_in_prose(c, auction_title) and _brand_appears_in_blob(c, evidence):
+            return c
+    return ""
 
 
 def resolve_lot_brands(
@@ -2651,16 +2710,12 @@ def resolve_lot_brands(
         brands
         + _brands_from_spec_lines(specification_lines)
         + _brands_from_item_spec_lines(specification_lines)
-        + infer_brands_from_label_context(
-            labels_and_tags,
-            specification_lines,
-            auction_title,
-            professional_description,
-        )
+        + infer_brands_from_label_context(labels_and_tags, specification_lines)
     )
     if not merged:
         return [], False
 
+    label_blob = label_evidence_blob(labels_and_tags, specification_lines)
     blob = _lot_listing_blob(
         labels_and_tags=labels_and_tags,
         specification_lines=specification_lines,
@@ -2674,24 +2729,22 @@ def resolve_lot_brands(
         if garment_context
         else list(merged)
     )
-    dropped = len(filtered) < len(merged)
+    # Drop makers that only appear in AI title/description — require tag OCR support.
+    label_evidenced = filter_brands_to_label_evidence(filtered, labels_and_tags, specification_lines)
+    dropped = len(label_evidenced) < len(merged)
 
-    if len(filtered) <= 1:
-        return filtered, dropped
+    if len(label_evidenced) <= 1:
+        return label_evidenced, dropped
 
     if _is_multi_brand_wardrobe_lot(specification_lines, blob):
-        evidenced = [b for b in filtered if _brand_appears_in_blob(b, blob)]
-        keep = normalize_brand_list(evidenced or filtered)
+        keep = normalize_brand_list(label_evidenced)
         return keep, dropped
 
-    if _count_item_spec_lines(specification_lines) >= 2 and len(filtered) >= 2:
-        evidenced = [b for b in filtered if _brand_appears_in_blob(b, blob)]
-        keep = normalize_brand_list(evidenced or filtered)
-        if len(keep) >= 2:
-            return keep, dropped
+    if _count_item_spec_lines(specification_lines) >= 2 and len(label_evidenced) >= 2:
+        return normalize_brand_list(label_evidenced), dropped
 
-    primary = _pick_primary_brand(filtered, auction_title, blob)
-    return ([primary] if primary else []), True
+    primary = _pick_primary_brand(filtered, auction_title, blob, label_blob=label_blob)
+    return ([primary] if primary else []), dropped or bool(primary and primary not in label_evidenced)
 
 
 def sync_brand_spec_lines_to_resolved_brands(lines: list[str], brands: list[str]) -> list[str]:
@@ -2908,11 +2961,10 @@ class LotOutput:
         self.specification_lines = _scrub_misapplied_collectible_specs_for_apparel(
             self.specification_lines, blob
         )
+        pre_brands = normalize_brand_list(self.brands)
         label_inferred = infer_brands_from_label_context(
             self.labels_and_tags,
             self.specification_lines,
-            self.auction_title,
-            self.professional_description,
         )
         if label_inferred:
             self.brands = normalize_brand_list(self.brands + label_inferred)
@@ -2923,7 +2975,13 @@ class LotOutput:
             self.auction_title,
             self.professional_description,
         )
-        if brand_review:
+        dropped_brands = [b for b in pre_brands if b not in resolved]
+        if dropped_brands:
+            self.auction_title = strip_leading_brands_from_text(self.auction_title, dropped_brands)
+            self.professional_description = strip_leading_brands_from_text(
+                self.professional_description, dropped_brands
+            )
+        if brand_review or dropped_brands:
             self.brand_needs_review = True
             self.sku_needs_review = True
         self.brands = resolved

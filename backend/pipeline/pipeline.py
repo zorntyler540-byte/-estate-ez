@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -41,6 +42,18 @@ LEGIBILITY_SCORE = {"clear": 3, "partial": 2, "none": 1}
 
 _BRAND_PLACEHOLDERS = frozenset(
     {"unknown", "generic", "unbranded", "n/a", "none", "unidentified", "no brand"}
+)
+
+# Bottom foil / maker stickers (music boxes, figurines, collectibles) — prioritize for Pro pool.
+_MAKER_STICKER_SIGNAL_RE = re.compile(
+    r"(?i)(?:"
+    r"22\s*kt\s*gold|"
+    r"hand[- ]?sculpted\s+glass|"
+    r"\btune\s*:\s*|"
+    r"hand[- ]?sculpted|"
+    r"made\s+in\s+(?:china|usa|taiwan|japan|korea)|"
+    r"\b(?:ug|wg)\b"
+    r")"
 )
 
 _genai_client: genai.Client | None = None
@@ -119,12 +132,17 @@ Rules:
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
 - angle_only: side, back, detail, damage close-up — not used for hero listing.
   Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
+  Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
+  are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
+  readable sticker text verbatim into brand_text (maker mark, material, tune — not just a guessed brand name).
 - tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image.
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.
 - Flag every image with any readable tag text (label_legibility clear or partial), even if corner of frame.
-- brand_text: verbatim OCR from labels/tags — copy the maker/brand name exactly (e.g. "St. John's Bay", "Mirabeau", "Shiboyuan") even when care/size text is also visible; empty string if not readable (never use Unknown/Generic/Unbranded).
+- brand_text: verbatim OCR from labels/tags/stickers — copy readable text exactly (maker logo letters, material
+  lines like "22 KT GOLD", tune lines like "Tune: Amazing Grace", care/size when on same tag); empty string if
+  not readable (never use Unknown/Generic/Unbranded).
 - duplicate_of_filename: set when this image is a near-duplicate of another file in the lot.
 
 The preceding image filename is: {filename}
@@ -182,14 +200,64 @@ def _front_score(row: PhotoTriageResult) -> tuple[int, int, int]:
     )
 
 
-def _pro_score(row: PhotoTriageResult) -> tuple[int, int, int, int]:
-    brand_len = len(_normalize_brand(row.brand_text))
+def _row_has_maker_sticker_signal(row: PhotoTriageResult) -> bool:
+    if row.photo_role == "tape":
+        return False
+    text = str(row.brand_text or "")
+    return bool(_MAKER_STICKER_SIGNAL_RE.search(text))
+
+
+def _pro_score(row: PhotoTriageResult) -> tuple[int, int, int, int, int]:
+    ocr = (row.brand_text or "").strip()
+    brand_len = len(_normalize_brand(ocr) or ocr)
+    maker_boost = 1 if _row_has_maker_sticker_signal(row) else 0
     return (
+        maker_boost,
         LEGIBILITY_SCORE.get(row.label_legibility, 0),
         brand_len,
         QUALITY_SCORE.get(row.quality, 0),
         CONFIDENCE_SCORE.get(row.confidence, 0),
     )
+
+
+def _best_maker_sticker_row(rows: list[PhotoTriageResult]) -> PhotoTriageResult | None:
+    pool = [
+        r
+        for r in rows
+        if r.label_legibility in ("clear", "partial") and _row_has_maker_sticker_signal(r)
+    ]
+    if not pool:
+        return None
+    return max(pool, key=_pro_score)
+
+
+def _ensure_maker_sticker_in_pro_filenames(
+    pro_filenames: list[str],
+    rows: list[PhotoTriageResult],
+) -> list[str]:
+    """Reserve one Pro slot for a bottom foil / maker sticker when triage OCR flagged it."""
+    best = _best_maker_sticker_row(rows)
+    if best is None or best.filename in pro_filenames:
+        return pro_filenames
+
+    cap = BRAND_PRO_MAX_LABEL_FRAMES
+    out = list(pro_filenames)
+    out.append(best.filename)
+    if len(out) <= cap:
+        return out
+
+    row_by_fn = {r.filename: r for r in rows}
+    droppable = [
+        fn
+        for fn in out
+        if fn != best.filename
+        and not _row_has_maker_sticker_signal(row_by_fn[fn])
+    ]
+    while len(out) > cap and droppable:
+        drop = min(droppable, key=lambda fn: _pro_score(row_by_fn[fn]))
+        out.remove(drop)
+        droppable.remove(drop)
+    return out[:cap]
 
 
 def _parse_triage_rows(triage_results: list[dict[str, Any]]) -> list[PhotoTriageResult]:
@@ -275,6 +343,9 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         if disagree or low_confidence or len(brands_top2) < 1:
             pro_filenames = [r.filename for r in pro_candidates[:BRAND_PRO_MAX_LABEL_FRAMES]]
 
+    pro_filenames = _ensure_maker_sticker_in_pro_filenames(pro_filenames, rows)
+    maker_row = _best_maker_sticker_row(rows)
+
     # D. Catalog-only
     analysis_set = set(listing_filenames) | set(pro_filenames)
     catalog_only = [r.filename for r in rows if r.filename not in analysis_set]
@@ -290,6 +361,7 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         "tape_filenames": tape_filenames,
         "brand_needs_review": brand_needs_review,
         "pro_candidates": [r.filename for r in pro_candidates],
+        "maker_sticker_filename": maker_row.filename if maker_row else None,
         "hero_triage_metadata": next(
             (dict(r.model_dump()) for r in rows if r.filename == hero_filename),
             None,
@@ -417,7 +489,9 @@ BRAND_AUDIT_SYSTEM = (
     "You are a senior estate inventory proofreader. Your job is to verify listing accuracy against the "
     "actual photos — title, description, brands, and per-item lines. Fix Flash errors (wrong category, "
     "wrong material, wrong object type). Never invent brands or details not visible in the images. "
-    "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
+    "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess from "
+    "product type or training knowledge. Never use placeholder tokens like Unknown, Generic, or Unbranded. "
+    "Output structured JSON only."
 )
 
 
@@ -490,9 +564,13 @@ def run_brand_audit_pro(
         "3. PROOFREAD the Flash listing title and description — fix wrong category (e.g. apparel vs tableware), "
         "wrong material, or missing brands. final_auction_title must be accurate shopper-facing search text.\n"
         "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
-        "5. When label/tag images show a maker name, set confirmed_brand on that item (e.g. St. John's Bay, Mirabeau, Shiboyuan).\n"
-        "6. Leave confirmed_brand empty only when no readable maker mark exists on any frame for that piece.\n"
-        "7. When one primary brand is clearly readable, lead final_auction_title with it for search.\n"
+        "5. When label/tag images show a maker name, set confirmed_brand on that item (e.g. St. John's Bay, Mirabeau).\n"
+        "6. Leave confirmed_brand empty when no readable maker mark exists on any frame for that piece — "
+        "never guess a brand from object type alone.\n"
+        "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
+        "8. When maker foil stickers show material lines (e.g. 22 KT GOLD, Hand-Sculpted Glass) or tune names, "
+        "include those exact phrases in final_auction_title or final_professional_description — do not downgrade "
+        "to vague 'gold-tone accents' when the sticker text is legible.\n"
         f"{valuation_block}"
         f"{listing_block}\n\n"
         f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
