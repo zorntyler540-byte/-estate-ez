@@ -1311,14 +1311,18 @@ export default function DashboardPage() {
     [photoHealthMissing]
   );
 
-  const { activeJobs, completedJobs } = useMemo(() => {
+  const { activeJobs, completedJobs, queuedJobCount } = useMemo(() => {
     const active: Job[] = [];
     const completed: Job[] = [];
+    let queuedCount = 0;
     for (const j of jobs) {
       if (j.status === "completed") completed.push(j);
-      else active.push(j);
+      else {
+        active.push(j);
+        if (j.status === "queued") queuedCount += 1;
+      }
     }
-    return { activeJobs: active, completedJobs: completed };
+    return { activeJobs: active, completedJobs: completed, queuedJobCount: queuedCount };
   }, [jobs]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
@@ -2096,20 +2100,21 @@ export default function DashboardPage() {
   }, [token, loading, processingJobId, jobSseSession]);
 
   useEffect(() => {
-    if (!processingJobId) {
-      setPhotoPendingSlots([]);
-      setInInventoryPhase(false);
-      setPipelinePhase(null);
-      setPipelinePhotoSelection(null);
-      setCatalogStepProgress(null);
-      setCancellingJobId(null);
-      liveProgressJobIdRef.current = null;
-      setLiveProgressJobId(null);
-    }
-  }, [processingJobId]);
+    if (processingJobId) return;
+    if (jobs.some((j) => j.status === "queued")) return;
+    setPhotoPendingSlots([]);
+    setInInventoryPhase(false);
+    setPipelinePhase(null);
+    setPipelinePhotoSelection(null);
+    setCatalogStepProgress(null);
+    setCancellingJobId(null);
+    liveProgressJobIdRef.current = null;
+    setLiveProgressJobId(null);
+  }, [processingJobId, jobs]);
 
   useEffect(() => {
-    if (!token || loading || !busyProcessing) return;
+    if (!token || loading) return;
+    if (!busyProcessing && queuedJobCount === 0) return;
 
     /** Keep syncing while the phone is locked or Safari is in the background (field use). Slightly slower when hidden to save radio. */
     const pollMs = () =>
@@ -2120,6 +2125,21 @@ export default function DashboardPage() {
         const sid = selectedSaleIdRef.current;
         if (!sid) return;
         const jlist = (await apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token)) as Job[];
+        const processing = jlist.filter((j) => j.status === "processing");
+        if (processing.length) {
+          const trackedId = liveProgressJobIdRef.current;
+          const stillTracked = trackedId && processing.some((j) => j.id === trackedId);
+          if (!stillTracked) {
+            const next = [...processing].sort((a, b) =>
+              (b.created_at || "").localeCompare(a.created_at || "")
+            )[0];
+            if (next) {
+              liveProgressJobIdRef.current = next.id;
+              setLiveProgressJobId(next.id);
+              setJobSseSession((n) => n + 1);
+            }
+          }
+        }
         setJobs((prev) => {
           const hadProcessing = prev.some((j) => j.status === "processing");
           const nowProcessing = jlist.some((j) => j.status === "processing");
@@ -2163,7 +2183,7 @@ export default function DashboardPage() {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [token, loading, busyProcessing, selectedSaleId, inventorySkuFlagFilter]);
+  }, [token, loading, busyProcessing, queuedJobCount, selectedSaleId, inventorySkuFlagFilter]);
 
   useEffect(() => {
     return () => {
@@ -3373,15 +3393,21 @@ export default function DashboardPage() {
       setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
-        liveProgressJobIdRef.current = running.id;
-        setLiveProgressJobId(running.id);
+        if (running.status === "processing") {
+          liveProgressJobIdRef.current = running.id;
+          setLiveProgressJobId(running.id);
+        }
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
         setUploadProgress("");
         setError("");
         setStagingSuccess(
           isSingleLot
-            ? `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
-            : `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running. Staged previews clear automatically once all ${total} photo${total === 1 ? " has" : "s have"} been sent to Gemini (catalog may still be building lots).`
+            ? running.status === "queued"
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — queued. It will start automatically when the current lot finishes. You can add another lot now.`
+              : `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
+            : running.status === "queued"
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} — queued until the current job finishes.`
+              : `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running. Staged previews clear automatically once all ${total} photo${total === 1 ? " has" : "s have"} been sent to Gemini (catalog may still be building lots).`
         );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
@@ -3432,7 +3458,14 @@ export default function DashboardPage() {
     }
     try {
       const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
+      if (updated.status === "processing") {
+        liveProgressJobIdRef.current = updated.id;
+        setLiveProgressJobId(updated.id);
+      }
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+      if (updated.status === "queued") {
+        setStagingSuccess("Job queued — it will start automatically when the current lot finishes.");
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Run failed";
       if (isAuthFailureMessage(msg)) {
@@ -3958,12 +3991,17 @@ export default function DashboardPage() {
           ) : null}
         </div>
       </section>
-      {busyProcessing && (
+      {(busyProcessing || queuedJobCount > 0) && (
         <div className="ct-banner ct-banner--warning">
           <p style={{ margin: 0 }}>
-            <strong>Working on your photos.</strong> New lots will appear in the table below as they are ready. You can
-            still <strong>Add one lot</strong> or run <strong>Regenerate AI</strong> on another lot at the same time. Use{" "}
-            <strong>Cancel</strong> on the job row if you need to stop.
+            <strong>{busyProcessing ? "Working on your photos." : "Lots are queued."}</strong> New lots will appear in
+            the table below as they are ready. Stacked <strong>Add one lot</strong> uploads run{" "}
+            <strong>one at a time</strong>
+            {queuedJobCount > 0
+              ? ` (${queuedJobCount} waiting in queue${queuedJobCount === 1 ? "" : ""})`
+              : ""}
+            . You can still run <strong>Regenerate AI</strong> on another lot. Use <strong>Cancel</strong> on the job row
+            if you need to stop.
           </p>
           {cancelNotice ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
@@ -4581,12 +4619,17 @@ export default function DashboardPage() {
                   SKU:{job.single_lot_manual_sku}
                 </span>
               ) : null}
+              {job.status === "queued" && busyProcessing ? (
+                <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
+                  Waiting for current lot…
+                </span>
+              ) : null}
               {(job.status === "queued" || job.status === "failed") && (
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"
                   onClick={() => void runJob(job.id)}
-                  disabled={busyProcessing}
+                  disabled={job.status === "queued" && busyProcessing}
                 >
                   {job.status === "failed" ? "Run again" : "Run now"}
                 </button>

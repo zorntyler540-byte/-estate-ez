@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
     # Cap simultaneous Gemini HTTP calls across upload jobs, regenerate, and triage threads.
     gemini_global_concurrency: int = Field(default=4, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
+    # Stacked Add-one-lot uploads queue automatically when this many jobs are already running.
+    catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
     gemini_image_max_edge: int = Field(default=1920, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=86, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     # Estate pipeline (Phase 1): per-photo triage + capped Pro brand audit for single-lot uploads only.

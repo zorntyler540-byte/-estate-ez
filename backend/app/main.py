@@ -1918,11 +1918,13 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
     try:
-        job_tasks.start_job_in_background(job.id, current.account_id)
+        started = job_tasks.start_job_in_background(job.id, current.account_id)
     except RuntimeError as exc:
         if str(exc) != "job_already_running":
             raise
         raise HTTPException(status_code=409, detail="Job is already running") from exc
+    if not started:
+        return _job_out(job)
     # Worker sets DB to processing asynchronously; return processing so the client
     # starts status polling immediately instead of waiting on the first GET /jobs refresh.
     db.expire(job)
