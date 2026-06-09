@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from app.core.lotting import (
@@ -224,6 +225,36 @@ class TestBrandResolution(unittest.TestCase):
             ["Shiboyuan"],
         )
         self.assertEqual(out, "Glass Angel Musical Box with Gold-Tone Accents")
+
+    def test_scrubs_vintage_without_era_evidence(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Vintage Glass Angel Musical Box with Gold Accents",
+                "professional_description": (
+                    "This vintage decorative music box features a glass angel with gold-tone accents."
+                ),
+                "specification_lines": [
+                    "Brand:",
+                    "Condition note: Appears in very good condition",
+                    "Era: Vintage",
+                    "Material: Glass",
+                ],
+            }
+        )
+        self.assertNotIn("vintage", lot.auction_title.lower())
+        self.assertNotIn("vintage", lot.professional_description.lower())
+        self.assertFalse(any(ln.lower().startswith("era:") for ln in lot.specification_lines))
+
+    def test_keeps_vintage_once_when_dated_era_on_tag(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Vintage 1970s Ceramic Vase",
+                "professional_description": "A vintage ceramic vase from the era.",
+                "labels_and_tags": ["© 1972"],
+                "specification_lines": ["Material: Ceramic", "Era: 1970s"],
+            }
+        )
+        self.assertLessEqual(len(re.findall(r"vintage", lot.auction_title + lot.professional_description, re.I)), 1)
 
 
 if __name__ == "__main__":

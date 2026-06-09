@@ -11,7 +11,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
 from google import genai
 from google.genai import types
@@ -39,6 +39,10 @@ TRIAGE_IMAGE_MAX_EDGE = max(256, int(os.environ.get("TRIAGE_IMAGE_MAX_EDGE", "10
 CONFIDENCE_SCORE = {"high": 3, "medium": 2, "low": 1}
 QUALITY_SCORE = {"sharp": 3, "ok": 2, "blur": 1}
 LEGIBILITY_SCORE = {"clear": 3, "partial": 2, "none": 1}
+
+
+class PipelineCancelled(Exception):
+    """Raised when a single-lot pipeline job is cancelled mid-stage."""
 
 _BRAND_PLACEHOLDERS = frozenset(
     {"unknown", "generic", "unbranded", "n/a", "none", "unidentified", "no brand"}
@@ -571,6 +575,8 @@ def run_brand_audit_pro(
         "8. When maker foil stickers show material lines (e.g. 22 KT GOLD, Hand-Sculpted Glass) or tune names, "
         "include those exact phrases in final_auction_title or final_professional_description — do not downgrade "
         "to vague 'gold-tone accents' when the sticker text is legible.\n"
+        "9. Do not add 'vintage' or 'antique' as filler — use material + object type unless a specific decade or "
+        "era mark is visible on a tag.\n"
         f"{valuation_block}"
         f"{listing_block}\n\n"
         f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
@@ -672,7 +678,12 @@ def _manifest_to_brand_audit(
     )
 
 
-def _run_parallel_triage(user_images_dict: dict[str, bytes]) -> list[dict[str, Any]]:
+def _run_parallel_triage(
+    user_images_dict: dict[str, bytes],
+    *,
+    on_triage_complete: Callable[[dict[str, Any]], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[dict[str, Any]]:
     """Stage 1 — parallel per-photo triage (order-independent)."""
     triage: list[dict[str, Any]] = []
     max_workers = min(8, max(1, len(user_images_dict)))
@@ -682,24 +693,34 @@ def _run_parallel_triage(user_images_dict: dict[str, bytes]) -> list[dict[str, A
             for filename, img_bytes in user_images_dict.items()
         }
         for future in as_completed(futures):
+            if should_cancel and should_cancel():
+                for pending in futures:
+                    pending.cancel()
+                raise PipelineCancelled()
             filename = futures[future]
             try:
-                triage.append(future.result())
+                row = future.result()
             except Exception as exc:
-                triage.append(
-                    PhotoTriageResult(
-                        filename=filename,
-                        photo_role="unusable",
-                        label_legibility="none",
-                        quality="blur",
-                        confidence="low",
-                    ).model_dump()
-                )
+                row = PhotoTriageResult(
+                    filename=filename,
+                    photo_role="unusable",
+                    label_legibility="none",
+                    quality="blur",
+                    confidence="low",
+                ).model_dump()
                 _ = exc
+            triage.append(row)
+            if on_triage_complete:
+                on_triage_complete(row)
     return triage
 
 
-def triage_and_select_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, Any]:
+def triage_and_select_field_lot(
+    user_images_dict: dict[str, bytes],
+    *,
+    on_triage_complete: Callable[[dict[str, Any]], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """Stage 1 only: triage every photo + deterministic selection (no Pro, no listing Flash)."""
     if not user_images_dict:
         return {
@@ -709,7 +730,13 @@ def triage_and_select_field_lot(user_images_dict: dict[str, bytes]) -> dict[str,
             "catalog_only_count": 0,
         }
 
-    triage = _run_parallel_triage(user_images_dict)
+    triage = _run_parallel_triage(
+        user_images_dict,
+        on_triage_complete=on_triage_complete,
+        should_cancel=should_cancel,
+    )
+    if should_cancel and should_cancel():
+        raise PipelineCancelled()
     selected = select_analysis_photos(triage)
     flash_draft = _build_flash_draft(triage, selected)
     return {

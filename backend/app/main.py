@@ -1939,7 +1939,12 @@ def cancel_job(job_id: str, current: User = Depends(get_current_user), db: Sessi
     # request_cancel for immediate wake when this server started the job.
     job.cancel_requested = True
     db.commit()
-    job_tasks.request_cancel(job_id)
+    woke = job_tasks.request_cancel(job_id)
+    if not woke and not job_tasks.is_job_running(job_id):
+        job.status = JobStatus.failed
+        job.error_message = "Cancelled"
+        job.cancel_requested = False
+        db.commit()
     db.refresh(job)
     return _job_out(job)
 

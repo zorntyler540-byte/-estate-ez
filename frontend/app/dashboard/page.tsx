@@ -1207,6 +1207,10 @@ export default function DashboardPage() {
   /** One loading row per catalog photo while the active job runs (SSE). */
   const [photoPendingSlots, setPhotoPendingSlots] = useState<PhotoPendingSlot[]>([]);
   const [inInventoryPhase, setInInventoryPhase] = useState(false);
+  /** Single-lot pipeline stage from SSE ``batch_phase`` (triage → listing → Pro). */
+  const [pipelinePhase, setPipelinePhase] = useState<string | null>(null);
+  const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState("");
   /** Server-reported position in the post-Gemini catalog merge loop (SSE ``inventory_step``). */
   const [catalogStepProgress, setCatalogStepProgress] = useState<{
     index: number;
@@ -1222,10 +1226,8 @@ export default function DashboardPage() {
   const busyProcessing = jobs.some((j) => j.status === "processing");
   const busyProcessingRef = useRef(false);
   busyProcessingRef.current = busyProcessing;
-  const processingJobId = useMemo(
-    () => jobs.find((j) => j.status === "processing")?.id ?? null,
-    [jobs]
-  );
+  const processingJob = useMemo(() => jobs.find((j) => j.status === "processing") ?? null, [jobs]);
+  const processingJobId = processingJob?.id ?? null;
   const photoHealthLotCount = useMemo(
     () => Object.keys(photoHealthMissing).length,
     [photoHealthMissing]
@@ -1832,6 +1834,8 @@ export default function DashboardPage() {
           const jid = processingJobId;
           setInInventoryPhase(false);
           setCatalogStepProgress(null);
+          setPipelinePhase(msg.phase === "pipeline" ? "pipeline_triage" : null);
+          setCancelNotice("");
           setPhotoPendingSlots(() =>
             Array.from({ length: n }, (_, i) => ({
               id: `${jid}-slot-${i}`,
@@ -1896,14 +1900,26 @@ export default function DashboardPage() {
             noteStagingGeminiPhotoAnalyzed(analyzedJobId, msg.index, msg.total);
           }
         }
-        if (msg.type === "batch_phase" && msg.phase === "inventory") {
-          const inventoryJobId =
+        if (msg.type === "batch_phase" && typeof msg.phase === "string") {
+          const phaseJobId =
             typeof msg.job_id === "string" && msg.job_id ? msg.job_id : processingJobId;
-          if (inventoryJobId && readStagingAwaitingGeminiJobId() === inventoryJobId) {
-            clearStagingAfterAllGeminiPhotos();
+          if (
+            (msg.phase === "pipeline_triage" ||
+              msg.phase === "pipeline_listing" ||
+              msg.phase === "pipeline_pro_proofread") &&
+            (!msg.job_id || msg.job_id === processingJobId)
+          ) {
+            setPipelinePhase(msg.phase);
+            setInInventoryPhase(false);
           }
-          if (!msg.job_id || msg.job_id === processingJobId) {
-            setInInventoryPhase(true);
+          if (msg.phase === "inventory") {
+            if (phaseJobId && readStagingAwaitingGeminiJobId() === phaseJobId) {
+              clearStagingAfterAllGeminiPhotos();
+            }
+            if (!msg.job_id || msg.job_id === processingJobId) {
+              setInInventoryPhase(true);
+              setPipelinePhase(null);
+            }
           }
         }
         if (
@@ -1943,7 +1959,10 @@ export default function DashboardPage() {
         if (msg.type === "status" && (msg.status === "completed" || msg.status === "failed")) {
           setPhotoPendingSlots([]);
           setInInventoryPhase(false);
+          setPipelinePhase(null);
           setCatalogStepProgress(null);
+          setCancellingJobId(null);
+          setCancelNotice("");
           const finishedJobId =
             typeof msg.job_id === "string" && msg.job_id
               ? msg.job_id
@@ -1976,7 +1995,9 @@ export default function DashboardPage() {
     if (!processingJobId) {
       setPhotoPendingSlots([]);
       setInInventoryPhase(false);
+      setPipelinePhase(null);
       setCatalogStepProgress(null);
+      setCancellingJobId(null);
     }
   }, [processingJobId]);
 
@@ -3324,14 +3345,24 @@ export default function DashboardPage() {
 
   async function cancelRun(jobId: string) {
     setError("");
+    setCancelNotice("");
+    setCancellingJobId(jobId);
     try {
-      await apiFetch(`/jobs/${jobId}/cancel`, token, { method: "POST" });
+      const updated = (await apiFetch(`/jobs/${jobId}/cancel`, token, { method: "POST" })) as Job;
       const sid = selectedSaleIdRef.current;
       if (!sid) return;
       const jlist = (await apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token)) as Job[];
       setJobs(jlist);
+      const row = jlist.find((j) => j.id === jobId) ?? updated;
+      if (row.status === "processing") {
+        setCancelNotice(
+          "Cancel requested — the job will stop after the current AI step finishes (usually under a minute)."
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cancel failed");
+    } finally {
+      setCancellingJobId((prev) => (prev === jobId ? null : prev));
     }
   }
 
@@ -3824,7 +3855,23 @@ export default function DashboardPage() {
             <strong>Working on your photos.</strong> New lots will appear in the table below as they are ready. Use{" "}
             <strong>Cancel</strong> on the job row if you need to stop.
           </p>
-          {geminiAnalyzedCount.total > 0 && !inInventoryPhase ? (
+          {cancelNotice ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
+              {cancelNotice}
+            </p>
+          ) : null}
+          {processingJob?.single_lot_mode && pipelinePhase && !inInventoryPhase ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
+              <strong>Step 1 — Add one lot:</strong>{" "}
+              {pipelinePhase === "pipeline_triage"
+                ? `Sorting ${geminiAnalyzedCount.total || "your"} photos (${geminiAnalyzedCount.done} / ${geminiAnalyzedCount.total || "…"} done). Rows update as each frame is classified.`
+                : pipelinePhase === "pipeline_listing"
+                  ? "Writing the listing draft from the best photos."
+                  : pipelinePhase === "pipeline_pro_proofread"
+                    ? "Pro is proofreading title, brands, and details."
+                    : "Working…"}
+            </p>
+          ) : geminiAnalyzedCount.total > 0 && !inInventoryPhase ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
               <strong>Step 1 — Reading photos:</strong> {geminiAnalyzedCount.done} / {geminiAnalyzedCount.total} done
               {geminiAnalyzedCount.done < geminiAnalyzedCount.total
@@ -4435,8 +4482,13 @@ export default function DashboardPage() {
                 </button>
               )}
               {job.status === "processing" && (
-                <button type="button" className="ct-btn" onClick={() => void cancelRun(job.id)}>
-                  Cancel
+                <button
+                  type="button"
+                  className="ct-btn"
+                  onClick={() => void cancelRun(job.id)}
+                  disabled={cancellingJobId === job.id}
+                >
+                  {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
                 </button>
               )}
               {job.error_message ? (
@@ -4615,7 +4667,11 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
                 <div className="ct-muted" style={{ fontSize: "0.82rem", marginTop: 6 }}>
-                  {slot.status === "queued" ? "Waiting for Gemini…" : null}
+                  {slot.status === "queued"
+                    ? processingJob?.single_lot_mode
+                      ? "Sorting for one lot…"
+                      : "Waiting for Gemini…"
+                    : null}
                   {slot.previewTitle ? (
                     <span>
                       {" "}
@@ -4781,7 +4837,10 @@ export default function DashboardPage() {
                   <span style={{ fontFamily: "monospace", color: "var(--ct-text-subtle)" }}> · {slot.fileName}</span>
                 ) : null}
                 {slot.status === "queued" ? (
-                  <span style={{ color: "var(--ct-text-subtle)" }}> — Waiting for Gemini…</span>
+                  <span style={{ color: "var(--ct-text-subtle)" }}>
+                    {" "}
+                    — {processingJob?.single_lot_mode ? "Sorting for one lot…" : "Waiting for Gemini…"}
+                  </span>
                 ) : (
                   <>
                     {slot.previewTitle ? (

@@ -25,6 +25,7 @@ from app.core.lotting import (
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
 from app.services.pipeline_integration import is_weak_pipeline_lot, run_single_lot_pipeline
+from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import (
     catalog_photo_file_on_disk,
@@ -612,28 +613,23 @@ def _process_job_single_lot_pipeline(
     def _emit(payload: dict) -> None:
         _emit_job(job, payload)
 
-    lot, pipeline_result = run_single_lot_pipeline(
-        photos,
-        manifest_tag=str(job.id),
-        emit=_emit,
-    )
+    def _should_cancel() -> bool:
+        return _cancel_signaled(db, job.id, cancel_event)
 
-    for i, triage_row in enumerate(pipeline_result.get("triage") or []):
-        preview = {
-            "auction_title": str(triage_row.get("photo_role") or ""),
-            "sku": triage_row.get("brand_text") or None,
-        }
-        _emit_job(
-            job,
-            {
-                "type": "photo_analyzed",
-                "index": i,
-                "total": total_photos,
-                "file_name": str(triage_row.get("filename") or ""),
-                "preview": preview,
-                "pipeline_role": triage_row.get("photo_role"),
-            },
+    try:
+        lot, pipeline_result = run_single_lot_pipeline(
+            photos,
+            manifest_tag=str(job.id),
+            emit=_emit,
+            should_cancel=_should_cancel,
         )
+    except PipelineCancelled:
+        job.status = JobStatus.failed
+        job.error_message = "Cancelled"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
 
     token_est = dict((pipeline_result.get("token_estimates") or {}))
     job.analyzed_photos = int(total_photos)

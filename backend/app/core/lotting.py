@@ -1811,11 +1811,11 @@ def _broaden_auction_title_for_numismatic_multi_year(
         pack_parts.append("folders")
     pack = " + ".join(pack_parts) if pack_parts else "as shown in photos"
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
-    lead = mat if mat and mat != "Brass" else "Vintage"
-    if lead == "Vintage":
-        out = f"Vintage {series} coin lot ({y_disp}) - {pack}"
-    else:
+    lead = mat if mat and mat != "Brass" else ""
+    if lead:
         out = f"{lead} {series} coin lot ({y_disp}) - {pack}"
+    else:
+        out = f"{series} coin lot ({y_disp}) - {pack}"
     return out[:500]
 
 
@@ -1888,7 +1888,7 @@ def _synthesize_textile_measurement_lot_prose(
     if "this estate u.s. coin lot" in low or "coin lot spans" in low:
         return description
     out = (
-        "This lot brings together several vintage lace and cotton textile pieces—not one single swatch. "
+        "This lot brings together several lace and cotton textile pieces—not one single swatch. "
         "Measuring tapes in the photos often show different spans for different panels; rely on the images for the clearest look at size, holes, fraying, and edge condition."
     )
     return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
@@ -2521,6 +2521,83 @@ def strip_leading_brands_from_text(text: str, brands: list[str]) -> str:
     return t
 
 
+_VINTAGE_ERA_VAGUE = frozenset({"vintage", "antique", "retro", "old", "used"})
+_VINTAGE_DATED_EVIDENCE_RE = re.compile(
+    r"(?i)\b("
+    r"19\d{2}|20[0-1]\d|18\d{2}|"
+    r"19\d0s|18\d0s|"
+    r"mid[- ]century|art deco|victorian|edwardian|"
+    r"antique\b"
+    r")"
+)
+
+
+def lot_has_dated_era_evidence(
+    labels_and_tags: list[str],
+    specification_lines: list[str],
+) -> bool:
+    """True when tags or Era spec cite a concrete period — not model-default 'Vintage' alone."""
+    blob = label_evidence_blob(labels_and_tags, specification_lines)
+    if _VINTAGE_DATED_EVIDENCE_RE.search(blob):
+        return True
+    for line in specification_lines or []:
+        parts = _spec_label_value_parts(line)
+        if not parts or parts[0].lower() != "era":
+            continue
+        val = clean_listing_text(parts[1]).strip().lower()
+        if not val or val in ("contemporary", "modern", "current"):
+            continue
+        if val in _VINTAGE_ERA_VAGUE:
+            continue
+        if _VINTAGE_DATED_EVIDENCE_RE.search(val) or re.search(r"\d{4}", val):
+            return True
+    return False
+
+
+def _remove_vintage_tokens(text: str) -> str:
+    t = re.sub(r"(?i)\bvintage\b", "", text or "")
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"^\s*[,\-–—]\s*", "", t)
+    t = re.sub(r"\s+[,\-–—]\s+", " ", t)
+    return clean_listing_text(t).strip(" ,-–—")
+
+
+def scrub_gratuitous_vintage_from_listing(
+    auction_title: str,
+    professional_description: str,
+    specification_lines: list[str],
+    labels_and_tags: list[str],
+) -> tuple[str, str, list[str]]:
+    """
+    Drop filler ``vintage`` unless the lot has dated era evidence on tags or specs.
+    When evidence exists, allow at most one ``vintage`` in title + description combined.
+    """
+    title = auction_title or ""
+    desc = professional_description or ""
+    specs = list(specification_lines or [])
+    has_dated = lot_has_dated_era_evidence(labels_and_tags, specs)
+
+    cleaned_specs: list[str] = []
+    for line in specs:
+        parts = _spec_label_value_parts(line)
+        if parts and parts[0].lower() == "era" and parts[1].strip().lower() in _VINTAGE_ERA_VAGUE:
+            continue
+        cleaned_specs.append(line)
+    specs = cleaned_specs
+
+    if not has_dated:
+        return _remove_vintage_tokens(title), _remove_vintage_tokens(desc), specs
+
+    combined = f"{title} {desc}"
+    if len(re.findall(r"(?i)\bvintage\b", combined)) <= 1:
+        return title, desc, specs
+
+    desc = _remove_vintage_tokens(desc)
+    if len(re.findall(r"(?i)\bvintage\b", f"{title} {desc}")) > 1:
+        title = _remove_vintage_tokens(title)
+    return title, desc, specs
+
+
 def _brand_token_key(brand: str) -> str:
     return re.sub(r"\s+", " ", clean_listing_text(brand)).strip().lower()
 
@@ -3006,6 +3083,14 @@ class LotOutput:
         )
         self.auction_title = _ensure_branded_auction_title(
             self.auction_title, self.brands, self.specification_lines
+        )
+        self.auction_title, self.professional_description, self.specification_lines = (
+            scrub_gratuitous_vintage_from_listing(
+                self.auction_title,
+                self.professional_description,
+                self.specification_lines,
+                self.labels_and_tags,
+            )
         )
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines

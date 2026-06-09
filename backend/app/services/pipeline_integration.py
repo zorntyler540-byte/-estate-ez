@@ -19,6 +19,7 @@ from app.core.lotting import (
 )
 from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
+    PipelineCancelled,
     _build_pro_image_payload,
     _hero_triage_block,
     _manifest_to_brand_audit,
@@ -339,6 +340,7 @@ def run_single_lot_pipeline(
     *,
     manifest_tag: str,
     emit: EmitFn | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[LotOutput, dict[str, Any]]:
     """
     Stage 1 triage + selection, capped Flash listing, then Pro proofreads title/brands/items.
@@ -354,8 +356,29 @@ def run_single_lot_pipeline(
     for path, key in entries:
         images[key] = path.read_bytes()
 
+    total_photos = len(entries)
+    filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
+
     if emit:
-        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": len(entries)})
+        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": total_photos})
+
+    def _emit_triage_row(triage_row: dict[str, Any]) -> None:
+        if not emit:
+            return
+        filename = str(triage_row.get("filename") or "")
+        emit(
+            {
+                "type": "photo_analyzed",
+                "index": filename_to_index.get(filename, 0),
+                "total": total_photos,
+                "file_name": filename,
+                "preview": {
+                    "auction_title": str(triage_row.get("photo_role") or ""),
+                    "sku": triage_row.get("brand_text") or None,
+                },
+                "pipeline_role": triage_row.get("photo_role"),
+            }
+        )
 
     logger.info(
         "Pipeline start: photos=%d pro_model=%s flash_model=%s",
@@ -363,7 +386,13 @@ def run_single_lot_pipeline(
         settings.gemini_pro_model,
         settings.gemini_flash_model,
     )
-    pipeline_result = triage_and_select_field_lot(images)
+    if should_cancel and should_cancel():
+        raise PipelineCancelled()
+    pipeline_result = triage_and_select_field_lot(
+        images,
+        on_triage_complete=_emit_triage_row,
+        should_cancel=should_cancel,
+    )
     selected = dict(pipeline_result.get("selected") or {})
     flash_draft = dict(pipeline_result.get("flash_draft") or {})
     triage_rows = list(pipeline_result.get("triage") or [])
@@ -398,6 +427,8 @@ def run_single_lot_pipeline(
     lot: LotOutput | None = None
     listing_calls = 0
     for idx, filename in enumerate(listing_names):
+        if should_cancel and should_cancel():
+            raise PipelineCancelled()
         path = path_by_key.get(filename)
         if path is None:
             continue
@@ -432,6 +463,8 @@ def run_single_lot_pipeline(
     hero_triage = _hero_triage_block(triage_rows, hero_name)
     should_run_pro = bool(hero_name or pro_filenames or lot)
     if should_run_pro:
+        if should_cancel and should_cancel():
+            raise PipelineCancelled()
         pro_images = _build_pro_image_payload(images, pro_filenames, hero_filename=hero_name)
         flash_listing_context = {
             "auction_title": lot.auction_title,
