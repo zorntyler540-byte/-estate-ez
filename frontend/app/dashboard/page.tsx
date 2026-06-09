@@ -967,6 +967,25 @@ function jobInputLabel(folder: string): string {
   return base;
 }
 
+/** Human label for pipeline triage roles shown while Add one lot runs. */
+function pipelineTriageRoleLabel(role: string | undefined): string {
+  const r = (role || "").trim().toLowerCase();
+  switch (r) {
+    case "unusable":
+      return "Not passed to Pro";
+    case "angle_only":
+      return "Extra angle";
+    case "item_front":
+      return "Item front";
+    case "hero":
+      return "Hero shot";
+    case "tape":
+      return "SKU tape";
+    default:
+      return role?.replace(/_/g, " ") || "";
+  }
+}
+
 type SaleZipExport = {
   id: string;
   sale_id: string;
@@ -4675,7 +4694,7 @@ export default function DashboardPage() {
                   {slot.previewTitle ? (
                     <span>
                       {" "}
-                      — <em>{slot.previewTitle}</em>
+                      — <em>{pipelineTriageRoleLabel(slot.previewTitle)}</em>
                     </span>
                   ) : null}
                   {slot.status !== "queued" && inInventoryPhase ? (
@@ -4846,7 +4865,7 @@ export default function DashboardPage() {
                     {slot.previewTitle ? (
                       <span style={{ color: "var(--ct-text-muted)" }}>
                         {" "}
-                        — <em>{slot.previewTitle}</em>
+                        — <em>{pipelineTriageRoleLabel(slot.previewTitle)}</em>
                       </span>
                     ) : null}
                     {inInventoryPhase ? (
