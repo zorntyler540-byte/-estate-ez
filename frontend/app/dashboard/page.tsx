@@ -1728,7 +1728,12 @@ export default function DashboardPage() {
           return;
         }
         setError(msg);
-        setLoading(false);
+      })
+      .finally(() => {
+        if (loadId !== salesLoadId.current) return;
+        if (!inventoryFirstLoad.current) {
+          setLoading(false);
+        }
       });
   }, [router, dataReloadNonce]);
 
@@ -1771,10 +1776,8 @@ export default function DashboardPage() {
       })
       .finally(() => {
         if (loadId !== inventoryLoadId.current) return;
-        if (inventoryFirstLoad.current) {
-          inventoryFirstLoad.current = false;
-          setLoading(false);
-        }
+        inventoryFirstLoad.current = false;
+        setLoading(false);
       });
     void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/photo-health`, t)
       .then((d) => {

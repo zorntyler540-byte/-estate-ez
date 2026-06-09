@@ -130,10 +130,13 @@ def start_job_in_background(job_id: str, account_id: str) -> bool:
     Start a queued job when account capacity allows.
     Returns False when the job should stay queued (another lot is still running).
     """
+    if not can_start_job_for_account(account_id):
+        return False
+    cap = max(1, settings.catalog_job_max_concurrent)
     with _job_cancels_lock:
         if job_id in _job_cancels:
             raise RuntimeError("job_already_running")
-        if not can_start_job_for_account(account_id):
+        if running_count_for_account(account_id) >= cap:
             return False
         cancel_ev = threading.Event()
         _job_cancels[job_id] = cancel_ev
