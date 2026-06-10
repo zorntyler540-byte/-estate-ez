@@ -119,8 +119,10 @@ export default function LotDetailPage() {
   const [organizeMsg, setOrganizeMsg] = useState("");
   const [splitNewLotTitle, setSplitNewLotTitle] = useState("");
   const [aiRegenerating, setAiRegenerating] = useState(false);
-  /** True from click until the server first reports ``ai_regenerating`` (avoids clearing busy on early polls). */
-  const aiRegenAwaitingServerRef = useRef(false);
+  const [aiRegenError, setAiRegenError] = useState("");
+  const [aiRegenNotice, setAiRegenNotice] = useState("");
+  /** Set after POST returns so pre-request polls do not clear the spinner. */
+  const aiRegenPostAckRef = useRef(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
@@ -164,6 +166,9 @@ export default function LotDetailPage() {
         const row = d as Lot;
         setLot(row);
         setAiRegenerating(Boolean(row.ai_regenerating));
+        if (row.ai_regenerating) {
+          aiRegenPostAckRef.current = true;
+        }
         try {
           const photos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/photos`, t)) as LotPhoto[];
           if (cancelled) return;
@@ -191,13 +196,15 @@ export default function LotDetailPage() {
         const row = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, token)) as Lot;
         if (cancelled) return;
         setLot(row);
-        if (row.ai_regenerating) {
-          aiRegenAwaitingServerRef.current = false;
-        }
-        if (!row.ai_regenerating && !aiRegenAwaitingServerRef.current) {
+        if (!row.ai_regenerating && aiRegenPostAckRef.current) {
           setAiRegenerating(false);
           if (row.ai_regenerate_error) {
-            setError(row.ai_regenerate_error);
+            const msg = row.ai_regenerate_error;
+            setAiRegenNotice("");
+            setAiRegenError(parseFastApiErrorMessage(msg, msg));
+          } else {
+            setAiRegenError("");
+            setAiRegenNotice("Listing updated from AI.");
           }
         }
       } catch {
@@ -355,9 +362,10 @@ export default function LotDetailPage() {
     ) {
       return;
     }
-    aiRegenAwaitingServerRef.current = true;
+    aiRegenPostAckRef.current = false;
     setAiRegenerating(true);
-    setError("");
+    setAiRegenError("");
+    setAiRegenNotice("");
     try {
       const photoIdsOrdered =
         selectedPhotoIds.size > 0
@@ -374,19 +382,26 @@ export default function LotDetailPage() {
         body: JSON.stringify(body)
       })) as Lot;
       setLot(updated);
-      if (updated.ai_regenerating) {
-        aiRegenAwaitingServerRef.current = false;
+      aiRegenPostAckRef.current = true;
+      if (updated.ai_regenerate_error) {
+        const msg = updated.ai_regenerate_error;
+        setAiRegenerating(false);
+        setAiRegenNotice("");
+        setAiRegenError(parseFastApiErrorMessage(msg, msg));
+        return;
       }
       if (!updated.ai_regenerating) {
-        aiRegenAwaitingServerRef.current = false;
         setAiRegenerating(false);
-        if (updated.ai_regenerate_error) {
-          setError(updated.ai_regenerate_error);
-        }
+        setAiRegenNotice("Listing updated from AI.");
+        return;
       }
+      setAiRegenerating(true);
     } catch (e) {
-      aiRegenAwaitingServerRef.current = false;
-      setError(e instanceof Error ? e.message : "AI regenerate failed");
+      aiRegenPostAckRef.current = false;
+      setAiRegenNotice("");
+      setAiRegenError(
+        e instanceof Error ? parseFastApiErrorMessage(e.message, "AI regenerate failed") : "AI regenerate failed"
+      );
       setAiRegenerating(false);
     }
   }
@@ -1330,6 +1345,25 @@ export default function LotDetailPage() {
                 can take several minutes.
               </span>
             </div>
+          </div>
+        ) : null}
+        {aiRegenError ? (
+          <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.85rem" }} role="alert">
+            <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate failed</strong>
+            {aiRegenError}
+          </div>
+        ) : null}
+        {!aiRegenerating && aiRegenNotice ? (
+          <div
+            className="ct-banner"
+            style={{
+              marginBottom: "0.85rem",
+              borderColor: "rgba(74, 222, 128, 0.35)",
+              background: "rgba(34, 197, 94, 0.1)"
+            }}
+            role="status"
+          >
+            {aiRegenNotice}
           </div>
         ) : null}
         <div
