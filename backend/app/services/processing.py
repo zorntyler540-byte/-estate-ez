@@ -6,9 +6,12 @@ import logging
 import re
 import threading
 import time
+import zlib
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import func, update
+from sqlalchemy import func, text, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -37,6 +40,93 @@ from app.services import job_events
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 
+_process_job_thread_locks: dict[str, threading.Lock] = {}
+_process_job_thread_locks_guard = threading.Lock()
+
+_LOG = logging.getLogger(__name__)
+
+
+def _job_lock_key(job_id: str) -> int:
+    return zlib.crc32(job_id.encode("utf-8")) & 0x7FFFFFFF
+
+
+def _thread_job_process_lock(job_id: str) -> threading.Lock:
+    with _process_job_thread_locks_guard:
+        lock = _process_job_thread_locks.get(job_id)
+        if lock is None:
+            lock = threading.Lock()
+            _process_job_thread_locks[job_id] = lock
+        return lock
+
+
+@contextmanager
+def _process_job_execution_lock(db: Session, job_id: str):
+    """One catalog worker per job id (Postgres advisory lock, in-process lock elsewhere)."""
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        key = _job_lock_key(job_id)
+        acquired = bool(db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
+        if not acquired:
+            _LOG.warning("Skipping duplicate process_job — advisory lock held job_id=%s", job_id)
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+    else:
+        lock = _thread_job_process_lock(job_id)
+        if not lock.acquire(blocking=False):
+            _LOG.warning("Skipping duplicate process_job — thread lock held job_id=%s", job_id)
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            lock.release()
+
+
+def _heartbeat_job(db: Session, job: ProcessingJob) -> None:
+    """Touch ``updated_at`` so multi-instance stale reconcile does not false-fail long runs."""
+    job.status = JobStatus.processing
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_paths: list[Path]) -> bool:
+    """True when this Add-one-lot upload already produced catalog rows (re-run / duplicate worker)."""
+    if not bool(getattr(job, "single_lot_mode", False)) or not photo_paths:
+        return False
+    db.refresh(job)
+    if job.status == JobStatus.completed:
+        return True
+    names = [p.name for p in photo_paths if p.name]
+    if not names:
+        return False
+    created_after = job.created_at
+    if created_after is not None and created_after.tzinfo is None:
+        created_after = created_after.replace(tzinfo=timezone.utc)
+    q = (
+        db.query(Photo.id)
+        .join(Lot, Photo.lot_id == Lot.id)
+        .filter(
+            Lot.sale_id == job.sale_id,
+            Lot.account_id == job.account_id,
+            Photo.original_name.in_(names),
+        )
+    )
+    if created_after is not None:
+        q = q.filter(Lot.created_at >= created_after)
+    return q.count() >= len(names)
+
+
+def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
+    job.status = JobStatus.completed
+    job.cancel_requested = False
+    job.error_message = None
+    db.commit()
+    _emit_job(job, {"type": "status", "status": "completed"})
+
 
 def _add_catalog_photo(db: Session, job: ProcessingJob, photo_path: Path) -> Photo:
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
@@ -59,8 +149,6 @@ def _add_catalog_photo(db: Session, job: ProcessingJob, photo_path: Path) -> Pho
 _CT_SKU_INJECTED_FALLBACK_KEY = "_ct_sku_injected_fallback"
 EST_INPUT_TOKENS_PER_PHOTO = 1100
 EST_OUTPUT_TOKENS_PER_SUCCESS = 220
-
-_LOG = logging.getLogger(__name__)
 
 
 def _maker_stamp_evidence_blob(lot: LotOutput, raw_payload: dict | None) -> str:
@@ -637,6 +725,16 @@ def _process_job_single_lot_pipeline(
     job.est_input_tokens = int(token_est.get("input") or total_photos * EST_INPUT_TOKENS_PER_PHOTO)
     job.est_output_tokens = int(token_est.get("output") or EST_OUTPUT_TOKENS_PER_SUCCESS)
     db.commit()
+    _heartbeat_job(db, job)
+
+    if _single_lot_batch_already_cataloged(db, job, photos):
+        _LOG.info(
+            "pipeline inventory skipped — batch already cataloged job_id=%s photos=%d",
+            job.id,
+            total_photos,
+        )
+        _finish_job_completed(db, job)
+        return
 
     _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
 
@@ -663,6 +761,17 @@ def _process_job_single_lot_pipeline(
         row = _add_catalog_photo(db, job, photo_path)
         pending_photo_ids.append(row.id)
         db.commit()
+        if i == 0 or (i + 1) % 5 == 0 or i + 1 == total_photos:
+            _heartbeat_job(db, job)
+
+    if _single_lot_batch_already_cataloged(db, job, photos):
+        _LOG.info(
+            "pipeline finalize skipped — batch already cataloged job_id=%s photos=%d",
+            job.id,
+            total_photos,
+        )
+        _finish_job_completed(db, job)
+        return
 
     lot.photo_count = len(photos)
     _, pending_photo_ids, finalized = _finalize_open_lot(
@@ -686,6 +795,23 @@ def process_job(
     *,
     cancel_event: threading.Event | None = None,
 ) -> None:
+    with _process_job_execution_lock(db, job.id) as acquired:
+        if not acquired:
+            return
+        _process_job_body(db, job, cancel_event=cancel_event)
+
+
+def _process_job_body(
+    db: Session,
+    job: ProcessingJob,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    db.refresh(job)
+    if job.status == JobStatus.completed:
+        _LOG.info("process_job skipped — already completed job_id=%s", job.id)
+        return
+
     job.status = JobStatus.processing
     job.error_message = None
     job.cancel_requested = False
@@ -735,6 +861,17 @@ def process_job(
         db.commit()
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
+
+    if _single_lot_batch_already_cataloged(db, job, photos):
+        _LOG.info(
+            "process_job skipped — Add-one-lot batch already cataloged job_id=%s photos=%d",
+            job.id,
+            len(photos),
+        )
+        _finish_job_completed(db, job)
+        return
+
+    _heartbeat_job(db, job)
     current_lot: LotOutput | None = None
     pending_photo_ids: list[str] = []
     current_lot_folder_batch_key: str | None = None

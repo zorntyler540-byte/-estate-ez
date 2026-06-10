@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 from app import job_tasks
+from app.models import JobStatus
 
 
 class JobTasksQueueTests(unittest.TestCase):
@@ -14,11 +16,16 @@ class JobTasksQueueTests(unittest.TestCase):
             job_tasks._job_cancels.clear()
             job_tasks._job_accounts.clear()
 
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
     @patch.object(job_tasks, "try_start_next_queued_job")
     @patch.object(job_tasks, "effective_running_count", return_value=0)
     @patch.object(job_tasks, "SessionLocal")
     def test_kick_queue_if_idle_starts_when_only_queued(
-        self, mock_session_local: object, _mock_eff: object, mock_try: object
+        self,
+        mock_session_local: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_reconcile: object,
     ) -> None:
         class _FakeQuery:
             def filter(self, *args: object, **kwargs: object) -> _FakeQuery:
@@ -61,6 +68,41 @@ class JobTasksQueueTests(unittest.TestCase):
     def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
         ok = job_tasks.start_job_in_background("job-b", "acct-1")
         self.assertFalse(ok)
+
+    def test_reconcile_does_not_fail_recent_processing_on_other_replica(self) -> None:
+        row = MagicMock()
+        row.id = "job-recent"
+        row.status = JobStatus.processing
+        row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        row.error_message = None
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "is_job_running", return_value=False):
+            changed = job_tasks.reconcile_stale_processing_jobs(db, "acct-1")
+
+        self.assertFalse(changed)
+        self.assertEqual(row.status, JobStatus.processing)
+
+    def test_reconcile_fails_stale_processing(self) -> None:
+        row = MagicMock()
+        row.id = "job-stale"
+        row.status = JobStatus.processing
+        row.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        row.error_message = None
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "is_job_running", return_value=False):
+            changed = job_tasks.reconcile_stale_processing_jobs(db, "acct-1")
+
+        self.assertTrue(changed)
+        self.assertEqual(row.status, JobStatus.failed)
+        self.assertIn("restart", (row.error_message or "").lower())
 
 
 if __name__ == "__main__":

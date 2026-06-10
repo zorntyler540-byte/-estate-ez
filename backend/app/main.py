@@ -1870,22 +1870,7 @@ def list_jobs(
 ) -> list[JobOut]:
     # If the API process restarted/OOM-killed, in-memory worker threads are gone while DB rows may still say
     # "processing". Reconcile those stale rows so UI actions (delete/purge) do not remain blocked forever.
-    stale_rows = (
-        db.query(ProcessingJob)
-        .filter(
-            ProcessingJob.account_id == current.account_id,
-            ProcessingJob.status == JobStatus.processing,
-        )
-        .all()
-    )
-    changed = False
-    for row in stale_rows:
-        if not job_tasks.is_job_running(row.id):
-            row.status = JobStatus.failed
-            if not row.error_message:
-                row.error_message = "Job interrupted after server restart. Re-run to continue."
-            row.cancel_requested = False
-            changed = True
+    changed = job_tasks.reconcile_stale_processing_jobs(db, current.account_id)
     if changed:
         db.commit()
     job_tasks.kick_queue_if_idle_async(current.account_id)

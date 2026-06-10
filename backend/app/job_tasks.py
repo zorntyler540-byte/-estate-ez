@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
+from datetime import datetime, timezone
+
+from sqlalchemy import update
 
 from app.config import settings
 from app.db import SessionLocal
@@ -11,6 +14,10 @@ from app.services import job_events
 from app.services.processing import process_job
 
 _LOG = logging.getLogger(__name__)
+
+# Jobs stuck in ``processing`` longer than this may be reconciled as failed (API restart / OOM).
+# Shorter values false-fail long Add-one-lot runs on another Railway replica.
+PROCESSING_STALE_SECONDS = 3600
 
 _job_cancels: dict[str, threading.Event] = {}
 _job_accounts: dict[str, str] = {}
@@ -66,22 +73,59 @@ def can_start_job_for_account(account_id: str) -> bool:
 def _claim_queued_job(job_id: str, account_id: str) -> bool:
     """Atomically mark a queued job as processing before the worker thread starts."""
     with SessionLocal() as db:
-        row = (
-            db.query(ProcessingJob)
-            .filter(
+        result = db.execute(
+            update(ProcessingJob)
+            .where(
                 ProcessingJob.id == job_id,
                 ProcessingJob.account_id == account_id,
                 ProcessingJob.status == JobStatus.queued,
             )
-            .first()
+            .values(
+                status=JobStatus.processing,
+                error_message=None,
+                cancel_requested=False,
+            )
         )
-        if row is None:
+        if (result.rowcount or 0) != 1:
+            db.rollback()
             return False
-        row.status = JobStatus.processing
-        row.error_message = None
-        row.cancel_requested = False
         db.commit()
         return True
+
+
+def reconcile_stale_processing_jobs(db, account_id: str) -> bool:
+    """
+    Mark orphan ``processing`` rows failed when they are not running locally **and** the row is stale.
+
+    On multi-instance deploys, ``is_job_running`` is false on every replica except the worker host,
+    so we must not fail jobs that were updated recently (another replica may still be cataloging).
+    """
+    stale_rows = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status == JobStatus.processing,
+        )
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    changed = False
+    for row in stale_rows:
+        if is_job_running(row.id):
+            continue
+        updated = row.updated_at
+        if updated is not None:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age_sec = (now - updated).total_seconds()
+            if age_sec < PROCESSING_STALE_SECONDS:
+                continue
+        row.status = JobStatus.failed
+        if not row.error_message:
+            row.error_message = "Job interrupted after server restart. Re-run to continue."
+        row.cancel_requested = False
+        changed = True
+    return changed
 
 
 def _release_claimed_job(job_id: str, account_id: str) -> None:
@@ -177,16 +221,14 @@ def start_job_in_background(job_id: str, account_id: str) -> bool:
         if job_id in _job_cancels:
             raise RuntimeError("job_already_running")
         cancel_ev = threading.Event()
-
-    if not _claim_queued_job(job_id, account_id):
-        return False
-
-    with _job_cancels_lock:
-        if job_id in _job_cancels:
-            _release_claimed_job(job_id, account_id)
-            raise RuntimeError("job_already_running")
         _job_cancels[job_id] = cancel_ev
         _job_accounts[job_id] = account_id
+
+    if not _claim_queued_job(job_id, account_id):
+        with _job_cancels_lock:
+            _job_cancels.pop(job_id, None)
+            _job_accounts.pop(job_id, None)
+        return False
 
     try:
         threading.Thread(
