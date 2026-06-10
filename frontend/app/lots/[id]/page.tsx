@@ -212,7 +212,7 @@ export default function LotDetailPage() {
           if (row.ai_regenerate_error) {
             const msg = row.ai_regenerate_error;
             setAiRegenNotice("");
-            setAiRegenError(parseFastApiErrorMessage(msg, msg));
+            setAiRegenError(parseFastApiErrorMessage(msg));
           } else {
             setAiRegenError("");
             setAiRegenNotice("Listing updated from AI.");
@@ -402,7 +402,7 @@ export default function LotDetailPage() {
         const msg = updated.ai_regenerate_error;
         setAiRegenerating(false);
         setAiRegenNotice("");
-        setAiRegenError(parseFastApiErrorMessage(msg, msg));
+        setAiRegenError(parseFastApiErrorMessage(msg));
         return;
       }
       if (!updated.ai_regenerating) {
@@ -416,7 +416,7 @@ export default function LotDetailPage() {
       aiRegenSawActiveRef.current = false;
       setAiRegenNotice("");
       setAiRegenError(
-        e instanceof Error ? parseFastApiErrorMessage(e.message, "AI regenerate failed") : "AI regenerate failed"
+        e instanceof Error ? parseFastApiErrorMessage(e.message) || "AI regenerate failed" : "AI regenerate failed"
       );
       setAiRegenerating(false);
     }
