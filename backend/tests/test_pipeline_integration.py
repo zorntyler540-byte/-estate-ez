@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
+from app.core.lotting import LotOutput
+from app.services.pipeline_integration import _apply_brand_audit, _brands_from_triage_and_draft, _lot_from_flash_draft
 from pipeline.pipeline import _build_pro_image_payload, select_analysis_photos
 
 
@@ -184,3 +185,24 @@ def test_lot_from_flash_draft_uses_brand_audit() -> None:
     lot = _lot_from_flash_draft(flash_draft, brand_audit)
     assert lot.brands == ["Levi's"]
     assert "Levi's" in lot.auction_title or "denim" in lot.auction_title.lower()
+
+
+def test_brand_audit_preserves_existing_label_evidenced_flash_brand() -> None:
+    lot = LotOutput(
+        sku=None,
+        auction_title="Levi's Denim Jacket",
+        professional_description="Levi's denim jacket with visible red tab.",
+        specification_lines=[],
+        brands=["Levi's"],
+        labels_and_tags=["Levi's red tab"],
+        condition="",
+        starting_price=None,
+        photo_count=1,
+        sku_needs_review=False,
+        brand_needs_review=False,
+    )
+
+    _apply_brand_audit(lot, {"brands": [], "brand_needs_review": True}, triage=[], flash_draft=None)
+
+    assert lot.brands == ["Levi's"]
+    assert "Brand: Levi's" in lot.specification_lines

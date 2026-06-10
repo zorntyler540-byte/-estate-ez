@@ -192,7 +192,7 @@ def _apply_brand_audit(
             if tag_text and tag_text not in lot.labels_and_tags:
                 lot.labels_and_tags.append(tag_text)
 
-    brands: list[str] = list(brand_audit.get("brands") or [])
+    brands: list[str] = list(lot.brands) + list(brand_audit.get("brands") or [])
     if pro_manifest:
         brands.extend(_brands_from_pro_manifest(pro_manifest))
     brands.extend(_brands_from_triage_and_draft(triage, flash_draft))
