@@ -49,6 +49,7 @@ class JobTasksQueueTests(unittest.TestCase):
         mock_try.assert_called_once_with("acct-1")
 
     @patch.object(job_tasks, "_claim_queued_job", return_value=True)
+    @patch.object(job_tasks, "_clear_stale_registration")
     @patch.object(job_tasks, "can_start_job_for_account", return_value=True)
     @patch.object(job_tasks, "reconcile_memory_threads_for_account")
     @patch.object(job_tasks.threading, "Thread")
@@ -57,6 +58,7 @@ class JobTasksQueueTests(unittest.TestCase):
         mock_thread: object,
         _mock_reconcile: object,
         _mock_can: object,
+        _mock_clear_stale: object,
         mock_claim: object,
     ) -> None:
         mock_thread.return_value.start = lambda: None
@@ -64,8 +66,30 @@ class JobTasksQueueTests(unittest.TestCase):
         self.assertTrue(ok)
         mock_claim.assert_called_once_with("job-a", "acct-1")
 
+    @patch.object(job_tasks, "SessionLocal")
+    def test_claim_queued_job_refreshes_updated_at(self, mock_session_local: object) -> None:
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.__exit__.return_value = None
+        result = MagicMock()
+        result.rowcount = 1
+        db.execute.return_value = result
+        mock_session_local.return_value = db
+
+        before = datetime.now(timezone.utc)
+        ok = job_tasks._claim_queued_job("job-old", "acct-1")
+        after = datetime.now(timezone.utc)
+
+        self.assertTrue(ok)
+        params = db.execute.call_args.args[0].compile().params
+        updated_at = params["updated_at"]
+        self.assertGreaterEqual(updated_at, before)
+        self.assertLessEqual(updated_at, after)
+        db.commit.assert_called_once()
+
     @patch.object(job_tasks, "can_start_job_for_account", return_value=False)
-    def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    def test_second_start_returns_false_when_at_capacity(self, _mock_reconcile: object, _mock_can: object) -> None:
         ok = job_tasks.start_job_in_background("job-b", "acct-1")
         self.assertFalse(ok)
 

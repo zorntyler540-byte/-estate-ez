@@ -84,6 +84,7 @@ def _claim_queued_job(job_id: str, account_id: str) -> bool:
                 status=JobStatus.processing,
                 error_message=None,
                 cancel_requested=False,
+                updated_at=datetime.now(timezone.utc),
             )
         )
         if (result.rowcount or 0) != 1:
