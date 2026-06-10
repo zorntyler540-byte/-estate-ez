@@ -165,8 +165,8 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     peer = sale_lot_photo_counts(db, row.sale_id, account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
     out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
-    regen = regeneration_tasks.is_regenerating(lot_id)
-    err = None if regen else regeneration_tasks.pop_regeneration_error(lot_id)
+    regen = regeneration_tasks.lot_regenerate_is_active(row)
+    err = regeneration_tasks.pop_regeneration_error(db, row) if not regen else None
     if regen or err:
         return out.model_copy(update={"ai_regenerating": regen, "ai_regenerate_error": err})
     return out
@@ -1636,9 +1636,14 @@ def regenerate_lot_with_ai(
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
     _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
-    if regeneration_tasks.is_regenerating(lot_id):
+    if regeneration_tasks.is_regenerating(db, lot_id=lot_id, account_id=current.account_id):
         raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.")
     try:
+        regeneration_tasks.mark_lot_regenerate_started(
+            db,
+            lot_id=lot_id,
+            account_id=current.account_id,
+        )
         regeneration_tasks.start_lot_regeneration_in_background(
             lot_id=lot_id,
             account_id=current.account_id,

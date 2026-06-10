@@ -1338,6 +1338,16 @@ select.ct-input option {
   }
 }
 
+.ct-spin {
+  animation: ct-spin 0.9s linear infinite;
+}
+
+@keyframes ct-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Collapsible help (dashboard, etc.) */
 .ct-help-details {
   max-width: 45rem;

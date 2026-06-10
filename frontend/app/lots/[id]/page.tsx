@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -119,6 +119,8 @@ export default function LotDetailPage() {
   const [organizeMsg, setOrganizeMsg] = useState("");
   const [splitNewLotTitle, setSplitNewLotTitle] = useState("");
   const [aiRegenerating, setAiRegenerating] = useState(false);
+  /** True from click until the server first reports ``ai_regenerating`` (avoids clearing busy on early polls). */
+  const aiRegenAwaitingServerRef = useRef(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
@@ -182,15 +184,17 @@ export default function LotDetailPage() {
   }, [routeLotId]);
 
   useEffect(() => {
-    if (!token || !routeLotId || !lot?.ai_regenerating) return;
-    setAiRegenerating(true);
+    if (!token || !routeLotId || !aiRegenerating) return;
     let cancelled = false;
     const poll = async () => {
       try {
         const row = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, token)) as Lot;
         if (cancelled) return;
         setLot(row);
-        if (!row.ai_regenerating) {
+        if (row.ai_regenerating) {
+          aiRegenAwaitingServerRef.current = false;
+        }
+        if (!row.ai_regenerating && !aiRegenAwaitingServerRef.current) {
           setAiRegenerating(false);
           if (row.ai_regenerate_error) {
             setError(row.ai_regenerate_error);
@@ -206,7 +210,7 @@ export default function LotDetailPage() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [token, routeLotId, lot?.ai_regenerating]);
+  }, [token, routeLotId, aiRegenerating]);
 
   useEffect(() => {
     if (!token || !lot?.sale_id) return;
@@ -351,6 +355,7 @@ export default function LotDetailPage() {
     ) {
       return;
     }
+    aiRegenAwaitingServerRef.current = true;
     setAiRegenerating(true);
     setError("");
     try {
@@ -369,11 +374,18 @@ export default function LotDetailPage() {
         body: JSON.stringify(body)
       })) as Lot;
       setLot(updated);
-      setAiRegenerating(Boolean(updated.ai_regenerating));
-      if (!updated.ai_regenerating && updated.ai_regenerate_error) {
-        setError(updated.ai_regenerate_error);
+      if (updated.ai_regenerating) {
+        aiRegenAwaitingServerRef.current = false;
+      }
+      if (!updated.ai_regenerating) {
+        aiRegenAwaitingServerRef.current = false;
+        setAiRegenerating(false);
+        if (updated.ai_regenerate_error) {
+          setError(updated.ai_regenerate_error);
+        }
       }
     } catch (e) {
+      aiRegenAwaitingServerRef.current = false;
       setError(e instanceof Error ? e.message : "AI regenerate failed");
       setAiRegenerating(false);
     }
@@ -1296,6 +1308,30 @@ export default function LotDetailPage() {
         <h2 className="ct-section-title" style={{ margin: "0 0 0.65rem", fontSize: "1.05rem" }}>
           Listing details
         </h2>
+        {aiRegenerating ? (
+          <div
+            className="ct-banner"
+            role="status"
+            aria-live="polite"
+            style={{
+              marginBottom: "0.85rem",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "0.5rem",
+              borderColor: "rgba(96, 165, 250, 0.45)",
+              background: "rgba(59, 130, 246, 0.12)"
+            }}
+          >
+            <Loader2 size={18} style={{ flexShrink: 0, marginTop: "0.1rem" }} className="ct-spin" />
+            <div>
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate in progress</strong>
+              <span className="ct-muted" style={{ fontSize: "0.88rem", lineHeight: 1.45 }}>
+                Title, description, and specs refresh when finished. This page updates automatically — large photo sets
+                can take several minutes.
+              </span>
+            </div>
+          </div>
+        ) : null}
         <div
           className="ct-stack"
           style={{
@@ -1303,8 +1339,10 @@ export default function LotDetailPage() {
             padding: "0.65rem 0.75rem",
             borderRadius: "var(--ct-radius)",
             border: "1px solid var(--ct-border)",
-            background: "rgba(255,255,255,0.03)"
+            background: "rgba(255,255,255,0.03)",
+            opacity: aiRegenerating ? 0.72 : 1
           }}
+          aria-busy={aiRegenerating}
         >
           <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
             Refresh title and description using AI and the photos on this listing. Checked photos above are used first;
@@ -1334,8 +1372,16 @@ export default function LotDetailPage() {
               className="ct-btn ct-btn--primary"
               onClick={() => void regenerateListingWithAi()}
               disabled={aiRegenerating || saving || !catalogPhotos.length}
+              aria-busy={aiRegenerating}
             >
-              {aiRegenerating ? "Running AI…" : "Regenerate listing with AI"}
+              {aiRegenerating ? (
+                <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
+                  <Loader2 size={16} className="ct-spin" aria-hidden />
+                  Running AI…
+                </span>
+              ) : (
+                "Regenerate listing with AI"
+              )}
             </button>
           </div>
         </div>
