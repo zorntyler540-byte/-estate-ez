@@ -13,6 +13,7 @@ from app.core.lotting import (
     dedupe_specification_lines_preserve_order,
     drop_components_spec_lines,
     filter_labels_and_tags_for_lot,
+    format_auction_title_case,
     lot_accepts_size_tags,
 )
 
@@ -211,6 +212,60 @@ class TestApparelMultiPhotoLot(unittest.TestCase):
             _collapse_conflicting_apparel_prose(prose, merged), merged
         )
         self.assertNotIn("several distinct", fixed.lower())
+
+
+class TestAuctionTitleCase(unittest.TestCase):
+    def test_title_cases_supply_lot_title(self) -> None:
+        title = format_auction_title_case(
+            "Assorted jewelry making findings, chains, and craft hardware"
+        )
+        self.assertEqual(title, "Assorted Jewelry Making Findings, Chains, and Craft Hardware")
+
+    def test_preserves_brand_casing(self) -> None:
+        title = format_auction_title_case("tribal utility jacket and alfred dunner cardigan", ["Tribal", "Alfred Dunner"])
+        self.assertTrue(title.startswith("Tribal Utility Jacket and Alfred Dunner Cardigan"))
+
+    def test_finalize_applies_title_case(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "assorted jewelry making findings, chains, and craft hardware",
+                "brand": "",
+                "specification_lines": [],
+            }
+        )
+        self.assertEqual(
+            lot.auction_title,
+            "Assorted Jewelry Making Findings, Chains, and Craft Hardware",
+        )
+
+
+class TestConditionNoteConsolidation(unittest.TestCase):
+    def test_collapses_stacked_publication_wear_from_multi_photo_merge(self) -> None:
+        lines = [
+            "Condition note: Minor page toning and wear consistent with age",
+            "Condition note: Cover and page wear consistent with the age of a historic paper publication",
+            "Condition note: Antique paper showing typical minor aging and toning",
+            "Condition note: Heavy wear, peeling, and deterioration to the leather cover and spine...",
+            "Brand: International Bible Agency",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        cond = next(l for l in merged if l.lower().startswith("condition note:"))
+        self.assertIn("Minor page toning and cover wear consistent with age", cond)
+        self.assertNotIn("Heavy....", cond)
+        self.assertNotIn("; Heavy.", cond)
+
+    def test_trims_at_clause_boundary_not_mid_word(self) -> None:
+        lines = [
+            "Condition note: Minor page toning and wear consistent with age; "
+            "Cover and page wear consistent with the age of a historic paper publication; "
+            "Antique paper showing typical minor aging and toning; "
+            "Heavy wear, peeling, and deterioration to the leather cover and spine with additional edge fraying",
+        ]
+        merged = dedupe_specification_lines_preserve_order(lines)
+        cond = next(l for l in merged if l.lower().startswith("condition note:"))
+        self.assertNotIn("with…", cond)
+        self.assertNotIn(" with.", cond.lower())
+        self.assertTrue(cond.endswith("."))
 
 
 if __name__ == "__main__":

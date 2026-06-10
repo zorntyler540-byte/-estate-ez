@@ -438,6 +438,9 @@ def consolidate_brand_and_marking_spec_lines(lines: list[str]) -> list[str]:
     return out
 
 
+CONDITION_NOTE_MAX_CHARS = 320
+
+
 def _scrub_condition_note_rhs(rhs: str) -> str:
     """Drop empty/dot-only fragments and near-empty semicolon pieces from merged condition notes."""
     s = clean_listing_text(rhs).strip(" ;")
@@ -449,14 +452,54 @@ def _scrub_condition_note_rhs(rhs: str) -> str:
     seen: set[str] = set()
     for piece in s.split(";"):
         f = clean_listing_text(piece).strip(" .;")
-        if len(f) < 5 or re.fullmatch(r"\.+", f):
+        f = re.sub(r"\.{2,}$", "", f).strip(" .;")
+        if len(f) < 10 or re.fullmatch(r"\.+", f) or re.fullmatch(r"[A-Za-z]+", f):
             continue
         key = f.lower()
         if key in seen:
             continue
         seen.add(key)
         parts.append(f)
-    return "; ".join(parts[:8]).strip(" ;")
+    return "; ".join(parts[:5]).strip(" ;")
+
+
+def _drop_incomplete_trailing_condition_clause(body: str) -> str:
+    """Remove dangling stub clauses after merge/scrub (e.g. ``Heavy`` or ``Heavy....``)."""
+    parts = [
+        clean_listing_text(p).strip(" .;")
+        for p in body.split(";")
+        if clean_listing_text(p).strip(" .;")
+    ]
+    while parts:
+        last = parts[-1]
+        if len(last) < 10 or re.fullmatch(r"[A-Za-z]+", last) or re.search(r"\.{2,}$", last):
+            parts.pop()
+            continue
+        break
+    return "; ".join(parts).strip(" ;")
+
+
+def _trim_condition_note_body(text: str, max_chars: int = CONDITION_NOTE_MAX_CHARS) -> str:
+    """Trim at semicolon clause boundaries when possible; avoid mid-clause word chops."""
+    t = clean_listing_text(text).strip().strip(" .;")
+    if len(t) <= max_chars:
+        return t
+    parts = [
+        clean_listing_text(p).strip(" .;")
+        for p in t.split(";")
+        if clean_listing_text(p).strip(" .;")
+    ]
+    if len(parts) > 1:
+        kept: list[str] = []
+        for part in parts:
+            candidate = "; ".join(kept + [part]) if kept else part
+            if len(candidate) <= max_chars:
+                kept.append(part)
+            else:
+                break
+        if kept:
+            return "; ".join(kept).rstrip(" ,;.")
+    return _trim_prose_at_limit(t, max_chars).rstrip(" ,;.…")
 
 
 def _dedupe_dealer_card_vs_narrative_coin_grade_rhs(rhs: str) -> str:
@@ -515,11 +558,30 @@ def _collapse_redundant_condition_clauses(rhs: str) -> str:
     if not s:
         return s
     parts = [clean_listing_text(p).strip(" .;") for p in s.split(";") if clean_listing_text(p).strip(" .;")]
+    if len(parts) < 2:
+        return s
+    pub_kw = (
+        "page",
+        "cover",
+        "spine",
+        "leather",
+        "paper",
+        "toning",
+        "binding",
+        "foxing",
+        "publication",
+        "book",
+    )
+    if len(parts) >= 2 and sum(1 for p in parts if any(k in p.lower() for k in pub_kw)) >= 2:
+        return "Minor page toning and cover wear consistent with age"
     if len(parts) < 3:
         return s
     wear_kw = ("oxidation", "tarnish", "patina", "wear", "vintage", "age", "surface", "moderate", "light", "honest")
     if all(any(k in p.lower() for k in wear_kw) for p in parts):
-        return "Surface oxidation and tarnish consistent with age"
+        metal_kw = ("oxidation", "tarnish", "patina", "silver", "brass", "copper", "metal")
+        if any(any(k in p.lower() for k in metal_kw) for p in parts):
+            return "Surface oxidation and tarnish consistent with age"
+        return "Wear consistent with age"
     coin_kw = ("uncirculated", "mint", "sealed", "quarter", "map", "folder", "sleeve", "circulation", "handling")
     if len(parts) >= 4 and sum(1 for p in parts if any(k in p.lower() for k in coin_kw)) >= 3:
         sealed = next((p for p in parts if "seal" in p.lower() or "uncirculated" in p.lower()), "")
@@ -555,8 +617,10 @@ def consolidate_condition_note_spec_lines(lines: list[str]) -> list[str]:
     body = _scrub_condition_note_rhs(body)
     body = _dedupe_dealer_card_vs_narrative_coin_grade_rhs(body)
     body = _collapse_redundant_condition_clauses(body)
-    if len(body) > 260:
-        body = _trim_prose_at_limit(body, 260).rstrip(" ,;.")
+    body = _drop_incomplete_trailing_condition_clause(body)
+    if len(body) > CONDITION_NOTE_MAX_CHARS:
+        body = _trim_condition_note_body(body, CONDITION_NOTE_MAX_CHARS)
+    body = _drop_incomplete_trailing_condition_clause(body)
     if body and not body.endswith((".", "!", "?")):
         body += "."
     skip_idx = {i for i, _ in hits}
@@ -2038,6 +2102,84 @@ def _garment_phrase_from_title(title: str) -> str:
     return ""
 
 
+_TITLE_CASE_MINOR_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "for",
+        "yet",
+        "so",
+        "as",
+        "at",
+        "by",
+        "in",
+        "of",
+        "on",
+        "to",
+        "up",
+        "via",
+        "with",
+        "from",
+        "into",
+        "over",
+    }
+)
+
+
+def _split_title_word_parts(word: str) -> tuple[str, str, str]:
+    m = re.match(r"^([^A-Za-z0-9']*)([A-Za-z0-9']+?)([^A-Za-z0-9']*)$", word)
+    if not m:
+        return "", word, ""
+    return m.group(1), m.group(2), m.group(3)
+
+
+def _capitalize_title_core(core: str, *, force_lower: bool) -> str:
+    if not core:
+        return core
+    if core.isdigit():
+        return core
+    if core.isupper() and 1 < len(core) <= 5:
+        return core
+    if force_lower:
+        return core.lower()
+    if "-" in core:
+        return "-".join(_capitalize_title_core(part, force_lower=False) for part in core.split("-"))
+    return core.lower().capitalize()
+
+
+def format_auction_title_case(title: str, brands: list[str] | None = None) -> str:
+    """Apply catalog title case: major words capped; short prepositions/conjunctions lowercased mid-title."""
+    t = clean_listing_text(title).strip()
+    if not t:
+        return t
+    words = t.split()
+    if not words:
+        return t
+    n = len(words)
+    cased: list[str] = []
+    for i, raw in enumerate(words):
+        prefix, core, suffix = _split_title_word_parts(raw)
+        lower_core = core.lower() if core else ""
+        force_lower = bool(core) and i not in (0, n - 1) and lower_core in _TITLE_CASE_MINOR_WORDS
+        core_out = _capitalize_title_core(core, force_lower=force_lower) if core else core
+        cased.append(prefix + core_out + suffix)
+    out = " ".join(cased)
+    for brand in brands or []:
+        brand_clean = clean_listing_text(brand).strip()
+        if not brand_clean:
+            continue
+        try:
+            out = re.sub(re.escape(brand_clean), brand_clean, out, flags=re.IGNORECASE)
+        except re.error:
+            continue
+    return out[:500]
+
+
 def _ensure_branded_auction_title(
     title: str,
     brands: list[str],
@@ -3148,6 +3290,7 @@ class LotOutput:
             self.auction_title,
             self.professional_description,
         )
+        self.auction_title = format_auction_title_case(self.auction_title, self.brands)
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines
         )

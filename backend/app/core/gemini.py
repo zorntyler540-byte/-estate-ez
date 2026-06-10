@@ -79,7 +79,9 @@ class InventoryTableEntry(BaseModel):
             "title that states quantity and type (e.g. 'Seven ceramic Disney character figurines') rather than naming "
             "only one figure. **Bad** when the table shows many forms: 'Brass Two-Piece Incense Censer' (names only one "
             "subset). **Good**: 'Brass censers, ewer, bell, and dragon stand' or 'Brass decorative pieces (multiple "
-            "forms)'. Do **not** use the word **lot** in titles. Never add animals or object types you do not see."
+            "forms)'. Use **title case** (capitalize major words; lowercase short prepositions/conjunctions like "
+            "and, of, with unless first or last). Do **not** use the word **lot** in titles. Never add animals or "
+            "object types you do not see."
         ),
     )
     brand: str = Field(

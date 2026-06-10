@@ -13,6 +13,7 @@ from app.core.gemini import analyze_path_with_retries, verify_tape_sku
 from app.core.lotting import (
     LotOutput,
     filter_brands_to_label_evidence,
+    format_auction_title_case,
     infer_brands_from_label_context,
     normalize_brand_list,
     tape_marking_canonical,
@@ -312,7 +313,7 @@ def _apply_pro_manifest_to_lot(
     )
     # Pro title/description are authoritative — finalize must not overwrite them.
     if title:
-        lot.auction_title = title
+        lot.auction_title = format_auction_title_case(title, lot.brands)
     if desc:
         lot.professional_description = desc
     if manifest.listing_was_corrected_by_pro:
