@@ -123,6 +123,8 @@ export default function LotDetailPage() {
   const [aiRegenNotice, setAiRegenNotice] = useState("");
   /** Set after POST returns so pre-request polls do not clear the spinner. */
   const aiRegenPostAckRef = useRef(false);
+  /** True after server has reported ``ai_regenerating`` at least once this run. */
+  const aiRegenSawActiveRef = useRef(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
@@ -133,6 +135,10 @@ export default function LotDetailPage() {
     const missing = catalogPhotos.filter((p) => p.file_on_disk === false).length;
     return { total, missing, allMissing: total > 0 && missing === total, someMissing: missing > 0 };
   }, [catalogPhotos]);
+  const showAiRegenProgress = useMemo(
+    () => aiRegenerating || Boolean(lot?.ai_regenerating),
+    [aiRegenerating, lot?.ai_regenerating]
+  );
   const lastPhotoSelectAnchorRef = useRef<number | null>(null);
   const dragPhotoIdRef = useRef<string | null>(null);
   const addPhotosInputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +174,7 @@ export default function LotDetailPage() {
         setAiRegenerating(Boolean(row.ai_regenerating));
         if (row.ai_regenerating) {
           aiRegenPostAckRef.current = true;
+          aiRegenSawActiveRef.current = true;
         }
         try {
           const photos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/photos`, t)) as LotPhoto[];
@@ -189,14 +196,18 @@ export default function LotDetailPage() {
   }, [routeLotId]);
 
   useEffect(() => {
-    if (!token || !routeLotId || !aiRegenerating) return;
+    if (!token || !routeLotId || !showAiRegenProgress) return;
     let cancelled = false;
     const poll = async () => {
       try {
         const row = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, token)) as Lot;
         if (cancelled) return;
         setLot(row);
-        if (!row.ai_regenerating && aiRegenPostAckRef.current) {
+        if (row.ai_regenerating) {
+          aiRegenSawActiveRef.current = true;
+          setAiRegenerating(true);
+        }
+        if (!row.ai_regenerating && aiRegenPostAckRef.current && aiRegenSawActiveRef.current) {
           setAiRegenerating(false);
           if (row.ai_regenerate_error) {
             const msg = row.ai_regenerate_error;
@@ -217,7 +228,7 @@ export default function LotDetailPage() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [token, routeLotId, aiRegenerating]);
+  }, [token, routeLotId, showAiRegenProgress]);
 
   useEffect(() => {
     if (!token || !lot?.sale_id) return;
@@ -363,6 +374,7 @@ export default function LotDetailPage() {
       return;
     }
     aiRegenPostAckRef.current = false;
+    aiRegenSawActiveRef.current = false;
     setAiRegenerating(true);
     setAiRegenError("");
     setAiRegenNotice("");
@@ -383,6 +395,9 @@ export default function LotDetailPage() {
       })) as Lot;
       setLot(updated);
       aiRegenPostAckRef.current = true;
+      if (updated.ai_regenerating) {
+        aiRegenSawActiveRef.current = true;
+      }
       if (updated.ai_regenerate_error) {
         const msg = updated.ai_regenerate_error;
         setAiRegenerating(false);
@@ -398,6 +413,7 @@ export default function LotDetailPage() {
       setAiRegenerating(true);
     } catch (e) {
       aiRegenPostAckRef.current = false;
+      aiRegenSawActiveRef.current = false;
       setAiRegenNotice("");
       setAiRegenError(
         e instanceof Error ? parseFastApiErrorMessage(e.message, "AI regenerate failed") : "AI regenerate failed"
@@ -876,7 +892,7 @@ export default function LotDetailPage() {
               addPhotosBusy ||
               organizeBusy ||
               reorderBusy ||
-              aiRegenerating ||
+              showAiRegenProgress ||
               (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
                 catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
             }
@@ -1323,7 +1339,7 @@ export default function LotDetailPage() {
         <h2 className="ct-section-title" style={{ margin: "0 0 0.65rem", fontSize: "1.05rem" }}>
           Listing details
         </h2>
-        {aiRegenerating ? (
+        {showAiRegenProgress ? (
           <div
             className="ct-banner"
             role="status"
@@ -1353,7 +1369,7 @@ export default function LotDetailPage() {
             {aiRegenError}
           </div>
         ) : null}
-        {!aiRegenerating && aiRegenNotice ? (
+        {!showAiRegenProgress && aiRegenNotice ? (
           <div
             className="ct-banner"
             style={{
@@ -1374,9 +1390,9 @@ export default function LotDetailPage() {
             borderRadius: "var(--ct-radius)",
             border: "1px solid var(--ct-border)",
             background: "rgba(255,255,255,0.03)",
-            opacity: aiRegenerating ? 0.72 : 1
+            opacity: showAiRegenProgress ? 0.72 : 1
           }}
-          aria-busy={aiRegenerating}
+          aria-busy={showAiRegenProgress}
         >
           <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
             Refresh title and description using AI and the photos on this listing. Checked photos above are used first;
@@ -1394,7 +1410,7 @@ export default function LotDetailPage() {
               type="checkbox"
               checked={preserveSkuForAi}
               onChange={(e) => setPreserveSkuForAi(e.target.checked)}
-              disabled={aiRegenerating || saving}
+              disabled={showAiRegenProgress || saving}
             />
             <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
               Keep the current lot number — only refresh wording and details
@@ -1405,10 +1421,10 @@ export default function LotDetailPage() {
               type="button"
               className="ct-btn ct-btn--primary"
               onClick={() => void regenerateListingWithAi()}
-              disabled={aiRegenerating || saving || !catalogPhotos.length}
-              aria-busy={aiRegenerating}
+              disabled={showAiRegenProgress || saving || !catalogPhotos.length}
+              aria-busy={showAiRegenProgress}
             >
-              {aiRegenerating ? (
+              {showAiRegenProgress ? (
                 <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
                   <Loader2 size={16} className="ct-spin" aria-hidden />
                   Running AI…

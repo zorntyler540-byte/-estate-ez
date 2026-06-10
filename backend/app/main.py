@@ -946,10 +946,7 @@ def get_lot(lot_id: str, current: User = Depends(get_current_user), db: Session 
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
-    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, [lot_id])
-    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
-    many = photo_count_is_sale_outlier(row.photo_count, peer)
-    return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    return _lot_out_for_id(db, current.account_id, lot_id)
 
 
 @app.get("/lots/{lot_id}/photos", response_model=list[LotPhotoOut])
