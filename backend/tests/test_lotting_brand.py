@@ -173,7 +173,7 @@ class TestBrandResolution(unittest.TestCase):
         out = _broaden_auction_title_for_components("Single scarf detail", specs)
         self.assertNotIn("Brass", out)
         self.assertNotIn("table", out.lower())
-        self.assertIn("accessory", out.lower())
+        self.assertIn("accessories", out.lower())
 
     def test_drops_brand_only_in_ai_title_not_on_labels(self) -> None:
         """Hallucinated maker in title/description must not become Brand: spec."""
@@ -244,6 +244,26 @@ class TestBrandResolution(unittest.TestCase):
         self.assertNotIn("vintage", lot.auction_title.lower())
         self.assertNotIn("vintage", lot.professional_description.lower())
         self.assertFalse(any(ln.lower().startswith("era:") for ln in lot.specification_lines))
+
+    def test_scrubs_lot_filler_from_title_and_description(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Brass decorative lot: censers, bell, and ewer",
+                "professional_description": (
+                    "This brass lot brings together several table pieces. "
+                    "Several distinct pieces in this lot—refer to the photos."
+                ),
+                "specification_lines": [
+                    "Item 1: Incense censer",
+                    "Item 2: Hand bell",
+                    "Material: Brass",
+                ],
+            }
+        )
+        combined = f"{lot.auction_title} {lot.professional_description}".lower()
+        self.assertNotIn(" lot", combined)
+        self.assertNotIn("lot ", combined)
+        self.assertIn("censer", combined)
 
     def test_keeps_vintage_once_when_dated_era_on_tag(self) -> None:
         lot = LotOutput.from_model(

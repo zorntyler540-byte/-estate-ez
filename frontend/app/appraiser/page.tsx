@@ -113,6 +113,7 @@ export default function AppraiserPage() {
   const [cameraSnaps, setCameraSnaps] = useState<File[]>([]);
   const [cameraSnapThumbUrls, setCameraSnapThumbUrls] = useState<string[]>([]);
   const [cameraSnapBusy, setCameraSnapBusy] = useState(false);
+  const [coarsePointer, setCoarsePointer] = useState(false);
 
   const maxPhotos = health?.appraiser_max_photos ?? 3;
   const appraiserEnabled = health?.enable_appraiser === true;
@@ -141,6 +142,10 @@ export default function AppraiserPage() {
     },
     []
   );
+
+  useEffect(() => {
+    setCoarsePointer(isCoarsePointer());
+  }, []);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -289,15 +294,15 @@ export default function AppraiserPage() {
     }
   }
 
+  function isCoarsePointer(): boolean {
+    return (
+      typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches
+    );
+  }
+
   async function openAddPhotos() {
     if (pendingFiles.length >= maxPhotos) return;
-    const coarse =
-      typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
-    if (coarse && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
-      await openAppraiserCamera();
-      return;
-    }
-    if (coarse) {
+    if (isCoarsePointer()) {
       cameraNativeChainingRef.current = true;
       cameraInputRef.current?.click();
       return;
@@ -589,19 +594,33 @@ export default function AppraiserPage() {
                 </div>
               ))}
               {pendingFiles.length < maxPhotos && (
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--secondary"
-                  onClick={() => void openAddPhotos()}
-                  disabled={submitBusy}
-                >
-                  <Camera size={16} style={{ marginRight: "0.35rem" }} />
-                  {pendingFiles.length ? "Add photo" : "Take / add photos"}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--secondary"
+                    onClick={() => void openAddPhotos()}
+                    disabled={submitBusy}
+                  >
+                    <Camera size={16} style={{ marginRight: "0.35rem" }} />
+                    {pendingFiles.length ? "Add photo" : "Take / add photos"}
+                  </button>
+                  {coarsePointer && (
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost"
+                      onClick={() => void openAppraiserCamera()}
+                      disabled={submitBusy}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      In-app camera
+                    </button>
+                  )}
+                </>
               )}
             </div>
             <p className="ct-subtitle" style={{ marginTop: "0.5rem" }}>
               {pendingFiles.length} / {maxPhotos} photos — multiple items in one frame is OK.
+              {coarsePointer ? " Phone camera opens by default." : ""}
             </p>
           </div>
 
@@ -785,9 +804,8 @@ export default function AppraiserPage() {
         >
           <div className="ct-lot-camera-scroll">
             <div className="ct-card ct-card--padded ct-lot-camera-card">
-              <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-                Snap up to {maxPhotos} photos for this check, then tap <strong>Done</strong> to add them to the
-                appraisal box. Use <strong>Phone camera</strong> if the in-browser preview is blurry.
+              <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+                Snap, then <strong>Done</strong> to add to the check. Prefer <strong>Phone camera</strong> for sharper shots.
               </p>
               {!cameraStream ? (
                 <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>

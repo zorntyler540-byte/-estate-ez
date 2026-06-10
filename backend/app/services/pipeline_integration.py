@@ -113,11 +113,11 @@ def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, An
             specs.append(f"Item {idx}: {title}")
 
     if len(items) == 1:
-        auction_title = str(items[0].get("suggested_title") or "").strip() or "Estate lot"
+        auction_title = str(items[0].get("suggested_title") or "").strip() or "Estate grouping"
     elif len(items) > 1:
-        auction_title = f"Estate lot ({len(items)} items)"
+        auction_title = f"Estate grouping ({len(items)} items)"
     else:
-        auction_title = "Estate lot"
+        auction_title = "Estate grouping"
 
     lot = LotOutput(
         sku=None,

@@ -78,8 +78,8 @@ class InventoryTableEntry(BaseModel):
             "For several distinct pieces in one shot, use a compound "
             "title that states quantity and type (e.g. 'Seven ceramic Disney character figurines') rather than naming "
             "only one figure. **Bad** when the table shows many forms: 'Brass Two-Piece Incense Censer' (names only one "
-            "subset). **Good**: 'Brass decorative lot: censers, ewer, bell, dragon stand' or 'Brass decorative lot (multiple "
-            "forms)'. Never add animals or object types you do not see."
+            "subset). **Good**: 'Brass censers, ewer, bell, and dragon stand' or 'Brass decorative pieces (multiple "
+            "forms)'. Do **not** use the word **lot** in titles. Never add animals or object types you do not see."
         ),
     )
     brand: str = Field(
@@ -216,12 +216,12 @@ SYSTEM_INSTRUCTION = (
     "- **Never** title a row from a macro/detail frame alone (e.g. 'Woven Utility Jacket Detail with Zippered Pocket') — "
     "use the **garment + brand** from the full item and label photos.\n"
     "- Example: 'Art Deco Ditmar-Urbach Lusterware Bird Figurine' (not '... Bird Flower Frog' unless a real flower frog is visible).\n"
-    "- **Multi-object lots:** the title must be **inclusive** of the main distinct forms on the table (or explicitly say "
-    "**lot** / **group** / **multiple forms**) — do **not** name only one piece type (e.g. a two-part censer) when an "
-    "ewer, bell, dragon stand, striker, or other salient objects are **clearly** in the same lot.\n\n"
+    "- **Multi-object groupings:** the title must be **inclusive** of the main distinct forms on the table (say "
+    "**group**, **set**, **assortment**, or **multiple pieces**) — do **not** name only one piece type (e.g. a two-part "
+    "censer) when an ewer, bell, dragon stand, striker, or other salient objects are **clearly** in the same SKU.\n\n"
     "### DESCRIPTION LOGIC:\n"
     "- Do **not** transcribe stamps, mold numbers, incised digits, or bottom-mark details in **specification_lines**.\n"
-    "- **professional_description**: appearance, style, and **why the lot is appealing** — not a condition report "
+    "- **professional_description**: appearance, style, and **why the grouping is appealing** — not a condition report "
     "(see **CONDITION VS PROSE** below).\n\n"
     "### CONDITION VS PROSE (CRITICAL):\n"
     "- **condition_notes** must be exactly **one** of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR — that single token is the "
@@ -243,7 +243,8 @@ SYSTEM_INSTRUCTION = (
     "If you have more to say, put it in **specification_lines** (Item rows, Material, Era, dimensions) or brief **professional_description**.\n"
     "- **Do not** pack micro-surface or wear detail into prose (lathe rings, every scratch, grain, patina layers) — "
     "that belongs in **specification_lines** if at all, not in **professional_description**.\n"
-    "- Prefer **you / we / this lot** sparingly or neutral third person; avoid stiff phrases like 'The present object exhibits'.\n"
+    "- Prefer **you / we** sparingly or neutral third person; avoid stiff phrases like 'The present object exhibits' and "
+    "avoid repeating **lot** — say **these pieces**, **what you see**, or name the objects.\n"
     "- Opening hook: what it is + why it is appealing; material/era in plain English — **not** a second hook that "
     "re-describes the same objects or their wear.\n\n"
     "### METAL IDENTIFICATION (HALLMARK-FIRST):\n"
@@ -275,19 +276,24 @@ SYSTEM_INSTRUCTION = (
     "- **Never** open **item_name** with \"Vintage\" without dated evidence. At most **one** use of \"vintage\" in the "
     "whole listing (title + description combined).\n"
     "- Do not set **Era: Vintage** or **Era: Antique** alone — use a real period (e.g. 1970s, Mid-Century) or omit Era.\n\n"
+    "### AVOID 'LOT' IN BUYER-FACING TEXT (CRITICAL):\n"
+    "- Shoppers search **item_name** and read **professional_description** — do **not** lean on the word **lot**.\n"
+    "- Prefer **material + object**, **group**, **set**, **collection**, **assortment**, or **multiple pieces**.\n"
+    "- **Never** open **item_name** with 'Estate lot' or '… lot:' — lead with brand, material, or object type.\n"
+    "- In prose, avoid **this lot** / **the lot** / **whole lot** — describe **these pieces** or what is visible.\n\n"
     "### MULTI-PIECE LOT COVERAGE (CRITICAL):\n"
     "- When a lot includes multiple distinct forms, cover ALL major visible components in **item_name** + **specification_lines** "
     "(and a short warm **professional_description** overview — not a blow-by-blow of every piece).\n"
     "- **professional_description** must **match the same inventory** as **Components:** / **Item n:** — if those list "
-    "a censer and a hand bell, the prose must summarize **that grouping** (or neutrally say 'this brass lot' and nod to "
-    "both), **not** a long passage about an ewer or another form that is **not** in the Components line.\n"
+    "a censer and a hand bell, the prose must summarize **that grouping** (name both forms plainly), **not** a long "
+    "passage about an ewer or another form that is **not** in the Components line.\n"
     "- Do not collapse the lot to only one repeated subset (e.g., cups/tumblers) if larger or unique pieces are present.\n"
     "- Prioritize the dominant/structural pieces in wording: e.g., flagon/jug, serving tray/platter, then cups/goblets.\n"
         "- Multi-piece inventory: **Item 1:** … **Item n:** only (no **Components:** line). Use only clearly visible counts.\n\n"
     "### LACE, LINEN, TEXTILES, AND MULTI-SWATCH LISTINGS (CRITICAL):\n"
     "- When **several** catalog images show **different** lace runners, dresser scarves, valances, trims, doilies, or "
-    "panels laid flat with **yellow measuring tapes** that read **different lengths or widths**, this row is a **group lot** "
-    "— **item_name** must use inclusive wording (e.g. 'Cotton lace textile lot — multiple runners & pieces'), "
+    "panels laid flat with **yellow measuring tapes** that read **different lengths or widths**, this row is a **multi-piece "
+    "textile grouping** — **item_name** must use inclusive wording (e.g. 'Cotton lace textiles — multiple runners & pieces'), "
     "**not** a singular 'one textile' title.\n"
     "- **professional_description** must read as a **warm overview of the whole spread** (cream tones, mixed openwork "
     "patterns, who would love it), **not** as if only one rectangle exists when the photos clearly show **separate shapes** "
@@ -367,9 +373,9 @@ SYSTEM_INSTRUCTION = (
     "censers and ewers. If a bell is visible, include it in **Components:**, **item_name**, and the **professional_description** "
     "overview — do **not** drop it because censers or an ewer dominate the photo.\n"
     "- **item_name** for the hero frame must signal quantity or variety: e.g. "
-    "'Brass decorative lot: dragon-form stand, incense censers, bell, ewer, striker' — or "
+    "'Brass dragon stand, incense censers, bell, ewer, and striker' — or "
     "'Collection of decorative brass table pieces (multiple forms)'.\n"
-    "- **professional_description**: one **warm overview** of the **whole visible lot** (what is on the table together, "
+    "- **professional_description**: one **warm overview** of **everything on the table** (what is together, "
     "the vibe, who might love it) — name-check the **main mix** that matches **Components** (e.g. etched censer + hand bell), "
     "not a zoom-in on one object type only. **Do not** write a separate mini-paragraph for every single piece, and **do not** "
     "paste another full condition pass — use **specification_lines** + **Components:** for inventory and **condition_notes** "
@@ -575,7 +581,7 @@ def _upsert_material_spec(specs: list[str], material_value: str | None) -> list[
 
 def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, Any]:
     sku_clean = tape_marking_canonical(row.sku)
-    title = (row.item_name.strip() or (f"Estate lot #{sku_clean}" if sku_clean else "Estate catalog item"))
+    title = (row.item_name.strip() or (f"Estate item #{sku_clean}" if sku_clean else "Estate catalog item"))
     specs = [
         s
         for s in row.specification_lines

@@ -602,7 +602,7 @@ def _drop_prose_sentences_conflicting_with_components(prof: str, specification_l
     out = " ".join(kept).strip()
     if len(out) < 18:
         mat = _material_lead_word_from_title_and_specs(prof, specification_lines)
-        return f"{mat} grouping with the pieces listed in the lot - a warm display lot."
+        return f"{mat} grouping with the pieces listed—a warm display set."
     return out
 
 
@@ -1670,8 +1670,8 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
         ):
             if len(accessory_types) >= 2:
                 joined = ", ".join(accessory_types[:4])
-                return f"Fashion accessory lot: {joined}"[:500]
-            return f"Fashion accessory lot ({len(item_bodies)} pieces)"[:500]
+                return f"Fashion accessories: {joined}"[:500]
+            return f"Fashion accessories ({len(item_bodies)} pieces)"[:500]
     if _spec_lines_indicate_multi_textile_piece(specification_lines):
         fiber = "Cotton"
         if "linen" in blob and "cotton" not in blob:
@@ -1680,9 +1680,9 @@ def _broaden_auction_title_for_components(title: str, specification_lines: list[
             fiber = "Silk"
         elif "wool" in blob:
             fiber = "Wool"
-        return f"{fiber} lace and textile lot - multiple pieces; dimensions vary by photo (refer to tape reads)"[:500]
+        return f"{fiber} lace and textiles - multiple pieces; dimensions vary by photo (refer to tape reads)"[:500]
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
-    out = f"{mat} decorative table lot - multiple pieces"
+    out = f"{mat} decorative table pieces - multiple forms"
     return out[:500]
 
 
@@ -1813,9 +1813,9 @@ def _broaden_auction_title_for_numismatic_multi_year(
     mat = _material_lead_word_from_title_and_specs(t, specification_lines)
     lead = mat if mat and mat != "Brass" else ""
     if lead:
-        out = f"{lead} {series} coin lot ({y_disp}) - {pack}"
+        out = f"{lead} {series} U.S. coins ({y_disp}) - {pack}"
     else:
-        out = f"{series} coin lot ({y_disp}) - {pack}"
+        out = f"{series} U.S. coins ({y_disp}) - {pack}"
     return out[:500]
 
 
@@ -1865,7 +1865,7 @@ def _synthesize_numismatic_multi_cent_prose(
         bits.append("Littleton-style dealer cards or holders")
     pack = "; ".join(bits) if bits else "items as shown in the photos"
     out = (
-        f"This estate U.S. coin lot spans {y_disp}, together with {pack}. "
+        f"These estate U.S. coins span {y_disp}, together with {pack}. "
         "Refer to the listing photos as the most accurate way to confirm each coin's date, mint mark, and detail."
     )
     return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
@@ -1885,10 +1885,10 @@ def _synthesize_textile_measurement_lot_prose(
     if len(_inventory_coin_years(specification_lines)) >= 2:
         return description
     low = (description or "").lower()
-    if "this estate u.s. coin lot" in low or "coin lot spans" in low:
+    if "these estate u.s. coins" in low or "coins span" in low:
         return description
     out = (
-        "This lot brings together several lace and cotton textile pieces—not one single swatch. "
+        "These lace and cotton textile pieces come together—not one single swatch. "
         "Measuring tapes in the photos often show different spans for different panels; rely on the images for the clearest look at size, holes, fraying, and edge condition."
     )
     return _trim_prose_at_limit(out.strip(), MERGED_PRO_DESCRIPTION_MAX_CHARS)
@@ -2206,9 +2206,9 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
             if "two-piece" in low or "2-piece" in low or "two piece" in low:
                 return desc
             if not desc:
-                return "Two-piece outerwear lot—see Item lines for each garment."
+                return "Two-piece outerwear set—see Item lines for each garment."
             joiner = " " if desc.endswith((".", "!", "?")) else ". "
-            return f"{desc}{joiner}Two-piece lot—see Item lines for each garment."
+            return f"{desc}{joiner}Two-piece set—see Item lines for each garment."
         if n < 3:
             return desc
     if not _listing_should_have_multi_piece_cue(specification_lines):
@@ -2216,8 +2216,8 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
     comp = _components_spec_text(specification_lines) or ""
     low = desc.lower()
     if (
-        "this lot includes multiple pieces" in low
-        or "includes multiple pieces" in low
+        "includes multiple pieces" in low
+        or "these pieces" in low
         or "see components" in low
         or "see item" in low
         or "several distinct pieces" in low
@@ -2225,7 +2225,7 @@ def _ensure_multi_piece_description(description: str, specification_lines: list[
         or (comp and comp.lower() in low)
     ):
         return desc
-    extra = "Several distinct pieces in this lot—refer to the photos for layout, size, and condition."
+    extra = "Several distinct pieces—refer to the photos for layout, size, and condition."
     if not desc:
         return extra
     joiner = " " if desc.endswith((".", "!", "?")) else ". "
@@ -2560,6 +2560,58 @@ def _remove_vintage_tokens(text: str) -> str:
     t = re.sub(r"^\s*[,\-–—]\s*", "", t)
     t = re.sub(r"\s+[,\-–—]\s+", " ", t)
     return clean_listing_text(t).strip(" ,-–—")
+
+
+def _rephrase_lot_filler(text: str) -> str:
+    """Replace estate-sale jargon ``lot`` with shopper-facing wording in titles and prose."""
+    t = (text or "").strip()
+    if not t:
+        return t
+    replacements: list[tuple[str, str]] = [
+        (r"(?i)\bthis\s+estate\s+u\.?s\.?\s+coin\s+lot\b", "These estate U.S. coins"),
+        (r"(?i)\bcoin\s+lot\s+spans\b", "coin collection spans"),
+        (r"(?i)\bthis\s+lot\s+brings\s+together\b", "These pieces bring together"),
+        (r"(?i)\bthis\s+lot\s+includes\b", "This grouping includes"),
+        (r"(?i)\bseveral\s+distinct\s+pieces\s+in\s+this\s+lot\b", "Several distinct pieces"),
+        (r"(?i)\bin\s+this\s+lot\b", "here"),
+        (r"(?i)\bthe\s+whole\s+visible\s+lot\b", "the full spread"),
+        (r"(?i)\bwhole\s+visible\s+lot\b", "full spread"),
+        (r"(?i)\bthe\s+whole\s+lot\b", "everything shown"),
+        (r"(?i)\bwhole\s+lot\b", "full grouping"),
+        (r"(?i)\bwith\s+the\s+pieces\s+listed\s+in\s+the\s+lot\b", "with the pieces listed"),
+        (r"(?i)\ba\s+warm\s+display\s+lot\b", "a warm display set"),
+        (r"(?i)\bgroup\s+lot\b", "grouping"),
+        (r"(?i)\bdecorative\s+table\s+lot\b", "decorative table pieces"),
+        (r"(?i)\bdecorative\s+lot\b", "decorative pieces"),
+        (r"(?i)\bfashion\s+accessory\s+lot\b", "fashion accessories"),
+        (r"(?i)\blace\s+and\s+textile\s+lot\b", "lace and textiles"),
+        (r"(?i)\btextile\s+lot\b", "textiles"),
+        (r"(?i)\bouterwear\s+lot\b", "outerwear set"),
+        (r"(?i)\btwo-piece\s+lot\b", "two-piece set"),
+        (r"(?i)\bcoin\s+lot\b", "coin collection"),
+        (r"(?i)\bestate\s+lot\b", "estate find"),
+        (r"(?i)\bthe\s+lot\b", "the grouping"),
+        (r"(?i)\bthis\s+lot\b", "these pieces"),
+        (r"(?i)\b(\w+(?:\s+\w+){0,3})\s+lot\s*:\s*", r"\1 pieces: "),
+        (r"(?i)\b(\w+(?:\s+\w+){0,3})\s+lot\s*-\s*", r"\1 pieces - "),
+        (r"(?i)\b(\w+(?:\s+\w+){0,3})\s+lot\s*\(", r"\1 set ("),
+    ]
+    for pattern, repl in replacements:
+        t = re.sub(pattern, repl, t)
+    t = re.sub(r"(?i)\s+lot\b", "", t)
+    t = re.sub(r"(?i)\blot\s+", "", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"^\s*[,\-–—]\s*", "", t)
+    t = re.sub(r"\s+[,\-–—]\s+", " ", t)
+    return clean_listing_text(t).strip(" ,-–—")
+
+
+def scrub_gratuitous_lot_from_listing(
+    auction_title: str,
+    professional_description: str,
+) -> tuple[str, str]:
+    """Minimize filler ``lot`` in shopper-facing title and description."""
+    return _rephrase_lot_filler(auction_title), _rephrase_lot_filler(professional_description)
 
 
 def scrub_gratuitous_vintage_from_listing(
@@ -3091,6 +3143,10 @@ class LotOutput:
                 self.specification_lines,
                 self.labels_and_tags,
             )
+        )
+        self.auction_title, self.professional_description = scrub_gratuitous_lot_from_listing(
+            self.auction_title,
+            self.professional_description,
         )
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines

@@ -580,6 +580,8 @@ def run_brand_audit_pro(
         "to vague 'gold-tone accents' when the sticker text is legible.\n"
         "9. Do not add 'vintage' or 'antique' as filler — use material + object type unless a specific decade or "
         "era mark is visible on a tag.\n"
+        "10. Do not use the word 'lot' in final_auction_title or final_professional_description — shoppers want "
+        "brand, material, and object names (use group, set, collection, or multiple pieces when needed).\n"
         f"{valuation_block}"
         f"{listing_block}\n\n"
         f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
