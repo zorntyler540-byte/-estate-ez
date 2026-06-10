@@ -49,6 +49,7 @@ class JobTasksQueueTests(unittest.TestCase):
         mock_try.assert_called_once_with("acct-1")
 
     @patch.object(job_tasks, "_claim_queued_job", return_value=True)
+    @patch.object(job_tasks, "_clear_stale_registration")
     @patch.object(job_tasks, "can_start_job_for_account", return_value=True)
     @patch.object(job_tasks, "reconcile_memory_threads_for_account")
     @patch.object(job_tasks.threading, "Thread")
@@ -57,6 +58,7 @@ class JobTasksQueueTests(unittest.TestCase):
         mock_thread: object,
         _mock_reconcile: object,
         _mock_can: object,
+        _mock_clear_stale: object,
         mock_claim: object,
     ) -> None:
         mock_thread.return_value.start = lambda: None
@@ -86,7 +88,8 @@ class JobTasksQueueTests(unittest.TestCase):
         db.commit.assert_called_once()
 
     @patch.object(job_tasks, "can_start_job_for_account", return_value=False)
-    def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    def test_second_start_returns_false_when_at_capacity(self, _mock_reconcile: object, _mock_can: object) -> None:
         ok = job_tasks.start_job_in_background("job-b", "acct-1")
         self.assertFalse(ok)
 
