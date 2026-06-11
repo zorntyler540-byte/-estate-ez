@@ -2382,6 +2382,23 @@ select.ct-input option {
   white-space: nowrap;
 }
 
+.ct-upload-option__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.ct-dash-exports__guide {
+  margin-bottom: 0;
+}
+
+.ct-dash-exports__status {
+  margin: 0.55rem 0 0;
+  font-size: 0.85rem;
+}
+
 .ct-upload-setting {
   display: flex;
   gap: 0.55rem;
@@ -2636,6 +2653,16 @@ select.ct-input option {
     grid-column: 1 / -1;
     width: 100%;
     justify-content: center;
+  }
+
+  .ct-upload-option__actions {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .ct-upload-option__actions .ct-upload-option__btn {
+    flex: 1 1 auto;
   }
 
   .ct-dash-stats {

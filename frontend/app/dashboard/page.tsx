@@ -5257,93 +5257,125 @@ export default function DashboardPage() {
 
           <section className="ct-dash-panel ct-dash-exports ct-dash-col--exports" aria-label="Sale exports">
             <h2 className="ct-dash-panel__title">Exports</h2>
-            <div className="ct-exports">
-              <p className="ct-lead" style={{ marginTop: 0 }}>
-                Download catalog data for the <strong>selected sale</strong> — titles, descriptions, prices, and SKUs.
-              </p>
-              <div className="ct-export-actions">
+            <p className="ct-upload-intro">Download catalog data and photos for the selected sale.</p>
+            <div className="ct-upload-options" role="group" aria-label="Export formats">
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <FileText size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Markdown</span>
+                  <span className="ct-upload-option__desc">
+                    Readable catalog — titles, descriptions, prices, and SKUs.
+                  </span>
+                </div>
                 <button
                   type="button"
-                  className="ct-export-btn"
+                  className="ct-btn ct-upload-option__btn"
                   onClick={() => void downloadExport("markdown")}
                   disabled={exporting !== "" && exporting !== "markdown"}
                 >
-                  <FileText size={16} aria-hidden />
-                  {exporting === "markdown" ? "Downloading..." : "Markdown"}
+                  {exporting === "markdown" ? "Downloading…" : "Download"}
                 </button>
+              </div>
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Database size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">JSON</span>
+                  <span className="ct-upload-option__desc">Structured catalog data for tools and integrations.</span>
+                </div>
                 <button
                   type="button"
-                  className="ct-export-btn"
+                  className="ct-btn ct-upload-option__btn"
                   onClick={() => void downloadExport("json")}
                   disabled={exporting !== "" && exporting !== "json"}
                 >
-                  <Database size={16} aria-hidden />
-                  {exporting === "json" ? "Downloading..." : "JSON"}
+                  {exporting === "json" ? "Downloading…" : "Download"}
                 </button>
+              </div>
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <FileSpreadsheet size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">CTBids CSV</span>
+                  <span className="ct-upload-option__desc">Spreadsheet formatted for CTBids catalog upload.</span>
+                </div>
                 <button
                   type="button"
-                  className="ct-export-btn"
+                  className="ct-btn ct-upload-option__btn"
                   onClick={() => void downloadExport("csv")}
                   disabled={exporting !== "" && exporting !== "csv"}
                 >
-                  <FileSpreadsheet size={16} aria-hidden />
-                  {exporting === "csv" ? "Downloading..." : "CTBids CSV"}
+                  {exporting === "csv" ? "Downloading…" : "Download"}
                 </button>
               </div>
-              <hr className="ct-dash-divider" />
-              <p className="ct-lead" style={{ marginBottom: "0.5rem" }}>
-                <strong>Photo ZIP</strong> — every catalog photo for this sale in one archive.
-              </p>
-              <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
-                <summary>How the photo ZIP is organized</summary>
-                <div className="ct-help-details__body">
-                  <ul>
-                    <li>
-                      Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>).
-                    </li>
-                    <li>Progress counts update every few seconds while the server builds the archive.</li>
-                    <li>
-                      To zip <strong>one listing only</strong>, open that lot&apos;s Details page and use the download
-                      there.
-                    </li>
-                  </ul>
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Archive size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Photo ZIP</span>
+                  <span className="ct-upload-option__desc">
+                    Every catalog photo for this sale — one folder per lot in the archive.
+                  </span>
                 </div>
-              </details>
-              <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
-                <button
-                  type="button"
-                  className="ct-export-btn"
-                  onClick={() => void startSalePhotosZipExport()}
-                  disabled={
-                    !selectedSaleId ||
-                    selectedSaleClosed ||
-                    saleZipBusy ||
-                    busyProcessing ||
-                    saleZipExport?.status === "queued" ||
-                    saleZipExport?.status === "processing"
-                  }
-                >
-                  <Archive size={16} aria-hidden />
-                  {saleZipBusy ? "Starting…" : "Prepare sale photos (ZIP)"}
-                </button>
-                {saleZipExport?.ready ? (
-                  <button type="button" className="ct-btn ct-btn--primary" onClick={() => void downloadSaleZipExport()}>
-                    Download ZIP
+                <div className="ct-upload-option__actions">
+                  <button
+                    type="button"
+                    className="ct-btn ct-upload-option__btn"
+                    onClick={() => void startSalePhotosZipExport()}
+                    disabled={
+                      !selectedSaleId ||
+                      selectedSaleClosed ||
+                      saleZipBusy ||
+                      busyProcessing ||
+                      saleZipExport?.status === "queued" ||
+                      saleZipExport?.status === "processing"
+                    }
+                  >
+                    {saleZipBusy ? "Starting…" : "Prepare ZIP…"}
                   </button>
-                ) : null}
+                  {saleZipExport?.ready ? (
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary ct-upload-option__btn"
+                      onClick={() => void downloadSaleZipExport()}
+                    >
+                      Download ZIP
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
-                <p className="ct-muted" style={{ fontSize: "0.85rem", marginTop: "0.55rem" }}>
-                  Building… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
-                  <strong>{saleZipExport.total_photos_expected}</strong> files in archive
-                </p>
-              ) : null}
-              {saleZipExport?.status === "failed" ? (
-                <p style={{ color: "var(--ct-error)", fontSize: "0.85rem", marginTop: "0.55rem" }}>
-                  {saleZipExport.error_message || "Export failed"}
-                </p>
-              ) : null}
             </div>
+            <details className="ct-help-details ct-dash-exports__guide">
+              <summary>Photo ZIP guide</summary>
+              <div className="ct-help-details__body">
+                <ul>
+                  <li>
+                    Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>).
+                  </li>
+                  <li>Progress counts update every few seconds while the server builds the archive.</li>
+                  <li>
+                    To zip <strong>one listing only</strong>, open that lot&apos;s Details page and use the download
+                    there.
+                  </li>
+                </ul>
+              </div>
+            </details>
+            {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
+              <p className="ct-dash-exports__status ct-muted">
+                Building ZIP… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+                <strong>{saleZipExport.total_photos_expected}</strong> files in archive
+              </p>
+            ) : null}
+            {saleZipExport?.status === "failed" ? (
+              <p className="ct-dash-exports__status" style={{ color: "var(--ct-error)" }}>
+                {saleZipExport.error_message || "Export failed"}
+              </p>
+            ) : null}
           </section>
         </div>
 
