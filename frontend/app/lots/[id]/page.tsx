@@ -56,6 +56,14 @@ const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
 /** Set when using ``← Back to dashboard`` so the dashboard can restore scroll after Details. */
 const DASHBOARD_SCROLL_RESTORE_PENDING_KEY = "ct_dashboard_scroll_restore_pending";
 
+function rememberDashboardScrollBeforeLotDetails() {
+  try {
+    sessionStorage.setItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY, "1");
+  } catch {
+    /* private mode */
+  }
+}
+
 /** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT`` (null = no cap). */
 const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
@@ -111,6 +119,7 @@ export default function LotDetailPage() {
   const [quickRotatingId, setQuickRotatingId] = useState<string | null>(null);
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
+  const [saleName, setSaleName] = useState("");
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
   const [transferTargetId, setTransferTargetId] = useState("");
   const [mergeSourceId, setMergeSourceId] = useState("");
@@ -254,6 +263,27 @@ export default function LotDetailPage() {
         }
       } catch {
         if (!cancelled) setSaleLots([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, lot?.sale_id]);
+
+  useEffect(() => {
+    if (!token || !lot?.sale_id) {
+      setSaleName("");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = (await apiFetch("/sales", token)) as { id: string; name?: string }[];
+        if (cancelled || !Array.isArray(rows)) return;
+        const hit = rows.find((s) => s.id === lot.sale_id);
+        setSaleName((hit?.name || "").trim());
+      } catch {
+        if (!cancelled) setSaleName("");
       }
     })();
     return () => {
@@ -749,90 +779,61 @@ export default function LotDetailPage() {
     }
   }
 
-  if (!token) {
-    return (
-      <main className="ct-shell">
-        <div className="ct-panel">
-          <p style={{ margin: 0 }}>Please sign in first.</p>
-        </div>
-      </main>
-    );
-  }
-  if (!lot) {
-    return (
-      <main className="ct-shell">
-        <div className="ct-panel ct-panel--pulse">
-          <p style={{ margin: 0 }}>Loading lot…</p>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <AppShell
-      actions={
-        <>
-          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
-    >
-      <div id="lot-detail-top" className="ct-dashboard" style={{ maxWidth: 960 }}>
-      <Link
-        href="/dashboard"
-        className="ct-back-link"
-        onClick={() => {
-          try {
-            sessionStorage.setItem(DASHBOARD_SCROLL_RESTORE_PENDING_KEY, "1");
-          } catch {
-            /* private mode */
-          }
-        }}
-      >
-        ← Back to dashboard
+  const shellActions = (
+    <>
+      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+        Account
       </Link>
-      <header className="ct-page-header" style={{ borderBottom: "none", paddingBottom: 0, marginBottom: "0.5rem" }}>
-        <div>
-          <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
-            Lot {lot.sku || "(no SKU)"}
-          </h1>
-          {(lot.auction_title || "").trim() ? (
-            <p className="ct-subtitle" style={{ margin: 0, maxWidth: "42rem" }}>
-              {(lot.auction_title || "").trim()}
-            </p>
-          ) : null}
-        </div>
-      </header>
+      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
+        Log out
+      </button>
+    </>
+  );
+
+  const lotTopBar = (
+    <nav className="ct-lot-detail-crumb" aria-label="Breadcrumb">
+      <Link href="/dashboard" onClick={rememberDashboardScrollBeforeLotDetails}>
+        Dashboard
+      </Link>
+      <span aria-hidden>›</span>
+      {saleName ? (
+        <>
+          <span className="ct-muted">{saleName}</span>
+          <span aria-hidden>›</span>
+        </>
+      ) : null}
+      <span aria-current="page">Lot {lot?.sku?.trim() || "(no SKU)"}</span>
+    </nav>
+  );
+
+  const lotWarnings = lot ? (
+    <>
       {lot.sku_needs_review ? (
-        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+        <div className="ct-banner ct-banner--warning">
           <strong>Double-check the lot number.</strong> We could not read the colored estate tape clearly — make sure
           the SKU below matches your photos before you publish.
         </div>
       ) : null}
       {lot.many_photos_review ? (
-        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+        <div className="ct-banner ct-banner--warning">
           <strong>Unusual number of photos.</strong> This listing has many more pictures than your other lots. Check
           that another item&apos;s photos were not combined here by mistake.
         </div>
       ) : null}
       {lot.sku_duplicate_in_sale ? (
-        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+        <div className="ct-banner ct-banner--warning">
           <strong>Same lot number as another row.</strong> Two listings share this number — confirm each item&apos;s
-          photos are on the right row (use <strong>Move or split</strong> or <strong>Merge</strong> above).
+          photos are on the right row (use <strong>Organize</strong> below).
         </div>
       ) : null}
       {lot.sku_text_mismatch ? (
-        <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.85rem" }}>
+        <div className="ct-banner ct-banner--warning">
           <strong>Text does not match the lot number.</strong> The title or description mentions a different number than
           this row&apos;s SKU — you may need to split or move photos.
         </div>
       ) : null}
       {photoFileHealth.someMissing ? (
-        <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.85rem" }}>
+        <div className="ct-banner ct-banner--error">
           <strong>Photo files missing on the server.</strong>{" "}
           {photoFileHealth.allMissing ? (
             <>All {photoFileHealth.total} catalog photo{photoFileHealth.total === 1 ? "" : "s"} for this lot are gone</>
@@ -844,20 +845,161 @@ export default function LotDetailPage() {
           )}
           {" "}
           (often after clearing completed upload jobs, an API redeploy without persistent storage, or multiple API
-          servers without a shared upload volume). Use{" "}
-          <strong>Add photos…</strong> below to re-upload; slots marked <strong>Missing on server</strong> have no file
-          left to download or export.
+          servers without a shared upload volume). Use <strong>Add photos</strong> to re-upload; slots marked{" "}
+          <strong>Missing on server</strong> have no file left to download or export.
         </div>
       ) : null}
-      <section className="ct-card ct-card--padded" style={{ marginBottom: "1rem" }}>
-        <h2 className="ct-section-title" style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>
-          Catalog photos
-          {catalogPhotos.length ? (
-            <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
-              ({catalogPhotos.length})
+      {showAiRegenProgress ? (
+        <div
+          className="ct-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.5rem",
+            borderColor: "rgba(96, 165, 250, 0.45)",
+            background: "rgba(59, 130, 246, 0.12)"
+          }}
+        >
+          <Loader2 size={18} style={{ flexShrink: 0, marginTop: "0.1rem" }} className="ct-spin" />
+          <div>
+            <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate in progress</strong>
+            <span className="ct-muted" style={{ fontSize: "0.88rem", lineHeight: 1.45 }}>
+              Title, description, and specs refresh when finished. This page updates automatically — large photo sets
+              can take several minutes.
             </span>
-          ) : null}
-        </h2>
+          </div>
+        </div>
+      ) : null}
+      {aiRegenError ? (
+        <div className="ct-banner ct-banner--error" role="alert">
+          <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate failed</strong>
+          {aiRegenError}
+        </div>
+      ) : null}
+      {!showAiRegenProgress && aiRegenNotice ? (
+        <div
+          className="ct-banner"
+          style={{
+            borderColor: "rgba(74, 222, 128, 0.35)",
+            background: "rgba(34, 197, 94, 0.1)"
+          }}
+          role="status"
+        >
+          {aiRegenNotice}
+        </div>
+      ) : null}
+    </>
+  ) : null;
+
+  if (!token) {
+    return (
+      <AppShell actions={shellActions}>
+        <div className="ct-dashboard">
+          <section className="ct-dash-panel">
+            <p style={{ margin: 0 }}>Please sign in first.</p>
+            <p style={{ margin: "0.75rem 0 0" }}>
+              <Link href="/" className="ct-btn ct-btn--primary">
+                Go to sign in
+              </Link>
+            </p>
+          </section>
+        </div>
+      </AppShell>
+    );
+  }
+  if (!lot) {
+    return (
+      <AppShell topBar={lotTopBar} actions={shellActions}>
+        <div className="ct-dashboard">
+          <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true">
+            <p style={{ margin: 0 }}>Loading lot…</p>
+          </section>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const showOrganizePanel =
+    catalogPhotos.length > 0 || saleLots.filter((x) => x.id !== lot.id).length > 0;
+
+  const showLotAlerts =
+    lot.sku_needs_review ||
+    lot.many_photos_review ||
+    lot.sku_duplicate_in_sale ||
+    lot.sku_text_mismatch ||
+    photoFileHealth.someMissing ||
+    showAiRegenProgress ||
+    Boolean(aiRegenError) ||
+    Boolean(aiRegenNotice);
+
+  return (
+    <AppShell topBar={lotTopBar} actions={shellActions}>
+      <div className="ct-dashboard ct-lot-detail-stack">
+        <header className="ct-lot-detail-hero">
+          <div className="ct-lot-detail-hero__main">
+            <h1 className="ct-lot-detail-hero__sku">Lot {lot.sku || "(no SKU)"}</h1>
+            {(lot.auction_title || "").trim() ? (
+              <p className="ct-lot-detail-hero__title">{(lot.auction_title || "").trim()}</p>
+            ) : (
+              <p className="ct-lot-detail-hero__title ct-muted">No auction title yet</p>
+            )}
+          </div>
+          <div className="ct-lot-detail-hero__side">
+            <label
+              className={`ct-lot-detail-status${lot.is_completed ? " ct-lot-detail-status--done" : ""}`}
+              style={{ cursor: "pointer" }}
+            >
+              <input
+                type="checkbox"
+                checked={lot.is_completed}
+                onChange={(e) => setLot({ ...lot, is_completed: e.target.checked })}
+                disabled={saving || showAiRegenProgress}
+              />
+              <span>{lot.is_completed ? "Done" : "Not done"}</span>
+            </label>
+            <div className="ct-lot-detail-hero__actions">
+              <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.82rem" }}>
+                <input
+                  type="checkbox"
+                  checked={preserveSkuForAi}
+                  onChange={(e) => setPreserveSkuForAi(e.target.checked)}
+                  disabled={showAiRegenProgress || saving}
+                />
+                <span className="ct-muted">Keep SKU</span>
+              </label>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => void regenerateListingWithAi()}
+                disabled={showAiRegenProgress || saving || !catalogPhotos.length}
+                aria-busy={showAiRegenProgress}
+              >
+                {showAiRegenProgress ? (
+                  <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
+                    <Loader2 size={16} className="ct-spin" aria-hidden />
+                    Running AI…
+                  </span>
+                ) : (
+                  "Regenerate with AI"
+                )}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {showLotAlerts ? <div className="ct-lot-detail-alerts">{lotWarnings}</div> : null}
+
+        <section className="ct-dash-panel">
+          <h2 className="ct-dash-panel__title">
+            Catalog photos
+            {catalogPhotos.length ? (
+              <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
+                ({catalogPhotos.length})
+              </span>
+            ) : null}
+          </h2>
         <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
           Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
           picture to reorder. Use <strong>↺ ↻</strong> on each thumbnail for a quick rotate, or click the image for crop and
@@ -938,176 +1080,6 @@ export default function LotDetailPage() {
             </ul>
           </div>
         </details>
-        {organizeMsg ? (
-          <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
-            {organizeMsg}
-          </div>
-        ) : null}
-        {catalogPhotos.length > 0 ? (
-          <div
-            style={{
-              border: "1px solid var(--ct-border)",
-              borderRadius: "var(--ct-radius)",
-              padding: "0.85rem",
-              marginBottom: "1rem"
-            }}
-          >
-            <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-              Move or split selected photos
-            </h3>
-            <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
-              Select photos, pick a <strong>destination</strong>, then move them or start a <strong>new listing</strong>{" "}
-              with just those pictures. One photo must stay on this lot.
-            </p>
-            <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
-              <summary>When to use this vs merge</summary>
-              <div className="ct-help-details__body">
-                Use this when only <em>some</em> photos belong elsewhere, or two tape numbers were merged into one row
-                by mistake. To pull in <em>every</em> photo from another row at once, use <strong>Merge a whole lot</strong>{" "}
-                below instead.
-              </div>
-            </details>
-            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
-              <button
-                type="button"
-                className="ct-btn ct-btn--ghost"
-                disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
-                onClick={selectAllCatalogPhotos}
-              >
-                Select all photos
-              </button>
-              <button
-                type="button"
-                className="ct-btn ct-btn--ghost"
-                disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
-                onClick={clearPhotoSelection}
-              >
-                Clear selection
-              </button>
-              <span className="ct-muted" style={{ fontSize: "0.82rem", alignSelf: "center" }}>
-                {selectedPhotoIds.size} selected
-              </span>
-            </div>
-            {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
-              <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
-                Optional title for the new listing (leave blank for a default)
-                <input
-                  className="ct-input"
-                  style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
-                  placeholder='e.g. "SA004 — orange pair"'
-                  value={splitNewLotTitle}
-                  onChange={(e) => setSplitNewLotTitle(e.target.value)}
-                  disabled={organizeBusy || reorderBusy}
-                  autoComplete="off"
-                />
-              </label>
-            ) : null}
-            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-              <select
-                className="ct-input"
-                style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                value={transferTargetId}
-                onChange={(e) => setTransferTargetId(e.target.value)}
-                disabled={organizeBusy || reorderBusy}
-              >
-                <option value="">— Destination —</option>
-                <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
-                {saleLots
-                  .filter((x) => x.id !== lot.id)
-                  .map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                      {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                    </option>
-                  ))}
-              </select>
-              <button
-                type="button"
-                className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
-                disabled={
-                  organizeBusy ||
-                  reorderBusy ||
-                  selectedPhotoIds.size === 0 ||
-                  !transferTargetId ||
-                  (transferTargetId === TRANSFER_DEST_NEW_LOT
-                    ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
-                    : !saleLots.some((x) => x.id === transferTargetId))
-                }
-                onClick={() => void applyPhotoDestination()}
-              >
-                {organizeBusy || reorderBusy
-                  ? "Working…"
-                  : transferTargetId === TRANSFER_DEST_NEW_LOT
-                    ? "Create new lot"
-                    : "Move selected"}
-              </button>
-            </div>
-          </div>
-        ) : null}
-        {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
-          <div
-            style={{
-              border: "1px solid var(--ct-border)",
-              borderRadius: "var(--ct-radius)",
-              padding: "0.85rem",
-              marginBottom: "1rem"
-            }}
-          >
-            <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-              Merge a whole lot into this one
-            </h3>
-            <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
-              All photos from the other listing move into this one; the other row is removed. A short note is added to
-              your specs.
-            </p>
-            <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
-              <summary>SKU option &amp; partial moves</summary>
-              <div className="ct-help-details__body">
-                You can optionally take the other lot&apos;s tape SKU using the checkbox below. To move only{" "}
-                <em>some</em> photos into a new row, use <strong>Move or split selected photos</strong> above and pick{" "}
-                <strong>New listing</strong> in the menu.
-              </div>
-            </details>
-            <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-              <select
-                className="ct-input"
-                style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                value={mergeSourceId}
-                onChange={(e) => setMergeSourceId(e.target.value)}
-                disabled={organizeBusy || reorderBusy}
-              >
-                <option value="">— Lot to absorb —</option>
-                {saleLots
-                  .filter((x) => x.id !== lot.id)
-                  .map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                      {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                    </option>
-                  ))}
-              </select>
-              <button
-                type="button"
-                className="ct-btn"
-                disabled={organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
-                onClick={() => void mergeSourceIntoThisLot()}
-              >
-                {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
-              </button>
-            </div>
-            <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
-              <input
-                type="checkbox"
-                checked={mergePreferSourceSku}
-                onChange={(e) => setMergePreferSourceSku(e.target.checked)}
-                disabled={organizeBusy || reorderBusy}
-              />
-              <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-                Use the other listing&apos;s lot number as this row&apos;s SKU when it has one
-              </span>
-            </label>
-          </div>
-        ) : null}
         {photosError ? (
           <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
             {photosError}
@@ -1334,138 +1306,199 @@ export default function LotDetailPage() {
             ))}
           </div>
         )}
-      </section>
-      <div id="listing-details" className="ct-card ct-card--padded ct-stack" style={{ scrollMarginTop: "0.75rem" }}>
-        <h2 className="ct-section-title" style={{ margin: "0 0 0.65rem", fontSize: "1.05rem" }}>
-          Listing details
-        </h2>
-        {showAiRegenProgress ? (
-          <div
-            className="ct-banner"
-            role="status"
-            aria-live="polite"
-            style={{
-              marginBottom: "0.85rem",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: "0.5rem",
-              borderColor: "rgba(96, 165, 250, 0.45)",
-              background: "rgba(59, 130, 246, 0.12)"
-            }}
-          >
-            <Loader2 size={18} style={{ flexShrink: 0, marginTop: "0.1rem" }} className="ct-spin" />
-            <div>
-              <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate in progress</strong>
-              <span className="ct-muted" style={{ fontSize: "0.88rem", lineHeight: 1.45 }}>
-                Title, description, and specs refresh when finished. This page updates automatically — large photo sets
-                can take several minutes.
-              </span>
-            </div>
-          </div>
+        </section>
+
+        {showOrganizePanel ? (
+          <section className="ct-dash-panel">
+            <h2 className="ct-dash-panel__title">Organize photos</h2>
+            {organizeMsg ? (
+              <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
+                {organizeMsg}
+              </div>
+            ) : null}
+            {catalogPhotos.length > 0 ? (
+              <div className="ct-lot-detail-organize-block">
+                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
+                  Move or split selected photos
+                </h3>
+                <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
+                  Select photos in the grid above, pick a <strong>destination</strong>, then move them or start a{" "}
+                  <strong>new listing</strong> with just those pictures. One photo must stay on this lot.
+                </p>
+                <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
+                  <summary>When to use this vs merge</summary>
+                  <div className="ct-help-details__body">
+                    Use this when only <em>some</em> photos belong elsewhere, or two tape numbers were merged into one row
+                    by mistake. To pull in <em>every</em> photo from another row at once, use{" "}
+                    <strong>Merge a whole lot</strong> below instead.
+                  </div>
+                </details>
+                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
+                    onClick={selectAllCatalogPhotos}
+                  >
+                    Select all photos
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
+                    onClick={clearPhotoSelection}
+                  >
+                    Clear selection
+                  </button>
+                  <span className="ct-muted" style={{ fontSize: "0.82rem", alignSelf: "center" }}>
+                    {selectedPhotoIds.size} selected
+                  </span>
+                </div>
+                {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
+                  <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
+                    Optional title for the new listing (leave blank for a default)
+                    <input
+                      className="ct-input"
+                      style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
+                      placeholder='e.g. "SA004 — orange pair"'
+                      value={splitNewLotTitle}
+                      onChange={(e) => setSplitNewLotTitle(e.target.value)}
+                      disabled={organizeBusy || reorderBusy}
+                      autoComplete="off"
+                    />
+                  </label>
+                ) : null}
+                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                  <select
+                    className="ct-input"
+                    style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                    value={transferTargetId}
+                    onChange={(e) => setTransferTargetId(e.target.value)}
+                    disabled={organizeBusy || reorderBusy}
+                  >
+                    <option value="">— Destination —</option>
+                    <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
+                    {saleLots
+                      .filter((x) => x.id !== lot.id)
+                      .map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                          {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
+                    disabled={
+                      organizeBusy ||
+                      reorderBusy ||
+                      selectedPhotoIds.size === 0 ||
+                      !transferTargetId ||
+                      (transferTargetId === TRANSFER_DEST_NEW_LOT
+                        ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
+                        : !saleLots.some((x) => x.id === transferTargetId))
+                    }
+                    onClick={() => void applyPhotoDestination()}
+                  >
+                    {organizeBusy || reorderBusy
+                      ? "Working…"
+                      : transferTargetId === TRANSFER_DEST_NEW_LOT
+                        ? "Create new lot"
+                        : "Move selected"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
+              <div className="ct-lot-detail-organize-block">
+                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
+                  Merge a whole lot into this one
+                </h3>
+                <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
+                  All photos from the other listing move into this one; the other row is removed. A short note is added to
+                  your specs.
+                </p>
+                <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
+                  <summary>SKU option &amp; partial moves</summary>
+                  <div className="ct-help-details__body">
+                    You can optionally take the other lot&apos;s tape SKU using the checkbox below. To move only{" "}
+                    <em>some</em> photos into a new row, use <strong>Move or split selected photos</strong> above and pick{" "}
+                    <strong>New listing</strong> in the menu.
+                  </div>
+                </details>
+                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                  <select
+                    className="ct-input"
+                    style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                    value={mergeSourceId}
+                    onChange={(e) => setMergeSourceId(e.target.value)}
+                    disabled={organizeBusy || reorderBusy}
+                  >
+                    <option value="">— Lot to absorb —</option>
+                    {saleLots
+                      .filter((x) => x.id !== lot.id)
+                      .map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                          {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    disabled={organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
+                    onClick={() => void mergeSourceIntoThisLot()}
+                  >
+                    {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
+                  </button>
+                </div>
+                <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={mergePreferSourceSku}
+                    onChange={(e) => setMergePreferSourceSku(e.target.checked)}
+                    disabled={organizeBusy || reorderBusy}
+                  />
+                  <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
+                    Use the other listing&apos;s lot number as this row&apos;s SKU when it has one
+                  </span>
+                </label>
+              </div>
+            ) : null}
+            {catalogPhotos.length > 0 ? (
+              <div className="ct-lot-detail-organize-block">
+                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
+                  Delete selected photos
+                </h3>
+                <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.92rem", lineHeight: 1.45 }}>
+                  Remove checked photos from this listing and the server for good. The listing row stays unless you delete
+                  the whole lot in <strong>Listing details</strong> below.
+                </p>
+                <div className="ct-form-actions" style={{ marginBottom: 0 }}>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--danger"
+                    onClick={() => void deleteSelectedPhotos()}
+                    disabled={
+                      organizeBusy ||
+                      reorderBusy ||
+                      saving ||
+                      selectedPhotoIds.size === 0 ||
+                      catalogPhotos.length === 0
+                    }
+                  >
+                    {organizeBusy ? "Working…" : "Delete selected photos"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
         ) : null}
-        {aiRegenError ? (
-          <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.85rem" }} role="alert">
-            <strong style={{ display: "block", marginBottom: "0.2rem" }}>AI regenerate failed</strong>
-            {aiRegenError}
-          </div>
-        ) : null}
-        {!showAiRegenProgress && aiRegenNotice ? (
-          <div
-            className="ct-banner"
-            style={{
-              marginBottom: "0.85rem",
-              borderColor: "rgba(74, 222, 128, 0.35)",
-              background: "rgba(34, 197, 94, 0.1)"
-            }}
-            role="status"
-          >
-            {aiRegenNotice}
-          </div>
-        ) : null}
-        <div
-          className="ct-stack"
-          style={{
-            marginBottom: "0.85rem",
-            padding: "0.65rem 0.75rem",
-            borderRadius: "var(--ct-radius)",
-            border: "1px solid var(--ct-border)",
-            background: "rgba(255,255,255,0.03)",
-            opacity: showAiRegenProgress ? 0.72 : 1
-          }}
-          aria-busy={showAiRegenProgress}
-        >
-          <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
-            Refresh title and description using AI and the photos on this listing. Checked photos above are used first;
-            if none are checked, all photos are used. Large sets may take a few minutes.
-          </p>
-          <details className="ct-help-details" style={{ marginTop: "0.5rem" }}>
-            <summary>Technical note</summary>
-            <div className="ct-help-details__body">
-              Sends stored catalog images to the model in gallery order. Only checkboxes in <strong>Catalog photos</strong>{" "}
-              above affect which frames are included when any are selected.
-            </div>
-          </details>
-          <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.5rem" }}>
-            <input
-              type="checkbox"
-              checked={preserveSkuForAi}
-              onChange={(e) => setPreserveSkuForAi(e.target.checked)}
-              disabled={showAiRegenProgress || saving}
-            />
-            <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-              Keep the current lot number — only refresh wording and details
-            </span>
-          </label>
-          <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
-            <button
-              type="button"
-              className="ct-btn ct-btn--primary"
-              onClick={() => void regenerateListingWithAi()}
-              disabled={showAiRegenProgress || saving || !catalogPhotos.length}
-              aria-busy={showAiRegenProgress}
-            >
-              {showAiRegenProgress ? (
-                <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
-                  <Loader2 size={16} className="ct-spin" aria-hidden />
-                  Running AI…
-                </span>
-              ) : (
-                "Regenerate listing with AI"
-              )}
-            </button>
-          </div>
-        </div>
-        <div
-          className="ct-stack"
-          style={{
-            marginBottom: "0.85rem",
-            padding: "0.65rem 0.75rem",
-            borderRadius: "var(--ct-radius)",
-            border: "1px solid var(--ct-border)",
-            background: "rgba(255,255,255,0.03)"
-          }}
-        >
-          <p className="ct-lead" style={{ margin: 0, fontSize: "0.92rem", lineHeight: 1.45 }}>
-            Remove checked photos from this listing and the server for good. The listing row stays unless you delete the
-            whole lot below.
-          </p>
-          <div className="ct-form-actions" style={{ marginTop: "0.55rem", marginBottom: 0 }}>
-            <button
-              type="button"
-              className="ct-btn ct-btn--danger"
-              onClick={() => void deleteSelectedPhotos()}
-              disabled={
-                organizeBusy ||
-                reorderBusy ||
-                saving ||
-                selectedPhotoIds.size === 0 ||
-                catalogPhotos.length === 0
-              }
-            >
-              {organizeBusy ? "Working…" : "Delete selected photos"}
-            </button>
-          </div>
-        </div>
+
+        <section id="listing-details" className="ct-dash-panel ct-stack" style={{ scrollMarginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">Listing details</h2>
         <div>
           <label className="ct-label" htmlFor="lot-sku">
             Estate lot SKU (handwritten on colored tape)
@@ -1565,18 +1598,6 @@ export default function LotDetailPage() {
           />
         </div>
         <div className="ct-form-actions">
-          <label className="ct-row" style={{ gap: "0.45rem" }}>
-            <input
-              type="checkbox"
-              checked={lot.is_completed}
-              onChange={(e) => setLot({ ...lot, is_completed: e.target.checked })}
-            />
-            <span className="ct-muted" style={{ fontSize: "0.9rem" }}>
-              Mark this lot as completed
-            </span>
-          </label>
-        </div>
-        <div className="ct-form-actions">
           <button type="button" className="ct-btn ct-btn--primary" onClick={() => void save()} disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </button>
@@ -1585,7 +1606,7 @@ export default function LotDetailPage() {
           </button>
         </div>
         {error ? <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>{error}</div> : null}
-      </div>
+      </section>
       {viewerIndex !== null && lot && token ? (
         <LotPhotoViewer
           lotId={lot.id}

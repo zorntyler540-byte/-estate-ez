@@ -1279,6 +1279,8 @@ export default function DashboardPage() {
   const uploadPickModeRef = useRef<"batch" | "single_lot">("batch");
   /** True after "Add one lot" camera flow until multi-file pick, upload, clear, or picker cancel. Chains camera opens on mobile. */
   const singleLotCaptureChainingRef = useRef(false);
+  /** Timestamp of last native file/camera picker open — skip bfcache reload briefly after return. */
+  const nativePickerOpenedAtRef = useRef(0);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
   const stagingAwaitingGeminiJobIdRef = useRef<string | null>(null);
   const stagingAwaitingGeminiTotalRef = useRef(0);
@@ -1681,6 +1683,9 @@ export default function DashboardPage() {
   useEffect(() => {
     const onPageShow = (e: PageTransitionEvent) => {
       if (!e.persisted) return;
+      // Returning from the OS photo/camera picker restores bfcache; refetching here flashes
+      // "Loading dashboard…" and drops the sticky upload bar until fetches finish.
+      if (Date.now() - nativePickerOpenedAtRef.current < 60_000) return;
       try {
         setToken(localStorage.getItem("token") || "");
         setDataReloadNonce((n) => n + 1);
@@ -1838,7 +1843,9 @@ export default function DashboardPage() {
       setSelectedSaleId("");
       return;
     }
-    setLoading(true);
+    if (inventoryFirstLoad.current) {
+      setLoading(true);
+    }
     const loadId = ++salesLoadId.current;
     void withNetworkRetry(() => apiFetch("/sales", t))
       .then((sl) => {
@@ -3027,6 +3034,20 @@ export default function DashboardPage() {
     });
   }
 
+  function markNativePhotoPickerOpening() {
+    nativePickerOpenedAtRef.current = Date.now();
+  }
+
+  function openPhotosFilePicker() {
+    markNativePhotoPickerOpening();
+    photosInputRef.current?.click();
+  }
+
+  function openFolderFilePicker() {
+    markNativePhotoPickerOpening();
+    folderInputRef.current?.click();
+  }
+
   function openPhoneCameraForLot() {
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -3036,6 +3057,7 @@ export default function DashboardPage() {
       return;
     }
     lotCameraNativeChainingRef.current = true;
+    markNativePhotoPickerOpening();
     lotCameraNativeInputRef.current?.click();
   }
 
@@ -3071,6 +3093,7 @@ export default function DashboardPage() {
           lotCameraNativeChainingRef.current = false;
           return;
         }
+        markNativePhotoPickerOpening();
         lotCameraNativeInputRef.current?.click();
       }, 320);
     } else {
@@ -3247,19 +3270,20 @@ export default function DashboardPage() {
     }
     singleLotCaptureChainingRef.current = false;
     uploadPickModeRef.current = "single_lot";
-    photosInputRef.current?.click();
+    openPhotosFilePicker();
   }
 
   function openChoosePhotosFlow() {
     singleLotCaptureChainingRef.current = false;
     uploadPickModeRef.current = "batch";
-    photosInputRef.current?.click();
+    openPhotosFilePicker();
   }
 
   async function openCreateOneLotCameraFlow() {
     if (typeof window === "undefined") return;
     const md = navigator.mediaDevices;
     if (window.isSecureContext && md?.getUserMedia) {
+      markNativePhotoPickerOpening();
       clearLotCameraSnapsAndThumbs();
       setLotCameraPreviewReady(false);
       setLotCameraViewerIndex(null);
@@ -3283,13 +3307,13 @@ export default function DashboardPage() {
         setLotCameraOpen(false);
         singleLotCaptureChainingRef.current = true;
         uploadPickModeRef.current = "single_lot";
-        photosInputRef.current?.click();
+        openPhotosFilePicker();
       }
       return;
     }
     singleLotCaptureChainingRef.current = true;
     uploadPickModeRef.current = "single_lot";
-    photosInputRef.current?.click();
+    openPhotosFilePicker();
   }
 
   async function onFolderInputChange(list: FileList | null) {
@@ -3394,7 +3418,7 @@ export default function DashboardPage() {
       window.setTimeout(() => {
         if (!singleLotCaptureChainingRef.current) return;
         uploadPickModeRef.current = "single_lot";
-        photosInputRef.current?.click();
+        openPhotosFilePicker();
       }, 280);
     }
   }
@@ -4076,6 +4100,29 @@ export default function DashboardPage() {
     </>
   );
 
+  const dashboardMobileBottomBar = (
+    <>
+      <button
+        type="button"
+        className="ct-app-mobile-bar__btn"
+        onClick={openChoosePhotosFlow}
+        disabled={uploading || !selectedSaleId || selectedSaleClosed}
+      >
+        <ImagePlus size={20} aria-hidden />
+        Choose photos
+      </button>
+      <button
+        type="button"
+        className="ct-app-mobile-bar__btn ct-app-mobile-bar__btn--primary"
+        onClick={() => void openAddOneLotFlow()}
+        disabled={uploading || !selectedSaleId || selectedSaleClosed}
+      >
+        <Plus size={20} aria-hidden />
+        Add one lot
+      </button>
+    </>
+  );
+
   if (!token) {
     return (
       <AppShell actions={shellActions}>
@@ -4094,7 +4141,7 @@ export default function DashboardPage() {
   }
   if (loading) {
     return (
-      <AppShell topBar={saleTopBar} actions={shellActions}>
+      <AppShell topBar={saleTopBar} actions={shellActions} mobileBottomBar={dashboardMobileBottomBar}>
         <div className="ct-dashboard">
           <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true">
             <p style={{ margin: 0 }}>Loading dashboard…</p>
@@ -4108,28 +4155,7 @@ export default function DashboardPage() {
     <AppShell
       topBar={saleTopBar}
       actions={shellActions}
-      mobileBottomBar={
-        <>
-          <button
-            type="button"
-            className="ct-app-mobile-bar__btn"
-            onClick={openChoosePhotosFlow}
-            disabled={uploading || !selectedSaleId || selectedSaleClosed}
-          >
-            <ImagePlus size={20} aria-hidden />
-            Choose photos
-          </button>
-          <button
-            type="button"
-            className="ct-app-mobile-bar__btn ct-app-mobile-bar__btn--primary"
-            onClick={() => void openAddOneLotFlow()}
-            disabled={uploading || !selectedSaleId || selectedSaleClosed}
-          >
-            <Plus size={20} aria-hidden />
-            Add one lot
-          </button>
-        </>
-      }
+      mobileBottomBar={dashboardMobileBottomBar}
     >
       <div id="dashboard-top" className="ct-dashboard">
         <header className="ct-dashboard-hero">
@@ -4558,7 +4584,7 @@ export default function DashboardPage() {
           onClick={() => {
             singleLotCaptureChainingRef.current = false;
             uploadPickModeRef.current = "batch";
-            folderInputRef.current?.click();
+            openFolderFilePicker();
           }}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
