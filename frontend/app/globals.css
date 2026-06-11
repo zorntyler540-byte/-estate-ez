@@ -1254,99 +1254,7 @@ a.ct-btn:hover {
   border-top: none;
 }
 
-.ct-upload-option--expand {
-  display: block;
-  padding: 0;
-  overflow: hidden;
-}
-
-.ct-upload-option__row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.65rem 0.75rem;
-  align-items: center;
-  padding: 0.7rem 0.85rem;
-}
-
-.ct-upload-option__body {
-  padding: 0.75rem 0.85rem 0.85rem;
-  border-top: 1px solid var(--ct-border);
-  background: rgba(12, 15, 18, 0.28);
-}
-
-.ct-upload-option__meta {
-  font-size: 0.8rem;
-  white-space: nowrap;
-}
-
-.ct-upload-options--stacked .ct-upload-option--stacked-card {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.75rem;
-  padding: 0.85rem;
-}
-
-.ct-upload-options--stacked .ct-upload-option__head {
-  display: flex;
-  gap: 0.65rem;
-  align-items: flex-start;
-}
-
-.ct-upload-options--stacked .ct-upload-option--expand .ct-upload-option__head {
-  padding: 0.85rem 0.85rem 0.65rem;
-}
-
-.ct-upload-options--stacked .ct-upload-option__text .ct-upload-option__meta {
-  display: block;
-  margin-top: 0.25rem;
-  white-space: normal;
-}
-
-.ct-upload-options--stacked .ct-upload-option__body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  padding: 0.75rem 0.85rem 0.85rem;
-}
-
-.ct-upload-options--stacked .ct-upload-option__body-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.ct-upload-options--stacked .ct-upload-option__field {
-  display: block;
-  font-size: 0.82rem;
-}
-
-.ct-upload-options--stacked .ct-upload-option__field .ct-input {
-  width: 100%;
-  margin-top: 0.35rem;
-  display: block;
-}
-
-.ct-upload-options--stacked .ct-upload-option__field-input {
-  width: 100%;
-  max-width: none;
-}
-
-.ct-upload-options--stacked .ct-upload-option__field-btn {
-  width: 100%;
-  justify-content: center;
-}
-
 @media (max-width: 640px) {
-  .ct-upload-option__row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .ct-upload-option__meta {
-    grid-column: 2;
-    justify-self: start;
-  }
-
   .ct-lot-detail-hero__side {
     align-items: stretch;
     width: 100%;
@@ -2490,6 +2398,81 @@ select.ct-input option {
   gap: 0.45rem;
   justify-content: flex-end;
   flex-shrink: 0;
+}
+
+/* Lot detail organize — stacked cards (must follow base .ct-upload-option grid above) */
+.ct-upload-option.ct-upload-option--expand,
+.ct-upload-options--stacked .ct-upload-option.ct-upload-option--stacked-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+}
+
+.ct-upload-options--stacked .ct-upload-option.ct-upload-option--stacked-card {
+  gap: 0.75rem;
+  padding: 0.85rem;
+}
+
+.ct-upload-options--stacked .ct-upload-option__head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.85rem 0.85rem 0.65rem;
+  box-sizing: border-box;
+}
+
+.ct-upload-options--stacked .ct-upload-option__text {
+  width: 100%;
+}
+
+.ct-upload-options--stacked .ct-upload-option__text .ct-upload-option__meta {
+  display: block;
+  margin-top: 0.2rem;
+  white-space: normal;
+}
+
+.ct-upload-options--stacked .ct-upload-option__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.75rem 0.85rem 0.85rem;
+  border-top: 1px solid var(--ct-border);
+  background: rgba(12, 15, 18, 0.28);
+  box-sizing: border-box;
+}
+
+.ct-upload-options--stacked .ct-upload-option__body-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ct-upload-options--stacked .ct-upload-option__field {
+  display: block;
+  width: 100%;
+  font-size: 0.82rem;
+}
+
+.ct-upload-options--stacked .ct-upload-option__field .ct-input {
+  width: 100%;
+  margin-top: 0.35rem;
+  display: block;
+}
+
+.ct-upload-options--stacked .ct-upload-option__field-input,
+.ct-upload-options--stacked .ct-upload-option__field-btn {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.ct-upload-options--stacked .ct-upload-option__field-btn {
+  justify-content: center;
 }
 
 .ct-dash-exports__guide {
