@@ -1663,14 +1663,14 @@ def regenerate_lot_with_ai(
             preserve_sku=body.preserve_sku,
         )
     except RuntimeError as exc:
+        if str(exc) == "regenerate_already_running":
+            raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.") from exc
         regeneration_tasks.finish_lot_regenerate(
             db,
             lot_id=lot_id,
             account_id=current.account_id,
-            error=str(exc)[:2000] if str(exc) != "regenerate_already_running" else None,
+            error=str(exc)[:2000],
         )
-        if str(exc) == "regenerate_already_running":
-            raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.") from exc
         raise
     return _lot_out_for_id(db, current.account_id, lot_id)
 
