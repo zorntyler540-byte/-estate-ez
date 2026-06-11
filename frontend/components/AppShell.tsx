@@ -85,8 +85,17 @@ function ShellNavLinks({ pathname, onNavigate, linkClass = "ct-app-sidebar__link
 export function AppShell({ children, topBar, actions }: AppShellProps) {
   const pathname = usePathname() || "";
   const [navOpen, setNavOpen] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
 
   const closeNav = useCallback(() => setNavOpen(false), []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1280px)");
+    const sync = () => setMobileNav(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   useEffect(() => {
     closeNav();
@@ -111,7 +120,9 @@ export function AppShell({ children, topBar, actions }: AppShellProps) {
   }, [navOpen]);
 
   return (
-    <div className={`ct-app${navOpen ? " ct-app--nav-open" : ""}`}>
+    <div
+      className={`ct-app${navOpen ? " ct-app--nav-open" : ""}${mobileNav ? " ct-app--mobile-nav" : ""}`}
+    >
       <aside className="ct-app-sidebar" aria-label="Main navigation">
         <BrandMark />
         <nav className="ct-app-sidebar__nav">
@@ -120,17 +131,22 @@ export function AppShell({ children, topBar, actions }: AppShellProps) {
       </aside>
 
       <div className="ct-app-main">
-        <header className={`ct-app-topbar${topBar ? " ct-app-topbar--has-center" : ""}`}>
-          <button
-            type="button"
-            className="ct-app-menu-btn"
-            aria-expanded={navOpen}
-            aria-controls="ct-app-nav-drawer"
-            onClick={() => setNavOpen((v) => !v)}
-          >
-            {navOpen ? <X size={22} aria-hidden /> : <Menu size={22} aria-hidden />}
-            <span className="ct-app-menu-btn__label">{navOpen ? "Close menu" : "Open menu"}</span>
-          </button>
+        <header
+          className={`ct-app-topbar${topBar ? " ct-app-topbar--has-center" : ""}${mobileNav ? " ct-app-topbar--mobile" : ""}`}
+        >
+          <div className="ct-app-topbar__menu">
+            <button
+              type="button"
+              className="ct-app-menu-btn"
+              aria-expanded={navOpen}
+              aria-controls="ct-app-nav-drawer"
+              onClick={() => setNavOpen((v) => !v)}
+            >
+              {navOpen ? <X size={22} aria-hidden /> : <Menu size={22} aria-hidden />}
+              <span className="ct-app-menu-btn__text">Menu</span>
+              <span className="ct-app-menu-btn__label">{navOpen ? "Close menu" : "Open menu"}</span>
+            </button>
+          </div>
           <div className="ct-app-topbar__start">
             {topBar ?? (
               <div className="ct-app-topbar__mobile-brand" aria-hidden>
