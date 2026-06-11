@@ -5114,66 +5114,54 @@ export default function DashboardPage() {
                 : ""
             }`}
           >
-            <div className="ct-row ct-row--gap-lg" style={{ alignItems: "flex-start" }}>
-              <div style={{ flexShrink: 0 }}>
+            <div className="ct-lot-mobile-card__main">
+              <div className="ct-lot-mobile-card__thumb">
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  className={lot.sku_needs_review || !lot.sku ? "ct-sku-cell ct-sku-cell--review" : "ct-sku-cell"}
-                  style={{ fontSize: "0.95rem" }}
-                >
-                  <span className={lot.sku_needs_review || !lot.sku ? "ct-sku-pill" : undefined}>{lot.sku || "—"}</span>
-                </div>
-                <div style={{ fontWeight: 600, marginTop: 6, lineHeight: 1.35 }}>{lot.auction_title || "—"}</div>
-                <div className="ct-muted" style={{ marginTop: "0.5rem", fontSize: "0.88rem", lineHeight: 1.4 }}>
-                  <strong style={{ color: "var(--ct-text)" }}>{lot.photo_count}</strong>{" "}
-                  photo{lot.photo_count === 1 ? "" : "s"}
+              <div className="ct-lot-mobile-card__body">
+                <span className={lotSkuBadgeClass(lot)} title={lotSkuCellTitle(lot)}>
+                  {lot.sku || "—"}
+                </span>
+                <div className="ct-lot-mobile-card__title">{lot.auction_title || "—"}</div>
+                <div className="ct-lot-mobile-card__meta">
+                  <span className="ct-lot-mobile-card__meta-item">
+                    <strong>{lot.photo_count}</strong> photo{lot.photo_count === 1 ? "" : "s"}
+                  </span>
                   {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
-                    <>
-                      {" "}
-                      ·{" "}
-                      <strong style={{ color: "var(--ct-error)" }}>
-                        {photoHealthMissing[lot.id]} missing on server
-                      </strong>
-                    </>
+                    <span className="ct-lot-mobile-card__meta-item ct-lot-mobile-card__meta-item--error">
+                      {photoHealthMissing[lot.id]} missing
+                    </span>
                   ) : null}
-                  {lot.starting_price != null ? (
-                    <>
-                      {" "}
-                      · Starting <strong style={{ color: "var(--ct-text)" }}>${lot.starting_price}</strong>
-                    </>
-                  ) : null}
+                  <span className="ct-lot-mobile-card__meta-item">{formatLotPrice(lot.starting_price)}</span>
                   {lot.condition_text ? (
-                    <>
-                      {" "}
-                      · <span title={lot.condition_text}>{lot.condition_text}</span>
-                    </>
+                    <span className="ct-lot-condition-chip">{lot.condition_text}</span>
                   ) : null}
                 </div>
               </div>
             </div>
-            <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.85rem", flexWrap: "wrap", alignItems: "center" }}>
+            <div className="ct-lot-mobile-card__actions">
               <Link
                 href={`/lots/${lot.id}#listing-details`}
-                className="ct-btn ct-btn--primary"
+                className="ct-lots-table__details-btn ct-lot-mobile-card__details-btn"
                 onClick={rememberDashboardScrollBeforeLotDetails}
               >
                 Details
               </Link>
-              <label className="ct-row" style={{ gap: "0.45rem", alignItems: "center" }}>
+              <label
+                className={`ct-lot-detail-status ct-lot-mobile-card__status${
+                  lot.is_completed ? " ct-lot-detail-status--done" : ""
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={lot.is_completed}
                   onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
                 />
-                <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-                  {lot.is_completed ? "Done" : "Not done"}
-                </span>
+                <span>{lot.is_completed ? "Done" : "Not done"}</span>
               </label>
               <button
                 type="button"
-                className="ct-btn ct-btn--ghost"
+                className="ct-btn ct-btn--danger-outline ct-lot-mobile-card__delete-btn"
                 onClick={() => void deleteLotRow(lot.id)}
                 disabled={busyProcessing}
               >

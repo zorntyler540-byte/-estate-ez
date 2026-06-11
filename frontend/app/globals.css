@@ -577,10 +577,8 @@ a.ct-btn:hover {
     touch-action: manipulation;
   }
 
-  .ct-lot-mobile-card .ct-btn {
-    min-height: 44px;
-    padding-left: 1rem;
-    padding-right: 1rem;
+  .ct-lot-mobile-card__delete-btn:not(:only-child) {
+    margin-left: auto;
   }
 
   .ct-lot-mobile-card--pending-queued {
@@ -2327,6 +2325,78 @@ select.ct-input option {
   background: rgba(45, 212, 191, 0.22);
   color: var(--ct-primary-hover);
   text-decoration: none;
+}
+
+.ct-lot-mobile-card__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.ct-lot-mobile-card__thumb {
+  flex-shrink: 0;
+}
+
+.ct-lot-mobile-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ct-lot-mobile-card__title {
+  margin-top: 0.45rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.ct-lot-mobile-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+  margin-top: 0.55rem;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  color: var(--ct-text-muted);
+}
+
+.ct-lot-mobile-card__meta-item strong {
+  color: var(--ct-text);
+  font-weight: 600;
+}
+
+.ct-lot-mobile-card__meta-item--error {
+  font-weight: 600;
+  color: var(--ct-error);
+}
+
+.ct-lot-mobile-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ct-border);
+}
+
+.ct-lot-mobile-card__details-btn {
+  min-height: 44px;
+  padding: 0.45rem 0.85rem;
+}
+
+.ct-lot-mobile-card__status {
+  min-height: 44px;
+  font-size: 0.84rem;
+}
+
+.ct-lot-mobile-card__delete-btn {
+  min-height: 44px;
+  margin-left: auto;
+}
+
+.ct-lot-mobile-card--warn {
+  box-shadow: inset 3px 0 0 0 rgba(251, 191, 36, 0.85);
 }
 
 .ct-table--lots .ct-lots-table__delete-btn {
