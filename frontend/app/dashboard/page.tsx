@@ -933,6 +933,32 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
   };
 }
 
+function formatLotPrice(price: number | null): string {
+  if (price == null || Number.isNaN(price)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  }).format(price);
+}
+
+function lotSkuBadgeClass(lot: Lot): string {
+  if (lot.sku_needs_review || !lot.sku) return "ct-lot-sku-badge ct-lot-sku-badge--review";
+  return "ct-lot-sku-badge ct-lot-sku-badge--ok";
+}
+
+function lotSkuCellTitle(lot: Lot): string | undefined {
+  if (lot.many_photos_review) {
+    return "Unusually many photos for this sale — confirm images belong to this listing.";
+  }
+  if (lot.sku_needs_review || !lot.sku) {
+    return "Verify handwritten lot code on colored estate tape (or enter manually on the lot page).";
+  }
+  if (lot.sku_duplicate_in_sale) return "Duplicate SKU in this sale.";
+  if (lot.sku_text_mismatch) return "Listing text may reference a different lot number.";
+  return undefined;
+}
+
 type Job = {
   id: string;
   user_id: string;
@@ -5019,58 +5045,62 @@ export default function DashboardPage() {
           <strong>Add photos…</strong> to re-upload.
         </div>
       ) : null}
-      <div className="ct-dash-lots__head ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
-        <h2 className="ct-dash-panel__title" style={{ margin: 0 }}>
-          Lots ({lots.length})
-        </h2>
-        <span className="ct-muted">
-          {lots.filter((l) => l.is_completed).length} completed / {lots.filter((l) => !l.is_completed).length} not done
-        </span>
-        <label className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.35rem" }}>
-          <span className="ct-muted" style={{ fontSize: "0.85rem" }}>
-            SKU checks
-          </span>
-          <select
-            className="ct-input"
-            style={{ maxWidth: 220, fontSize: "0.88rem" }}
-            value={inventorySkuFlagFilter}
-            onChange={(e) =>
-              setInventorySkuFlagFilter(
-                (e.target.value || "") as "" | "duplicate" | "text_mismatch" | "any"
-              )
-            }
-            aria-label="Filter lots by SKU sanity flags"
-          >
-            <option value="">All lots</option>
-            <option value="any">Flagged: any issue</option>
-            <option value="duplicate">Duplicate SKU (same sale)</option>
-            <option value="text_mismatch">Mixed lot # in text</option>
-          </select>
-        </label>
-        <button
-          type="button"
-          className="ct-btn ct-btn--danger"
-          onClick={() => void purgeCurrentSaleCatalog()}
-          disabled={busyProcessing || !selectedSaleId}
-          title={
-            selectedSaleId
-              ? "Remove lots, photos, and jobs for the selected sale only"
-              : "Select a sale first"
-          }
-        >
-          Clear lots & jobs (this sale)
-        </button>
-        <button
-          type="button"
-          className="ct-btn ct-btn--ghost"
-          style={{ fontSize: "0.82rem", color: "var(--ct-danger, #f87171)" }}
-          onClick={() => void purgeEntireAccountCatalog()}
-          disabled={busyProcessing}
-          title="Removes catalog data for every sale on this account"
-        >
-          Clear entire account…
-        </button>
-      </div>
+      <header className="ct-dash-lots__header">
+        <h2 className="ct-dash-panel__title">Lots ({lots.length})</h2>
+        <p className="ct-dash-lots__stats">
+          {lots.filter((l) => l.is_completed).length} completed ·{" "}
+          {lots.filter((l) => !l.is_completed).length} not done
+        </p>
+        <p className="ct-upload-intro ct-dash-lots__intro">
+          Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot.
+        </p>
+        <div className="ct-dash-lots__toolbar">
+          <div className="ct-dash-lots__toolbar-filters">
+            <label className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.45rem" }}>
+              <span className="ct-dash-lots__filter-label">SKU checks</span>
+              <select
+                className="ct-input"
+                value={inventorySkuFlagFilter}
+                onChange={(e) =>
+                  setInventorySkuFlagFilter(
+                    (e.target.value || "") as "" | "duplicate" | "text_mismatch" | "any"
+                  )
+                }
+                aria-label="Filter lots by SKU sanity flags"
+              >
+                <option value="">All lots</option>
+                <option value="any">Flagged: any issue</option>
+                <option value="duplicate">Duplicate SKU (same sale)</option>
+                <option value="text_mismatch">Mixed lot # in text</option>
+              </select>
+            </label>
+          </div>
+          <div className="ct-dash-lots__toolbar-actions">
+            <button
+              type="button"
+              className="ct-btn ct-btn--danger-outline"
+              onClick={() => void purgeCurrentSaleCatalog()}
+              disabled={busyProcessing || !selectedSaleId}
+              title={
+                selectedSaleId
+                  ? "Remove lots, photos, and jobs for the selected sale only"
+                  : "Select a sale first"
+              }
+            >
+              Clear lots &amp; jobs (this sale)
+            </button>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost ct-dash-lots__danger-link"
+              onClick={() => void purgeEntireAccountCatalog()}
+              disabled={busyProcessing}
+              title="Removes catalog data for every sale on this account"
+            >
+              Clear entire account…
+            </button>
+          </div>
+        </div>
+      </header>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
         {lots.map((lot) => (
           <div
@@ -5185,39 +5215,40 @@ export default function DashboardPage() {
               <td className="ct-table__photo">
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </td>
-              <td
-                className={lot.sku_needs_review || !lot.sku ? "ct-sku-cell ct-sku-cell--review" : "ct-sku-cell"}
-                title={
-                  lot.many_photos_review
-                    ? "Unusually many photos for this sale — confirm images belong to this listing."
-                    : lot.sku_needs_review || !lot.sku
-                      ? "Verify handwritten lot code on colored estate tape (or enter manually on the lot page)."
-                      : undefined
-                }
-              >
-                <span className={lot.sku_needs_review || !lot.sku ? "ct-sku-pill" : undefined}>{lot.sku || "—"}</span>
+              <td className="ct-sku-cell" title={lotSkuCellTitle(lot)}>
+                <span className={lotSkuBadgeClass(lot)}>{lot.sku || "—"}</span>
               </td>
-              <td title={lot.auction_title || undefined}>{lot.auction_title}</td>
-              <td>{lot.starting_price ?? "-"}</td>
-              <td>{lot.condition_text}</td>
+              <td className="ct-lots-table__title" title={lot.auction_title || undefined}>
+                {lot.auction_title || "—"}
+              </td>
+              <td className="ct-lots-table__price">{formatLotPrice(lot.starting_price)}</td>
               <td>
-                <label className="ct-row" style={{ gap: "0.4rem" }}>
+                {lot.condition_text ? (
+                  <span className="ct-lot-condition-chip">{lot.condition_text}</span>
+                ) : (
+                  <span className="ct-muted">—</span>
+                )}
+              </td>
+              <td>
+                <label
+                  className={`ct-lot-detail-status ct-lot-detail-status--table${
+                    lot.is_completed ? " ct-lot-detail-status--done" : ""
+                  }`}
+                  style={{ cursor: "pointer" }}
+                >
                   <input
                     type="checkbox"
                     checked={lot.is_completed}
                     onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
                   />
-                  <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
-                    {lot.is_completed ? "Done" : "Not done"}
-                  </span>
+                  <span>{lot.is_completed ? "Done" : "Not done"}</span>
                 </label>
               </td>
-              <td>
+              <td className="ct-lots-table__photo-count">
                 {lot.photo_count}
                 {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
                   <span
-                    className="ct-muted"
-                    style={{ display: "block", fontSize: "0.78rem", color: "var(--ct-error)", marginTop: 2 }}
+                    className="ct-lots-table__photo-missing"
                     title="Catalog photo records exist but files are missing on the server — open Details to re-upload."
                   >
                     {photoHealthMissing[lot.id]} missing
@@ -5227,6 +5258,7 @@ export default function DashboardPage() {
               <td>
                 <Link
                   href={`/lots/${lot.id}#listing-details`}
+                  className="ct-lots-table__details-btn"
                   onClick={rememberDashboardScrollBeforeLotDetails}
                   title={
                     (photoHealthMissing[lot.id] ?? 0) > 0
@@ -5240,7 +5272,7 @@ export default function DashboardPage() {
               <td>
                 <button
                   type="button"
-                  className="ct-btn ct-btn--ghost"
+                  className="ct-btn ct-btn--danger-outline ct-lots-table__delete-btn"
                   onClick={() => void deleteLotRow(lot.id)}
                   disabled={busyProcessing}
                 >

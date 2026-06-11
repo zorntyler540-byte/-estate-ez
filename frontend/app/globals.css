@@ -2151,13 +2151,26 @@ select.ct-input option {
   max-height: min(calc(100dvh - 14rem), 780px);
   overflow: auto;
   overscroll-behavior: contain;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
 }
 
 .ct-dash-lots-table .ct-table thead th {
   position: sticky;
   top: 0;
   z-index: 3;
+  background: rgba(12, 15, 18, 0.92);
+  border-bottom: 1px solid rgba(45, 212, 191, 0.14);
   box-shadow: 0 1px 0 var(--ct-border);
+}
+
+.ct-table--lots tbody tr {
+  transition: background 0.12s ease;
+}
+
+.ct-table--lots tbody tr:hover {
+  background: rgba(45, 212, 191, 0.04);
 }
 
 .ct-table--lots {
@@ -2214,6 +2227,111 @@ select.ct-input option {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ct-lots-table__title {
+  font-weight: 500;
+}
+
+.ct-lots-table__price {
+  font-variant-numeric: tabular-nums;
+  color: var(--ct-text-muted);
+}
+
+.ct-lots-table__photo-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-lots-table__photo-missing {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ct-error);
+}
+
+.ct-lot-sku-badge {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.14rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-lot-sku-badge--ok {
+  color: var(--ct-primary);
+  background: var(--ct-primary-muted);
+  border: 1px solid rgba(45, 212, 191, 0.32);
+}
+
+.ct-lot-sku-badge--review {
+  color: var(--ct-warning-text);
+  background: var(--ct-warning-bg);
+  border: 1px solid var(--ct-warning-border);
+}
+
+.ct-lot-condition-chip {
+  display: inline-block;
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.25;
+  color: var(--ct-text-muted);
+  background: var(--ct-bg-elevated);
+  border: 1px solid var(--ct-border-strong);
+}
+
+.ct-lot-detail-status input[type="checkbox"] {
+  accent-color: var(--ct-primary);
+  margin: 0;
+}
+
+.ct-lot-detail-status--done input[type="checkbox"] {
+  accent-color: var(--ct-success);
+}
+
+.ct-lot-detail-status--table {
+  font-size: 0.76rem;
+  padding: 0.22rem 0.48rem;
+  gap: 0.32rem;
+  white-space: nowrap;
+}
+
+.ct-lots-table__details-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.32rem 0.58rem;
+  border-radius: var(--ct-radius-sm);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  background: var(--ct-primary-muted);
+  color: var(--ct-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ct-lots-table__details-btn:hover {
+  background: rgba(45, 212, 191, 0.22);
+  color: var(--ct-primary-hover);
+  text-decoration: none;
+}
+
+.ct-table--lots .ct-lots-table__delete-btn {
+  font-size: 0.82rem;
+  padding: 0.32rem 0.55rem;
 }
 
 .ct-table__photo {
@@ -2688,14 +2806,79 @@ select.ct-input option {
   min-height: 320px;
 }
 
-.ct-dash-lots__head {
-  padding-bottom: 0.35rem;
-  border-bottom: 1px solid var(--ct-border);
-  margin-bottom: 0.85rem !important;
+.ct-dash-lots__header {
+  margin-bottom: 0.85rem;
+}
+
+.ct-dash-lots__header .ct-dash-panel__title {
+  margin-bottom: 0.35rem;
+}
+
+.ct-dash-lots__stats {
+  margin: 0 0 0.45rem;
+  font-size: 0.88rem;
+  color: var(--ct-text-muted);
+}
+
+.ct-dash-lots__intro {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.ct-dash-lots__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+}
+
+.ct-dash-lots__toolbar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ct-dash-lots__filter-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ct-text-subtle);
+  white-space: nowrap;
+}
+
+.ct-dash-lots__toolbar-filters .ct-input {
+  max-width: 220px;
+  font-size: 0.88rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.ct-dash-lots__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.ct-dash-lots__danger-link {
+  font-size: 0.82rem;
+  color: var(--ct-error);
+}
+
+.ct-dash-lots__danger-link:hover:not(:disabled) {
+  color: #fecaca;
+  background: var(--ct-error-bg);
 }
 
 .ct-dash-lots .ct-dashboard-table-desktop {
-  margin-top: 0.5rem;
+  margin-top: 0;
 }
 
 @media (max-width: 1280px) {
