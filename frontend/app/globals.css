@@ -1563,6 +1563,104 @@ select.ct-input option {
   padding: 0.4rem 0.7rem;
 }
 
+.ct-app-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+  color: var(--ct-text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ct-app-menu-btn:hover {
+  border-color: var(--ct-border-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ct-app-menu-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ct-focus);
+}
+
+.ct-app-menu-btn__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ct-app-topbar__mobile-brand {
+  display: none;
+}
+
+.ct-app-topbar__mobile-brand .ct-app-sidebar__brand {
+  padding: 0;
+}
+
+.ct-app-topbar__mobile-brand .ct-app-sidebar__brand:hover {
+  background: transparent;
+}
+
+/* Mobile drawer + bottom nav */
+.ct-app-nav-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
+.ct-app-nav-drawer {
+  display: none;
+}
+
+.ct-app-nav-drawer__link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--ct-radius-sm);
+  color: var(--ct-text-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ct-app-nav-drawer__link:hover {
+  color: var(--ct-text);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ct-app-nav-drawer__link--active {
+  color: var(--ct-primary);
+  background: var(--ct-primary-muted);
+}
+
+.ct-app-nav-drawer__link--active:hover {
+  color: var(--ct-primary-hover);
+}
+
+.ct-app-bottom-nav {
+  display: none;
+}
+
 .ct-app-sale-select {
   display: flex;
   align-items: center;
@@ -1881,6 +1979,160 @@ select.ct-input option {
     display: none;
   }
 
+  .ct-app-menu-btn {
+    display: inline-flex;
+  }
+
+  .ct-app-topbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem 0.65rem;
+  }
+
+  .ct-app-topbar--has-center {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .ct-app-topbar__start {
+    grid-column: 2;
+    justify-self: stretch;
+    max-width: none;
+    width: 100%;
+  }
+
+  .ct-app-topbar--has-center .ct-app-topbar__start {
+    justify-self: stretch;
+    justify-content: stretch;
+  }
+
+  .ct-app-topbar__actions {
+    grid-column: 3;
+  }
+
+  .ct-app-topbar:not(.ct-app-topbar--has-center) .ct-app-topbar__mobile-brand {
+    display: block;
+  }
+
+  .ct-app-content {
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .ct-app-nav-backdrop {
+    display: block;
+  }
+
+  .ct-app-nav-drawer {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 41;
+    width: min(288px, 88vw);
+    padding: 1rem 0.85rem 1.25rem;
+    background: var(--ct-bg-elevated);
+    border-right: 1px solid var(--ct-border);
+    box-shadow: var(--ct-shadow);
+    animation: ct-nav-drawer-in 0.2s ease-out;
+  }
+
+  @keyframes ct-nav-drawer-in {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  .ct-app-nav-drawer__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .ct-app-nav-drawer__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: 1px solid var(--ct-border);
+    border-radius: var(--ct-radius-sm);
+    background: transparent;
+    color: var(--ct-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .ct-app-nav-drawer__close:hover {
+    color: var(--ct-text);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .ct-app-nav-drawer__nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .ct-app-bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 14;
+    justify-content: space-around;
+    gap: 0.25rem;
+    padding: 0.35rem 0.5rem calc(0.45rem + env(safe-area-inset-bottom, 0px));
+    background: rgba(12, 15, 18, 0.94);
+    border-top: 1px solid var(--ct-border);
+    backdrop-filter: blur(10px);
+  }
+
+  .ct-app-bottom-nav__link {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    min-height: 3rem;
+    padding: 0.25rem 0.35rem;
+    border-radius: var(--ct-radius-sm);
+    color: var(--ct-text-muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-decoration: none;
+    text-align: center;
+    line-height: 1.15;
+  }
+
+  .ct-app-bottom-nav__link:hover {
+    color: var(--ct-text);
+    text-decoration: none;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .ct-app-bottom-nav__link--active {
+    color: var(--ct-primary);
+    background: var(--ct-primary-muted);
+  }
+
+  .ct-app-bottom-nav__link--active:hover {
+    color: var(--ct-primary-hover);
+  }
+
+  .ct-app-bottom-nav__icon {
+    flex-shrink: 0;
+  }
+
   .ct-dash-stats-row {
     grid-template-columns: 1fr;
   }
@@ -1907,26 +2159,18 @@ select.ct-input option {
     grid-template-columns: 1fr;
   }
 
-  .ct-app-topbar--has-center {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto;
-  }
-
-  .ct-app-topbar--has-center .ct-app-topbar__start {
-    grid-row: 1;
-    justify-self: stretch;
-    max-width: none;
-  }
-
-  .ct-app-topbar--has-center .ct-app-topbar__actions {
-    grid-row: 2;
-    justify-self: stretch;
-    justify-content: flex-end;
+  .ct-app-topbar-btn {
+    font-size: 0.8rem;
+    padding: 0.35rem 0.5rem;
   }
 
   .ct-app-sale-select {
     flex-direction: column;
     align-items: stretch;
     gap: 0.35rem;
+  }
+
+  .ct-app-sale-select__label {
+    font-size: 0.75rem;
   }
 }
