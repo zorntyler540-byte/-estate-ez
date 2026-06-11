@@ -12,6 +12,7 @@ import {
   Database,
   FileSpreadsheet,
   FileText,
+  ImagePlus,
   Minus,
   Pencil,
   Plus,
@@ -3249,6 +3250,12 @@ export default function DashboardPage() {
     photosInputRef.current?.click();
   }
 
+  function openChoosePhotosFlow() {
+    singleLotCaptureChainingRef.current = false;
+    uploadPickModeRef.current = "batch";
+    photosInputRef.current?.click();
+  }
+
   async function openCreateOneLotCameraFlow() {
     if (typeof window === "undefined") return;
     const md = navigator.mediaDevices;
@@ -4098,7 +4105,32 @@ export default function DashboardPage() {
   }
 
   return (
-    <AppShell topBar={saleTopBar} actions={shellActions}>
+    <AppShell
+      topBar={saleTopBar}
+      actions={shellActions}
+      mobileBottomBar={
+        <>
+          <button
+            type="button"
+            className="ct-app-mobile-bar__btn"
+            onClick={openChoosePhotosFlow}
+            disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          >
+            <ImagePlus size={20} aria-hidden />
+            Choose photos
+          </button>
+          <button
+            type="button"
+            className="ct-app-mobile-bar__btn ct-app-mobile-bar__btn--primary"
+            onClick={() => void openAddOneLotFlow()}
+            disabled={uploading || !selectedSaleId || selectedSaleClosed}
+          >
+            <Plus size={20} aria-hidden />
+            Add one lot
+          </button>
+        </>
+      }
+    >
       <div id="dashboard-top" className="ct-dashboard">
         <header className="ct-dashboard-hero">
           <h1 className="ct-dashboard-hero__title">
@@ -4539,11 +4571,7 @@ export default function DashboardPage() {
           type="button"
           className="ct-btn"
           style={{ marginLeft: "0.6rem" }}
-          onClick={() => {
-            singleLotCaptureChainingRef.current = false;
-            uploadPickModeRef.current = "batch";
-            photosInputRef.current?.click();
-          }}
+          onClick={openChoosePhotosFlow}
           disabled={uploading || !selectedSaleId || selectedSaleClosed}
         >
           Choose photos…

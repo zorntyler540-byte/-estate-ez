@@ -11,6 +11,8 @@ type AppShellProps = {
   topBar?: ReactNode;
   /** Right side of top bar (Account, Log out). */
   actions: ReactNode;
+  /** Fixed bottom bar on mobile (e.g. dashboard upload shortcuts). */
+  mobileBottomBar?: ReactNode;
 };
 
 const NAV = [
@@ -82,7 +84,7 @@ function ShellNavLinks({ pathname, onNavigate, linkClass = "ct-app-sidebar__link
   );
 }
 
-export function AppShell({ children, topBar, actions }: AppShellProps) {
+export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShellProps) {
   const pathname = usePathname() || "";
   const [navOpen, setNavOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -121,7 +123,7 @@ export function AppShell({ children, topBar, actions }: AppShellProps) {
 
   return (
     <div
-      className={`ct-app${navOpen ? " ct-app--nav-open" : ""}${mobileNav ? " ct-app--mobile-nav" : ""}`}
+      className={`ct-app${navOpen ? " ct-app--nav-open" : ""}${mobileNav ? " ct-app--mobile-nav" : ""}${mobileBottomBar ? " ct-app--has-mobile-bar" : ""}`}
     >
       <aside className="ct-app-sidebar" aria-label="Main navigation">
         <BrandMark />
@@ -161,21 +163,11 @@ export function AppShell({ children, topBar, actions }: AppShellProps) {
 
         <div className="ct-app-content">{children}</div>
 
-        <nav className="ct-app-bottom-nav" aria-label="Quick navigation">
-          {NAV.map(({ href, shortLabel, icon: Icon, match }) => {
-            const active = isNavActive(pathname, href, match);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`ct-app-bottom-nav__link${active ? " ct-app-bottom-nav__link--active" : ""}`}
-              >
-                <Icon size={20} aria-hidden className="ct-app-bottom-nav__icon" />
-                <span>{shortLabel}</span>
-              </Link>
-            );
-          })}
-        </nav>
+        {mobileBottomBar ? (
+          <div className="ct-app-mobile-bar" aria-label="Quick actions">
+            {mobileBottomBar}
+          </div>
+        ) : null}
       </div>
 
       {navOpen ? (
