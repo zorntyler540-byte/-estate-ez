@@ -1329,10 +1329,10 @@ export default function LotDetailPage() {
                 {organizeMsg}
               </div>
             ) : null}
-            <div className="ct-upload-options">
+            <div className="ct-upload-options ct-upload-options--stacked">
               {catalogPhotos.length > 0 ? (
                 <div className="ct-upload-option ct-upload-option--expand">
-                  <div className="ct-upload-option__row">
+                  <div className="ct-upload-option__head">
                     <span className="ct-upload-option__icon" aria-hidden>
                       <ArrowRightLeft size={20} strokeWidth={1.75} />
                     </span>
@@ -1341,11 +1341,11 @@ export default function LotDetailPage() {
                       <span className="ct-upload-option__desc">
                         Send selected photos to another lot or start a new listing.
                       </span>
+                      <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
                     </div>
-                    <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
                   </div>
                   <div className="ct-upload-option__body">
-                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
+                    <div className="ct-upload-option__body-actions">
                       <button
                         type="button"
                         className="ct-btn ct-btn--ghost"
@@ -1364,11 +1364,10 @@ export default function LotDetailPage() {
                       </button>
                     </div>
                     {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
-                      <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
+                      <label className="ct-upload-option__field ct-muted">
                         Optional title for the new listing
                         <input
                           className="ct-input"
-                          style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
                           placeholder='e.g. "SA004 — orange pair"'
                           value={splitNewLotTitle}
                           onChange={(e) => setSplitNewLotTitle(e.target.value)}
@@ -1377,52 +1376,49 @@ export default function LotDetailPage() {
                         />
                       </label>
                     ) : null}
-                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                      <select
-                        className="ct-input"
-                        style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                        value={transferTargetId}
-                        onChange={(e) => setTransferTargetId(e.target.value)}
-                        disabled={organizeBusy || reorderBusy}
-                      >
-                        <option value="">— Destination —</option>
-                        <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
-                        {saleLots
-                          .filter((x) => x.id !== lot.id)
-                          .map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                              {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        type="button"
-                        className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
-                        disabled={
-                          organizeBusy ||
-                          reorderBusy ||
-                          selectedPhotoIds.size === 0 ||
-                          !transferTargetId ||
-                          (transferTargetId === TRANSFER_DEST_NEW_LOT
-                            ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
-                            : !saleLots.some((x) => x.id === transferTargetId))
-                        }
-                        onClick={() => void applyPhotoDestination()}
-                      >
-                        {organizeBusy || reorderBusy
-                          ? "Working…"
-                          : transferTargetId === TRANSFER_DEST_NEW_LOT
-                            ? "Create new lot"
-                            : "Move selected"}
-                      </button>
-                    </div>
+                    <select
+                      className="ct-input ct-upload-option__field-input"
+                      value={transferTargetId}
+                      onChange={(e) => setTransferTargetId(e.target.value)}
+                      disabled={organizeBusy || reorderBusy}
+                    >
+                      <option value="">— Destination —</option>
+                      <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
+                      {saleLots
+                        .filter((x) => x.id !== lot.id)
+                        .map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                            {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      className={`ct-btn ct-upload-option__field-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
+                      disabled={
+                        organizeBusy ||
+                        reorderBusy ||
+                        selectedPhotoIds.size === 0 ||
+                        !transferTargetId ||
+                        (transferTargetId === TRANSFER_DEST_NEW_LOT
+                          ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
+                          : !saleLots.some((x) => x.id === transferTargetId))
+                      }
+                      onClick={() => void applyPhotoDestination()}
+                    >
+                      {organizeBusy || reorderBusy
+                        ? "Working…"
+                        : transferTargetId === TRANSFER_DEST_NEW_LOT
+                          ? "Create new lot"
+                          : "Move selected"}
+                    </button>
                   </div>
                 </div>
               ) : null}
               {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
                 <div className="ct-upload-option ct-upload-option--expand">
-                  <div className="ct-upload-option__row">
+                  <div className="ct-upload-option__head">
                     <span className="ct-upload-option__icon" aria-hidden>
                       <GitMerge size={20} strokeWidth={1.75} />
                     </span>
@@ -1434,36 +1430,33 @@ export default function LotDetailPage() {
                     </div>
                   </div>
                   <div className="ct-upload-option__body">
-                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                      <select
-                        className="ct-input"
-                        style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                        value={mergeSourceId}
-                        onChange={(e) => setMergeSourceId(e.target.value)}
-                        disabled={organizeBusy || reorderBusy}
-                      >
-                        <option value="">— Lot to absorb —</option>
-                        {saleLots
-                          .filter((x) => x.id !== lot.id)
-                          .map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                              {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="ct-btn ct-upload-option__btn"
-                        disabled={
-                          organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)
-                        }
-                        onClick={() => void mergeSourceIntoThisLot()}
-                      >
-                        {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
-                      </button>
-                    </div>
-                    <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
+                    <select
+                      className="ct-input ct-upload-option__field-input"
+                      value={mergeSourceId}
+                      onChange={(e) => setMergeSourceId(e.target.value)}
+                      disabled={organizeBusy || reorderBusy}
+                    >
+                      <option value="">— Lot to absorb —</option>
+                      {saleLots
+                        .filter((x) => x.id !== lot.id)
+                        .map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                            {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__field-btn"
+                      disabled={
+                        organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)
+                      }
+                      onClick={() => void mergeSourceIntoThisLot()}
+                    >
+                      {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
+                    </button>
+                    <label className="ct-row" style={{ gap: "0.45rem" }}>
                       <input
                         type="checkbox"
                         checked={mergePreferSourceSku}
@@ -1478,19 +1471,21 @@ export default function LotDetailPage() {
                 </div>
               ) : null}
               {catalogPhotos.length > 0 ? (
-                <div className="ct-upload-option">
-                  <span className="ct-upload-option__icon" aria-hidden>
-                    <Trash2 size={20} strokeWidth={1.75} />
-                  </span>
-                  <div className="ct-upload-option__text">
-                    <span className="ct-upload-option__title">Delete selected</span>
-                    <span className="ct-upload-option__desc">
-                      Permanently remove checked photos from this lot and the server.
+                <div className="ct-upload-option ct-upload-option--stacked-card">
+                  <div className="ct-upload-option__head">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <Trash2 size={20} strokeWidth={1.75} />
                     </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Delete selected</span>
+                      <span className="ct-upload-option__desc">
+                        Permanently remove checked photos from this lot and the server.
+                      </span>
+                    </div>
                   </div>
                   <button
                     type="button"
-                    className="ct-btn ct-btn--danger ct-upload-option__btn"
+                    className="ct-btn ct-btn--danger ct-upload-option__field-btn"
                     onClick={() => void deleteSelectedPhotos()}
                     disabled={
                       organizeBusy ||
