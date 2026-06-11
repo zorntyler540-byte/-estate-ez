@@ -4158,33 +4158,34 @@ export default function DashboardPage() {
       mobileBottomBar={dashboardMobileBottomBar}
     >
       <div id="dashboard-top" className="ct-dashboard">
-        <header className="ct-dashboard-hero">
-          <h1 className="ct-dashboard-hero__title">
-            Lots dashboard
-            {selectedSale ? (
-              <span className="ct-dashboard-hero__sale"> — {selectedSale.name}</span>
-            ) : null}
-          </h1>
-          {selectedSaleClosed ? (
-            <p className="ct-muted ct-dashboard-hero__note">This sale is closed — uploads and edits are disabled.</p>
-          ) : null}
-        </header>
-
         <div className="ct-dash-stats-row">
-          <section className="ct-dash-panel ct-dash-stats" aria-label="Sale summary">
-            <div className="ct-stat-card">
-              <span className="ct-stat-card__value">{dashboardStats.totalLots}</span>
-              <span className="ct-stat-card__label">Total lots</span>
-            </div>
-            <div className="ct-stat-card">
-              <span className="ct-stat-card__value">{dashboardStats.photoTotal}</span>
-              <span className="ct-stat-card__label">Photos uploaded</span>
-            </div>
-            <div className="ct-stat-card">
-              <span className="ct-stat-card__value">{dashboardStats.withCondition}</span>
-              <span className="ct-stat-card__label">With condition</span>
-            </div>
-          </section>
+          <div className="ct-dashboard-hero-band">
+            <header className="ct-dashboard-hero">
+              <h1 className="ct-dashboard-hero__title">
+                Lots dashboard
+                {selectedSale ? (
+                  <span className="ct-dashboard-hero__sale"> — {selectedSale.name}</span>
+                ) : null}
+              </h1>
+              {selectedSaleClosed ? (
+                <p className="ct-muted ct-dashboard-hero__note">This sale is closed — uploads and edits are disabled.</p>
+              ) : null}
+            </header>
+            <section className="ct-dash-stats" aria-label="Sale summary">
+              <div className="ct-stat-card">
+                <span className="ct-stat-card__value">{dashboardStats.totalLots}</span>
+                <span className="ct-stat-card__label">Total lots</span>
+              </div>
+              <div className="ct-stat-card">
+                <span className="ct-stat-card__value">{dashboardStats.photoTotal}</span>
+                <span className="ct-stat-card__label">Photos uploaded</span>
+              </div>
+              <div className="ct-stat-card">
+                <span className="ct-stat-card__value">{dashboardStats.withCondition}</span>
+                <span className="ct-stat-card__label">With condition</span>
+              </div>
+            </section>
+          </div>
           {dashboardStats.completedJobCount > 0 || activeJobs.length > 0 ? (
             <section className="ct-dash-panel ct-dash-jobs-card" aria-label="Processing jobs">
               <div className="ct-dash-jobs-card__head">
