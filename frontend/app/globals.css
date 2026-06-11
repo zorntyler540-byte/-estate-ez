@@ -2450,10 +2450,42 @@ select.ct-input option {
 .ct-dash-jobs-card {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 0.45rem;
-  min-width: 180px;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  width: min(100%, 380px);
+  max-height: min(calc(100dvh - 10rem), 720px);
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 0.85rem 1rem;
+  align-self: start;
+}
+
+.ct-dash-jobs-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.ct-dash-jobs-card__empty {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.ct-dash-jobs-card__list {
+  margin-bottom: 0;
+}
+
+.ct-dash-jobs-card__list li {
+  background: var(--ct-bg-elevated);
+}
+
+.ct-dash-jobs-card__completed {
+  margin-bottom: 0;
+}
+
+.ct-dash-jobs-card .ct-photo-progress {
+  margin-bottom: 0;
 }
 
 .ct-dash-jobs-card__head {

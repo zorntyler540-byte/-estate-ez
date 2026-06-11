@@ -4150,6 +4150,145 @@ export default function DashboardPage() {
     </>
   );
 
+  const showJobsCard =
+    dashboardStats.completedJobCount > 0 || activeJobs.length > 0 || photoPendingSlots.length > 0;
+
+  const jobsPanelContent = (
+    <>
+      {photoPendingSlots.length > 0 ? (
+        <PhotoProcessingProgressPanel
+          slots={photoPendingSlots}
+          analyzedDone={geminiAnalyzedCount.done}
+          analyzedTotal={geminiAnalyzedCount.total}
+          singleLotMode={Boolean(processingJob?.single_lot_mode)}
+          pipelinePhase={pipelinePhase}
+          pipelinePhotoSelection={pipelinePhotoSelection}
+          inInventoryPhase={inInventoryPhase}
+          catalogStepProgress={catalogStepProgress}
+        />
+      ) : null}
+      {activeJobs.length === 0 && completedJobs.length === 0 && photoPendingSlots.length === 0 ? (
+        <p className="ct-muted ct-dash-jobs-card__empty">No jobs yet.</p>
+      ) : null}
+      {activeJobs.length > 0 ? (
+        <ul className="ct-job-list ct-dash-jobs-card__list">
+          {activeJobs.map((job) => (
+            <li key={job.id}>
+              <span className="ct-job-status">{job.status}</span>
+              <span className="ct-job-path" title={job.input_folder}>
+                {jobInputLabel(job.input_folder)}
+              </span>
+              {job.inherit_sku_from_subfolder ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Lot SKUs taken from digit folder names">
+                  SKU←folders
+                </span>
+              ) : null}
+              {job.single_lot_mode ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
+                  1 lot
+                </span>
+              ) : null}
+              {job.single_lot_manual_sku ? (
+                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Manual SKU on this job">
+                  SKU:{job.single_lot_manual_sku}
+                </span>
+              ) : null}
+              {job.status === "queued" && busyProcessing ? (
+                <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
+                  Waiting for current lot…
+                </span>
+              ) : null}
+              {(job.status === "queued" || job.status === "failed") && (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  onClick={() => void runJob(job.id)}
+                  disabled={job.status === "queued" && busyProcessing}
+                >
+                  {job.status === "failed" ? "Run again" : "Run now"}
+                </button>
+              )}
+              {job.status === "processing" && (
+                <button
+                  type="button"
+                  className="ct-btn"
+                  onClick={() => void cancelRun(job.id)}
+                  disabled={cancellingJobId === job.id}
+                >
+                  {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
+                </button>
+              )}
+              {job.error_message ? (
+                <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
+              ) : null}
+              {job.status !== "processing" && (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() => void deleteJobRow(job.id)}
+                  disabled={busyProcessing}
+                >
+                  Delete job
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {completedJobs.length > 0 ? (
+        <div className="ct-jobs-completed ct-dash-jobs-card__completed">
+          <div className="ct-jobs-completed-bar">
+            <button
+              type="button"
+              className="ct-jobs-completed-toggle"
+              onClick={() => setCompletedJobsExpanded((v) => !v)}
+              aria-expanded={completedJobsExpanded}
+            >
+              {completedJobsExpanded ? (
+                <ChevronDown size={16} aria-hidden />
+              ) : (
+                <ChevronRight size={16} aria-hidden />
+              )}
+              <span>
+                {completedJobs.length} completed {completedJobs.length === 1 ? "job" : "jobs"}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost"
+              style={{ fontSize: "0.82rem", padding: "0.25rem 0.55rem" }}
+              onClick={() => void deleteAllCompletedJobs()}
+              disabled={busyProcessing}
+            >
+              Clear job list
+            </button>
+          </div>
+          {completedJobsExpanded ? (
+            <ul className="ct-job-list ct-job-list--compact">
+              {completedJobs.map((job) => (
+                <li key={job.id}>
+                  <span className="ct-job-status ct-job-status--done">{job.status}</span>
+                  <span className="ct-job-path" title={job.input_folder}>
+                    {jobInputLabel(job.input_folder)}
+                  </span>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    style={{ fontSize: "0.8rem", padding: "0.2rem 0.45rem", marginLeft: "auto" }}
+                    onClick={() => void deleteJobRow(job.id)}
+                    disabled={busyProcessing}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+
   if (!token) {
     return (
       <AppShell actions={shellActions}>
@@ -4213,7 +4352,7 @@ export default function DashboardPage() {
               </div>
             </section>
           </div>
-          {dashboardStats.completedJobCount > 0 || activeJobs.length > 0 ? (
+          {showJobsCard ? (
             <section className="ct-dash-panel ct-dash-jobs-card" aria-label="Processing jobs">
               <div className="ct-dash-jobs-card__head">
                 <span className="ct-dash-jobs-card__title">Recent jobs</span>
@@ -4227,7 +4366,7 @@ export default function DashboardPage() {
                   </span>
                 )}
               </div>
-              {completedJobs.length > 0 ? (
+              {completedJobs.length > 0 && activeJobs.length === 0 ? (
                 <button
                   type="button"
                   className="ct-btn ct-btn--ghost ct-dash-jobs-card__clear"
@@ -4237,6 +4376,7 @@ export default function DashboardPage() {
                   Clear job list
                 </button>
               ) : null}
+              <div className="ct-dash-jobs-card__body">{jobsPanelContent}</div>
             </section>
           ) : null}
         </div>
@@ -4660,7 +4800,7 @@ export default function DashboardPage() {
                       the camera may open first; desktop opens the file picker directly.
                     </li>
                     <li>
-                      While a job runs, progress appears in <strong>Jobs</strong>; you can cancel from the job row.
+                      While a job runs, progress appears in <strong>Recent jobs</strong>; you can cancel from the job row.
                     </li>
                   </ul>
                 </div>
@@ -4893,143 +5033,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </details>
-            </section>
-
-            <section className="ct-dash-panel ct-dash-jobs-detail" aria-label="Processing jobs">
-              <h2 className="ct-dash-panel__title">Jobs</h2>
-      {photoPendingSlots.length > 0 ? (
-        <PhotoProcessingProgressPanel
-          slots={photoPendingSlots}
-          analyzedDone={geminiAnalyzedCount.done}
-          analyzedTotal={geminiAnalyzedCount.total}
-          singleLotMode={Boolean(processingJob?.single_lot_mode)}
-          pipelinePhase={pipelinePhase}
-          pipelinePhotoSelection={pipelinePhotoSelection}
-          inInventoryPhase={inInventoryPhase}
-          catalogStepProgress={catalogStepProgress}
-        />
-      ) : null}
-      {activeJobs.length === 0 && completedJobs.length === 0 ? (
-        <p className="ct-muted" style={{ margin: "0 0 1.25rem", fontSize: "0.9rem" }}>
-          No jobs yet.
-        </p>
-      ) : null}
-      {activeJobs.length > 0 ? (
-        <ul className="ct-job-list">
-          {activeJobs.map((job) => (
-            <li key={job.id}>
-              <span className="ct-job-status">{job.status}</span>
-              <span className="ct-job-path" title={job.input_folder}>
-                {jobInputLabel(job.input_folder)}
-              </span>
-              {job.inherit_sku_from_subfolder ? (
-                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Lot SKUs taken from digit folder names">
-                  SKU←folders
-                </span>
-              ) : null}
-              {job.single_lot_mode ? (
-                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="All photos merged into one catalog lot">
-                  1 lot
-                </span>
-              ) : null}
-              {job.single_lot_manual_sku ? (
-                <span className="ct-muted" style={{ fontSize: "0.78rem" }} title="Manual SKU on this job">
-                  SKU:{job.single_lot_manual_sku}
-                </span>
-              ) : null}
-              {job.status === "queued" && busyProcessing ? (
-                <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
-                  Waiting for current lot…
-                </span>
-              ) : null}
-              {(job.status === "queued" || job.status === "failed") && (
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--primary"
-                  onClick={() => void runJob(job.id)}
-                  disabled={job.status === "queued" && busyProcessing}
-                >
-                  {job.status === "failed" ? "Run again" : "Run now"}
-                </button>
-              )}
-              {job.status === "processing" && (
-                <button
-                  type="button"
-                  className="ct-btn"
-                  onClick={() => void cancelRun(job.id)}
-                  disabled={cancellingJobId === job.id}
-                >
-                  {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
-                </button>
-              )}
-              {job.error_message ? (
-                <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
-              ) : null}
-              {job.status !== "processing" && (
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--ghost"
-                  onClick={() => void deleteJobRow(job.id)}
-                  disabled={busyProcessing}
-                >
-                  Delete job
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {completedJobs.length > 0 ? (
-        <div className="ct-jobs-completed">
-          <div className="ct-jobs-completed-bar">
-            <button
-              type="button"
-              className="ct-jobs-completed-toggle"
-              onClick={() => setCompletedJobsExpanded((v) => !v)}
-              aria-expanded={completedJobsExpanded}
-            >
-              {completedJobsExpanded ? (
-                <ChevronDown size={16} aria-hidden />
-              ) : (
-                <ChevronRight size={16} aria-hidden />
-              )}
-              <span>
-                {completedJobs.length} completed {completedJobs.length === 1 ? "job" : "jobs"}
-              </span>
-            </button>
-            <button
-              type="button"
-              className="ct-btn ct-btn--ghost"
-              style={{ fontSize: "0.82rem", padding: "0.25rem 0.55rem" }}
-              onClick={() => void deleteAllCompletedJobs()}
-              disabled={busyProcessing}
-            >
-              Clear job list
-            </button>
-          </div>
-          {completedJobsExpanded ? (
-            <ul className="ct-job-list ct-job-list--compact">
-              {completedJobs.map((job) => (
-                <li key={job.id}>
-                  <span className="ct-job-status ct-job-status--done">{job.status}</span>
-                  <span className="ct-job-path" title={job.input_folder}>
-                    {jobInputLabel(job.input_folder)}
-                  </span>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--ghost"
-                    style={{ fontSize: "0.8rem", padding: "0.2rem 0.45rem", marginLeft: "auto" }}
-                    onClick={() => void deleteJobRow(job.id)}
-                    disabled={busyProcessing}
-                  >
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
             </section>
 
           </div>
