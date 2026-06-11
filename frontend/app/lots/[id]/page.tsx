@@ -1331,6 +1331,36 @@ export default function LotDetailPage() {
             ) : null}
             <div className="ct-upload-options ct-upload-options--stacked">
               {catalogPhotos.length > 0 ? (
+                <div className="ct-upload-option ct-upload-option--stacked-card">
+                  <div className="ct-upload-option__head">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <Trash2 size={20} strokeWidth={1.75} />
+                    </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Delete selected</span>
+                      <span className="ct-upload-option__desc">
+                        Permanently remove checked photos from this lot and the server.
+                      </span>
+                      <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--danger ct-upload-option__field-btn"
+                    onClick={() => void deleteSelectedPhotos()}
+                    disabled={
+                      organizeBusy ||
+                      reorderBusy ||
+                      saving ||
+                      selectedPhotoIds.size === 0 ||
+                      catalogPhotos.length === 0
+                    }
+                  >
+                    {organizeBusy ? "Working…" : "Delete photos"}
+                  </button>
+                </div>
+              ) : null}
+              {catalogPhotos.length > 0 ? (
                 <div className="ct-upload-option ct-upload-option--expand">
                   <div className="ct-upload-option__head">
                     <span className="ct-upload-option__icon" aria-hidden>
@@ -1341,7 +1371,6 @@ export default function LotDetailPage() {
                       <span className="ct-upload-option__desc">
                         Send selected photos to another lot or start a new listing.
                       </span>
-                      <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
                     </div>
                   </div>
                   <div className="ct-upload-option__body">
@@ -1468,35 +1497,6 @@ export default function LotDetailPage() {
                       </span>
                     </label>
                   </div>
-                </div>
-              ) : null}
-              {catalogPhotos.length > 0 ? (
-                <div className="ct-upload-option ct-upload-option--stacked-card">
-                  <div className="ct-upload-option__head">
-                    <span className="ct-upload-option__icon" aria-hidden>
-                      <Trash2 size={20} strokeWidth={1.75} />
-                    </span>
-                    <div className="ct-upload-option__text">
-                      <span className="ct-upload-option__title">Delete selected</span>
-                      <span className="ct-upload-option__desc">
-                        Permanently remove checked photos from this lot and the server.
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--danger ct-upload-option__field-btn"
-                    onClick={() => void deleteSelectedPhotos()}
-                    disabled={
-                      organizeBusy ||
-                      reorderBusy ||
-                      saving ||
-                      selectedPhotoIds.size === 0 ||
-                      catalogPhotos.length === 0
-                    }
-                  >
-                    {organizeBusy ? "Working…" : "Delete photos"}
-                  </button>
                 </div>
               ) : null}
             </div>
