@@ -51,7 +51,7 @@ export function AppShell({ children, topBar, actions }: AppShellProps) {
         </nav>
       </aside>
       <div className="ct-app-main">
-        <header className="ct-app-topbar">
+        <header className={`ct-app-topbar${topBar ? " ct-app-topbar--has-center" : ""}`}>
           <div className="ct-app-topbar__start">{topBar}</div>
           <nav className="ct-app-topbar__actions" aria-label="Account navigation">
             {actions}

@@ -3903,25 +3903,6 @@ export default function DashboardPage() {
     }
   }
 
-  if (!token) {
-    return (
-      <main className="ct-shell">
-        <div className="ct-panel">
-          <p style={{ margin: 0 }}>Please sign in first.</p>
-        </div>
-      </main>
-    );
-  }
-  if (loading) {
-    return (
-      <main className="ct-shell">
-        <div className="ct-panel ct-panel--pulse">
-          <p style={{ margin: 0 }}>Loading dashboard…</p>
-        </div>
-      </main>
-    );
-  }
-
   const saleTopBar = (
     <label className="ct-app-sale-select">
       <span className="ct-app-sale-select__label">Change sale</span>
@@ -3956,6 +3937,34 @@ export default function DashboardPage() {
       </button>
     </>
   );
+
+  if (!token) {
+    return (
+      <AppShell actions={shellActions}>
+        <div className="ct-dashboard">
+          <section className="ct-dash-panel">
+            <p style={{ margin: 0 }}>Please sign in first.</p>
+            <p style={{ margin: "0.75rem 0 0" }}>
+              <Link href="/" className="ct-btn ct-btn--primary">
+                Go to sign in
+              </Link>
+            </p>
+          </section>
+        </div>
+      </AppShell>
+    );
+  }
+  if (loading) {
+    return (
+      <AppShell topBar={saleTopBar} actions={shellActions}>
+        <div className="ct-dashboard">
+          <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true">
+            <p style={{ margin: 0 }}>Loading dashboard…</p>
+          </section>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell topBar={saleTopBar} actions={shellActions}>
@@ -4122,10 +4131,8 @@ export default function DashboardPage() {
         </div>
       ) : null}
       {isMasterAdmin || adminLoading || adminError ? (
-        <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
-          <h2 className="ct-section-title" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
-            Master admin
-          </h2>
+        <section className="ct-dash-panel ct-dash-admin" aria-label="Master admin">
+          <h2 className="ct-dash-panel__title">Master admin</h2>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
             Manage pilot accounts from one place: toggle access and set a plan label for internal tracking.
           </p>
@@ -4162,10 +4169,8 @@ export default function DashboardPage() {
             </p>
           ) : null}
           {isMasterAdmin ? (
-            <div className="ct-card ct-card--padded" style={{ marginBottom: "0.75rem" }}>
-              <h3 className="ct-section-title" style={{ marginTop: 0, marginBottom: "0.4rem", fontSize: "1rem" }}>
-                Analytics (last 30 days)
-              </h3>
+            <div className="ct-dash-admin__stats">
+              <h3 className="ct-dash-admin__stats-title">Analytics (last 30 days)</h3>
               {adminUsageLoading ? (
                 <p className="ct-muted" style={{ margin: 0 }}>
                   Loading analytics…
@@ -4186,8 +4191,8 @@ export default function DashboardPage() {
             </div>
           ) : null}
           {isMasterAdmin ? (
-            <div className="ct-dashboard-table-desktop ct-table-wrap" style={{ marginBottom: 0 }}>
-              <table className="ct-table">
+            <div className="ct-dashboard-table-desktop ct-table-wrap ct-dash-admin-table">
+              <table className="ct-table ct-table--admin">
                 <thead>
                   <tr>
                     <th>Account</th>
@@ -5086,19 +5091,19 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="ct-dashboard-table-desktop ct-table-wrap">
-        <table className="ct-table">
+      <div className="ct-dashboard-table-desktop ct-table-wrap ct-dash-lots-table">
+        <table className="ct-table ct-table--lots">
         <thead>
           <tr>
-            <th>Photo</th>
-            <th>SKU</th>
-            <th>Auction Title</th>
-            <th>Price</th>
-            <th>Condition</th>
-            <th>Status</th>
-            <th>Photos</th>
-            <th>Details</th>
-            <th>Delete</th>
+            <th scope="col">Photo</th>
+            <th scope="col">SKU</th>
+            <th scope="col">Auction Title</th>
+            <th scope="col">Price</th>
+            <th scope="col">Condition</th>
+            <th scope="col">Status</th>
+            <th scope="col">Photos</th>
+            <th scope="col">Details</th>
+            <th scope="col">Delete</th>
           </tr>
         </thead>
         <tbody>
@@ -5107,7 +5112,7 @@ export default function DashboardPage() {
               key={slot.id}
               className={slot.status === "queued" ? "ct-table-row--pending-queued" : "ct-table-row--pending-done"}
             >
-              <td style={{ verticalAlign: "middle", width: 52, textAlign: "center" }}>
+              <td className="ct-table__photo">
                 {slot.status === "queued" ? (
                   <svg width={22} height={22} viewBox="0 0 24 24" aria-label="Processing" role="img">
                     <title>Processing</title>
@@ -5193,7 +5198,7 @@ export default function DashboardPage() {
                   : undefined
               }
             >
-              <td style={{ verticalAlign: "middle", width: 72 }}>
+              <td className="ct-table__photo">
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </td>
               <td
@@ -5208,7 +5213,7 @@ export default function DashboardPage() {
               >
                 <span className={lot.sku_needs_review || !lot.sku ? "ct-sku-pill" : undefined}>{lot.sku || "—"}</span>
               </td>
-              <td>{lot.auction_title}</td>
+              <td title={lot.auction_title || undefined}>{lot.auction_title}</td>
               <td>{lot.starting_price ?? "-"}</td>
               <td>{lot.condition_text}</td>
               <td>
