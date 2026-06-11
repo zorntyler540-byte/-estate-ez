@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -1000,91 +1000,102 @@ export default function LotDetailPage() {
               </span>
             ) : null}
           </h2>
-        <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.95rem", maxWidth: "44rem" }}>
-          Photos are shown in <strong>gallery order</strong> (how they will export). Drag <strong>⋮⋮</strong> on a
-          picture to reorder. Use <strong>↺ ↻</strong> on each thumbnail for a quick rotate, or click the image for crop and
-          fine-tune. <strong>Add photos</strong> uploads more frames
-          {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
-            <>
-              {" "}
-              (CTBids max <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> per listing).
-            </>
-          ) : (
-            "."
-          )}{" "}
-          <strong>Download all photos (ZIP)</strong> and the CT Seller flow use the same stored files as{" "}
-          <strong>tap-to-zoom</strong> (full resolution). Grid thumbnails are only previews.
-        </p>
-        <input
-          ref={addPhotosInputRef}
-          type="file"
-          multiple
-          accept="image/*,.heic,.heif"
-          style={{ display: "none" }}
-          onChange={(e) => void uploadAdditionalCatalogPhotos(e.target.files)}
-        />
-        <div
-          className="ct-row"
-          style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem", alignItems: "center" }}
-        >
-          <button
-            type="button"
-            className="ct-btn ct-btn--primary"
-            disabled={
-              addPhotosBusy ||
-              organizeBusy ||
-              reorderBusy ||
-              showAiRegenProgress ||
-              (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-                catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
-            }
-            onClick={() => addPhotosInputRef.current?.click()}
-          >
-            {addPhotosBusy
-              ? "Uploading…"
-              : CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-                  catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
-                ? "Photo limit reached"
-                : "Add photos…"}
-          </button>
-          {catalogPhotos.length > 0 ? (
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={zipDownloading || addPhotosBusy}
-              onClick={() => void downloadLotPhotosZip()}
-            >
-              {zipDownloading ? "Preparing ZIP…" : "Download all photos (ZIP)"}
-            </button>
+          <p className="ct-upload-intro">
+            Gallery order is export order. Drag to reorder; tap a photo to crop or fine-tune.
+          </p>
+          <input
+            ref={addPhotosInputRef}
+            type="file"
+            multiple
+            accept="image/*,.heic,.heif"
+            style={{ display: "none" }}
+            onChange={(e) => void uploadAdditionalCatalogPhotos(e.target.files)}
+          />
+          <div className="ct-upload-options" role="group" aria-label="Photo actions">
+            <div className="ct-upload-option ct-upload-option--featured">
+              <span className="ct-upload-option__icon" aria-hidden>
+                <ImagePlus size={20} strokeWidth={1.75} />
+              </span>
+              <div className="ct-upload-option__text">
+                <span className="ct-upload-option__title">Add photos</span>
+                <span className="ct-upload-option__desc">
+                  Upload more frames to this listing
+                  {CTBIDS_MAX_PHOTOS_PER_LOT != null ? ` (max ${CTBIDS_MAX_PHOTOS_PER_LOT})` : ""}.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary ct-upload-option__btn"
+                disabled={
+                  addPhotosBusy ||
+                  organizeBusy ||
+                  reorderBusy ||
+                  showAiRegenProgress ||
+                  (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                    catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
+                }
+                onClick={() => addPhotosInputRef.current?.click()}
+              >
+                {addPhotosBusy
+                  ? "Uploading…"
+                  : CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+                      catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                    ? "Limit reached"
+                    : "Add photos…"}
+              </button>
+            </div>
+            {catalogPhotos.length > 0 ? (
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Archive size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Download ZIP</span>
+                  <span className="ct-upload-option__desc">
+                    Full-resolution files for this lot — same images used for export and CT Seller.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ct-btn ct-upload-option__btn"
+                  disabled={zipDownloading || addPhotosBusy}
+                  onClick={() => void downloadLotPhotosZip()}
+                >
+                  {zipDownloading ? "Preparing…" : "Download ZIP"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <details className="ct-help-details">
+            <summary>Photo guide</summary>
+            <div className="ct-help-details__body">
+              <ul>
+                <li>
+                  Same order as <strong>Upload lot photos</strong> in the browser extension: first row left to right,
+                  then the next row.
+                </li>
+                <li>Order is saved for ZIP downloads, extension upload, and AI.</li>
+                <li>
+                  Use <strong>↺ ↻</strong> on a thumbnail for a quick rotate; click the image for crop and other edits
+                  in the full viewer.
+                </li>
+                <li>
+                  <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle
+                  one photo (for organize actions below).
+                </li>
+                <li>Grid thumbnails are previews only — tap-to-zoom uses full resolution.</li>
+              </ul>
+            </div>
+          </details>
+          {photosError ? (
+            <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem", marginTop: "0.65rem" }}>
+              {photosError}
+            </div>
           ) : null}
-        </div>
-        <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
-          <summary>Extension order, checkboxes, and keyboard tips</summary>
-          <div className="ct-help-details__body">
-            <ul>
-              <li>
-                Same order as <strong>Upload lot photos</strong> in the browser extension: first row left to right,
-                then the next row.
-              </li>
-              <li>
-                Order is saved for ZIP downloads, extension upload, and AI.
-              </li>
-              <li>
-                <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to add or
-                remove one photo.
-              </li>
-              <li>
-                <strong>↺ ↻</strong> on a thumbnail rotates and saves immediately; click the image for crop or multiple
-                edits in the full viewer.
-              </li>
-            </ul>
-          </div>
-        </details>
-        {photosError ? (
-          <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
-            {photosError}
-          </div>
-        ) : null}
+          <div
+            className="ct-lot-detail-photo-grid-wrap"
+            style={catalogPhotos.length > 0 ? { marginTop: "0.65rem" } : undefined}
+          >
         {catalogPhotos.length === 0 && !photosError ? (
           <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
             <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={720} />
@@ -1306,180 +1317,180 @@ export default function LotDetailPage() {
             ))}
           </div>
         )}
+          </div>
         </section>
 
         {showOrganizePanel ? (
           <section className="ct-dash-panel">
             <h2 className="ct-dash-panel__title">Organize photos</h2>
+            <p className="ct-upload-intro">Select photos in the grid above, then choose an action below.</p>
             {organizeMsg ? (
               <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
                 {organizeMsg}
               </div>
             ) : null}
-            {catalogPhotos.length > 0 ? (
-              <div className="ct-lot-detail-organize-block">
-                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-                  Move or split selected photos
-                </h3>
-                <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
-                  Select photos in the grid above, pick a <strong>destination</strong>, then move them or start a{" "}
-                  <strong>new listing</strong> with just those pictures. One photo must stay on this lot.
-                </p>
-                <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
-                  <summary>When to use this vs merge</summary>
-                  <div className="ct-help-details__body">
-                    Use this when only <em>some</em> photos belong elsewhere, or two tape numbers were merged into one row
-                    by mistake. To pull in <em>every</em> photo from another row at once, use{" "}
-                    <strong>Merge a whole lot</strong> below instead.
+            <div className="ct-upload-options">
+              {catalogPhotos.length > 0 ? (
+                <div className="ct-upload-option ct-upload-option--expand">
+                  <div className="ct-upload-option__row">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <ArrowRightLeft size={20} strokeWidth={1.75} />
+                    </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Move or split</span>
+                      <span className="ct-upload-option__desc">
+                        Send selected photos to another lot or start a new listing.
+                      </span>
+                    </div>
+                    <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
                   </div>
-                </details>
-                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--ghost"
-                    disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
-                    onClick={selectAllCatalogPhotos}
-                  >
-                    Select all photos
-                  </button>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--ghost"
-                    disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
-                    onClick={clearPhotoSelection}
-                  >
-                    Clear selection
-                  </button>
-                  <span className="ct-muted" style={{ fontSize: "0.82rem", alignSelf: "center" }}>
-                    {selectedPhotoIds.size} selected
-                  </span>
-                </div>
-                {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
-                  <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
-                    Optional title for the new listing (leave blank for a default)
-                    <input
-                      className="ct-input"
-                      style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
-                      placeholder='e.g. "SA004 — orange pair"'
-                      value={splitNewLotTitle}
-                      onChange={(e) => setSplitNewLotTitle(e.target.value)}
-                      disabled={organizeBusy || reorderBusy}
-                      autoComplete="off"
-                    />
-                  </label>
-                ) : null}
-                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                  <select
-                    className="ct-input"
-                    style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                    value={transferTargetId}
-                    onChange={(e) => setTransferTargetId(e.target.value)}
-                    disabled={organizeBusy || reorderBusy}
-                  >
-                    <option value="">— Destination —</option>
-                    <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
-                    {saleLots
-                      .filter((x) => x.id !== lot.id)
-                      .map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                          {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                        </option>
-                      ))}
-                  </select>
-                  <button
-                    type="button"
-                    className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
-                    disabled={
-                      organizeBusy ||
-                      reorderBusy ||
-                      selectedPhotoIds.size === 0 ||
-                      !transferTargetId ||
-                      (transferTargetId === TRANSFER_DEST_NEW_LOT
-                        ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
-                        : !saleLots.some((x) => x.id === transferTargetId))
-                    }
-                    onClick={() => void applyPhotoDestination()}
-                  >
-                    {organizeBusy || reorderBusy
-                      ? "Working…"
-                      : transferTargetId === TRANSFER_DEST_NEW_LOT
-                        ? "Create new lot"
-                        : "Move selected"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
-              <div className="ct-lot-detail-organize-block">
-                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-                  Merge a whole lot into this one
-                </h3>
-                <p className="ct-lead" style={{ fontSize: "0.92rem", margin: "0 0 0.55rem", maxWidth: "44rem" }}>
-                  All photos from the other listing move into this one; the other row is removed. A short note is added to
-                  your specs.
-                </p>
-                <details className="ct-help-details" style={{ marginBottom: "0.55rem" }}>
-                  <summary>SKU option &amp; partial moves</summary>
-                  <div className="ct-help-details__body">
-                    You can optionally take the other lot&apos;s tape SKU using the checkbox below. To move only{" "}
-                    <em>some</em> photos into a new row, use <strong>Move or split selected photos</strong> above and pick{" "}
-                    <strong>New listing</strong> in the menu.
+                  <div className="ct-upload-option__body">
+                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
+                        onClick={selectAllCatalogPhotos}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
+                        onClick={clearPhotoSelection}
+                      >
+                        Clear selection
+                      </button>
+                    </div>
+                    {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
+                      <label className="ct-muted" style={{ display: "block", fontSize: "0.82rem", marginBottom: "0.55rem" }}>
+                        Optional title for the new listing
+                        <input
+                          className="ct-input"
+                          style={{ width: "100%", maxWidth: 420, marginTop: 6, display: "block" }}
+                          placeholder='e.g. "SA004 — orange pair"'
+                          value={splitNewLotTitle}
+                          onChange={(e) => setSplitNewLotTitle(e.target.value)}
+                          disabled={organizeBusy || reorderBusy}
+                          autoComplete="off"
+                        />
+                      </label>
+                    ) : null}
+                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                      <select
+                        className="ct-input"
+                        style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                        value={transferTargetId}
+                        onChange={(e) => setTransferTargetId(e.target.value)}
+                        disabled={organizeBusy || reorderBusy}
+                      >
+                        <option value="">— Destination —</option>
+                        <option value={TRANSFER_DEST_NEW_LOT}>+ New listing (selected photos only)…</option>
+                        {saleLots
+                          .filter((x) => x.id !== lot.id)
+                          .map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                              {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        className={`ct-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
+                        disabled={
+                          organizeBusy ||
+                          reorderBusy ||
+                          selectedPhotoIds.size === 0 ||
+                          !transferTargetId ||
+                          (transferTargetId === TRANSFER_DEST_NEW_LOT
+                            ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
+                            : !saleLots.some((x) => x.id === transferTargetId))
+                        }
+                        onClick={() => void applyPhotoDestination()}
+                      >
+                        {organizeBusy || reorderBusy
+                          ? "Working…"
+                          : transferTargetId === TRANSFER_DEST_NEW_LOT
+                            ? "Create new lot"
+                            : "Move selected"}
+                      </button>
+                    </div>
                   </div>
-                </details>
-                <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                  <select
-                    className="ct-input"
-                    style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
-                    value={mergeSourceId}
-                    onChange={(e) => setMergeSourceId(e.target.value)}
-                    disabled={organizeBusy || reorderBusy}
-                  >
-                    <option value="">— Lot to absorb —</option>
-                    {saleLots
-                      .filter((x) => x.id !== lot.id)
-                      .map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
-                          {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
-                        </option>
-                      ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="ct-btn"
-                    disabled={organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)}
-                    onClick={() => void mergeSourceIntoThisLot()}
-                  >
-                    {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
-                  </button>
                 </div>
-                <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={mergePreferSourceSku}
-                    onChange={(e) => setMergePreferSourceSku(e.target.checked)}
-                    disabled={organizeBusy || reorderBusy}
-                  />
-                  <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
-                    Use the other listing&apos;s lot number as this row&apos;s SKU when it has one
+              ) : null}
+              {saleLots.filter((x) => x.id !== lot.id).length > 0 ? (
+                <div className="ct-upload-option ct-upload-option--expand">
+                  <div className="ct-upload-option__row">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <GitMerge size={20} strokeWidth={1.75} />
+                    </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Merge lot</span>
+                      <span className="ct-upload-option__desc">
+                        Pull every photo from another listing into this one; the other row is removed.
+                      </span>
+                    </div>
+                  </div>
+                  <div className="ct-upload-option__body">
+                    <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                      <select
+                        className="ct-input"
+                        style={{ minWidth: "min(100%, 280px)", flex: "1 1 200px" }}
+                        value={mergeSourceId}
+                        onChange={(e) => setMergeSourceId(e.target.value)}
+                        disabled={organizeBusy || reorderBusy}
+                      >
+                        <option value="">— Lot to absorb —</option>
+                        {saleLots
+                          .filter((x) => x.id !== lot.id)
+                          .map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 56)}
+                              {(opt.auction_title || "").length > 56 ? "…" : ""} ({opt.photo_count} photos)
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="ct-btn ct-upload-option__btn"
+                        disabled={
+                          organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)
+                        }
+                        onClick={() => void mergeSourceIntoThisLot()}
+                      >
+                        {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
+                      </button>
+                    </div>
+                    <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={mergePreferSourceSku}
+                        onChange={(e) => setMergePreferSourceSku(e.target.checked)}
+                        disabled={organizeBusy || reorderBusy}
+                      />
+                      <span className="ct-muted" style={{ fontSize: "0.88rem" }}>
+                        Use the other listing&apos;s lot number as this row&apos;s SKU when it has one
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+              {catalogPhotos.length > 0 ? (
+                <div className="ct-upload-option">
+                  <span className="ct-upload-option__icon" aria-hidden>
+                    <Trash2 size={20} strokeWidth={1.75} />
                   </span>
-                </label>
-              </div>
-            ) : null}
-            {catalogPhotos.length > 0 ? (
-              <div className="ct-lot-detail-organize-block">
-                <h3 className="ct-section-title" style={{ fontSize: "1rem", margin: "0 0 0.35rem" }}>
-                  Delete selected photos
-                </h3>
-                <p className="ct-lead" style={{ margin: "0 0 0.55rem", fontSize: "0.92rem", lineHeight: 1.45 }}>
-                  Remove checked photos from this listing and the server for good. The listing row stays unless you delete
-                  the whole lot in <strong>Listing details</strong> below.
-                </p>
-                <div className="ct-form-actions" style={{ marginBottom: 0 }}>
+                  <div className="ct-upload-option__text">
+                    <span className="ct-upload-option__title">Delete selected</span>
+                    <span className="ct-upload-option__desc">
+                      Permanently remove checked photos from this lot and the server.
+                    </span>
+                  </div>
                   <button
                     type="button"
-                    className="ct-btn ct-btn--danger"
+                    className="ct-btn ct-btn--danger ct-upload-option__btn"
                     onClick={() => void deleteSelectedPhotos()}
                     disabled={
                       organizeBusy ||
@@ -1489,11 +1500,33 @@ export default function LotDetailPage() {
                       catalogPhotos.length === 0
                     }
                   >
-                    {organizeBusy ? "Working…" : "Delete selected photos"}
+                    {organizeBusy ? "Working…" : "Delete photos"}
                   </button>
                 </div>
+              ) : null}
+            </div>
+            <details className="ct-help-details">
+              <summary>Organize guide</summary>
+              <div className="ct-help-details__body">
+                <ul>
+                  <li>
+                    <strong>Move or split</strong> when only some photos belong elsewhere, or two tape numbers were
+                    merged into one row by mistake. One photo must stay on this lot.
+                  </li>
+                  <li>
+                    <strong>Merge lot</strong> when every photo from another row should join this listing at once.
+                  </li>
+                  <li>
+                    To move only some photos into a new row, use <strong>Move or split</strong> and pick{" "}
+                    <strong>New listing</strong> in the destination menu.
+                  </li>
+                  <li>
+                    Deleting photos removes files only — use <strong>Delete lot</strong> in Listing details to remove
+                    the entire row.
+                  </li>
+                </ul>
               </div>
-            ) : null}
+            </details>
           </section>
         ) : null}
 

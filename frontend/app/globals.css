@@ -1162,10 +1162,20 @@ a.ct-btn:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem 1.25rem;
-  padding: 1.15rem 1.2rem;
-  background: var(--ct-surface);
-  border: 1px solid var(--ct-border);
+  padding: 1.15rem 1.25rem 1.2rem;
   border-radius: var(--ct-radius);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  background:
+    linear-gradient(
+      128deg,
+      rgba(45, 212, 191, 0.16) 0%,
+      rgba(45, 212, 191, 0.05) 38%,
+      rgba(12, 15, 18, 0.15) 100%
+    ),
+    var(--ct-surface);
+  box-shadow:
+    inset 0 1px 0 rgba(45, 212, 191, 0.1),
+    0 2px 12px rgba(0, 0, 0, 0.2);
 }
 
 .ct-lot-detail-hero__main {
@@ -1244,7 +1254,41 @@ a.ct-btn:hover {
   border-top: none;
 }
 
+.ct-upload-option--expand {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ct-upload-option__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.65rem 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0.85rem;
+}
+
+.ct-upload-option__body {
+  padding: 0.75rem 0.85rem 0.85rem;
+  border-top: 1px solid var(--ct-border);
+  background: rgba(12, 15, 18, 0.28);
+}
+
+.ct-upload-option__meta {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
+  .ct-upload-option__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ct-upload-option__meta {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .ct-lot-detail-hero__side {
     align-items: stretch;
     width: 100%;
