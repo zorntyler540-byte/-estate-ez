@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, Loader2, Trash2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, Loader2, Save, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -67,6 +67,16 @@ function rememberDashboardScrollBeforeLotDetails() {
 /** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT`` (null = no cap). */
 const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
+const STANDARD_CONDITIONS = ["NEW", "LIKE NEW", "VERY GOOD", "GOOD", "FAIR"] as const;
+
+function conditionSelectOptions(current: string): string[] {
+  const trimmed = current.trim();
+  if (trimmed && !STANDARD_CONDITIONS.includes(trimmed as (typeof STANDARD_CONDITIONS)[number])) {
+    return [trimmed, ...STANDARD_CONDITIONS];
+  }
+  return [...STANDARD_CONDITIONS];
+}
+
 function parseFastApiErrorMessage(raw: string): string {
   const t = raw.trim();
   if (!t.startsWith("{")) return raw;
@@ -114,6 +124,7 @@ export default function LotDetailPage() {
   const [photosError, setPhotosError] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [listingDirty, setListingDirty] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [thumbCacheBust, setThumbCacheBust] = useState<Record<string, number>>({});
   const [quickRotatingId, setQuickRotatingId] = useState<string | null>(null);
@@ -169,6 +180,19 @@ export default function LotDetailPage() {
   }, [routeLotId]);
 
   useEffect(() => {
+    setListingDirty(false);
+  }, [routeLotId]);
+
+  function markListingDirty() {
+    setListingDirty(true);
+  }
+
+  function updateListingFields(patch: Partial<Lot>) {
+    markListingDirty();
+    setLot((prev) => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  useEffect(() => {
     const t = localStorage.getItem("token") || "";
     setToken(t);
     if (!t || !routeLotId) return;
@@ -180,6 +204,7 @@ export default function LotDetailPage() {
         if (cancelled) return;
         const row = d as Lot;
         setLot(row);
+        setListingDirty(false);
         setAiRegenerating(Boolean(row.ai_regenerating));
         if (row.ai_regenerating) {
           aiRegenPostAckRef.current = true;
@@ -472,6 +497,7 @@ export default function LotDetailPage() {
         })
       });
       setLot(updated);
+      setListingDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -934,8 +960,28 @@ export default function LotDetailPage() {
     Boolean(aiRegenError) ||
     Boolean(aiRegenNotice);
 
+  const lotMobileSaveBar = (
+    <>
+      {listingDirty ? (
+        <span className="ct-app-mobile-bar__hint" aria-live="polite">
+          Unsaved changes
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className="ct-app-mobile-bar__btn ct-app-mobile-bar__btn--primary"
+        onClick={() => void save()}
+        disabled={saving || !listingDirty}
+        aria-busy={saving}
+      >
+        <Save size={20} aria-hidden />
+        {saving ? "Saving…" : "Save listing"}
+      </button>
+    </>
+  );
+
   return (
-    <AppShell topBar={lotTopBar} actions={shellActions}>
+    <AppShell topBar={lotTopBar} actions={shellActions} mobileBottomBar={lotMobileSaveBar}>
       <div className="ct-dashboard ct-lot-detail-stack">
         <header className="ct-lot-detail-hero">
           <div className="ct-lot-detail-hero__main">
@@ -954,7 +1000,7 @@ export default function LotDetailPage() {
               <input
                 type="checkbox"
                 checked={lot.is_completed}
-                onChange={(e) => setLot({ ...lot, is_completed: e.target.checked })}
+                onChange={(e) => updateListingFields({ is_completed: e.target.checked })}
                 disabled={saving || showAiRegenProgress}
               />
               <span>{lot.is_completed ? "Done" : "Not done"}</span>
@@ -1525,116 +1571,207 @@ export default function LotDetailPage() {
           </section>
         ) : null}
 
-        <section id="listing-details" className="ct-dash-panel ct-stack" style={{ scrollMarginTop: "0.75rem" }}>
+        <section id="listing-details" className="ct-dash-panel ct-listing-form" style={{ scrollMarginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">Listing details</h2>
-        <div>
-          <label className="ct-label" htmlFor="lot-sku">
-            Estate lot SKU (handwritten on colored tape)
-          </label>
-          <input
-            id="lot-sku"
-            className="ct-input"
-            inputMode="text"
-            autoComplete="off"
-            placeholder="e.g. 034 or SA013"
-            value={lot.sku ?? ""}
-            onChange={(e) => setLot({ ...lot, sku: e.target.value.trim() || null })}
-          />
-          <p className="ct-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-            Save after you fix it — the yellow “review SKU” flag on the dashboard clears.
+          <p className="ct-upload-intro">
+            Edit auction copy and metadata for this lot, then save. Changes apply to exports after you save.
           </p>
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="auction-title">
-            Auction title
-          </label>
-          <input
-            id="auction-title"
-            className="ct-input"
-            value={lot.auction_title}
-            onChange={(e) => setLot({ ...lot, auction_title: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="pro-desc">
-            Professional description
-          </label>
-          <textarea
-            id="pro-desc"
-            className="ct-textarea"
-            style={{ minHeight: 160 }}
-            value={lot.professional_description}
-            onChange={(e) => setLot({ ...lot, professional_description: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="spec-lines">
-            Specification lines (one per line)
-          </label>
-          <textarea
-            id="spec-lines"
-            className="ct-textarea"
-            value={lot.specification_lines.join("\n")}
-            onChange={(e) => setLot({ ...lot, specification_lines: e.target.value.split("\n").filter(Boolean) })}
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="brands">
-            Brands (comma separated)
-          </label>
-          <input
-            id="brands"
-            className="ct-input"
-            value={lot.brands.join(", ")}
-            onChange={(e) => setLot({ ...lot, brands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="tags">
-            Sizes / tags — clothing &amp; shoes only (comma separated)
-          </label>
-          <input
-            id="tags"
-            className="ct-input"
-            value={lot.labels_and_tags.join(", ")}
-            onChange={(e) =>
-              setLot({ ...lot, labels_and_tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
-            }
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="price">
-            Starting price
-          </label>
-          <input
-            id="price"
-            className="ct-input"
-            type="number"
-            value={lot.starting_price ?? ""}
-            onChange={(e) => setLot({ ...lot, starting_price: e.target.value ? Number(e.target.value) : null })}
-          />
-        </div>
-        <div>
-          <label className="ct-label" htmlFor="condition">
-            Condition
-          </label>
-          <input
-            id="condition"
-            className="ct-input"
-            value={lot.condition_text}
-            onChange={(e) => setLot({ ...lot, condition_text: e.target.value })}
-          />
-        </div>
-        <div className="ct-form-actions">
-          <button type="button" className="ct-btn ct-btn--primary" onClick={() => void save()} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <button type="button" className="ct-btn ct-btn--danger" onClick={() => void removeLot()}>
-            Delete lot
-          </button>
-        </div>
-        {error ? <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>{error}</div> : null}
-      </section>
+
+          <div className="ct-listing-form__sections">
+            <section className="ct-listing-form__section" aria-labelledby="listing-identity-heading">
+              <h3 id="listing-identity-heading" className="ct-listing-form__section-title">
+                Identity
+              </h3>
+              <div>
+                <label className="ct-label" htmlFor="lot-sku">
+                  Estate lot SKU
+                </label>
+                <input
+                  id="lot-sku"
+                  className="ct-input"
+                  inputMode="text"
+                  autoComplete="off"
+                  placeholder="e.g. 034 or SA013"
+                  value={lot.sku ?? ""}
+                  onChange={(e) => updateListingFields({ sku: e.target.value.trim() || null })}
+                />
+                <p className="ct-field-hint">
+                  Handwritten code on colored estate tape. Save after you fix it — the yellow “review SKU” flag on the
+                  dashboard clears.
+                </p>
+              </div>
+              <div>
+                <label className="ct-label" htmlFor="auction-title">
+                  Auction title
+                </label>
+                <input
+                  id="auction-title"
+                  className="ct-input"
+                  value={lot.auction_title}
+                  onChange={(e) => updateListingFields({ auction_title: e.target.value })}
+                />
+              </div>
+            </section>
+
+            <section className="ct-listing-form__section" aria-labelledby="listing-copy-heading">
+              <h3 id="listing-copy-heading" className="ct-listing-form__section-title">
+                Listing copy
+              </h3>
+              <div>
+                <label className="ct-label" htmlFor="pro-desc">
+                  Professional description
+                </label>
+                <textarea
+                  id="pro-desc"
+                  className="ct-textarea ct-textarea--listing-pro"
+                  value={lot.professional_description}
+                  onChange={(e) => updateListingFields({ professional_description: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="ct-label" htmlFor="spec-lines">
+                  Specification lines
+                </label>
+                <textarea
+                  id="spec-lines"
+                  className="ct-textarea ct-textarea--compact"
+                  placeholder="One label per line, e.g. Brand: …"
+                  value={lot.specification_lines.join("\n")}
+                  onChange={(e) =>
+                    updateListingFields({ specification_lines: e.target.value.split("\n").filter(Boolean) })
+                  }
+                />
+                <details className="ct-help-details ct-listing-form__help">
+                  <summary>What goes in specification lines?</summary>
+                  <div className="ct-help-details__body">
+                    <p style={{ margin: "0 0 0.5rem" }}>One line per fact — use labels like:</p>
+                    <ul>
+                      <li>
+                        <strong>Brand:</strong> confirmed maker when visible
+                      </li>
+                      <li>
+                        <strong>Dimensions:</strong> / <strong>Measurement:</strong> when a ruler or tape is in the
+                        photos
+                      </li>
+                      <li>
+                        <strong>Condition note:</strong> wear or damage called out in the listing
+                      </li>
+                      <li>
+                        <strong>Size / tags:</strong> for apparel only (otherwise use Sizes / tags below)
+                      </li>
+                    </ul>
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <section className="ct-listing-form__section" aria-labelledby="listing-details-heading">
+              <h3 id="listing-details-heading" className="ct-listing-form__section-title">
+                Details
+              </h3>
+              <div className="ct-listing-form__details-grid">
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="brands">
+                    Brands
+                  </label>
+                  <input
+                    id="brands"
+                    className="ct-input"
+                    placeholder="Comma separated"
+                    value={lot.brands.join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        brands: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                </div>
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="tags">
+                    Sizes / tags
+                  </label>
+                  <input
+                    id="tags"
+                    className="ct-input"
+                    placeholder="Clothing &amp; shoes only — comma separated"
+                    value={lot.labels_and_tags.join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        labels_and_tags: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="price">
+                    Starting price
+                  </label>
+                  <div className="ct-input-prefix">
+                    <span className="ct-input-prefix__symbol" aria-hidden>
+                      $
+                    </span>
+                    <input
+                      id="price"
+                      className="ct-input"
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      placeholder="0.00"
+                      value={lot.starting_price ?? ""}
+                      onChange={(e) =>
+                        updateListingFields({ starting_price: e.target.value ? Number(e.target.value) : null })
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="condition">
+                    Condition
+                  </label>
+                  <select
+                    id="condition"
+                    className="ct-input"
+                    value={lot.condition_text}
+                    onChange={(e) => updateListingFields({ condition_text: e.target.value })}
+                  >
+                    <option value="">Select condition…</option>
+                    {conditionSelectOptions(lot.condition_text).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div className="ct-listing-form__actions">
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary ct-listing-form__save-desktop"
+              onClick={() => void save()}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button type="button" className="ct-btn ct-btn--danger-outline" onClick={() => void removeLot()}>
+              Delete lot
+            </button>
+          </div>
+          {error ? (
+            <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>
+              {error}
+            </div>
+          ) : null}
+        </section>
       {viewerIndex !== null && lot && token ? (
         <LotPhotoViewer
           lotId={lot.id}
