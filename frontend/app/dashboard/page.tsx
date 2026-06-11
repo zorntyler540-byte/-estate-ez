@@ -1051,6 +1051,137 @@ type PhotoPendingSlot = {
   previewSku?: string | null;
 };
 
+type PhotoProcessingProgressProps = {
+  slots: PhotoPendingSlot[];
+  analyzedDone: number;
+  analyzedTotal: number;
+  singleLotMode: boolean;
+  pipelinePhase: string | null;
+  pipelinePhotoSelection: PipelinePhotoSelection | null;
+  inInventoryPhase: boolean;
+  catalogStepProgress: { index: number; total: number; fileName: string } | null;
+};
+
+function photoProgressPhaseLine({
+  analyzedDone,
+  analyzedTotal,
+  singleLotMode,
+  pipelinePhase,
+  inInventoryPhase,
+  catalogStepProgress
+}: Omit<PhotoProcessingProgressProps, "slots" | "pipelinePhotoSelection">): string {
+  if (inInventoryPhase) {
+    if (!catalogStepProgress) return "Saving lots to the catalog…";
+    return `Saving lots — photo ${catalogStepProgress.index + 1} of ${catalogStepProgress.total}${
+      catalogStepProgress.fileName ? ` (${catalogStepProgress.fileName})` : ""
+    }`;
+  }
+  if (singleLotMode && pipelinePhase) {
+    if (pipelinePhase === "pipeline_triage") {
+      return `Sorting photos for one lot (${analyzedDone} / ${analyzedTotal || "…"} classified)`;
+    }
+    if (pipelinePhase === "pipeline_listing") return "Writing the listing draft…";
+    if (pipelinePhase === "pipeline_pro_proofread") return "Pro is proofreading title and details…";
+    return "Working on this lot…";
+  }
+  if (analyzedTotal > 0) {
+    if (analyzedDone < analyzedTotal) {
+      return `Reading photos with AI (${analyzedDone} / ${analyzedTotal} done)`;
+    }
+    return "Photos analyzed — finishing catalog merge…";
+  }
+  return "Processing photos…";
+}
+
+function PhotoProcessingProgressPanel({
+  slots,
+  analyzedDone,
+  analyzedTotal,
+  singleLotMode,
+  pipelinePhase,
+  pipelinePhotoSelection,
+  inInventoryPhase,
+  catalogStepProgress
+}: PhotoProcessingProgressProps) {
+  if (!slots.length) return null;
+  const pct = analyzedTotal > 0 ? Math.min(100, Math.round((analyzedDone / analyzedTotal) * 100)) : 0;
+  const phaseLine = photoProgressPhaseLine({
+    analyzedDone,
+    analyzedTotal,
+    singleLotMode,
+    pipelinePhase,
+    inInventoryPhase,
+    catalogStepProgress
+  });
+
+  return (
+    <div className="ct-photo-progress" aria-live="polite">
+      <div className="ct-photo-progress__head">
+        <span className="ct-photo-progress__title">Live photo progress</span>
+        <span className="ct-photo-progress__count">
+          {inInventoryPhase && catalogStepProgress
+            ? `${catalogStepProgress.index + 1} / ${catalogStepProgress.total}`
+            : `${analyzedDone} / ${analyzedTotal}`}
+        </span>
+      </div>
+      <div
+        className="ct-photo-progress__bar"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={inInventoryPhase && catalogStepProgress ? undefined : pct}
+        aria-label="Photo processing progress"
+      >
+        <div
+          className="ct-photo-progress__bar-fill"
+          style={{
+            width: inInventoryPhase && catalogStepProgress
+              ? `${Math.min(100, Math.round(((catalogStepProgress.index + 1) / catalogStepProgress.total) * 100))}%`
+              : `${pct}%`
+          }}
+        />
+      </div>
+      <p className="ct-photo-progress__phase">{phaseLine}</p>
+      <details className="ct-photo-progress__details">
+        <summary>Per-photo status ({slots.length})</summary>
+        <ul className="ct-photo-progress__list">
+          {slots.map((slot) => (
+            <li
+              key={slot.id}
+              className={`ct-photo-progress__item${
+                slot.status === "queued" ? " ct-photo-progress__item--queued" : " ct-photo-progress__item--done"
+              }`}
+            >
+              <span className="ct-photo-progress__item-icon" aria-hidden>
+                {slot.status === "queued" ? "…" : "✓"}
+              </span>
+              <span className="ct-photo-progress__item-text">
+                <strong>
+                  {slot.index + 1}/{slot.total}
+                </strong>
+                {slot.fileName ? (
+                  <span className="ct-photo-progress__item-file"> · {slot.fileName}</span>
+                ) : null}
+                {slot.status === "queued" ? (
+                  <span className="ct-photo-progress__item-note">
+                    {" "}
+                    — {singleLotMode ? "Sorting…" : "Waiting…"}
+                  </span>
+                ) : slot.previewTitle ? (
+                  <span className="ct-photo-progress__item-note">
+                    {" "}
+                    — {pipelineSlotLabel(slot.fileName, slot.previewTitle, pipelinePhotoSelection)}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
+
 const CATALOG_IMAGE_RE = /\.(jpe?g|png|webp|heic|heif)$/i;
 
 function isCatalogImageFile(f: File): boolean {
@@ -4655,6 +4786,18 @@ export default function DashboardPage() {
 
             <section className="ct-dash-panel ct-dash-jobs-detail" aria-label="Processing jobs">
               <h2 className="ct-dash-panel__title">Jobs</h2>
+      {photoPendingSlots.length > 0 ? (
+        <PhotoProcessingProgressPanel
+          slots={photoPendingSlots}
+          analyzedDone={geminiAnalyzedCount.done}
+          analyzedTotal={geminiAnalyzedCount.total}
+          singleLotMode={Boolean(processingJob?.single_lot_mode)}
+          pipelinePhase={pipelinePhase}
+          pipelinePhotoSelection={pipelinePhotoSelection}
+          inInventoryPhase={inInventoryPhase}
+          catalogStepProgress={catalogStepProgress}
+        />
+      ) : null}
       {activeJobs.length === 0 && completedJobs.length === 0 ? (
         <p className="ct-muted" style={{ margin: "0 0 1.25rem", fontSize: "0.9rem" }}>
           No jobs yet.
@@ -4934,81 +5077,6 @@ export default function DashboardPage() {
         </button>
       </div>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
-        {photoPendingSlots.map((slot) => (
-          <div
-            key={slot.id}
-            className={`ct-lot-mobile-card ct-card ct-card--padded${
-              slot.status === "queued" ? " ct-lot-mobile-card--pending-queued" : " ct-lot-mobile-card--pending-done"
-            }`}
-          >
-            <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center" }}>
-              <div style={{ width: 40, flexShrink: 0, textAlign: "center" }}>
-                {slot.status === "queued" ? (
-                  <svg width={22} height={22} viewBox="0 0 24 24" aria-hidden>
-                    <circle cx="12" cy="12" r="9" fill="none" stroke="rgba(253, 230, 138, 0.35)" strokeWidth="3" />
-                    <path
-                      d="M12 3 A9 9 0 0 1 21 12"
-                      fill="none"
-                      stroke="#fbbf24"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                    >
-                      <animateTransform
-                        attributeName="transform"
-                        type="rotate"
-                        from="0 12 12"
-                        to="360 12 12"
-                        dur="0.75s"
-                        repeatCount="indefinite"
-                      />
-                    </path>
-                  </svg>
-                ) : (
-                  <span style={{ color: "var(--ct-success)", fontWeight: 700 }} aria-hidden>
-                    ✓
-                  </span>
-                )}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>
-                  Photo {slot.index + 1} / {slot.total}
-                </div>
-                {slot.fileName ? (
-                  <div className="ct-muted" style={{ fontSize: "0.8rem", wordBreak: "break-word", marginTop: 4 }}>
-                    {slot.fileName}
-                  </div>
-                ) : null}
-                <div className="ct-muted" style={{ fontSize: "0.82rem", marginTop: 6 }}>
-                  {slot.status === "queued"
-                    ? processingJob?.single_lot_mode
-                      ? "Sorting for one lot…"
-                      : "Waiting for Gemini…"
-                    : null}
-                  {slot.previewTitle ? (
-                    <span>
-                      {" "}
-                      — <em>{pipelineSlotLabel(slot.fileName, slot.previewTitle, pipelinePhotoSelection)}</em>
-                    </span>
-                  ) : null}
-                  {slot.status !== "queued" && inInventoryPhase ? (
-                    <span>
-                      {" · "}
-                      {!catalogStepProgress
-                        ? "Catalog merge: starting…"
-                        : slot.index < catalogStepProgress.index
-                          ? "Catalog merge: done"
-                          : slot.index > catalogStepProgress.index
-                            ? "Catalog merge: waiting"
-                            : `Catalog merge: now ${catalogStepProgress.index + 1}/${catalogStepProgress.total}${
-                                catalogStepProgress.fileName ? ` · ${catalogStepProgress.fileName}` : ""
-                              }`}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
         {lots.map((lot) => (
           <div
             key={`m-${lot.id}`}
@@ -5107,85 +5175,6 @@ export default function DashboardPage() {
           </tr>
         </thead>
         <tbody>
-          {photoPendingSlots.map((slot) => (
-            <tr
-              key={slot.id}
-              className={slot.status === "queued" ? "ct-table-row--pending-queued" : "ct-table-row--pending-done"}
-            >
-              <td className="ct-table__photo">
-                {slot.status === "queued" ? (
-                  <svg width={22} height={22} viewBox="0 0 24 24" aria-label="Processing" role="img">
-                    <title>Processing</title>
-                    <circle cx="12" cy="12" r="9" fill="none" stroke="rgba(253, 230, 138, 0.35)" strokeWidth="3" />
-                    <path
-                      d="M12 3 A9 9 0 0 1 21 12"
-                      fill="none"
-                      stroke="#fbbf24"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                    >
-                      <animateTransform
-                        attributeName="transform"
-                        type="rotate"
-                        from="0 12 12"
-                        to="360 12 12"
-                        dur="0.75s"
-                        repeatCount="indefinite"
-                      />
-                    </path>
-                  </svg>
-                ) : (
-                  <span style={{ color: "var(--ct-success)", fontWeight: 700 }} aria-hidden>
-                    ✓
-                  </span>
-                )}
-              </td>
-              <td style={{ color: "var(--ct-text-muted)" }}>{slot.previewSku ?? "—"}</td>
-              <td>
-                <strong>
-                  Photo {slot.index + 1}/{slot.total}
-                </strong>
-                {slot.fileName ? (
-                  <span style={{ fontFamily: "monospace", color: "var(--ct-text-subtle)" }}> · {slot.fileName}</span>
-                ) : null}
-                {slot.status === "queued" ? (
-                  <span style={{ color: "var(--ct-text-subtle)" }}>
-                    {" "}
-                    — {processingJob?.single_lot_mode ? "Sorting for one lot…" : "Waiting for Gemini…"}
-                  </span>
-                ) : (
-                  <>
-                    {slot.previewTitle ? (
-                      <span style={{ color: "var(--ct-text-muted)" }}>
-                        {" "}
-                        — <em>{pipelineSlotLabel(slot.fileName, slot.previewTitle, pipelinePhotoSelection)}</em>
-                      </span>
-                    ) : null}
-                    {inInventoryPhase ? (
-                      <span style={{ color: "var(--ct-text-subtle)" }}>
-                        {" · "}
-                        {!catalogStepProgress
-                          ? "Catalog merge: starting…"
-                          : slot.index < catalogStepProgress.index
-                            ? "Catalog merge: done"
-                            : slot.index > catalogStepProgress.index
-                              ? "Catalog merge: waiting"
-                              : `Catalog merge: now ${catalogStepProgress.index + 1}/${catalogStepProgress.total}${
-                                  catalogStepProgress.fileName ? ` · ${catalogStepProgress.fileName}` : ""
-                                }`}
-                      </span>
-                    ) : null}
-                  </>
-                )}
-              </td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-              <td style={{ color: "var(--ct-text-faint)" }}>—</td>
-            </tr>
-          ))}
           {lots.map((lot) => (
             <tr
               key={lot.id}
