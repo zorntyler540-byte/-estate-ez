@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { SiteHeader } from "../../components/SiteHeader";
+import { AppShell } from "../../components/AppShell";
 import { apiFetch } from "../../lib/api";
 
 type Me = {
@@ -231,22 +231,19 @@ export default function AccountPage() {
   }
 
   return (
-    <main className="ct-shell" style={{ maxWidth: 640 }}>
-      <SiteHeader
-        actions={
-          <>
-            <Link href="/dashboard" className="ct-btn ct-btn--ghost">
-              Dashboard
-            </Link>
-            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-              Log out
-            </button>
-          </>
-        }
-      />
-      <Link href="/dashboard" className="ct-back-link">
-        ← Back to dashboard
-      </Link>
+    <AppShell
+      actions={
+        <>
+          <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+            Dashboard
+          </Link>
+          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
+            Log out
+          </button>
+        </>
+      }
+    >
+      <div className="ct-dashboard" style={{ maxWidth: 640 }}>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
@@ -523,6 +520,7 @@ export default function AccountPage() {
           )}
         </section>
       ) : null}
-    </main>
+      </div>
+    </AppShell>
   );
 }

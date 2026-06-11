@@ -7,7 +7,7 @@ import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
-import { SiteHeader } from "../../../components/SiteHeader";
+import { AppShell } from "../../../components/AppShell";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
 import { rotateImageBlob } from "../../../lib/photoEdit";
@@ -769,19 +769,19 @@ export default function LotDetailPage() {
   }
 
   return (
-    <main id="lot-detail-top" className="ct-shell" style={{ maxWidth: 960 }}>
-      <SiteHeader
-        actions={
-          <>
-            <Link href="/account" className="ct-btn ct-btn--ghost">
-              Account
-            </Link>
-            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-              Log out
-            </button>
-          </>
-        }
-      />
+    <AppShell
+      actions={
+        <>
+          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+            Account
+          </Link>
+          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
+            Log out
+          </button>
+        </>
+      }
+    >
+      <div id="lot-detail-top" className="ct-dashboard" style={{ maxWidth: 960 }}>
       <Link
         href="/dashboard"
         className="ct-back-link"
@@ -1657,7 +1657,8 @@ export default function LotDetailPage() {
           </button>
         </div>
       ) : null}
-    </main>
+      </div>
+    </AppShell>
   );
 }
 

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Loader2, Plus, Trash2 } from "lucide-react";
 import { AppraisalPhotoThumb } from "../../components/AppraisalPhotoThumb";
-import { SiteHeader } from "../../components/SiteHeader";
+import { AppShell } from "../../components/AppShell";
 import {
   APPRAISER_CAMERA_MEDIA,
   captureVideoFrameAsJpegFile,
@@ -471,21 +471,42 @@ export default function AppraiserPage() {
     return null;
   }
 
-  return (
-    <main className="ct-shell">
-      <SiteHeader
-        actions={
-          <>
-            <Link href="/account" className="ct-btn ct-btn--ghost">
-              Account
-            </Link>
-            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-              Log out
-            </button>
-          </>
-        }
-      />
+  const saleTopBar = (
+    <label className="ct-app-sale-select">
+      <span className="ct-app-sale-select__label">Sale</span>
+      <select
+        id="appraiser-sale-top"
+        className="ct-input ct-app-sale-select__input"
+        value={selectedSaleId}
+        onChange={(e) => setSelectedSaleId(e.target.value)}
+        disabled={!sales.length}
+        aria-label="Select sale for appraisals"
+      >
+        {sales.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+            {s.closed_at ? " (closed)" : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 
+  return (
+    <AppShell
+      topBar={saleTopBar}
+      actions={
+        <>
+          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+            Account
+          </Link>
+          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
+            Log out
+          </button>
+        </>
+      }
+    >
+      <div className="ct-dashboard" style={{ maxWidth: 900 }}>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
@@ -872,6 +893,7 @@ export default function AppraiserPage() {
           </div>
         </div>
       ) : null}
-    </main>
+      </div>
+    </AppShell>
   );
 }

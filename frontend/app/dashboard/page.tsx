@@ -21,7 +21,7 @@ import {
   X
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
-import { SiteHeader } from "../../components/SiteHeader";
+import { AppShell } from "../../components/AppShell";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import {
   clearStagingDraft,
@@ -1326,6 +1326,16 @@ export default function DashboardPage() {
   }, [jobs]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+  const dashboardStats = useMemo(() => {
+    const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
+    const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
+    return {
+      totalLots: lots.length,
+      photoTotal,
+      withCondition,
+      completedJobCount: completedJobs.length
+    };
+  }, [lots, completedJobs.length]);
   const filteredAdminAccounts = useMemo(() => {
     const q = adminSearch.trim().toLowerCase();
     if (!q) return adminAccounts;
@@ -3912,97 +3922,132 @@ export default function DashboardPage() {
     );
   }
 
-  const saleContext =
-    selectedSale != null
-      ? `Working in “${selectedSale.name}”${selectedSale.closed_at ? " (closed)" : ""}. Switch sale below.`
-      : "Select or create a sale below to organize lots and jobs.";
+  const saleTopBar = (
+    <label className="ct-app-sale-select">
+      <span className="ct-app-sale-select__label">Change sale</span>
+      <select
+        className="ct-input ct-app-sale-select__input"
+        value={selectedSaleId}
+        onChange={(e) => {
+          setSelectedSaleId(e.target.value);
+          setError("");
+        }}
+        disabled={!sales.length}
+        aria-label="Select sale"
+      >
+        {!sales.length ? <option value="">No sales yet</option> : null}
+        {sales.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+            {s.closed_at ? " (Closed)" : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  const shellActions = (
+    <>
+      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+        Account
+      </Link>
+      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
+        Log out
+      </button>
+    </>
+  );
 
   return (
-    <main id="dashboard-top" className="ct-shell">
-      <SiteHeader
-        actions={
-          <>
-            <Link href="/account" className="ct-btn ct-btn--ghost">
-              Account
-            </Link>
-            <button type="button" className="ct-btn ct-btn--ghost" onClick={logout}>
-              Log out
-            </button>
-          </>
-        }
-      />
-      <header className="ct-page-header">
-        <div>
-          <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
+    <AppShell topBar={saleTopBar} actions={shellActions}>
+      <div id="dashboard-top" className="ct-dashboard">
+        <header className="ct-dashboard-hero">
+          <h1 className="ct-dashboard-hero__title">
             Lots dashboard
+            {selectedSale ? (
+              <span className="ct-dashboard-hero__sale"> — {selectedSale.name}</span>
+            ) : null}
           </h1>
-          <p className="ct-subtitle" style={{ margin: 0, maxWidth: "36rem" }}>
-            {saleContext}
-          </p>
-        </div>
-      </header>
-      <section className="ct-card ct-card--padded ct-card--interactive" style={{ marginBottom: "1.25rem" }}>
-        <h2 className="ct-section-title" style={{ marginTop: 0 }}>
-          Sales
-        </h2>
-        <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "42rem" }}>
-          Each <strong>sale</strong> is its own workspace — pick the tab for the auction or project you are working on.
-          Lots and uploads always go into the <strong>selected</strong> sale.
-        </p>
-        {sales.length > 0 ? (
-          <nav className="ct-tabs" aria-label="Sales">
-            {sales.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`ct-tab${selectedSaleId === s.id ? " ct-tab--active" : ""}`}
-                onClick={() => {
-                  setSelectedSaleId(s.id);
-                  setError("");
-                }}
-              >
-                {s.name}
-                {s.closed_at ? " (Closed)" : ""}
-              </button>
-            ))}
-          </nav>
-        ) : (
-          <p className="ct-muted" style={{ marginBottom: "0.65rem" }}>
-            No sales yet — add one below to start cataloging.
-          </p>
-        )}
-        <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.75rem", flexWrap: "wrap" }}>
-          <input
-            className="ct-input"
-            style={{ maxWidth: 320, width: "100%" }}
-            placeholder="e.g. Oak Street estate — April 2026"
-            value={newSaleName}
-            onChange={(e) => setNewSaleName(e.target.value)}
-            disabled={creatingSale}
-          />
-          <button
-            type="button"
-            className="ct-btn ct-btn--primary"
-            disabled={creatingSale || !newSaleName.trim() || !token}
-            onClick={() => void createSale()}
-          >
-            {creatingSale ? "Creating…" : "Add sale"}
-          </button>
-          <button
-            type="button"
-            className="ct-btn"
-            disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
-            onClick={() => void endSelectedSale()}
-          >
-            {closingSale ? "Closing…" : "End sale"}
-          </button>
           {selectedSaleClosed ? (
-            <span className="ct-muted" style={{ fontSize: "0.85rem" }}>
-              This sale is closed.
-            </span>
+            <p className="ct-muted ct-dashboard-hero__note">This sale is closed — uploads and edits are disabled.</p>
+          ) : null}
+        </header>
+
+        <div className="ct-dash-stats-row">
+          <section className="ct-dash-panel ct-dash-stats" aria-label="Sale summary">
+            <div className="ct-stat-card">
+              <span className="ct-stat-card__value">{dashboardStats.totalLots}</span>
+              <span className="ct-stat-card__label">Total lots</span>
+            </div>
+            <div className="ct-stat-card">
+              <span className="ct-stat-card__value">{dashboardStats.photoTotal}</span>
+              <span className="ct-stat-card__label">Photos uploaded</span>
+            </div>
+            <div className="ct-stat-card">
+              <span className="ct-stat-card__value">{dashboardStats.withCondition}</span>
+              <span className="ct-stat-card__label">With condition</span>
+            </div>
+          </section>
+          {dashboardStats.completedJobCount > 0 || activeJobs.length > 0 ? (
+            <section className="ct-dash-panel ct-dash-jobs-card" aria-label="Processing jobs">
+              <div className="ct-dash-jobs-card__head">
+                <span className="ct-dash-jobs-card__title">Recent jobs</span>
+                {activeJobs.length > 0 ? (
+                  <span className="ct-dash-jobs-card__badge ct-dash-jobs-card__badge--active">
+                    {activeJobs.length} active
+                  </span>
+                ) : (
+                  <span className="ct-dash-jobs-card__badge ct-dash-jobs-card__badge--done">
+                    {dashboardStats.completedJobCount} completed
+                  </span>
+                )}
+              </div>
+              {completedJobs.length > 0 ? (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost ct-dash-jobs-card__clear"
+                  onClick={() => void deleteAllCompletedJobs()}
+                  disabled={busyProcessing}
+                >
+                  Clear job list
+                </button>
+              ) : null}
+            </section>
           ) : null}
         </div>
-      </section>
+
+        <section className="ct-dash-panel ct-dash-sale-manage">
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              className="ct-input"
+              style={{ maxWidth: 320, width: "100%", flex: "1 1 200px" }}
+              placeholder="New sale name — e.g. Oak Street estate"
+              value={newSaleName}
+              onChange={(e) => setNewSaleName(e.target.value)}
+              disabled={creatingSale}
+            />
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              disabled={creatingSale || !newSaleName.trim() || !token}
+              onClick={() => void createSale()}
+            >
+              {creatingSale ? "Creating…" : "Add sale"}
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
+              onClick={() => void endSelectedSale()}
+            >
+              {closingSale ? "Closing…" : "End sale"}
+            </button>
+          </div>
+          {!sales.length ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
+              Add a sale to start cataloging lots and photos.
+            </p>
+          ) : null}
+        </section>
       {(busyProcessing || queuedJobCount > 0) && (
         <div className="ct-banner ct-banner--warning">
           <p style={{ margin: 0 }}>
@@ -4259,10 +4304,11 @@ export default function DashboardPage() {
           ) : null}
         </section>
       ) : null}
-      <div style={{ marginBottom: "1.25rem" }}>
-        <h2 className="ct-section-title" style={{ marginTop: 0 }}>
-          Run photo processing job
-        </h2>
+
+        <div className="ct-dash-grid">
+          <div className="ct-dash-col ct-dash-col--left">
+            <section className="ct-dash-panel ct-dash-upload">
+              <h2 className="ct-dash-panel__title">Upload photos</h2>
         <p className="ct-lead">
           Add photos for the <strong>sale you selected above</strong>. Choose a whole folder, or pick individual
           photos — then review thumbnails and tap <strong>Upload</strong>. Processing runs automatically; new lots
@@ -4600,9 +4646,10 @@ export default function DashboardPage() {
             Queue job
           </button>
         </div>
-      </div>
+            </section>
 
-      <h2 className="ct-section-title">Jobs</h2>
+            <section className="ct-dash-panel ct-dash-jobs-detail" aria-label="Processing jobs">
+              <h2 className="ct-dash-panel__title">Jobs</h2>
       {activeJobs.length === 0 && completedJobs.length === 0 ? (
         <p className="ct-muted" style={{ margin: "0 0 1.25rem", fontSize: "0.9rem" }}>
           No jobs yet.
@@ -4724,7 +4771,102 @@ export default function DashboardPage() {
           ) : null}
         </div>
       ) : null}
+            </section>
 
+            <section className="ct-dash-panel ct-dash-exports" aria-label="Sale exports">
+              <h2 className="ct-dash-panel__title">Exports</h2>
+              <div className="ct-exports">
+                <p className="ct-lead" style={{ marginTop: 0 }}>
+                  Download catalog data for the <strong>selected sale</strong> — titles, descriptions, prices, and SKUs.
+                </p>
+                <div className="ct-export-actions">
+                  <button
+                    type="button"
+                    className="ct-export-btn"
+                    onClick={() => void downloadExport("markdown")}
+                    disabled={exporting !== "" && exporting !== "markdown"}
+                  >
+                    <FileText size={16} aria-hidden />
+                    {exporting === "markdown" ? "Downloading..." : "Markdown"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-export-btn"
+                    onClick={() => void downloadExport("json")}
+                    disabled={exporting !== "" && exporting !== "json"}
+                  >
+                    <Database size={16} aria-hidden />
+                    {exporting === "json" ? "Downloading..." : "JSON"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-export-btn"
+                    onClick={() => void downloadExport("csv")}
+                    disabled={exporting !== "" && exporting !== "csv"}
+                  >
+                    <FileSpreadsheet size={16} aria-hidden />
+                    {exporting === "csv" ? "Downloading..." : "CTBids CSV"}
+                  </button>
+                </div>
+                <hr className="ct-dash-divider" />
+                <p className="ct-lead" style={{ marginBottom: "0.5rem" }}>
+                  <strong>Photo ZIP</strong> — every catalog photo for this sale in one archive.
+                </p>
+                <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
+                  <summary>How the photo ZIP is organized</summary>
+                  <div className="ct-help-details__body">
+                    <ul>
+                      <li>
+                        Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>).
+                      </li>
+                      <li>Progress counts update every few seconds while the server builds the archive.</li>
+                      <li>
+                        To zip <strong>one listing only</strong>, open that lot&apos;s Details page and use the download
+                        there.
+                      </li>
+                    </ul>
+                  </div>
+                </details>
+                <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    className="ct-export-btn"
+                    onClick={() => void startSalePhotosZipExport()}
+                    disabled={
+                      !selectedSaleId ||
+                      selectedSaleClosed ||
+                      saleZipBusy ||
+                      busyProcessing ||
+                      saleZipExport?.status === "queued" ||
+                      saleZipExport?.status === "processing"
+                    }
+                  >
+                    <Archive size={16} aria-hidden />
+                    {saleZipBusy ? "Starting…" : "Prepare sale photos (ZIP)"}
+                  </button>
+                  {saleZipExport?.ready ? (
+                    <button type="button" className="ct-btn ct-btn--primary" onClick={() => void downloadSaleZipExport()}>
+                      Download ZIP
+                    </button>
+                  ) : null}
+                </div>
+                {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
+                  <p className="ct-muted" style={{ fontSize: "0.85rem", marginTop: "0.55rem" }}>
+                    Building… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+                    <strong>{saleZipExport.total_photos_expected}</strong> files in archive
+                  </p>
+                ) : null}
+                {saleZipExport?.status === "failed" ? (
+                  <p style={{ color: "var(--ct-error)", fontSize: "0.85rem", marginTop: "0.55rem" }}>
+                    {saleZipExport.error_message || "Export failed"}
+                  </p>
+                ) : null}
+              </div>
+            </section>
+          </div>
+
+          <div className="ct-dash-col ct-dash-col--right">
+            <section className="ct-dash-panel ct-dash-lots" aria-label="Catalog lots">
       {photoHealthLotCount > 0 ? (
         <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem" }}>
           <strong>
@@ -4734,8 +4876,8 @@ export default function DashboardPage() {
           <strong>Add photos…</strong> to re-upload.
         </div>
       ) : null}
-      <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
-        <h2 className="ct-section-title" style={{ margin: 0 }}>
+      <div className="ct-dash-lots__head ct-row ct-row--gap-lg" style={{ marginBottom: "0.65rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <h2 className="ct-dash-panel__title" style={{ margin: 0 }}>
           Lots ({lots.length})
         </h2>
         <span className="ct-muted">
@@ -5121,6 +5263,9 @@ export default function DashboardPage() {
         </tbody>
         </table>
       </div>
+            </section>
+          </div>
+        </div>
 
       <input
         ref={lotCameraNativeInputRef}
@@ -5717,99 +5862,6 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      <h2 className="ct-section-title">Exports</h2>
-      <div className="ct-card ct-card--padded ct-exports">
-        <p className="ct-lead" style={{ marginTop: 0 }}>
-          Download a file of everything in the <strong>sale you selected above</strong> — titles, descriptions, prices,
-          and SKUs — for spreadsheets or printing.
-        </p>
-        <div className="ct-export-actions">
-          <button
-            type="button"
-            className="ct-export-btn"
-            onClick={() => void downloadExport("markdown")}
-            disabled={exporting !== "" && exporting !== "markdown"}
-          >
-            <FileText size={16} aria-hidden />
-            {exporting === "markdown" ? "Downloading..." : "Markdown Export"}
-          </button>
-          <button
-            type="button"
-            className="ct-export-btn"
-            onClick={() => void downloadExport("json")}
-            disabled={exporting !== "" && exporting !== "json"}
-          >
-            <Database size={16} aria-hidden />
-            {exporting === "json" ? "Downloading..." : "JSON Export"}
-          </button>
-          <button
-            type="button"
-            className="ct-export-btn"
-            onClick={() => void downloadExport("csv")}
-            disabled={exporting !== "" && exporting !== "csv"}
-          >
-            <FileSpreadsheet size={16} aria-hidden />
-            {exporting === "csv" ? "Downloading..." : "CTBids CSV"}
-          </button>
-        </div>
-        <hr style={{ border: 0, borderTop: "1px solid var(--ct-border)", margin: "1.1rem 0" }} />
-        <p className="ct-lead" style={{ marginBottom: "0.5rem" }}>
-          <strong>Photo ZIP (full sale)</strong> — Download every catalog photo for this sale in one file. Large sales
-          can take a few minutes; keep this tab open, then press <strong>Download ZIP</strong> when it appears.
-        </p>
-        <details className="ct-help-details" style={{ marginBottom: "0.65rem" }}>
-          <summary>How the photo ZIP is organized</summary>
-          <div className="ct-help-details__body">
-            <ul>
-              <li>
-                Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>; lots
-                without a SKU use <code>lot-no-sku-…</code>).
-              </li>
-              <li>
-                Progress counts update every few seconds while the server builds the archive.
-              </li>
-              <li>
-                To zip <strong>one listing only</strong>, open that lot&apos;s Details page and use the download there.
-              </li>
-            </ul>
-          </div>
-        </details>
-        <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
-          <button
-            type="button"
-            className="ct-export-btn"
-            onClick={() => void startSalePhotosZipExport()}
-            disabled={
-              !selectedSaleId ||
-              selectedSaleClosed ||
-              saleZipBusy ||
-              busyProcessing ||
-              saleZipExport?.status === "queued" ||
-              saleZipExport?.status === "processing"
-            }
-          >
-            <Archive size={16} aria-hidden />
-            {saleZipBusy ? "Starting…" : "Prepare sale photos (ZIP)"}
-          </button>
-          {saleZipExport?.ready ? (
-            <button type="button" className="ct-btn ct-btn--primary" onClick={() => void downloadSaleZipExport()}>
-              Download ZIP
-            </button>
-          ) : null}
-        </div>
-        {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
-          <p className="ct-muted" style={{ fontSize: "0.85rem", marginTop: "0.55rem" }}>
-            Building… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
-            <strong>{saleZipExport.total_photos_expected}</strong> files in archive
-          </p>
-        ) : null}
-        {saleZipExport?.status === "failed" ? (
-          <p style={{ color: "var(--ct-error)", fontSize: "0.85rem", marginTop: "0.55rem" }}>
-            {saleZipExport.error_message || "Export failed"}
-          </p>
-        ) : null}
-      </div>
-
       {folderPick &&
       stagingViewerIndex !== null &&
       stagingViewerIndex >= 0 &&
@@ -6216,7 +6268,8 @@ export default function DashboardPage() {
           </button>
         </div>
       ) : null}
-    </main>
+      </div>
+    </AppShell>
   );
 }
 
