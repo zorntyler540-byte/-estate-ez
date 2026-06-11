@@ -20,8 +20,8 @@ class LotRegenerationClaimTests(unittest.TestCase):
         Base.metadata.create_all(bind=engine)
         session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
         db = session_factory()
-        self.addCleanup(db.close)
         self.addCleanup(engine.dispose)
+        self.addCleanup(db.close)
 
         account = Account(id="acct-1", name="Account")
         user = User(id="user-1", account_id=account.id, email="user@example.com", password_hash="hash")
