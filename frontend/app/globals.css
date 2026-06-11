@@ -2881,6 +2881,24 @@ select.ct-input option {
   font-size: 0.78em;
 }
 
+.ct-upload-staging {
+  margin-top: 0.85rem;
+  max-width: 900px;
+}
+
+.ct-upload-setting--compact {
+  margin-bottom: 0.65rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.ct-upload-setting--compact .ct-upload-setting__label {
+  font-size: 0.84rem;
+}
+
+.ct-dash-upload__mobile-settings {
+  display: none;
+}
+
 .ct-upload-staff {
   margin-top: 0.85rem;
   margin-bottom: 0;
@@ -3148,7 +3166,28 @@ select.ct-input option {
     margin-top: 0.25rem;
   }
 
-  /* Mobile order: upload & jobs, lots, exports last. */
+  .ct-dash-upload__desktop {
+    display: none;
+  }
+
+  .ct-dash-upload:not(.ct-dash-upload--active) {
+    display: none;
+  }
+
+  .ct-dash-upload--active {
+    padding: 0.85rem 0.95rem;
+  }
+
+  .ct-dash-upload__mobile-settings {
+    display: flex;
+  }
+
+  .ct-upload-staging {
+    margin-top: 0;
+    max-width: none;
+  }
+
+  /* Mobile order: upload staging when active, lots, exports last. */
 }
 
 @media (max-width: 540px) {

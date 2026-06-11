@@ -4669,12 +4669,9 @@ export default function DashboardPage() {
 
         <div className="ct-dash-grid">
           <div className="ct-dash-col ct-dash-col--left">
-            <section className="ct-dash-panel ct-dash-upload">
-              <h2 className="ct-dash-panel__title">Upload photos</h2>
-              <p className="ct-upload-intro">
-                Add images for the selected sale. Review thumbnails, then upload.
-              </p>
-
+            <section
+              className={`ct-dash-panel ct-dash-upload${folderPick ? " ct-dash-upload--active" : ""}`}
+            >
               <input
                 ref={folderInputRef}
                 type="file"
@@ -4693,123 +4690,170 @@ export default function DashboardPage() {
                 onChange={(e) => onFolderInputChange(e.target.files)}
               />
 
-              <div className="ct-upload-options" role="group" aria-label="Select photos">
-                <div className="ct-upload-option ct-upload-option--featured">
-                  <span className="ct-upload-option__icon" aria-hidden>
-                    <FolderOpen size={20} strokeWidth={1.75} />
-                  </span>
-                  <div className="ct-upload-option__text">
-                    <span className="ct-upload-option__title">Choose folder</span>
-                    <span className="ct-upload-option__desc">
-                      Entire folder from disk; one subfolder or estate tape per lot.
+              <div className="ct-dash-upload__desktop">
+                <h2 className="ct-dash-panel__title">Upload photos</h2>
+                <p className="ct-upload-intro">
+                  Add images for the selected sale. Review thumbnails, then upload.
+                </p>
+
+                <div className="ct-upload-options" role="group" aria-label="Select photos">
+                  <div className="ct-upload-option ct-upload-option--featured">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <FolderOpen size={20} strokeWidth={1.75} />
                     </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Choose folder</span>
+                      <span className="ct-upload-option__desc">
+                        Entire folder from disk; one subfolder or estate tape per lot.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary ct-upload-option__btn"
+                      onClick={() => {
+                        singleLotCaptureChainingRef.current = false;
+                        uploadPickModeRef.current = "batch";
+                        openFolderFilePicker();
+                      }}
+                      disabled={uploading || !selectedSaleId || selectedSaleClosed}
+                    >
+                      Select folder…
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--primary ct-upload-option__btn"
-                    onClick={() => {
-                      singleLotCaptureChainingRef.current = false;
-                      uploadPickModeRef.current = "batch";
-                      openFolderFilePicker();
-                    }}
-                    disabled={uploading || !selectedSaleId || selectedSaleClosed}
-                  >
-                    Select folder…
-                  </button>
-                </div>
-                <div className="ct-upload-option">
-                  <span className="ct-upload-option__icon" aria-hidden>
-                    <ImagePlus size={20} strokeWidth={1.75} />
-                  </span>
-                  <div className="ct-upload-option__text">
-                    <span className="ct-upload-option__title">Choose photos</span>
-                    <span className="ct-upload-option__desc">
-                      Individual files with thumbnail preview in the picker.
+                  <div className="ct-upload-option">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <ImagePlus size={20} strokeWidth={1.75} />
                     </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Choose photos</span>
+                      <span className="ct-upload-option__desc">
+                        Individual files with thumbnail preview in the picker.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__btn"
+                      onClick={openChoosePhotosFlow}
+                      disabled={uploading || !selectedSaleId || selectedSaleClosed}
+                    >
+                      Select photos…
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="ct-btn ct-upload-option__btn"
-                    onClick={openChoosePhotosFlow}
-                    disabled={uploading || !selectedSaleId || selectedSaleClosed}
-                  >
-                    Select photos…
-                  </button>
-                </div>
-                <div className="ct-upload-option">
-                  <span className="ct-upload-option__icon" aria-hidden>
-                    <Plus size={20} strokeWidth={1.75} />
-                  </span>
-                  <div className="ct-upload-option__text">
-                    <span className="ct-upload-option__title">Add one lot</span>
-                    <span className="ct-upload-option__desc">
-                      All selected images become one catalog row; SKU from tape when visible.
+                  <div className="ct-upload-option">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <Plus size={20} strokeWidth={1.75} />
                     </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">Add one lot</span>
+                      <span className="ct-upload-option__desc">
+                        All selected images become one catalog row; SKU from tape when visible.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__btn"
+                      onClick={() => void openAddOneLotFlow()}
+                      disabled={uploading || !selectedSaleId || selectedSaleClosed}
+                    >
+                      Add one lot…
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="ct-btn ct-upload-option__btn"
-                    onClick={() => void openAddOneLotFlow()}
-                    disabled={uploading || !selectedSaleId || selectedSaleClosed}
-                  >
-                    Add one lot…
-                  </button>
                 </div>
+
+                <label className="ct-upload-setting">
+                  <input
+                    type="checkbox"
+                    checked={inheritSkuFromSubfolder}
+                    onChange={(e) => setInheritSkuFromSubfolder(e.target.checked)}
+                  />
+                  <span className="ct-upload-setting__label">
+                    <strong>Use subfolder names as lot numbers</strong>
+                    <span className="ct-upload-setting__hint">
+                      Numeric folder names (e.g. <code>035</code>, <code>036</code>) set the SKU instead of
+                      reading tape in photos.
+                    </span>
+                  </span>
+                </label>
+
+                <details className="ct-help-details">
+                  <summary>Upload guide</summary>
+                  <div className="ct-help-details__body">
+                    <ul>
+                      <li>
+                        <strong>Choose folder</strong> opens your system folder dialog — thumbnails may not appear
+                        there; previews show here after you confirm.
+                      </li>
+                      <li>
+                        <strong>Choose photos</strong> is preferred on phones when you need previews in the picker.
+                      </li>
+                      <li>
+                        Large folders upload in chunks of about <strong>{UPLOAD_FILE_CHUNK} images</strong> per request
+                        into the <strong>same</strong> job so the browser does not time out.
+                      </li>
+                      <li>
+                        <strong>Separate items:</strong> use one subfolder per item (e.g. <code>035/</code>,{" "}
+                        <code>036/</code>) when not using estate tape on every group.
+                      </li>
+                      <li>
+                        <strong>One flat folder:</strong> colored estate tape marks new lots; subfolders work if you
+                        prefer not to use tape on every group.
+                      </li>
+                      <li>
+                        <strong>Add one lot</strong> merges every selected image into one catalog row. On touch devices
+                        the camera may open first; desktop opens the file picker directly.
+                      </li>
+                      <li>
+                        While a job runs, progress appears in <strong>Recent jobs</strong>; you can cancel from the job
+                        row.
+                      </li>
+                    </ul>
+                  </div>
+                </details>
+
+                <details className="ct-help-details ct-upload-staff">
+                  <summary>Staff — server path job</summary>
+                  <div className="ct-help-details__body">
+                    <p style={{ margin: "0 0 0.65rem" }}>
+                      Queue processing for images already on the API server. Nothing uploads from the browser.
+                    </p>
+                    <div className="ct-upload-staff__row">
+                      <input
+                        className="ct-input"
+                        value={folder}
+                        onChange={(e) => setFolder(e.target.value)}
+                        placeholder="Path on the server where images already live"
+                        aria-label="Server folder path for queued job"
+                      />
+                      <button
+                        type="button"
+                        className="ct-btn"
+                        onClick={() => void enqueueJob()}
+                        disabled={!folder || uploading || !selectedSaleId || selectedSaleClosed}
+                      >
+                        Queue job
+                      </button>
+                    </div>
+                  </div>
+                </details>
               </div>
 
-              <label className="ct-upload-setting">
-                <input
-                  type="checkbox"
-                  checked={inheritSkuFromSubfolder}
-                  onChange={(e) => setInheritSkuFromSubfolder(e.target.checked)}
-                />
-                <span className="ct-upload-setting__label">
-                  <strong>Use subfolder names as lot numbers</strong>
-                  <span className="ct-upload-setting__hint">
-                    Numeric folder names (e.g. <code>035</code>, <code>036</code>) set the SKU instead of
-                    reading tape in photos.
+              {folderPick && !folderPick.singleLotMode ? (
+                <label className="ct-upload-setting ct-upload-setting--compact ct-dash-upload__mobile-settings">
+                  <input
+                    type="checkbox"
+                    checked={inheritSkuFromSubfolder}
+                    onChange={(e) => setInheritSkuFromSubfolder(e.target.checked)}
+                  />
+                  <span className="ct-upload-setting__label">
+                    <strong>Use subfolder names as lot numbers</strong>
                   </span>
-                </span>
-              </label>
+                </label>
+              ) : null}
 
-              <details className="ct-help-details">
-                <summary>Upload guide</summary>
-                <div className="ct-help-details__body">
-                  <ul>
-                    <li>
-                      <strong>Choose folder</strong> opens your system folder dialog — thumbnails may not appear
-                      there; previews show here after you confirm.
-                    </li>
-                    <li>
-                      <strong>Choose photos</strong> is preferred on phones when you need previews in the picker.
-                    </li>
-                    <li>
-                      Large folders upload in chunks of about <strong>{UPLOAD_FILE_CHUNK} images</strong> per request
-                      into the <strong>same</strong> job so the browser does not time out.
-                    </li>
-                    <li>
-                      <strong>Separate items:</strong> use one subfolder per item (e.g. <code>035/</code>,{" "}
-                      <code>036/</code>) when not using estate tape on every group.
-                    </li>
-                    <li>
-                      <strong>One flat folder:</strong> colored estate tape marks new lots; subfolders work if you
-                      prefer not to use tape on every group.
-                    </li>
-                    <li>
-                      <strong>Add one lot</strong> merges every selected image into one catalog row. On touch devices
-                      the camera may open first; desktop opens the file picker directly.
-                    </li>
-                    <li>
-                      While a job runs, progress appears in <strong>Recent jobs</strong>; you can cancel from the job row.
-                    </li>
-                  </ul>
-                </div>
-              </details>
         {folderPick && (
           <div
             id="staging-upload-box"
-            className="ct-card ct-card--padded"
-            style={{ marginTop: "0.85rem", maxWidth: 900 }}
+            className="ct-card ct-card--padded ct-upload-staging"
           >
             {folderPick.singleLotMode ? (
               <div style={{ marginBottom: "0.65rem" }}>
@@ -5008,31 +5052,6 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
-              <details className="ct-help-details ct-upload-staff">
-                <summary>Staff — server path job</summary>
-                <div className="ct-help-details__body">
-                  <p style={{ margin: "0 0 0.65rem" }}>
-                    Queue processing for images already on the API server. Nothing uploads from the browser.
-                  </p>
-                  <div className="ct-upload-staff__row">
-                    <input
-                      className="ct-input"
-                      value={folder}
-                      onChange={(e) => setFolder(e.target.value)}
-                      placeholder="Path on the server where images already live"
-                      aria-label="Server folder path for queued job"
-                    />
-                    <button
-                      type="button"
-                      className="ct-btn"
-                      onClick={() => void enqueueJob()}
-                      disabled={!folder || uploading || !selectedSaleId || selectedSaleClosed}
-                    >
-                      Queue job
-                    </button>
-                  </div>
-                </div>
-              </details>
             </section>
 
           </div>
