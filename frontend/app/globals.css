@@ -2070,8 +2070,24 @@ select.ct-input option {
 .ct-dash-grid {
   display: grid;
   grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  grid-template-areas:
+    "left right"
+    "exports right";
   gap: 1.15rem;
   align-items: start;
+}
+
+.ct-dash-col--left {
+  grid-area: left;
+}
+
+.ct-dash-col--right {
+  grid-area: right;
+  grid-row: 1 / -1;
+}
+
+.ct-dash-col--exports {
+  grid-area: exports;
 }
 
 .ct-dash-col {
@@ -2307,9 +2323,21 @@ select.ct-input option {
 
   .ct-dash-grid {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "left"
+      "right"
+      "exports";
   }
 
-  /* Upload / jobs first on mobile — natural DOM order (left col, then lots). */
+  .ct-dash-col--right {
+    grid-row: auto;
+  }
+
+  .ct-dash-col--exports {
+    margin-top: 0.25rem;
+  }
+
+  /* Mobile order: upload & jobs, lots, exports last. */
 }
 
 @media (max-width: 540px) {
