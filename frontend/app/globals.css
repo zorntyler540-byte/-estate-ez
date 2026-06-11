@@ -2184,13 +2184,7 @@ select.ct-input option {
     grid-template-columns: 1fr;
   }
 
-  .ct-dash-col--left {
-    order: 2;
-  }
-
-  .ct-dash-col--right {
-    order: 1;
-  }
+  /* Upload / jobs first on mobile — natural DOM order (left col, then lots). */
 }
 
 @media (max-width: 540px) {
