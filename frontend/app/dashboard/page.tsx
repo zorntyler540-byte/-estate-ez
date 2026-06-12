@@ -1730,6 +1730,10 @@ export default function DashboardPage() {
     stagingDraftRestoredRef.current = true;
     void loadStagingDraft().then((draft) => {
       if (!draft?.imageFiles.length) return;
+      if (folderPickRef.current) {
+        revokeObjectUrls(draft.thumbUrls);
+        return;
+      }
       setFolderPick({
         folderLabel: draft.folderLabel,
         imageFiles: draft.imageFiles,
@@ -3506,7 +3510,7 @@ export default function DashboardPage() {
     openPhotosFilePicker();
   }
 
-  async function onFolderInputChange(list: FileList | null) {
+  async function onFolderInputChange(list: FileList | null, source: "folder" | "photos") {
     if (!list?.length) {
       if (singleLotCaptureChainingRef.current) {
         singleLotCaptureChainingRef.current = false;
@@ -3588,12 +3592,13 @@ export default function DashboardPage() {
         if (folderInputRef.current) folderInputRef.current.value = "";
         return;
       }
+      const stagedImageFiles = source === "photos" ? await stabilizeCapturedFiles(imageFiles) : imageFiles;
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-        const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
+        const thumbUrls = stagedImageFiles.map((f) => URL.createObjectURL(f));
         return {
           folderLabel: label,
-          imageFiles,
+          imageFiles: stagedImageFiles,
           thumbUrls,
           skippedCount,
           singleLotMode
@@ -3819,13 +3824,12 @@ export default function DashboardPage() {
   async function runJob(jobId: string) {
     setError("");
     const pick = folderPickRef.current;
-    const isSingleLot = pick?.singleLotMode === true && (pick?.imageFiles.length ?? 0) > 0;
-    if (isSingleLot) {
-      clearFolderPick();
-      setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
-    } else if (pick?.imageFiles.length) {
-      const n = pick.imageFiles.length;
-      persistStagingAwaitingGemini(jobId, n);
+    const stagedUploadBelongsToJob =
+      readStagingAwaitingGeminiJobId() === jobId &&
+      pick?.singleLotMode !== true &&
+      (pick?.imageFiles.length ?? 0) > 0;
+    if (stagedUploadBelongsToJob) {
+      const n = stagingAwaitingGeminiTotalRef.current || pick!.imageFiles.length;
       setStagingSuccess(
         `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
       );
@@ -4842,7 +4846,7 @@ export default function DashboardPage() {
                 style={{ display: "none" }}
                 accept="image/*,.heic,.heif"
                 {...({ webkitdirectory: "" } as Record<string, unknown>)}
-                onChange={(e) => onFolderInputChange(e.target.files)}
+                onChange={(e) => onFolderInputChange(e.target.files, "folder")}
               />
               <input
                 ref={photosInputRef}
@@ -4850,7 +4854,7 @@ export default function DashboardPage() {
                 multiple
                 style={{ display: "none" }}
                 accept="image/*,.heic,.heif"
-                onChange={(e) => onFolderInputChange(e.target.files)}
+                onChange={(e) => onFolderInputChange(e.target.files, "photos")}
               />
 
               <div className="ct-dash-upload__desktop">
