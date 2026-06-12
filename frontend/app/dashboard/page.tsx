@@ -3181,6 +3181,7 @@ export default function DashboardPage() {
     const stableFiles = await stabilizeCapturedFiles(files);
     clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
+    if (replacing) clearStagingAwaitingGeminiJobId();
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, stableFiles, 0);
     scrollToStagingPendingRef.current = true;
     setFolderPick(pick);
@@ -3550,6 +3551,9 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
+      if (prev?.imageFiles.length && !prev.singleLotMode) {
+        clearStagingAwaitingGeminiJobId();
+      }
       const tailStart = folderPickRef.current?.singleLotMode
         ? (folderPickRef.current?.imageFiles.length ?? 0)
         : 0;
@@ -3592,6 +3596,7 @@ export default function DashboardPage() {
         if (folderInputRef.current) folderInputRef.current.value = "";
         return;
       }
+      clearStagingAwaitingGeminiJobId();
       const stagedImageFiles = source === "photos" ? await stabilizeCapturedFiles(imageFiles) : imageFiles;
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
