@@ -2886,6 +2886,13 @@ select.ct-input option {
   max-width: 900px;
 }
 
+@media (max-width: 1280px) {
+  #staging-upload-box.ct-upload-staging {
+    scroll-margin-top: 0.75rem;
+    scroll-margin-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 .ct-upload-setting--compact {
   margin-bottom: 0.65rem;
   padding: 0.5rem 0.65rem;

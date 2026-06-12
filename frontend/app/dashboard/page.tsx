@@ -53,6 +53,36 @@ function rememberDashboardScrollBeforeLotDetails() {
   }
 }
 
+function isMobileDashboardLayout(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(max-width: 1280px)").matches;
+}
+
+function scrollStagingUploadBoxIntoView(): boolean {
+  const el = document.getElementById("staging-upload-box");
+  if (!el) return false;
+  el.scrollIntoView({
+    behavior: "smooth",
+    block: isMobileDashboardLayout() ? "start" : "nearest",
+    inline: "nearest"
+  });
+  return true;
+}
+
+/** Retry until React mounts the staging box (hidden on mobile until photos are staged). */
+function scheduleScrollStagingUploadBoxIntoView() {
+  if (typeof window === "undefined") return;
+  const tryScroll = (attempt: number) => {
+    window.requestAnimationFrame(() => {
+      if (scrollStagingUploadBoxIntoView()) return;
+      if (attempt < 12) {
+        window.setTimeout(() => tryScroll(attempt + 1), 60);
+      }
+    });
+  };
+  tryScroll(0);
+}
+
 /**
  * Max files per multipart POST. Smaller chunks shorten each request (less “stuck” behind proxies)
  * while still batching enough for large estate folders.
@@ -1309,6 +1339,7 @@ export default function DashboardPage() {
   /** Timestamp of last native file/camera picker open — skip bfcache reload briefly after return. */
   const nativePickerOpenedAtRef = useRef(0);
   const folderPickRef = useRef<FolderPickPreview | null>(null);
+  const scrollToStagingPendingRef = useRef(false);
   const stagingAwaitingGeminiJobIdRef = useRef<string | null>(null);
   const stagingAwaitingGeminiTotalRef = useRef(0);
   const stagingAwaitingGeminiSeenRef = useRef<Set<number>>(new Set());
@@ -1706,6 +1737,13 @@ export default function DashboardPage() {
     }, 500);
     return () => window.clearTimeout(t);
   }, [folderPick, selectedSaleId, singleLotManualSku]);
+
+  useEffect(() => {
+    if (!scrollToStagingPendingRef.current || !folderPick?.imageFiles.length) return;
+    if (scrollStagingUploadBoxIntoView()) {
+      scrollToStagingPendingRef.current = false;
+    }
+  }, [folderPick]);
 
   useEffect(() => {
     const onPageShow = (e: PageTransitionEvent) => {
@@ -3000,10 +3038,9 @@ export default function DashboardPage() {
     clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, stableFiles, 0);
+    scrollToStagingPendingRef.current = true;
     setFolderPick(pick);
-    window.requestAnimationFrame(() => {
-      document.getElementById("staging-upload-box")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
+    scheduleScrollStagingUploadBoxIntoView();
     if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
       setError(
         `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
