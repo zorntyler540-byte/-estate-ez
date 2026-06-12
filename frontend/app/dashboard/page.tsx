@@ -1350,10 +1350,8 @@ export default function DashboardPage() {
   const lotCameraResumeTimerRef = useRef<number | null>(null);
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
   const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
-  const lotCameraNativeChainingRef = useRef(false);
   /** True while the OS camera sheet is open — inline preview must stay suspended. */
   const lotCameraNativePickerOpenRef = useRef(false);
-  const lotCameraNativeChainTimerRef = useRef<number | null>(null);
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
   const lotCameraSnapsRef = useRef<File[]>([]);
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
@@ -2873,7 +2871,6 @@ export default function DashboardPage() {
   function scheduleResumeLotCameraPreview() {
     if (!lotCameraOpen) return;
     if (lotCameraNativePickerOpenRef.current) return;
-    if (lotCameraNativeChainTimerRef.current != null) return;
     if (lotCameraResumeTimerRef.current !== null) {
       window.clearTimeout(lotCameraResumeTimerRef.current);
     }
@@ -2897,8 +2894,11 @@ export default function DashboardPage() {
 
   async function resumeInlineLotCameraAfterNativePicker() {
     if (!lotCameraOpen || lotCameraNativePickerOpenRef.current) return;
-    if (lotCameraNativeChainTimerRef.current != null) return;
-    if (lotCameraNativeChainingRef.current) return;
+    // Brief pause so iOS releases the lens after the native capture sheet closes.
+    const delayMs = isScreenLandscape() ? 280 : 160;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    if (!lotCameraOpen || lotCameraNativePickerOpenRef.current) return;
+    if (lotCameraStreamRef.current?.getVideoTracks().some((t) => t.readyState === "live")) return;
     await reinitLotCameraStream();
   }
 
@@ -2922,7 +2922,6 @@ export default function DashboardPage() {
   async function resumeLotCameraPreview() {
     if (!lotCameraOpen) return;
     if (lotCameraNativePickerOpenRef.current) return;
-    if (lotCameraNativeChainTimerRef.current != null) return;
     const stream = lotCameraStreamRef.current;
     const track = stream?.getVideoTracks()[0];
     const coarse =
@@ -2977,12 +2976,7 @@ export default function DashboardPage() {
     lotCameraHardwareZoomRef.current = false;
     setLotCameraHardwareZoom(false);
     setLotCameraOpticalAvailable(false);
-    lotCameraNativeChainingRef.current = false;
     lotCameraNativePickerOpenRef.current = false;
-    if (lotCameraNativeChainTimerRef.current != null) {
-      window.clearTimeout(lotCameraNativeChainTimerRef.current);
-      lotCameraNativeChainTimerRef.current = null;
-    }
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
   }
@@ -3042,11 +3036,6 @@ export default function DashboardPage() {
   }
 
   async function finishLotCameraSession() {
-    lotCameraNativeChainingRef.current = false;
-    if (lotCameraNativeChainTimerRef.current != null) {
-      window.clearTimeout(lotCameraNativeChainTimerRef.current);
-      lotCameraNativeChainTimerRef.current = null;
-    }
     const files = [...lotCameraSnapsRef.current];
     if (!files.length) {
       stopLotCameraTracks();
@@ -3146,11 +3135,6 @@ export default function DashboardPage() {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
       return;
     }
-    if (lotCameraNativeChainTimerRef.current != null) {
-      window.clearTimeout(lotCameraNativeChainTimerRef.current);
-      lotCameraNativeChainTimerRef.current = null;
-    }
-    lotCameraNativeChainingRef.current = true;
     suspendInlineLotCameraForNativePicker();
     lotCameraNativePickerOpenRef.current = true;
     markNativePhotoPickerOpening();
@@ -3160,51 +3144,25 @@ export default function DashboardPage() {
   async function onLotCameraNativeInputChange(list: FileList | null) {
     lotCameraNativePickerOpenRef.current = false;
     if (!list?.length) {
-      lotCameraNativeChainingRef.current = false;
       void resumeInlineLotCameraAfterNativePicker();
       return;
     }
     const imageFiles = Array.from(list).filter(isCatalogImageFile);
     if (lotCameraNativeInputRef.current) lotCameraNativeInputRef.current.value = "";
     if (!imageFiles.length) {
-      lotCameraNativeChainingRef.current = false;
       void resumeInlineLotCameraAfterNativePicker();
       return;
     }
     const startIndex = lotCameraSnapsRef.current.length;
     appendLotCameraSnapFiles(imageFiles);
+    void resumeInlineLotCameraAfterNativePicker();
     const stableFiles = await stabilizeCapturedFiles(imageFiles);
     replaceLotCameraSnapTail(stableFiles, startIndex);
-    const atCap =
+    if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT;
-    if (lotCameraNativeChainingRef.current && !atCap && imageFiles.length === 1) {
-      if (lotCameraNativeChainTimerRef.current != null) {
-        window.clearTimeout(lotCameraNativeChainTimerRef.current);
-      }
-      const chainDelayMs = isScreenLandscape() ? 750 : 320;
-      lotCameraNativeChainTimerRef.current = window.setTimeout(() => {
-        lotCameraNativeChainTimerRef.current = null;
-        if (!lotCameraNativeChainingRef.current) {
-          void resumeInlineLotCameraAfterNativePicker();
-          return;
-        }
-        if (
-          CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-          lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
-        ) {
-          lotCameraNativeChainingRef.current = false;
-          void resumeInlineLotCameraAfterNativePicker();
-          return;
-        }
-        suspendInlineLotCameraForNativePicker();
-        lotCameraNativePickerOpenRef.current = true;
-        markNativePhotoPickerOpening();
-        lotCameraNativeInputRef.current?.click();
-      }, chainDelayMs);
-    } else {
-      lotCameraNativeChainingRef.current = false;
-      void resumeInlineLotCameraAfterNativePicker();
+      lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+    ) {
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
     }
   }
 
