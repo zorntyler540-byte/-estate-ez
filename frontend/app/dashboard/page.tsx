@@ -304,9 +304,9 @@ function isScreenLandscape(): boolean {
 }
 
 /**
- * CSS rotation for the live ``<video>`` preview. iOS often delivers landscape sensor frames while the
- * phone is held in portrait; captures are corrected via ImageCapture/EXIF but the preview needs
- * an explicit quarter-turn when that happens (especially after reopening the inline stream).
+ * CSS rotation for the live preview canvas. ``drawImage(video)`` always sees the raw sensor
+ * buffer (not iOS display correction on ``<video>``), so orientation is derived from frame
+ * dimensions + screen angle only — same rules as capture, without fighting Safari.
  */
 function lotCameraPreviewRotationDeg(video: HTMLVideoElement): number {
   const vw = video.videoWidth;
@@ -333,23 +333,6 @@ function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
 function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
   const previewRot = lotCameraPreviewRotationDeg(video);
   return previewRot === 0 ? 0 : -previewRot;
-}
-
-function lotCameraPreviewTransform(
-  video: HTMLVideoElement | null,
-  uiZoom: number,
-  hardwareZoom: boolean
-): string {
-  const rot = video ? lotCameraFrameRotationDeg(video) : 0;
-  const z = hardwareZoom ? 1 : uiZoom;
-  if (rot === 90 || rot === -90) {
-    const vw = video?.videoWidth ?? 1;
-    const vh = video?.videoHeight ?? 1;
-    const fill = Math.max(vw / vh, vh / vw);
-    return `rotate(${rot}deg) scale(${z * fill})`;
-  }
-  if (rot !== 0) return `rotate(${rot}deg) scale(${z})`;
-  return `scale(${z})`;
 }
 
 function drawOrientedVideoFrameToCanvas(
@@ -379,6 +362,52 @@ function drawOrientedVideoFrameToCanvas(
 
   const z = Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom);
   if (useDigitalCrop && z > LOT_CAMERA_ZOOM_MIN + 0.001) {
+    const sw = vw / z;
+    const sh = vh / z;
+    const sx = (vw - sw) / 2;
+    const sy = (vh - sh) / 2;
+    ctx.drawImage(video, sx, sy, sw, sh, -vw / 2, -vh / 2, vw, vh);
+  } else {
+    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
+  }
+  ctx.restore();
+}
+
+/** Paint one oriented, object-fit-cover frame to the visible preview canvas (raw sensor → upright). */
+function drawLotCameraPreviewToCanvas(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  outW: number,
+  outH: number,
+  uiZoom: number,
+  hardwareZoom: boolean
+): void {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2 || outW < 2 || outH < 2) return;
+
+  const rotationDeg = lotCameraFrameRotationDeg(video);
+  const rot = ((rotationDeg % 360) + 360) % 360;
+  const swapped = rot === 90 || rot === 270;
+
+  const z = Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom);
+  const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !hardwareZoom;
+  const cropW = useDigitalCrop ? vw / z : vw;
+  const cropH = useDigitalCrop ? vh / z : vh;
+  const orientedW = swapped ? cropH : cropW;
+  const orientedH = swapped ? cropW : cropH;
+  const coverScale = Math.max(outW / orientedW, outH / orientedH);
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, outW, outH);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.save();
+  ctx.translate(outW / 2, outH / 2);
+  ctx.scale(coverScale, coverScale);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+
+  if (useDigitalCrop) {
     const sw = vw / z;
     const sh = vh / z;
     const sx = (vw - sw) / 2;
@@ -1343,6 +1372,8 @@ export default function DashboardPage() {
   const stagingAwaitingGeminiSeenRef = useRef<Set<number>>(new Set());
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  /** Visible preview is canvas-painted so orientation matches captures (iOS ``<video>`` display is inconsistent). */
+  const lotCameraPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Remount the ``<video>`` after iOS backgrounds the tab (preview black, capture still works). */
   const [lotCameraVideoMountKey, setLotCameraVideoMountKey] = useState(0);
   const lotCameraResumeTimerRef = useRef<number | null>(null);
@@ -2442,6 +2473,102 @@ export default function DashboardPage() {
       el.srcObject = null;
     };
   }, [lotCameraStream, lotCameraVideoMountKey]);
+
+  /** Canvas preview loop — draws raw video frames with explicit rotation (avoids iOS ``<video>`` auto-rotate). */
+  useEffect(() => {
+    const canvas = lotCameraPreviewCanvasRef.current;
+    if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady || !canvas) return;
+
+    type VideoWithRvfc = HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: () => void) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
+    };
+
+    let stopped = false;
+    let frameHandle: number | null = null;
+    let resizeRaf = 0;
+
+    const syncCanvasPixels = () => {
+      const c = lotCameraPreviewCanvasRef.current;
+      if (!c) return;
+      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 2);
+      const w = Math.max(2, Math.round(c.clientWidth * dpr));
+      const h = Math.max(2, Math.round(c.clientHeight * dpr));
+      if (c.width !== w || c.height !== h) {
+        c.width = w;
+        c.height = h;
+      }
+    };
+
+    const paint = () => {
+      if (stopped) return;
+      const v = lotCameraVideoRef.current;
+      const c = lotCameraPreviewCanvasRef.current;
+      if (!v || !c || v.readyState < 2 || v.videoWidth < 2) {
+        scheduleNext();
+        return;
+      }
+      syncCanvasPixels();
+      const ctx = c.getContext("2d");
+      if (ctx) {
+        drawLotCameraPreviewToCanvas(
+          ctx,
+          v,
+          c.width,
+          c.height,
+          lotCameraZoomRef.current,
+          lotCameraHardwareZoomRef.current
+        );
+      }
+      scheduleNext();
+    };
+
+    const scheduleNext = () => {
+      if (stopped) return;
+      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
+      if (v?.requestVideoFrameCallback) {
+        frameHandle = v.requestVideoFrameCallback(paint);
+      } else {
+        frameHandle = requestAnimationFrame(paint);
+      }
+    };
+
+    syncCanvasPixels();
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+        cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+          syncCanvasPixels();
+          setLotCameraPreviewLayoutTick((t) => t + 1);
+        });
+      }) : null;
+    ro?.observe(canvas);
+    scheduleNext();
+
+    return () => {
+      stopped = true;
+      ro?.disconnect();
+      cancelAnimationFrame(resizeRaf);
+      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
+      if (frameHandle != null) {
+        if (v?.cancelVideoFrameCallback) {
+          try {
+            v.cancelVideoFrameCallback(frameHandle);
+          } catch {
+            /* ignore */
+          }
+        } else {
+          cancelAnimationFrame(frameHandle);
+        }
+      }
+    };
+  }, [
+    lotCameraOpen,
+    lotCameraStream,
+    lotCameraPreviewReady,
+    lotCameraVideoMountKey,
+    lotCameraPreviewLayoutTick
+  ]);
 
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
   useEffect(() => {
@@ -5532,20 +5659,25 @@ export default function DashboardPage() {
                     onLoadedMetadata={() => {
                       setLotCameraPreviewLayoutTick((t) => t + 1);
                     }}
+                    aria-hidden
+                    tabIndex={-1}
+                    style={{
+                      position: "absolute",
+                      width: 1,
+                      height: 1,
+                      opacity: 0,
+                      pointerEvents: "none",
+                      overflow: "hidden"
+                    }}
+                  />
+                  <canvas
+                    ref={lotCameraPreviewCanvasRef}
+                    className="ct-lot-camera-live-canvas"
+                    aria-hidden
                     style={{
                       width: "100%",
                       height: "100%",
                       display: "block",
-                      objectFit: "cover",
-                      transform: (() => {
-                        void lotCameraPreviewLayoutTick;
-                        return lotCameraPreviewTransform(
-                          lotCameraVideoRef.current,
-                          lotCameraZoom,
-                          lotCameraHardwareZoom
-                        );
-                      })(),
-                      transformOrigin: "center center",
                       pointerEvents: "none"
                     }}
                   />

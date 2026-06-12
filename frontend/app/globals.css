@@ -686,6 +686,10 @@ a.ct-btn:hover {
   outline-offset: 2px;
 }
 
+.ct-lot-camera-live-canvas {
+  vertical-align: top;
+}
+
 .ct-lot-camera-zoom-mode {
   display: inline-block;
   max-width: 100%;
