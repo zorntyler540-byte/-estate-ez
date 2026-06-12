@@ -304,20 +304,26 @@ function isScreenLandscape(): boolean {
 }
 
 /**
- * Rotate live frames so preview/capture match how the user holds the phone (iOS back camera).
- * In landscape both handednesses need the same correction — mixing +90/-90 or 0/180 flips one side upside down.
+ * CSS rotation for the live ``<video>`` preview. iOS often delivers landscape sensor frames while the
+ * phone is held in portrait; captures are corrected via ImageCapture/EXIF but the preview needs
+ * an explicit quarter-turn when that happens (especially after reopening the inline stream).
  */
-function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
+function lotCameraPreviewRotationDeg(video: HTMLVideoElement): number {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return 0;
-  if (!isScreenLandscape()) return 0;
 
+  const frameLandscape = vw > vh * 1.05;
   const framePortrait = vh > vw * 1.05;
-  if (framePortrait) {
-    return 90;
+
+  if (isScreenLandscape()) {
+    return framePortrait ? 90 : 0;
   }
-  return 0;
+  return frameLandscape ? 90 : 0;
+}
+
+function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
+  return lotCameraPreviewRotationDeg(video);
 }
 
 /**
@@ -325,16 +331,8 @@ function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
  * so canvas ``drawImage(video)`` / ``takePhoto`` need the opposite quarter-turn from CSS preview.
  */
 function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (vw < 2 || vh < 2) return 0;
-  if (!isScreenLandscape()) return 0;
-
-  const framePortrait = vh > vw * 1.05;
-  if (framePortrait) {
-    return -90;
-  }
-  return 0;
+  const previewRot = lotCameraPreviewRotationDeg(video);
+  return previewRot === 0 ? 0 : -previewRot;
 }
 
 function lotCameraPreviewTransform(
@@ -5529,6 +5527,9 @@ export default function DashboardPage() {
                     muted
                     onLoadedData={() => {
                       setLotCameraPreviewReady(true);
+                      setLotCameraPreviewLayoutTick((t) => t + 1);
+                    }}
+                    onLoadedMetadata={() => {
                       setLotCameraPreviewLayoutTick((t) => t + 1);
                     }}
                     style={{
