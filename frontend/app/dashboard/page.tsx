@@ -1351,6 +1351,8 @@ export default function DashboardPage() {
   /** Opens the device camera app (``capture``) while the one-lot dialog stays open. */
   const lotCameraNativeInputRef = useRef<HTMLInputElement | null>(null);
   const lotCameraNativeChainingRef = useRef(false);
+  /** True while the OS camera sheet is open — inline preview must stay suspended. */
+  const lotCameraNativePickerOpenRef = useRef(false);
   const lotCameraNativeChainTimerRef = useRef<number | null>(null);
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
   const lotCameraSnapsRef = useRef<File[]>([]);
@@ -2870,6 +2872,8 @@ export default function DashboardPage() {
 
   function scheduleResumeLotCameraPreview() {
     if (!lotCameraOpen) return;
+    if (lotCameraNativePickerOpenRef.current) return;
+    if (lotCameraNativeChainTimerRef.current != null) return;
     if (lotCameraResumeTimerRef.current !== null) {
       window.clearTimeout(lotCameraResumeTimerRef.current);
     }
@@ -2877,6 +2881,25 @@ export default function DashboardPage() {
       lotCameraResumeTimerRef.current = null;
       void resumeLotCameraPreview();
     }, 120);
+  }
+
+  /** Release inline getUserMedia so iOS can hand the lens to the native ``capture`` picker (especially landscape). */
+  function suspendInlineLotCameraForNativePicker() {
+    if (lotCameraResumeTimerRef.current != null) {
+      window.clearTimeout(lotCameraResumeTimerRef.current);
+      lotCameraResumeTimerRef.current = null;
+    }
+    lotCameraStreamRef.current?.getVideoTracks().forEach((t) => t.stop());
+    lotCameraStreamRef.current = null;
+    setLotCameraStream(null);
+    setLotCameraPreviewReady(false);
+  }
+
+  async function resumeInlineLotCameraAfterNativePicker() {
+    if (!lotCameraOpen || lotCameraNativePickerOpenRef.current) return;
+    if (lotCameraNativeChainTimerRef.current != null) return;
+    if (lotCameraNativeChainingRef.current) return;
+    await reinitLotCameraStream();
   }
 
   async function reinitLotCameraStream() {
@@ -2898,6 +2921,8 @@ export default function DashboardPage() {
 
   async function resumeLotCameraPreview() {
     if (!lotCameraOpen) return;
+    if (lotCameraNativePickerOpenRef.current) return;
+    if (lotCameraNativeChainTimerRef.current != null) return;
     const stream = lotCameraStreamRef.current;
     const track = stream?.getVideoTracks()[0];
     const coarse =
@@ -2953,6 +2978,7 @@ export default function DashboardPage() {
     setLotCameraHardwareZoom(false);
     setLotCameraOpticalAvailable(false);
     lotCameraNativeChainingRef.current = false;
+    lotCameraNativePickerOpenRef.current = false;
     if (lotCameraNativeChainTimerRef.current != null) {
       window.clearTimeout(lotCameraNativeChainTimerRef.current);
       lotCameraNativeChainTimerRef.current = null;
@@ -3120,20 +3146,29 @@ export default function DashboardPage() {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
       return;
     }
+    if (lotCameraNativeChainTimerRef.current != null) {
+      window.clearTimeout(lotCameraNativeChainTimerRef.current);
+      lotCameraNativeChainTimerRef.current = null;
+    }
     lotCameraNativeChainingRef.current = true;
+    suspendInlineLotCameraForNativePicker();
+    lotCameraNativePickerOpenRef.current = true;
     markNativePhotoPickerOpening();
     lotCameraNativeInputRef.current?.click();
   }
 
   async function onLotCameraNativeInputChange(list: FileList | null) {
+    lotCameraNativePickerOpenRef.current = false;
     if (!list?.length) {
       lotCameraNativeChainingRef.current = false;
+      void resumeInlineLotCameraAfterNativePicker();
       return;
     }
     const imageFiles = Array.from(list).filter(isCatalogImageFile);
     if (lotCameraNativeInputRef.current) lotCameraNativeInputRef.current.value = "";
     if (!imageFiles.length) {
       lotCameraNativeChainingRef.current = false;
+      void resumeInlineLotCameraAfterNativePicker();
       return;
     }
     const startIndex = lotCameraSnapsRef.current.length;
@@ -3147,21 +3182,29 @@ export default function DashboardPage() {
       if (lotCameraNativeChainTimerRef.current != null) {
         window.clearTimeout(lotCameraNativeChainTimerRef.current);
       }
+      const chainDelayMs = isScreenLandscape() ? 750 : 320;
       lotCameraNativeChainTimerRef.current = window.setTimeout(() => {
         lotCameraNativeChainTimerRef.current = null;
-        if (!lotCameraNativeChainingRef.current) return;
+        if (!lotCameraNativeChainingRef.current) {
+          void resumeInlineLotCameraAfterNativePicker();
+          return;
+        }
         if (
           CTBIDS_MAX_PHOTOS_PER_LOT != null &&
           lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
         ) {
           lotCameraNativeChainingRef.current = false;
+          void resumeInlineLotCameraAfterNativePicker();
           return;
         }
+        suspendInlineLotCameraForNativePicker();
+        lotCameraNativePickerOpenRef.current = true;
         markNativePhotoPickerOpening();
         lotCameraNativeInputRef.current?.click();
-      }, 320);
+      }, chainDelayMs);
     } else {
       lotCameraNativeChainingRef.current = false;
+      void resumeInlineLotCameraAfterNativePicker();
     }
   }
 
