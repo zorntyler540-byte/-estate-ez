@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -26,16 +27,18 @@ class ClosedSaleMutationGuardTests(unittest.TestCase):
         )
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
-        self.current = User(
-            id="owner-1",
-            account_id="acct-1",
-            email="owner@example.com",
-            password_hash="unused",
-            role="owner",
-        )
+        self.current = SimpleNamespace(id="owner-1", account_id="acct-1", email="owner@example.com", role="owner")
         with self.Session() as db:
             db.add(Account(id="acct-1", name="Test Account"))
-            db.add(self.current)
+            db.add(
+                User(
+                    id="owner-1",
+                    account_id="acct-1",
+                    email="owner@example.com",
+                    password_hash="unused",
+                    role="owner",
+                )
+            )
             db.add(
                 Sale(
                     id="sale-closed",
