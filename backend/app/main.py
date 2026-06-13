@@ -135,7 +135,7 @@ def _require_master_admin(current: User) -> None:
 
 def _require_open_sale(row: Sale) -> None:
     if row.closed_at is not None:
-        raise HTTPException(status_code=409, detail="Sale is closed; reopen or create a new sale for new jobs.")
+        raise HTTPException(status_code=409, detail="Sale is closed; reopen it before making catalog changes.")
 
 
 def _assert_sale_editable_for_lot_moves(db: Session, sale_id: str, current: User) -> Sale:
@@ -1590,6 +1590,7 @@ def update_lot(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
 
     if patch.auction_title is not None:
         row.auction_title = patch.auction_title
@@ -1684,6 +1685,7 @@ def delete_lot(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
     sale_id = row.sale_id
     db.query(Photo).filter(
         Photo.lot_id == lot_id,
@@ -1745,7 +1747,8 @@ def purge_sale_catalog(
 ) -> Response:
     """Remove lots, photos, and jobs for one sale only (other sales unchanged)."""
     _require_owner(current)
-    _sale_for_user(sale_id, current, db)
+    sale = _sale_for_user(sale_id, current, db)
+    _require_open_sale(sale)
     _purge_catalog_data(db, account_id=current.account_id, sale_id=sale_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
