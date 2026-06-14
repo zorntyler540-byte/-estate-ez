@@ -3681,6 +3681,7 @@ export default function DashboardPage() {
     if (isSingleLot) {
       clearFolderPick();
     }
+    let partialUploadJobId: string | null = null;
     setUploading(true);
     try {
       const buildFormForSlice = (slice: File[]) => {
@@ -3728,6 +3729,7 @@ export default function DashboardPage() {
             onUploadPart(`Batch 1/${batchCount}`)
           )
         );
+        partialUploadJobId = created.id;
         let uploaded = first.length;
         let batchIndex = 2;
         while (uploaded < total) {
@@ -3752,6 +3754,7 @@ export default function DashboardPage() {
           uploaded += slice.length;
           batchIndex += 1;
         }
+        partialUploadJobId = null;
         setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
       setJobs((prev) => [created, ...prev]);
@@ -3805,10 +3808,23 @@ export default function DashboardPage() {
       if (isSingleLot) {
         restoreSingleLotStaging(files, manualSkuBackup, skippedCount);
       }
+      if (partialUploadJobId) {
+        try {
+          await apiFetch(`/jobs/${partialUploadJobId}`, token, { method: "DELETE" });
+          setJobs((prev) => prev.filter((j) => j.id !== partialUploadJobId));
+        } catch {
+          setError(
+            `${msg} A partial server upload may still be in Recent jobs; delete that job before running it, then try again.`
+          );
+          return;
+        }
+      }
       setError(
-        isSingleLot
-          ? `${msg} Your staged photos were restored in the upload box — fix the issue and try again without refreshing.`
-          : `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
+        partialUploadJobId
+          ? `${msg} The partial server upload was discarded; your staged photos are still in the upload box.`
+          : isSingleLot
+            ? `${msg} Your staged photos were restored in the upload box — fix the issue and try again without refreshing.`
+            : `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
       );
     } finally {
       setUploading(false);
@@ -3818,18 +3834,6 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
-    const pick = folderPickRef.current;
-    const isSingleLot = pick?.singleLotMode === true && (pick?.imageFiles.length ?? 0) > 0;
-    if (isSingleLot) {
-      clearFolderPick();
-      setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
-    } else if (pick?.imageFiles.length) {
-      const n = pick.imageFiles.length;
-      persistStagingAwaitingGemini(jobId, n);
-      setStagingSuccess(
-        `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
-      );
-    }
     try {
       const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
       if (updated.status === "processing") {
@@ -3839,6 +3843,8 @@ export default function DashboardPage() {
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
       if (updated.status === "queued") {
         setStagingSuccess("Job queued — it will start automatically when the current lot finishes.");
+      } else if (folderPickRef.current?.imageFiles.length) {
+        setStagingSuccess("Catalog started — your current staged photos were kept in the upload box.");
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Run failed";
