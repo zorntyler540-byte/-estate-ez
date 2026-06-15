@@ -113,8 +113,11 @@ const LOT_CAMERA_JPEG_QUALITY = 0.92;
 const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
   video: {
     facingMode: { ideal: "environment" },
-    width: { ideal: 3840 },
-    height: { ideal: 2160 }
+    // 1080p keeps the canvas preview smooth on phones; portrait snaps still grab full-res
+    // frames via ImageCapture.takePhoto, so saved-photo quality is unaffected.
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    frameRate: { ideal: 30 }
   },
   audio: false
 };
@@ -400,8 +403,10 @@ function drawLotCameraPreviewToCanvas(
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, outW, outH);
+  // Live preview only — cheap bilinear smoothing keeps the per-frame draw fast on mobile.
+  // Saved captures use the separate high-quality draw path.
   ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
+  ctx.imageSmoothingQuality = "low";
   ctx.save();
   ctx.translate(outW / 2, outH / 2);
   ctx.scale(coverScale, coverScale);
@@ -2491,7 +2496,9 @@ export default function DashboardPage() {
     const syncCanvasPixels = () => {
       const c = lotCameraPreviewCanvasRef.current;
       if (!c) return;
-      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 2);
+      // Cap backing-store density: the live preview does not need full retina pixels and a
+      // smaller canvas keeps the per-frame draw/upload cheap enough to stay smooth.
+      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1.5);
       const w = Math.max(2, Math.round(c.clientWidth * dpr));
       const h = Math.max(2, Math.round(c.clientHeight * dpr));
       if (c.width !== w || c.height !== h) {
