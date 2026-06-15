@@ -1362,6 +1362,15 @@ type FolderPickPreview = {
 };
 
 type SingleLotStagingApply = { pick: FolderPickPreview; droppedFromCap: number };
+type LotCameraSnapHandle = { id: string; file: File };
+
+function makeLotCameraSnapId(): string {
+  const rand =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
+  return rand.replace(/[^a-z0-9-]/gi, "").slice(0, 24) || String(Date.now());
+}
 
 function capIncomingSingleLotFiles(existingCount: number, incoming: File[]): { files: File[]; dropped: number } {
   if (CTBIDS_MAX_PHOTOS_PER_LOT == null) return { files: incoming, dropped: 0 };
@@ -1440,6 +1449,7 @@ export default function DashboardPage() {
   /** True while the OS camera sheet is open — inline preview must stay suspended. */
   const lotCameraNativePickerOpenRef = useRef(false);
   const lotCameraStreamRef = useRef<MediaStream | null>(null);
+  const lotCameraSnapIdsRef = useRef<string[]>([]);
   const lotCameraSnapsRef = useRef<File[]>([]);
   const [lotCameraOpen, setLotCameraOpen] = useState(false);
   const [lotCameraStream, setLotCameraStream] = useState<MediaStream | null>(null);
@@ -2898,6 +2908,7 @@ export default function DashboardPage() {
 
   function restoreSingleLotStaging(files: File[], manualSku: string, skippedCount: number) {
     if (!files.length) return;
+    clearStagingAwaitingGeminiJobId();
     const thumbUrls = files.map((f) => URL.createObjectURL(f));
     setFolderPick({
       folderLabel:
@@ -2926,6 +2937,7 @@ export default function DashboardPage() {
 
   function removeStagingImage(index: number) {
     setStagingSuccess("");
+    clearStagingAwaitingGeminiJobId();
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
       const oldThumb = prev.thumbUrls[index];
@@ -2955,6 +2967,7 @@ export default function DashboardPage() {
   }
 
   function replaceStagingImageFile(index: number, file: File) {
+    clearStagingAwaitingGeminiJobId();
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
       const nextFiles = [...prev.imageFiles];
@@ -3199,27 +3212,27 @@ export default function DashboardPage() {
       urls.forEach((u) => URL.revokeObjectURL(u));
       return [];
     });
+    lotCameraSnapIdsRef.current = [];
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
   }
 
-  function pushLotCameraSnap(file: File): number {
-    const index = lotCameraSnapsRef.current.length;
+  function pushLotCameraSnap(file: File): string {
+    const id = makeLotCameraSnapId();
+    lotCameraSnapIdsRef.current = [...lotCameraSnapIdsRef.current, id];
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
     setLotCameraSnapThumbUrls((prev) => [...prev, URL.createObjectURL(file)]);
-    return index;
+    return id;
   }
 
-  function replaceLotCameraSnapAt(index: number, file: File) {
+  function replaceLotCameraSnapAt(index: number, file: File, expectedCurrentFile?: File) {
     if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
-    setLotCameraSnaps((prev) => {
-      if (index < 0 || index >= prev.length) return prev;
-      const next = [...prev];
-      next[index] = file;
-      lotCameraSnapsRef.current = next;
-      return next;
-    });
+    if (expectedCurrentFile && lotCameraSnapsRef.current[index] !== expectedCurrentFile) return;
+    const next = [...lotCameraSnapsRef.current];
+    next[index] = file;
+    lotCameraSnapsRef.current = next;
+    setLotCameraSnaps(next);
     setLotCameraSnapThumbUrls((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const next = [...prev];
@@ -3228,6 +3241,12 @@ export default function DashboardPage() {
       next[index] = URL.createObjectURL(file);
       return next;
     });
+  }
+
+  function replaceLotCameraSnapById(id: string, file: File, expectedCurrentFile?: File) {
+    const index = lotCameraSnapIdsRef.current.indexOf(id);
+    if (index < 0) return;
+    replaceLotCameraSnapAt(index, file, expectedCurrentFile);
   }
 
   function cancelLotCameraSession() {
@@ -3266,6 +3285,8 @@ export default function DashboardPage() {
     clearLotCameraSnapsAndThumbs();
     stopLotCameraTracks();
     const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, stableFiles, 0);
+    clearStagingAwaitingGeminiJobId();
+    setStagingSuccess("");
     scrollToStagingPendingRef.current = true;
     setFolderPick(pick);
     scheduleScrollStagingUploadBoxIntoView();
@@ -3276,21 +3297,27 @@ export default function DashboardPage() {
     }
   }
 
-  function appendLotCameraSnapFiles(files: File[]) {
-    if (!files.length) return;
+  function appendLotCameraSnapFiles(files: File[]): LotCameraSnapHandle[] {
+    if (!files.length) return [];
     let dropped = 0;
     let added = 0;
     const newThumbs: string[] = [];
+    const addedHandles: LotCameraSnapHandle[] = [];
+    const nextIds = [...lotCameraSnapIdsRef.current];
     const next = [...lotCameraSnapsRef.current];
     for (const f of files) {
       if (CTBIDS_MAX_PHOTOS_PER_LOT != null && next.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
         dropped += 1;
         continue;
       }
+      const id = makeLotCameraSnapId();
+      nextIds.push(id);
       next.push(f);
+      addedHandles.push({ id, file: f });
       newThumbs.push(URL.createObjectURL(f));
       added += 1;
     }
+    lotCameraSnapIdsRef.current = nextIds;
     lotCameraSnapsRef.current = next;
     setLotCameraSnaps(next);
     if (newThumbs.length) {
@@ -3300,30 +3327,7 @@ export default function DashboardPage() {
       setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
     }
     if (added > 0) triggerLotCameraSnapFeedbackImmediate();
-  }
-
-  function replaceLotCameraSnapTail(stableFiles: File[], startIndex: number) {
-    if (!stableFiles.length) return;
-    const next = [...lotCameraSnapsRef.current];
-    const newThumbs: string[] = [];
-    for (let i = 0; i < stableFiles.length; i++) {
-      const idx = startIndex + i;
-      if (idx < 0 || idx >= next.length) continue;
-      next[idx] = stableFiles[i]!;
-    }
-    lotCameraSnapsRef.current = next;
-    setLotCameraSnaps(next);
-    setLotCameraSnapThumbUrls((prev) => {
-      const thumbs = [...prev];
-      for (let i = 0; i < stableFiles.length; i++) {
-        const idx = startIndex + i;
-        if (idx < 0 || idx >= thumbs.length) continue;
-        const old = thumbs[idx];
-        if (old) URL.revokeObjectURL(old);
-        thumbs[idx] = URL.createObjectURL(stableFiles[i]!);
-      }
-      return thumbs;
-    });
+    return addedHandles;
   }
 
   function markNativePhotoPickerOpening() {
@@ -3374,11 +3378,14 @@ export default function DashboardPage() {
       void resumeInlineLotCameraAfterNativePicker();
       return;
     }
-    const startIndex = lotCameraSnapsRef.current.length;
-    appendLotCameraSnapFiles(imageFiles);
+    const addedHandles = appendLotCameraSnapFiles(imageFiles);
     void resumeInlineLotCameraAfterNativePicker();
     const stableFiles = await stabilizeCapturedFiles(imageFiles);
-    replaceLotCameraSnapTail(stableFiles, startIndex);
+    const stableByOriginal = new Map(imageFiles.map((f, i) => [f, stableFiles[i]]));
+    for (const handle of addedHandles) {
+      const stableFile = stableByOriginal.get(handle.file);
+      if (stableFile) replaceLotCameraSnapById(handle.id, stableFile, handle.file);
+    }
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
@@ -3410,24 +3417,21 @@ export default function DashboardPage() {
     ) {
       return;
     }
-    const snapId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID().slice(0, 8)
-        : String(Math.random()).slice(2, 10);
-    const quickFile = new File([quickBlob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
-    const snapIndex = pushLotCameraSnap(quickFile);
+    const fileId = makeLotCameraSnapId().slice(0, 8);
+    const quickFile = new File([quickBlob], `lot-${Date.now()}-${fileId}.jpg`, { type: "image/jpeg" });
+    const snapId = pushLotCameraSnap(quickFile);
 
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
     // Digital zoom crops the preview frame — still capture must match that crop.
     if (track && !useDigitalCrop) {
       void (async () => {
         const hqBlob = await captureLotCameraPhotoBlob(track);
-        if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
+        if (!hqBlob) return;
         const hqFile = new File([hqBlob], quickFile.name, {
           type: hqBlob.type || "image/jpeg"
         });
         const normalized = await normalizeCaptureFileOrientation(hqFile);
-        replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
+        replaceLotCameraSnapById(snapId, normalized ?? hqFile, quickFile);
       })();
     }
   }
@@ -3451,17 +3455,16 @@ export default function DashboardPage() {
   }
 
   function removeLotCameraSnap(index: number) {
+    if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
+    lotCameraSnapIdsRef.current = lotCameraSnapIdsRef.current.filter((_, j) => j !== index);
+    const nextSnaps = lotCameraSnapsRef.current.filter((_, j) => j !== index);
+    lotCameraSnapsRef.current = nextSnaps;
+    setLotCameraSnaps(nextSnaps);
     setLotCameraSnapThumbUrls((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const old = prev[index];
       if (old) URL.revokeObjectURL(old);
       return prev.filter((_, j) => j !== index);
-    });
-    setLotCameraSnaps((prev) => {
-      if (index < 0 || index >= prev.length) return prev;
-      const next = prev.filter((_, j) => j !== index);
-      lotCameraSnapsRef.current = next;
-      return next;
     });
     setLotCameraViewerIndex((cur) => {
       if (cur === null) return null;
@@ -3630,14 +3633,13 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
-      const tailStart = folderPickRef.current?.singleLotMode
-        ? (folderPickRef.current?.imageFiles.length ?? 0)
-        : 0;
+      const stableImageFiles = await stabilizeCapturedFiles(imageFiles);
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
-        imageFiles,
+        stableImageFiles,
         skippedCount
       );
+      clearStagingAwaitingGeminiJobId();
       setFolderPick(pick);
       setStagingSuccess("");
       if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
@@ -3645,23 +3647,6 @@ export default function DashboardPage() {
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
-      void stabilizeCapturedFiles(imageFiles).then((stableImageFiles) => {
-        if (!stableImageFiles.length) return;
-        setFolderPick((p) => {
-          if (!p?.singleLotMode) return p;
-          const nextFiles = [...p.imageFiles];
-          const nextThumbs = [...p.thumbUrls];
-          for (let i = 0; i < stableImageFiles.length; i++) {
-            const idx = tailStart + i;
-            if (idx < 0 || idx >= nextFiles.length) continue;
-            nextFiles[idx] = stableImageFiles[i]!;
-            const oldThumb = nextThumbs[idx];
-            if (oldThumb) URL.revokeObjectURL(oldThumb);
-            nextThumbs[idx] = URL.createObjectURL(stableImageFiles[i]!);
-          }
-          return { ...p, imageFiles: nextFiles, thumbUrls: nextThumbs };
-        });
-      });
     } else {
       if (
         !confirmStagingOverwrite(
@@ -3672,6 +3657,7 @@ export default function DashboardPage() {
         if (folderInputRef.current) folderInputRef.current.value = "";
         return;
       }
+      clearStagingAwaitingGeminiJobId();
       setFolderPick((prev) => {
         if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
         const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
