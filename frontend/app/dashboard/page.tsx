@@ -119,8 +119,8 @@ const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
   audio: false
 };
 
-/** Live preview paint rate — full-res stream, sharper on-screen draw without 4K canvas work. */
-const LOT_CAMERA_PREVIEW_MAX_FPS = 24;
+/** rAF fallback cap; with requestVideoFrameCallback we paint every camera frame (~30fps). */
+const LOT_CAMERA_PREVIEW_MAX_FPS = 30;
 /** Longest preview canvas edge in px (display only; captures stay full sensor resolution). */
 const LOT_CAMERA_PREVIEW_MAX_LONG_EDGE = 1280;
 const LOT_CAMERA_PREVIEW_MAX_DPR = 2;
@@ -2559,16 +2559,17 @@ export default function DashboardPage() {
 
     const paint = () => {
       if (stopped) return;
-      const v = lotCameraVideoRef.current;
+      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
       const c = lotCameraPreviewCanvasRef.current;
       if (!v || !c || v.readyState < 2 || v.videoWidth < 2) {
         scheduleNext();
         return;
       }
+      const syncedToVideo = typeof v.requestVideoFrameCallback === "function";
       const now = typeof performance !== "undefined" ? performance.now() : Date.now();
       const minInterval = 1000 / LOT_CAMERA_PREVIEW_MAX_FPS;
-      if (now - lastPaintMs >= minInterval) {
-        lastPaintMs = now;
+      if (syncedToVideo || now - lastPaintMs >= minInterval) {
+        if (!syncedToVideo) lastPaintMs = now;
         syncCanvasPixels();
         const ctx = c.getContext("2d");
         if (ctx) {
@@ -2635,23 +2636,22 @@ export default function DashboardPage() {
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
   useEffect(() => {
     if (!lotCameraOpen) return;
-    const resume = () => scheduleResumeLotCameraPreview();
     const onVisible = () => {
-      if (document.visibilityState === "visible") resume();
+      if (document.visibilityState === "visible") handleLotCameraForegroundReturn();
     };
     const onOrientation = () => {
       setLotCameraPreviewLayoutTick((t) => t + 1);
-      scheduleResumeLotCameraPreview();
+      handleLotCameraForegroundReturn();
     };
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pageshow", resume);
-    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", handleLotCameraForegroundReturn);
+    window.addEventListener("focus", handleLotCameraForegroundReturn);
     window.addEventListener("orientationchange", onOrientation);
     screen.orientation?.addEventListener("change", onOrientation);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pageshow", resume);
-      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", handleLotCameraForegroundReturn);
+      window.removeEventListener("focus", handleLotCameraForegroundReturn);
       window.removeEventListener("orientationchange", onOrientation);
       screen.orientation?.removeEventListener("change", onOrientation);
     };
@@ -3077,6 +3077,32 @@ export default function DashboardPage() {
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
     setLotCameraPreviewReady(false);
+  }
+
+  /**
+   * iOS often skips ``change`` when the user taps X on the native camera — clear the picker flag
+   * and restart inline preview after a short delay so a real ``change`` can win if a photo was taken.
+   */
+  function dismissLotCameraNativePickerIfNeeded() {
+    if (!lotCameraOpen || !lotCameraNativePickerOpenRef.current) return;
+    if (lotCameraResumeTimerRef.current !== null) {
+      window.clearTimeout(lotCameraResumeTimerRef.current);
+    }
+    lotCameraResumeTimerRef.current = window.setTimeout(() => {
+      lotCameraResumeTimerRef.current = null;
+      if (!lotCameraOpen || !lotCameraNativePickerOpenRef.current) return;
+      lotCameraNativePickerOpenRef.current = false;
+      void resumeInlineLotCameraAfterNativePicker();
+    }, 150);
+  }
+
+  function handleLotCameraForegroundReturn() {
+    if (!lotCameraOpen) return;
+    if (lotCameraNativePickerOpenRef.current) {
+      dismissLotCameraNativePickerIfNeeded();
+      return;
+    }
+    scheduleResumeLotCameraPreview();
   }
 
   async function resumeInlineLotCameraAfterNativePicker() {
@@ -5641,6 +5667,10 @@ export default function DashboardPage() {
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onLotCameraNativeInputChange(e.target.files)}
+        onCancel={() => {
+          lotCameraNativePickerOpenRef.current = false;
+          void resumeInlineLotCameraAfterNativePicker();
+        }}
       />
 
       {lotCameraOpen ? (
