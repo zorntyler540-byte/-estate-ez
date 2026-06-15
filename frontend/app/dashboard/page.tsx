@@ -119,10 +119,26 @@ const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
   audio: false
 };
 
-/** Live preview paint rate — full-res stream, lightweight on-screen draw. */
-const LOT_CAMERA_PREVIEW_MAX_FPS = 20;
-/** Cap preview backing-store pixels (display only; captures use full sensor resolution). */
-const LOT_CAMERA_PREVIEW_MAX_PX = 720;
+/** Live preview paint rate — full-res stream, sharper on-screen draw without 4K canvas work. */
+const LOT_CAMERA_PREVIEW_MAX_FPS = 24;
+/** Longest preview canvas edge in px (display only; captures stay full sensor resolution). */
+const LOT_CAMERA_PREVIEW_MAX_LONG_EDGE = 1280;
+const LOT_CAMERA_PREVIEW_MAX_DPR = 2;
+
+function lotCameraPreviewCanvasPixels(layoutW: number, layoutH: number): { w: number; h: number } {
+  const lw = Math.max(2, layoutW);
+  const lh = Math.max(2, layoutH);
+  const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, LOT_CAMERA_PREVIEW_MAX_DPR);
+  let w = Math.max(2, Math.round(lw * dpr));
+  let h = Math.max(2, Math.round(lh * dpr));
+  const longEdge = Math.max(w, h);
+  if (longEdge > LOT_CAMERA_PREVIEW_MAX_LONG_EDGE) {
+    const scale = LOT_CAMERA_PREVIEW_MAX_LONG_EDGE / longEdge;
+    w = Math.max(2, Math.round(w * scale));
+    h = Math.max(2, Math.round(h * scale));
+  }
+  return { w, h };
+}
 
 type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
@@ -405,10 +421,9 @@ function drawLotCameraPreviewToCanvas(
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, outW, outH);
-  // Live preview only — cheap bilinear smoothing keeps the per-frame draw fast on mobile.
-  // Saved captures use the separate high-quality draw path.
+  // Live preview only — medium smoothing balances sharpness and per-frame cost at ~1MP canvas.
   ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "low";
+  ctx.imageSmoothingQuality = "medium";
   ctx.save();
   ctx.translate(outW / 2, outH / 2);
   ctx.scale(coverScale, coverScale);
@@ -2535,14 +2550,7 @@ export default function DashboardPage() {
     const syncCanvasPixels = () => {
       const c = lotCameraPreviewCanvasRef.current;
       if (!c) return;
-      const layoutW = Math.max(2, c.clientWidth);
-      const layoutH = Math.max(2, c.clientHeight);
-      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1);
-      let w = Math.max(2, Math.round(layoutW * dpr));
-      let h = Math.max(2, Math.round(layoutH * dpr));
-      const scale = Math.min(1, LOT_CAMERA_PREVIEW_MAX_PX / w, LOT_CAMERA_PREVIEW_MAX_PX / h);
-      w = Math.max(2, Math.round(w * scale));
-      h = Math.max(2, Math.round(h * scale));
+      const { w, h } = lotCameraPreviewCanvasPixels(c.clientWidth, c.clientHeight);
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
