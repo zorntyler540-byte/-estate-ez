@@ -3351,7 +3351,15 @@ export default function DashboardPage() {
     suspendInlineLotCameraForNativePicker();
     lotCameraNativePickerOpenRef.current = true;
     markNativePhotoPickerOpening();
-    lotCameraNativeInputRef.current?.click();
+    const el = lotCameraNativeInputRef.current;
+    if (el) {
+      const onNativePickerCancel = () => {
+        lotCameraNativePickerOpenRef.current = false;
+        void resumeInlineLotCameraAfterNativePicker();
+      };
+      el.addEventListener("cancel", onNativePickerCancel, { once: true });
+    }
+    el?.click();
   }
 
   async function onLotCameraNativeInputChange(list: FileList | null) {
@@ -5667,10 +5675,6 @@ export default function DashboardPage() {
         capture="environment"
         style={{ display: "none" }}
         onChange={(e) => onLotCameraNativeInputChange(e.target.files)}
-        onCancel={() => {
-          lotCameraNativePickerOpenRef.current = false;
-          void resumeInlineLotCameraAfterNativePicker();
-        }}
       />
 
       {lotCameraOpen ? (
