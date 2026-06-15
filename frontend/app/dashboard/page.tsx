@@ -113,14 +113,16 @@ const LOT_CAMERA_JPEG_QUALITY = 0.92;
 const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
   video: {
     facingMode: { ideal: "environment" },
-    // 1080p keeps the canvas preview smooth on phones; portrait snaps still grab full-res
-    // frames via ImageCapture.takePhoto, so saved-photo quality is unaffected.
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    frameRate: { ideal: 30 }
+    width: { ideal: 3840 },
+    height: { ideal: 2160 }
   },
   audio: false
 };
+
+/** Live preview paint rate — full-res stream, lightweight on-screen draw. */
+const LOT_CAMERA_PREVIEW_MAX_FPS = 20;
+/** Cap preview backing-store pixels (display only; captures use full sensor resolution). */
+const LOT_CAMERA_PREVIEW_MAX_PX = 720;
 
 type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
@@ -573,6 +575,42 @@ function captureVideoFrameBlob(
   const rotationDeg = lotCameraCaptureRotationDeg(video);
   drawOrientedVideoFrameToCanvas(ctx, video, rotationDeg, uiZoom, useDigitalCrop);
   return canvasToJpegBlob(canvas);
+}
+
+type LotCameraImageCapture = {
+  takePhoto: (settings?: MediaTrackConstraints) => Promise<Blob>;
+  getPhotoCapabilities?: () => Promise<{
+    imageWidth?: { max?: number };
+    imageHeight?: { max?: number };
+  }>;
+};
+
+/** Full-resolution still from the camera track (independent of preview canvas size). */
+async function captureLotCameraPhotoBlob(track: MediaStreamTrack): Promise<Blob | null> {
+  const ImageCaptureCtor =
+    typeof window !== "undefined"
+      ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => LotCameraImageCapture })
+          .ImageCapture
+      : undefined;
+  if (!ImageCaptureCtor) return null;
+  try {
+    const ic = new ImageCaptureCtor(track);
+    if (typeof ic.getPhotoCapabilities === "function") {
+      try {
+        const caps = await ic.getPhotoCapabilities();
+        const iw = caps.imageWidth?.max;
+        const ih = caps.imageHeight?.max;
+        if (typeof iw === "number" && typeof ih === "number" && iw >= 2 && ih >= 2) {
+          return await ic.takePhoto({ imageWidth: iw, imageHeight: ih } as MediaTrackConstraints);
+        }
+      } catch {
+        /* fall through to default takePhoto */
+      }
+    }
+    return await ic.takePhoto();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -2492,15 +2530,19 @@ export default function DashboardPage() {
     let stopped = false;
     let frameHandle: number | null = null;
     let resizeRaf = 0;
+    let lastPaintMs = 0;
 
     const syncCanvasPixels = () => {
       const c = lotCameraPreviewCanvasRef.current;
       if (!c) return;
-      // Cap backing-store density: the live preview does not need full retina pixels and a
-      // smaller canvas keeps the per-frame draw/upload cheap enough to stay smooth.
-      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1.5);
-      const w = Math.max(2, Math.round(c.clientWidth * dpr));
-      const h = Math.max(2, Math.round(c.clientHeight * dpr));
+      const layoutW = Math.max(2, c.clientWidth);
+      const layoutH = Math.max(2, c.clientHeight);
+      const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1);
+      let w = Math.max(2, Math.round(layoutW * dpr));
+      let h = Math.max(2, Math.round(layoutH * dpr));
+      const scale = Math.min(1, LOT_CAMERA_PREVIEW_MAX_PX / w, LOT_CAMERA_PREVIEW_MAX_PX / h);
+      w = Math.max(2, Math.round(w * scale));
+      h = Math.max(2, Math.round(h * scale));
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
@@ -2515,17 +2557,22 @@ export default function DashboardPage() {
         scheduleNext();
         return;
       }
-      syncCanvasPixels();
-      const ctx = c.getContext("2d");
-      if (ctx) {
-        drawLotCameraPreviewToCanvas(
-          ctx,
-          v,
-          c.width,
-          c.height,
-          lotCameraZoomRef.current,
-          lotCameraHardwareZoomRef.current
-        );
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const minInterval = 1000 / LOT_CAMERA_PREVIEW_MAX_FPS;
+      if (now - lastPaintMs >= minInterval) {
+        lastPaintMs = now;
+        syncCanvasPixels();
+        const ctx = c.getContext("2d");
+        if (ctx) {
+          drawLotCameraPreviewToCanvas(
+            ctx,
+            v,
+            c.width,
+            c.height,
+            lotCameraZoomRef.current,
+            lotCameraHardwareZoomRef.current
+          );
+        }
       }
       scheduleNext();
     };
@@ -3329,28 +3376,16 @@ export default function DashboardPage() {
     const snapIndex = pushLotCameraSnap(quickFile);
 
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
-    const ImageCaptureCtor =
-      typeof window !== "undefined"
-        ? (window as Window & { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto: () => Promise<Blob> } })
-            .ImageCapture
-        : undefined;
-    const screenLandscape = isScreenLandscape();
-    // Landscape: quick video-frame capture is already upright; takePhoto() JPEGs arrive with
-    // their own EXIF orientation and replacing the thumb makes it flip sideways a moment later.
-    if (ImageCaptureCtor && track && !useDigitalCrop && !screenLandscape) {
+    // Digital zoom crops the preview frame — still capture must match that crop.
+    if (track && !useDigitalCrop) {
       void (async () => {
-        try {
-          const ic = new ImageCaptureCtor(track);
-          const hqBlob = await ic.takePhoto();
-          if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
-          const hqFile = new File([hqBlob], quickFile.name, {
-            type: hqBlob.type || "image/jpeg"
-          });
-          const normalized = await normalizeCaptureFileOrientation(hqFile);
-          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
-        } catch {
-          /* keep live-frame capture */
-        }
+        const hqBlob = await captureLotCameraPhotoBlob(track);
+        if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
+        const hqFile = new File([hqBlob], quickFile.name, {
+          type: hqBlob.type || "image/jpeg"
+        });
+        const normalized = await normalizeCaptureFileOrientation(hqFile);
+        replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
       })();
     }
   }
