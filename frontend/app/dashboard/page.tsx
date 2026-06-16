@@ -27,7 +27,9 @@ import { AppShell } from "../../components/AppShell";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import {
   clearStagingDraft,
+  getUploadRelativePath,
   loadStagingDraft,
+  preserveUploadRelativePath,
   saveStagingDraft,
   stagingDraftSupported
 } from "../../lib/stagingDraft";
@@ -367,7 +369,7 @@ async function normalizeCaptureFileOrientation(file: File): Promise<File | null>
   release?.();
   const blob = await canvasToJpegBlob(canvas);
   if (!blob) return null;
-  return new File([blob], file.name, { type: "image/jpeg" });
+  return preserveUploadRelativePath(new File([blob], file.name, { type: "image/jpeg" }), file);
 }
 
 /** Short label for the zoom row. Preview always uses CSS scale so WYSIWYG matches capture crop. */
@@ -547,7 +549,8 @@ async function encodeCanvasSourceToJpegFile(
   source: CanvasImageSource,
   width: number,
   height: number,
-  fileName: string
+  fileName: string,
+  sourceFile?: File
 ): Promise<File | null> {
   if (width < 2 || height < 2) return null;
   const canvas = document.createElement("canvas");
@@ -560,7 +563,8 @@ async function encodeCanvasSourceToJpegFile(
   ctx.drawImage(source, 0, 0, width, height);
   const blob = await canvasToJpegBlob(canvas);
   if (!blob) return null;
-  const out = new File([blob], fileName, { type: "image/jpeg", lastModified: Date.now() });
+  let out = new File([blob], fileName, { type: "image/jpeg", lastModified: Date.now() });
+  if (sourceFile) out = preserveUploadRelativePath(out, sourceFile);
   markStabilizedCaptureFile(out);
   return out;
 }
@@ -592,8 +596,9 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
       type: mime,
       lastModified: file.lastModified || Date.now()
     });
-    markStabilizedCaptureFile(out);
-    return out;
+    const withPath = preserveUploadRelativePath(out, file);
+    markStabilizedCaptureFile(withPath);
+    return withPath;
   }
 
   const temp = new File([bytes], file.name || `${base}.heic`, {
@@ -603,7 +608,7 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
   const decoded = await decodeImageForCanvas(temp);
   if (!decoded) return null;
   const { source, width, height, release } = decoded;
-  const out = await encodeCanvasSourceToJpegFile(source, width, height, `${base}.jpg`);
+  const out = await encodeCanvasSourceToJpegFile(source, width, height, `${base}.jpg`, file);
   release?.();
   return out;
 }
@@ -972,7 +977,7 @@ async function rasterizeLotCameraEdit(
           resolve(null);
           return;
         }
-        resolve(new File([blob], `${baseName}.jpg`, { type: "image/jpeg" }));
+        resolve(preserveUploadRelativePath(new File([blob], `${baseName}.jpg`, { type: "image/jpeg" }), file));
       },
       "image/jpeg",
       0.92
@@ -1412,7 +1417,7 @@ function isCatalogImageFile(f: File): boolean {
 }
 
 function folderLabelFromFile(f: File): string {
-  const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+  const rel = getUploadRelativePath(f);
   const parts = rel.split("/").filter(Boolean);
   if (parts.length >= 2) return parts[0] ?? "Folder";
   return "Selected photos";
@@ -3924,8 +3929,7 @@ export default function DashboardPage() {
           form.append("single_lot_manual_sku", manualSkuBackup.trim());
         }
         for (const file of slice) {
-          const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-          form.append("files", file, rel);
+          form.append("files", file, getUploadRelativePath(file));
         }
         return form;
       };
@@ -3969,8 +3973,7 @@ export default function DashboardPage() {
           );
           const form = new FormData();
           for (const file of slice) {
-            const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-            form.append("files", file, rel);
+            form.append("files", file, getUploadRelativePath(file));
           }
           created = jobFromUploadResponse(
             await apiUploadFiles(

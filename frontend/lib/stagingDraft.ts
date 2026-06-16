@@ -11,6 +11,7 @@ type SerializedFile = {
   name: string;
   type: string;
   lastModified: number;
+  relativePath?: string;
   data: ArrayBuffer;
 };
 
@@ -35,6 +36,38 @@ type StagingDraftRecord = {
 
 export function stagingDraftSupported(): boolean {
   return typeof indexedDB !== "undefined";
+}
+
+type UploadRelativeFile = File & { webkitRelativePath?: string };
+
+function cleanUploadRelativePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+export function getUploadRelativePath(file: File): string {
+  const rel = cleanUploadRelativePath((file as UploadRelativeFile).webkitRelativePath || "");
+  return rel || file.name || "unnamed";
+}
+
+function attachUploadRelativePath<T extends File>(file: T, relativePath?: string): T {
+  const rel = cleanUploadRelativePath(relativePath || "");
+  if (!rel || rel === file.name) return file;
+  try {
+    Object.defineProperty(file, "webkitRelativePath", {
+      value: rel,
+      configurable: true
+    });
+  } catch {
+    /* Some browser File implementations may not allow overriding this readonly hint. */
+  }
+  return file;
+}
+
+export function preserveUploadRelativePath<T extends File>(file: T, source: File): T {
+  const sourceRel = getUploadRelativePath(source);
+  const parts = sourceRel.split("/").filter(Boolean);
+  if (parts.length <= 1) return file;
+  return attachUploadRelativePath(file, [...parts.slice(0, -1), file.name || "unnamed"].join("/"));
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -81,6 +114,7 @@ export async function saveStagingDraft(
       name: f.name,
       type: f.type || "image/jpeg",
       lastModified: f.lastModified,
+      relativePath: getUploadRelativePath(f),
       data: await f.arrayBuffer()
     }))
   );
@@ -104,8 +138,11 @@ export async function loadStagingDraft(): Promise<StagingDraftPayload | null> {
     return null;
   }
   if (!record?.files?.length) return null;
-  const imageFiles = record.files.map(
-    (f) => new File([f.data], f.name, { type: f.type, lastModified: f.lastModified })
+  const imageFiles = record.files.map((f) =>
+    attachUploadRelativePath(
+      new File([f.data], f.name, { type: f.type, lastModified: f.lastModified }),
+      f.relativePath
+    )
   );
   const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
   return {
