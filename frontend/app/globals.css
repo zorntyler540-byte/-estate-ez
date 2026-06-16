@@ -679,6 +679,37 @@ a.ct-btn:hover {
   background: #111;
   touch-action: none;
   cursor: pointer;
+  --lot-camera-ui-zoom: 1;
+}
+
+.ct-lot-camera-live video {
+  will-change: transform;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.ct-staging-thumb-failed,
+.ct-capture-thumb-failed,
+.ct-file-preview-failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ct-error);
+  background: var(--ct-error-bg);
+  border: 1px dashed var(--ct-error-border);
+}
+
+.ct-file-preview-failed {
+  font-weight: 500;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  padding: 1rem;
+  border-radius: 8;
+  max-width: min(100%, 420px);
 }
 
 .ct-lot-camera-live:focus-visible {

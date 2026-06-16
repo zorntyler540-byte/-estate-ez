@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Archive,
   ChevronDown,
@@ -109,171 +109,148 @@ const LOT_CAMERA_ZOOM_MIN = 1;
 const LOT_CAMERA_ZOOM_MAX = 4;
 const LOT_CAMERA_ZOOM_STEP = 0.25;
 const LOT_CAMERA_JPEG_QUALITY = 0.92;
+/** Small JPEG thumbs for staging/camera strips — keeps memory low with 30+ photos. */
+const STAGING_THUMB_MAX_PX = 384;
+
+/** Tracks files whose bytes were cloned (or re-encoded) so Done does not re-read 30+ shots on iOS. */
+const stabilizedCaptureFiles = new WeakSet<File>();
+
+function markStabilizedCaptureFile(file: File): void {
+  stabilizedCaptureFiles.add(file);
+}
+
+function isStabilizedCaptureFile(file: File): boolean {
+  return stabilizedCaptureFiles.has(file);
+}
 
 const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
   video: {
     facingMode: { ideal: "environment" },
-    width: { ideal: 3840 },
-    height: { ideal: 2160 }
+    // 1080p live stream keeps canvas preview smooth; still captures use takePhoto() at full sensor.
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    frameRate: { ideal: 30 }
   },
   audio: false
 };
 
-/** rAF fallback cap; with requestVideoFrameCallback we paint every camera frame (~30fps). */
-const LOT_CAMERA_PREVIEW_MAX_FPS = 30;
-/** Longest preview canvas edge in px (display only; captures stay full sensor resolution). */
-const LOT_CAMERA_PREVIEW_MAX_LONG_EDGE = 1280;
-const LOT_CAMERA_PREVIEW_MAX_DPR = 2;
+type VideoTrackSettings = { width?: number; height?: number };
 
-function lotCameraPreviewCanvasPixels(layoutW: number, layoutH: number): { w: number; h: number } {
-  const lw = Math.max(2, layoutW);
-  const lh = Math.max(2, layoutH);
-  const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, LOT_CAMERA_PREVIEW_MAX_DPR);
-  let w = Math.max(2, Math.round(lw * dpr));
-  let h = Math.max(2, Math.round(lh * dpr));
-  const longEdge = Math.max(w, h);
-  if (longEdge > LOT_CAMERA_PREVIEW_MAX_LONG_EDGE) {
-    const scale = LOT_CAMERA_PREVIEW_MAX_LONG_EDGE / longEdge;
-    w = Math.max(2, Math.round(w * scale));
-    h = Math.max(2, Math.round(h * scale));
+/** Quarter-turn needed for raw sensor buffer (canvas capture math). */
+function lotCameraSensorQuarterTurnDeg(video: HTMLVideoElement): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  const frameLandscape = vw > vh * 1.05;
+  const framePortrait = vh > vw * 1.05;
+
+  if (isScreenLandscape()) {
+    return framePortrait ? 90 : 0;
   }
-  return { w, h };
+  return frameLandscape ? 90 : 0;
+}
+
+/** True when Safari already maps the sensor buffer upright on the ``<video>`` element. */
+function lotCameraVideoDisplayIsUpright(video: HTMLVideoElement, track: MediaStreamTrack | null): boolean {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return false;
+
+  const settings = (track?.getSettings?.() ?? {}) as VideoTrackSettings;
+  const sw = settings.width ?? 0;
+  const sh = settings.height ?? 0;
+  if (sw >= 2 && sh >= 2) {
+    const dimsSwapped =
+      (Math.abs(sw - vh) <= Math.max(4, vh * 0.02) && Math.abs(sh - vw) <= Math.max(4, vw * 0.02)) ||
+      (sw === vh && sh === vw);
+    if (dimsSwapped) return true;
+    const settingsPortrait = sh > sw * 1.05;
+    const bufferLandscape = vw > vh * 1.05;
+    if (settingsPortrait && bufferLandscape) return true;
+  }
+
+  const bufferPortrait = vh > vw * 1.05;
+  if (!isScreenLandscape() && bufferPortrait) return true;
+  if (isScreenLandscape() && vw > vh * 1.05) return true;
+  return false;
+}
+
+/**
+ * CSS rotation for the visible ``<video>`` preview (hardware composited). Probed once per stream
+ * so we do not fight iOS display correction with a per-frame canvas loop.
+ */
+function probeLotCameraVideoCssRotationDeg(
+  video: HTMLVideoElement,
+  track: MediaStreamTrack | null
+): number {
+  const sensorTurn = lotCameraSensorQuarterTurnDeg(video);
+  if (sensorTurn === 0) return 0;
+  if (lotCameraVideoDisplayIsUpright(video, track)) return 0;
+  return sensorTurn;
+}
+
+function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
+  return lotCameraSensorQuarterTurnDeg(video);
+}
+
+/** Zoom factor for CSS transform — number or ``var(--lot-camera-ui-zoom)`` for pinch without re-renders. */
+type LotCameraPreviewZoomExpr = number | "var(--lot-camera-ui-zoom, 1)";
+
+function lotCameraPreviewZoomScaleExpr(uiZoom: LotCameraPreviewZoomExpr): string {
+  return typeof uiZoom === "number"
+    ? String(Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom))
+    : uiZoom;
+}
+
+function lotCameraPreviewTransform(
+  video: HTMLVideoElement | null,
+  cssRotationDeg: number,
+  uiZoom: LotCameraPreviewZoomExpr
+): string {
+  const rot = cssRotationDeg;
+  const z = lotCameraPreviewZoomScaleExpr(uiZoom);
+  if (rot === 90 || rot === -90) {
+    const vw = video?.videoWidth ?? 1;
+    const vh = video?.videoHeight ?? 1;
+    const fill = Math.max(vw / vh, vh / vw);
+    return `rotate(${rot}deg) scale(calc(${z} * ${fill}))`;
+  }
+  if (rot !== 0) return `rotate(${rot}deg) scale(${z})`;
+  return `scale(${z})`;
 }
 
 type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
   pointsOfInterest?: boolean;
-  zoom?: { min: number; max: number; step?: number };
 };
-
-type LotCameraZoomCap = { min: number; max: number; step?: number };
 
 function clampLotCameraUiZoom(z: number): number {
   return Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
 }
 
-/** Optical zoom span used by the UI (not the device's full telephoto range). */
-const LOT_CAMERA_HARDWARE_SPAN_MAX = 3;
-
-function effectiveHardwareZoomRange(cap: LotCameraZoomCap): LotCameraZoomCap | null {
-  // Some devices report min > 1 (already zoomed); optical +/- is jumpy there — use digital only.
-  if (cap.min > 1.2) return null;
-  const min = cap.min;
-  let max = Math.min(cap.max, min + LOT_CAMERA_HARDWARE_SPAN_MAX);
-  if (cap.step && cap.step > 0) {
-    max = min + Math.floor((max - min) / cap.step) * cap.step;
-  }
-  if (max <= min + 0.01) return null;
-  return { min, max, step: cap.step };
-}
-
-function readTrackZoom(track: MediaStreamTrack): number | null {
-  const z = (track.getSettings?.() as { zoom?: number } | undefined)?.zoom;
-  return typeof z === "number" && Number.isFinite(z) ? z : null;
-}
-
-function mapUiZoomToHardware(uiZoom: number, cap: LotCameraZoomCap): number {
-  const eff = effectiveHardwareZoomRange(cap);
-  if (!eff) return cap.min;
-  const span = LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN;
-  const t = span > 0 ? (uiZoom - LOT_CAMERA_ZOOM_MIN) / span : 0;
-  let hz = eff.min + t * (eff.max - eff.min);
-  if (eff.step && eff.step > 0) {
-    hz = Math.round(hz / eff.step) * eff.step;
-  }
-  return Math.min(eff.max, Math.max(eff.min, Math.round(hz * 100) / 100));
-}
-
-function mapHardwareToUiZoom(hz: number, cap: LotCameraZoomCap): number {
-  const eff = effectiveHardwareZoomRange(cap);
-  if (!eff) return LOT_CAMERA_ZOOM_MIN;
-  const span = LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN;
-  const t = (hz - eff.min) / (eff.max - eff.min);
-  return clampLotCameraUiZoom(LOT_CAMERA_ZOOM_MIN + t * span);
-}
-
-/** One +/- tap on hardware — small fraction of the capped optical span. */
-function hardwareZoomNudgeAmount(cap: LotCameraZoomCap): number {
-  const eff = effectiveHardwareZoomRange(cap);
-  if (!eff) return 0;
-  const span = eff.max - eff.min;
-  const uiSteps = (LOT_CAMERA_ZOOM_MAX - LOT_CAMERA_ZOOM_MIN) / LOT_CAMERA_ZOOM_STEP;
-  const perTap = span / Math.max(4, uiSteps);
-  if (eff.step && eff.step > 0 && eff.step < perTap * 1.5) {
-    return eff.step;
-  }
-  return Math.max(0.08, Math.round(perTap * 100) / 100);
-}
-
-function readLotCameraZoomCap(track: MediaStreamTrack): LotCameraZoomCap | null {
-  const raw = track.getCapabilities?.() as VideoTrackCaps | undefined;
-  const z = raw?.zoom;
-  if (!z || typeof z.min !== "number" || typeof z.max !== "number" || z.max <= z.min) return null;
-  return { min: z.min, max: z.max, step: z.step };
-}
-
-/** Ask for the rear camera at the highest resolution the device exposes. */
-async function configureLotCameraTrack(track: MediaStreamTrack): Promise<LotCameraZoomCap | null> {
-  const caps = track.getCapabilities?.();
-  if (!caps || !track.applyConstraints) return readLotCameraZoomCap(track);
-
-  const width = caps.width;
-  const height = caps.height;
-  const target: MediaTrackConstraints = { facingMode: { ideal: "environment" } };
-  if (width && typeof width === "object" && "max" in width && typeof width.max === "number") {
-    target.width = { ideal: width.max };
-  } else {
-    target.width = { ideal: 3840 };
-  }
-  if (height && typeof height === "object" && "max" in height && typeof height.max === "number") {
-    target.height = { ideal: height.max };
-  } else {
-    target.height = { ideal: 2160 };
-  }
-
-  try {
-    await track.applyConstraints(target);
-  } catch {
+/** Configure focus and keep the live stream at preview resolution (not 4K). */
+async function configureLotCameraTrack(track: MediaStreamTrack): Promise<void> {
+  if (track.applyConstraints) {
     try {
       await track.applyConstraints({
+        facingMode: { ideal: "environment" },
         width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 }
       });
     } catch {
-      /* keep default stream size */
+      try {
+        await track.applyConstraints({
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        });
+      } catch {
+        /* keep default stream size */
+      }
     }
   }
-  return readLotCameraZoomCap(track);
-}
-
-async function applyHardwareZoomValue(
-  track: MediaStreamTrack,
-  hz: number,
-  cap: LotCameraZoomCap
-): Promise<boolean> {
-  if (!track.applyConstraints) return false;
-  const eff = effectiveHardwareZoomRange(cap);
-  if (!eff) return false;
-  const clamped = Math.min(eff.max, Math.max(eff.min, Math.round(hz * 100) / 100));
-  try {
-    await track.applyConstraints({ advanced: [{ zoom: clamped }] } as unknown as MediaTrackConstraints);
-    return true;
-  } catch {
-    try {
-      await track.applyConstraints({ zoom: clamped } as unknown as MediaTrackConstraints);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-async function applyHardwareZoomOnTrack(
-  track: MediaStreamTrack,
-  cap: LotCameraZoomCap,
-  uiZoom: number
-): Promise<boolean> {
-  return applyHardwareZoomValue(track, mapUiZoomToHardware(uiZoom, cap), cap);
 }
 
 /** Digital crop from a full-resolution still (or video frame); 1 = no crop. */
@@ -325,35 +302,11 @@ function isScreenLandscape(): boolean {
 }
 
 /**
- * CSS rotation for the live preview canvas. ``drawImage(video)`` always sees the raw sensor
- * buffer (not iOS display correction on ``<video>``), so orientation is derived from frame
- * dimensions + screen angle only — same rules as capture, without fighting Safari.
- */
-function lotCameraPreviewRotationDeg(video: HTMLVideoElement): number {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (vw < 2 || vh < 2) return 0;
-
-  const frameLandscape = vw > vh * 1.05;
-  const framePortrait = vh > vw * 1.05;
-
-  if (isScreenLandscape()) {
-    return framePortrait ? 90 : 0;
-  }
-  return frameLandscape ? 90 : 0;
-}
-
-function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
-  return lotCameraPreviewRotationDeg(video);
-}
-
-/**
- * Rotation baked into saved JPEGs. iOS applies its own display correction on the ``<video>`` element,
- * so canvas ``drawImage(video)`` / ``takePhoto`` need the opposite quarter-turn from CSS preview.
+ * Rotation baked into saved JPEGs from canvas ``drawImage(video)`` (raw sensor buffer).
  */
 function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
-  const previewRot = lotCameraPreviewRotationDeg(video);
-  return previewRot === 0 ? 0 : -previewRot;
+  const sensorTurn = lotCameraSensorQuarterTurnDeg(video);
+  return sensorTurn === 0 ? 0 : -sensorTurn;
 }
 
 function drawOrientedVideoFrameToCanvas(
@@ -394,53 +347,6 @@ function drawOrientedVideoFrameToCanvas(
   ctx.restore();
 }
 
-/** Paint one oriented, object-fit-cover frame to the visible preview canvas (raw sensor → upright). */
-function drawLotCameraPreviewToCanvas(
-  ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
-  outW: number,
-  outH: number,
-  uiZoom: number,
-  hardwareZoom: boolean
-): void {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (vw < 2 || vh < 2 || outW < 2 || outH < 2) return;
-
-  const rotationDeg = lotCameraFrameRotationDeg(video);
-  const rot = ((rotationDeg % 360) + 360) % 360;
-  const swapped = rot === 90 || rot === 270;
-
-  const z = Math.max(LOT_CAMERA_ZOOM_MIN, uiZoom);
-  const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !hardwareZoom;
-  const cropW = useDigitalCrop ? vw / z : vw;
-  const cropH = useDigitalCrop ? vh / z : vh;
-  const orientedW = swapped ? cropH : cropW;
-  const orientedH = swapped ? cropW : cropH;
-  const coverScale = Math.max(outW / orientedW, outH / orientedH);
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, outW, outH);
-  // Live preview only — medium smoothing balances sharpness and per-frame cost at ~1MP canvas.
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "medium";
-  ctx.save();
-  ctx.translate(outW / 2, outH / 2);
-  ctx.scale(coverScale, coverScale);
-  ctx.rotate((rotationDeg * Math.PI) / 180);
-
-  if (useDigitalCrop) {
-    const sw = vw / z;
-    const sh = vh / z;
-    const sx = (vw - sw) / 2;
-    const sy = (vh - sh) / 2;
-    ctx.drawImage(video, sx, sy, sw, sh, -vw / 2, -vh / 2, vw, vh);
-  } else {
-    ctx.drawImage(video, -vw / 2, -vh / 2, vw, vh);
-  }
-  ctx.restore();
-}
-
 async function normalizeCaptureFileOrientation(file: File): Promise<File | null> {
   const decoded = await decodeImageForCanvas(file);
   if (!decoded) return null;
@@ -464,32 +370,21 @@ async function normalizeCaptureFileOrientation(file: File): Promise<File | null>
   return new File([blob], file.name, { type: "image/jpeg" });
 }
 
-/** Short label for the zoom row (optical vs digital vs 1×). */
-function lotCameraZoomModeLabel(
-  uiZoom: number,
-  hardwareActive: boolean,
-  opticalAvailable: boolean
-): string {
-  if (uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001) {
-    return opticalAvailable ? "1× — optical zoom available" : "1× — no zoom";
-  }
-  if (hardwareActive) return "Optical zoom (camera lens)";
+/** Short label for the zoom row. Preview always uses CSS scale so WYSIWYG matches capture crop. */
+function lotCameraZoomModeLabel(uiZoom: number): string {
+  if (uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001) return "1×";
   return "Digital zoom — move closer for sharpest detail";
 }
 
 type LotCameraZoomControlsProps = {
   variant: "inline" | "actions";
   uiZoom: number;
-  hardwareActive: boolean;
-  opticalAvailable: boolean;
   onNudge: (direction: -1 | 1) => void;
 };
 
 function LotCameraZoomControls({
   variant,
   uiZoom,
-  hardwareActive,
-  opticalAvailable,
   onNudge
 }: LotCameraZoomControlsProps) {
   const compact = variant === "actions";
@@ -536,16 +431,12 @@ function LotCameraZoomControls({
             </span>
             <span
               className={`ct-lot-camera-zoom-mode${
-                hardwareActive && uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001
-                  ? " ct-lot-camera-zoom-mode--optical"
-                  : uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001
-                    ? " ct-lot-camera-zoom-mode--digital"
-                    : ""
+                uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001 ? " ct-lot-camera-zoom-mode--digital" : ""
               }`}
               role="status"
               aria-live="polite"
             >
-              {lotCameraZoomModeLabel(uiZoom, hardwareActive, opticalAvailable)}
+              {lotCameraZoomModeLabel(uiZoom)}
             </span>
           </div>
           <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
@@ -630,38 +521,185 @@ async function captureLotCameraPhotoBlob(track: MediaStreamTrack): Promise<Blob 
 
 /**
  * iOS Safari can hand back camera-capture File handles that become unreadable after reopening
- * the capture sheet. Clone bytes immediately so staged thumbnails/uploads stay valid.
+ * the capture sheet. Clone bytes immediately (sequentially for large batches) and normalize
+ * HEIC to JPEG so thumbnails and upload stay reliable on older iPhones.
  */
-async function stabilizeCapturedFiles(files: File[]): Promise<File[]> {
-  const out: File[] = [];
-  for (const f of files) {
-    try {
-      const bytes = await f.arrayBuffer();
-      const type = (f.type || "image/jpeg").trim() || "image/jpeg";
-      const fallbackExt =
-        type === "image/png"
-          ? "png"
-          : type === "image/webp"
-            ? "webp"
-            : type === "image/heic"
-              ? "heic"
-              : type === "image/heif"
-                ? "heif"
-                : "jpg";
-      const hasExt = /\.[a-z0-9]{2,6}$/i.test(f.name || "");
-      const baseName = (f.name || "").trim() || `capture-${Date.now()}`;
-      const safeName = hasExt ? baseName : `${baseName}.${fallbackExt}`;
-      out.push(
-        new File([bytes], safeName, {
-          type,
-          lastModified: f.lastModified || Date.now()
-        })
-      );
-    } catch {
-      out.push(f);
-    }
+function captureStabilizeBaseName(file: File): string {
+  const raw = (file.name || "").trim() || `capture-${Date.now()}`;
+  return raw.replace(/\.[a-z0-9]{2,6}$/i, "") || raw;
+}
+
+function isHeicLikeFile(file: File): boolean {
+  const type = (file.type || "").toLowerCase();
+  if (type.includes("heic") || type.includes("heif")) return true;
+  return /\.heic$|\.heif$/i.test(file.name || "");
+}
+
+function isBrowserDisplayableImageFile(file: File): boolean {
+  const type = (file.type || "").toLowerCase();
+  if (type === "image/jpeg" || type === "image/jpg" || type === "image/png" || type === "image/webp") {
+    return true;
   }
+  return /\.jpe?g$|\.png$|\.webp$/i.test(file.name || "");
+}
+
+async function encodeCanvasSourceToJpegFile(
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+  fileName: string
+): Promise<File | null> {
+  if (width < 2 || height < 2) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, width, height);
+  const blob = await canvasToJpegBlob(canvas);
+  if (!blob) return null;
+  const out = new File([blob], fileName, { type: "image/jpeg", lastModified: Date.now() });
+  markStabilizedCaptureFile(out);
   return out;
+}
+
+async function stabilizeCapturedFile(file: File): Promise<File | null> {
+  if (isStabilizedCaptureFile(file)) return file;
+
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await file.arrayBuffer();
+  } catch {
+    return null;
+  }
+  if (bytes.byteLength < 12) return null;
+
+  const type = (file.type || "").trim().toLowerCase() || "application/octet-stream";
+  const base = captureStabilizeBaseName(file);
+
+  if (!isHeicLikeFile(file) && isBrowserDisplayableImageFile(file)) {
+    const ext =
+      type === "image/png" || /\.png$/i.test(file.name)
+        ? "png"
+        : type === "image/webp" || /\.webp$/i.test(file.name)
+          ? "webp"
+          : "jpg";
+    const mime =
+      ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const out = new File([bytes], `${base}.${ext}`, {
+      type: mime,
+      lastModified: file.lastModified || Date.now()
+    });
+    markStabilizedCaptureFile(out);
+    return out;
+  }
+
+  const temp = new File([bytes], file.name || `${base}.heic`, {
+    type: isHeicLikeFile(file) ? type || "image/heic" : type,
+    lastModified: file.lastModified || Date.now()
+  });
+  const decoded = await decodeImageForCanvas(temp);
+  if (!decoded) return null;
+  const { source, width, height, release } = decoded;
+  const out = await encodeCanvasSourceToJpegFile(source, width, height, `${base}.jpg`);
+  release?.();
+  return out;
+}
+
+type StabilizeCapturedBatchResult = { files: File[]; failed: number };
+
+async function stabilizeCapturedFiles(files: File[]): Promise<StabilizeCapturedBatchResult> {
+  const out: File[] = [];
+  let failed = 0;
+  for (const f of files) {
+    const stable = await stabilizeCapturedFile(f);
+    if (stable) out.push(stable);
+    else failed += 1;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  }
+  return { files: out, failed };
+}
+
+/** JPEG blob URL sized for ``<img>`` strips — avoids HEIC question marks and full-res blob memory. */
+async function createDisplayThumbUrl(file: File): Promise<string | null> {
+  const decoded = await decodeImageForCanvas(file);
+  if (!decoded) return null;
+  const { source, width, height, release } = decoded;
+  const scale = Math.min(1, STAGING_THUMB_MAX_PX / Math.max(width, height));
+  const tw = Math.max(1, Math.round(width * scale));
+  const th = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = tw;
+  canvas.height = th;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    release?.();
+    return null;
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "medium";
+  ctx.drawImage(source, 0, 0, tw, th);
+  release?.();
+  const blob = await canvasToJpegBlob(canvas);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
+async function createDisplayThumbUrls(files: File[]): Promise<(string | null)[]> {
+  const urls: (string | null)[] = [];
+  for (const f of files) {
+    urls.push(await createDisplayThumbUrl(f));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  }
+  return urls;
+}
+
+/** Re-clone bytes and verify readability immediately before multipart upload (iOS stale File handles). */
+async function prepareStagedFilesForUpload(files: File[]): Promise<{ files: File[]; skipped: number }> {
+  const out: File[] = [];
+  let skipped = 0;
+  for (const f of files) {
+    const ready = await stabilizeCapturedFile(f);
+    if (!ready || ready.size < 1) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const probe = await ready.slice(0, Math.min(ready.size, 8192)).arrayBuffer();
+      if (probe.byteLength < 1) {
+        skipped += 1;
+        continue;
+      }
+    } catch {
+      skipped += 1;
+      continue;
+    }
+    out.push(ready);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  }
+  return { files: out, skipped };
+}
+
+async function refreshStagingPickFiles(
+  prev: FolderPickPreview,
+  readyFiles: File[]
+): Promise<FolderPickPreview> {
+  if (prev.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
+  const built = await createDisplayThumbUrls(readyFiles);
+  const folderLabel =
+    prev.singleLotMode && readyFiles.length > 0
+      ? readyFiles.length === 1
+        ? folderLabelFromFile(readyFiles[0]!)
+        : `One lot (${readyFiles.length} photos)`
+      : prev.folderLabel;
+  return {
+    ...prev,
+    imageFiles: readyFiles,
+    thumbUrls: built.map((u) => u ?? ""),
+    folderLabel
+  };
 }
 
 function lotCameraPinchDistance(e: TouchEvent): number {
@@ -789,6 +827,47 @@ async function decodeImageForCanvas(
   } catch {
     return null;
   }
+}
+
+function probeImageObjectUrl(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
+
+/** Full-size preview from file bytes — used by viewer/edit modals (not the small strip thumb). */
+async function createPreviewObjectUrlFromFile(file: File): Promise<string | null> {
+  let direct: string | null = null;
+  try {
+    direct = URL.createObjectURL(file);
+    const ok = await probeImageObjectUrl(direct);
+    if (ok) return direct;
+    URL.revokeObjectURL(direct);
+  } catch {
+    if (direct) URL.revokeObjectURL(direct);
+  }
+
+  const decoded = await decodeImageForCanvas(file);
+  if (!decoded) return null;
+  const { source, width, height, release } = decoded;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    release?.();
+    return null;
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, width, height);
+  release?.();
+  const blob = await canvasToJpegBlob(canvas);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
 }
 
 /** Basic tone controls; values are CSS ``filter`` percentages (100 = unchanged). */
@@ -1374,14 +1453,19 @@ function capIncomingSingleLotFiles(existingCount: number, incoming: File[]): { f
 function applySingleLotFilesToStaging(
   prev: FolderPickPreview | null,
   incoming: File[],
-  extraSkipped: number
+  extraSkipped: number,
+  incomingThumbUrls?: (string | null)[]
 ): SingleLotStagingApply {
+  const thumbFor = (f: File, i: number): string => {
+    if (incomingThumbUrls) return incomingThumbUrls[i] ?? "";
+    return URL.createObjectURL(f);
+  };
   const appendSingleLot = Boolean(prev?.singleLotMode);
   if (appendSingleLot) {
     const { files: cappedIncoming, dropped } = capIncomingSingleLotFiles(prev!.imageFiles.length, incoming);
     const merged = [...prev!.imageFiles, ...cappedIncoming];
     const mergedSkipped = prev!.skippedCount + extraSkipped + dropped;
-    const newThumbUrls = cappedIncoming.map((f) => URL.createObjectURL(f));
+    const newThumbUrls = cappedIncoming.map((f, i) => thumbFor(f, i));
     const thumbUrls = [...prev!.thumbUrls, ...newThumbUrls];
     return {
       pick: {
@@ -1397,7 +1481,7 @@ function applySingleLotFilesToStaging(
   }
   const { files: cappedIncoming, dropped } = capIncomingSingleLotFiles(0, incoming);
   if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-  const thumbUrls = cappedIncoming.map((f) => URL.createObjectURL(f));
+  const thumbUrls = cappedIncoming.map((f, i) => thumbFor(f, i));
   return {
     pick: {
       folderLabel:
@@ -1411,6 +1495,130 @@ function applySingleLotFilesToStaging(
     },
     droppedFromCap: dropped
   };
+}
+
+function CaptureStripThumb({ url, label }: { url: string | null; label: string }) {
+  const [failed, setFailed] = useState(false);
+  const showFailed = failed || !url;
+  if (showFailed) {
+    return (
+      <span
+        className="ct-capture-thumb-failed"
+        title={`${label} — could not preview (photo may still upload)`}
+        aria-label={`${label} preview unavailable`}
+      >
+        !
+      </span>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt=""
+      onError={() => setFailed(true)}
+      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+    />
+  );
+}
+
+function StagingStripThumb({ url, label }: { url: string | null; label: string }) {
+  const [failed, setFailed] = useState(false);
+  const showFailed = failed || !url;
+  if (showFailed) {
+    return (
+      <span
+        className="ct-staging-thumb-failed"
+        title={`${label} — preview unavailable (try Upload; photo data may still be OK)`}
+        aria-hidden
+      >
+        !
+      </span>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt=""
+      onError={() => setFailed(true)}
+      width={72}
+      height={72}
+      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none" }}
+    />
+  );
+}
+
+function StagingFilePreviewImage({
+  file,
+  alt,
+  imgStyle,
+  failedMessage = "Could not load this photo. Delete it and retake, or switch iPhone camera to Most Compatible (JPEG)."
+}: {
+  file: File | null | undefined;
+  alt: string;
+  imgStyle?: CSSProperties;
+  failedMessage?: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
+  const urlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPhase("loading");
+    setSrc(null);
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    }
+    if (!file) {
+      setPhase("failed");
+      return;
+    }
+    void createPreviewObjectUrlFromFile(file).then((url) => {
+      if (cancelled) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+      if (!url) {
+        setPhase("failed");
+        return;
+      }
+      urlRef.current = url;
+      setSrc(url);
+      setPhase("ready");
+    });
+    return () => {
+      cancelled = true;
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
+    };
+  }, [file]);
+
+  const boxStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+    padding: "1rem",
+    color: "rgba(255,255,255,0.75)",
+    fontSize: "0.88rem",
+    lineHeight: 1.35,
+    ...imgStyle
+  };
+
+  if (phase === "loading") {
+    return <div style={boxStyle}>Loading photo…</div>;
+  }
+  if (phase === "failed" || !src) {
+    return (
+      <div className="ct-file-preview-failed" style={boxStyle} role="alert">
+        {failedMessage}
+      </div>
+    );
+  }
+  return <img src={src} alt={alt} style={imgStyle} onError={() => setPhase("failed")} />;
 }
 
 export default function DashboardPage() {
@@ -1430,8 +1638,9 @@ export default function DashboardPage() {
   const stagingAwaitingGeminiSeenRef = useRef<Set<number>>(new Set());
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
-  /** Visible preview is canvas-painted so orientation matches captures (iOS ``<video>`` display is inconsistent). */
-  const lotCameraPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** Probed CSS quarter-turn for the visible ``<video>`` preview. */
+  const [lotCameraVideoCssRotation, setLotCameraVideoCssRotation] = useState(0);
+  const lotCameraVideoCssRotationRef = useRef(0);
   /** Remount the ``<video>`` after iOS backgrounds the tab (preview black, capture still works). */
   const [lotCameraVideoMountKey, setLotCameraVideoMountKey] = useState(0);
   const lotCameraResumeTimerRef = useRef<number | null>(null);
@@ -1445,6 +1654,7 @@ export default function DashboardPage() {
   const [lotCameraStream, setLotCameraStream] = useState<MediaStream | null>(null);
   const [lotCameraSnaps, setLotCameraSnaps] = useState<File[]>([]);
   const [lotCameraSnapThumbUrls, setLotCameraSnapThumbUrls] = useState<string[]>([]);
+  const [lotCameraFinishing, setLotCameraFinishing] = useState(false);
   const [lotCameraPreviewReady, setLotCameraPreviewReady] = useState(false);
   /** Bumps when orientation or video dimensions change so preview rotation recalculates. */
   const [lotCameraPreviewLayoutTick, setLotCameraPreviewLayoutTick] = useState(0);
@@ -1462,12 +1672,6 @@ export default function DashboardPage() {
   const [lotCameraEditBusy, setLotCameraEditBusy] = useState(false);
   const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
-  /** When true, zoom is applied on the camera lens — preview uses CSS scale 1. */
-  const [lotCameraHardwareZoom, setLotCameraHardwareZoom] = useState(false);
-  const lotCameraHardwareZoomRef = useRef(false);
-  const [lotCameraOpticalAvailable, setLotCameraOpticalAvailable] = useState(false);
-  const lotCameraZoomCapRef = useRef<LotCameraZoomCap | null>(null);
-  const lotCameraZoomApplyTimerRef = useRef<number | null>(null);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
   const lotCameraTapStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -1786,12 +1990,16 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
     stagingDraftRestoredRef.current = true;
-    void loadStagingDraft().then((draft) => {
+    void loadStagingDraft().then(async (draft) => {
       if (!draft?.imageFiles.length) return;
+      draft.imageFiles.forEach((f) => markStabilizedCaptureFile(f));
+      if (draft.thumbUrls.length) revokeObjectUrls(draft.thumbUrls);
+      const built = await createDisplayThumbUrls(draft.imageFiles);
+      const thumbUrls = built.map((u) => u ?? "");
       setFolderPick({
         folderLabel: draft.folderLabel,
         imageFiles: draft.imageFiles,
-        thumbUrls: draft.thumbUrls,
+        thumbUrls,
         skippedCount: draft.skippedCount,
         singleLotMode: draft.singleLotMode
       });
@@ -2416,15 +2624,34 @@ export default function DashboardPage() {
     setLiveProgressJobId(null);
   }, [processingJobId, jobs]);
 
+  /** Poll jobs/lots so field uploads appear on other devices (same account) without a manual refresh. */
   useEffect(() => {
-    if (!token || loading) return;
-    if (!busyProcessing && queuedJobCount === 0) return;
+    if (!token || loading || !selectedSaleId) return;
 
-    /** Keep syncing while the phone is locked or Safari is in the background (field use). Slightly slower when hidden to save radio. */
     const pollMs = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return 45000;
-      if (queuedJobCount > 0 && !busyProcessing) return 4000;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return 60000;
+      if (busyProcessing || queuedJobCount > 0) {
+        if (queuedJobCount > 0 && !busyProcessing) return 4000;
+        return 8000;
+      }
       return 12000;
+    };
+
+    const refreshLotsForSale = (sid: string) => {
+      const fq =
+        inventorySkuFlagFilterRef.current === ""
+          ? ""
+          : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilterRef.current)}`;
+      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token)
+        .then((lotsData) => setLots(lotsData as Lot[]))
+        .catch(() => {
+          /* ignore */
+        });
+      void apiFetch(`/sales/${encodeURIComponent(sid)}/photo-health`, token)
+        .then((d) => setPhotoHealthMissing(photoHealthMapFromResponse(d)))
+        .catch(() => {
+          /* ignore */
+        });
     };
 
     const tick = async () => {
@@ -2446,23 +2673,13 @@ export default function DashboardPage() {
               setJobSseSession((n) => n + 1);
             }
           }
+          refreshLotsForSale(sid);
         }
         setJobs((prev) => {
           const hadProcessing = prev.some((j) => j.status === "processing");
           const nowProcessing = jlist.some((j) => j.status === "processing");
           if (hadProcessing && !nowProcessing) {
-            const fq =
-              inventorySkuFlagFilterRef.current === ""
-                ? ""
-                : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilterRef.current)}`;
-            void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token).then((lotsData) =>
-              setLots(lotsData as Lot[])
-            );
-            void apiFetch(`/sales/${encodeURIComponent(sid)}/photo-health`, token)
-              .then((d) => setPhotoHealthMissing(photoHealthMapFromResponse(d)))
-              .catch(() => {
-                /* ignore */
-              });
+            refreshLotsForSale(sid);
             const awaiting = readStagingAwaitingGeminiJobId();
             if (awaiting) {
               const finished = jlist.find((j) => j.id === awaiting);
@@ -2532,106 +2749,27 @@ export default function DashboardPage() {
     };
   }, [lotCameraStream, lotCameraVideoMountKey]);
 
-  /** Canvas preview loop — draws raw video frames with explicit rotation (avoids iOS ``<video>`` auto-rotate). */
+  /** One-time orientation probe per stream — visible preview stays on hardware ``<video>``. */
   useEffect(() => {
-    const canvas = lotCameraPreviewCanvasRef.current;
-    if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady || !canvas) return;
+    if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady) return;
+    refreshLotCameraVideoCssRotation();
+  }, [lotCameraOpen, lotCameraStream, lotCameraPreviewReady, lotCameraVideoMountKey]);
 
-    type VideoWithRvfc = HTMLVideoElement & {
-      requestVideoFrameCallback?: (cb: () => void) => number;
-      cancelVideoFrameCallback?: (id: number) => void;
-    };
+  function refreshLotCameraVideoCssRotation() {
+    const video = lotCameraVideoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth < 2) return;
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0] ?? null;
+    const deg = probeLotCameraVideoCssRotationDeg(video, track);
+    lotCameraVideoCssRotationRef.current = deg;
+    setLotCameraVideoCssRotation(deg);
+  }
 
-    let stopped = false;
-    let frameHandle: number | null = null;
-    let resizeRaf = 0;
-    let lastPaintMs = 0;
-
-    const syncCanvasPixels = () => {
-      const c = lotCameraPreviewCanvasRef.current;
-      if (!c) return;
-      const { w, h } = lotCameraPreviewCanvasPixels(c.clientWidth, c.clientHeight);
-      if (c.width !== w || c.height !== h) {
-        c.width = w;
-        c.height = h;
-      }
-    };
-
-    const paint = () => {
-      if (stopped) return;
-      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
-      const c = lotCameraPreviewCanvasRef.current;
-      if (!v || !c || v.readyState < 2 || v.videoWidth < 2) {
-        scheduleNext();
-        return;
-      }
-      const syncedToVideo = typeof v.requestVideoFrameCallback === "function";
-      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-      const minInterval = 1000 / LOT_CAMERA_PREVIEW_MAX_FPS;
-      if (syncedToVideo || now - lastPaintMs >= minInterval) {
-        if (!syncedToVideo) lastPaintMs = now;
-        syncCanvasPixels();
-        const ctx = c.getContext("2d");
-        if (ctx) {
-          drawLotCameraPreviewToCanvas(
-            ctx,
-            v,
-            c.width,
-            c.height,
-            lotCameraZoomRef.current,
-            lotCameraHardwareZoomRef.current
-          );
-        }
-      }
-      scheduleNext();
-    };
-
-    const scheduleNext = () => {
-      if (stopped) return;
-      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
-      if (v?.requestVideoFrameCallback) {
-        frameHandle = v.requestVideoFrameCallback(paint);
-      } else {
-        frameHandle = requestAnimationFrame(paint);
-      }
-    };
-
-    syncCanvasPixels();
-    const ro =
-      typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
-        cancelAnimationFrame(resizeRaf);
-        resizeRaf = requestAnimationFrame(() => {
-          syncCanvasPixels();
-          setLotCameraPreviewLayoutTick((t) => t + 1);
-        });
-      }) : null;
-    ro?.observe(canvas);
-    scheduleNext();
-
-    return () => {
-      stopped = true;
-      ro?.disconnect();
-      cancelAnimationFrame(resizeRaf);
-      const v = lotCameraVideoRef.current as VideoWithRvfc | null;
-      if (frameHandle != null) {
-        if (v?.cancelVideoFrameCallback) {
-          try {
-            v.cancelVideoFrameCallback(frameHandle);
-          } catch {
-            /* ignore */
-          }
-        } else {
-          cancelAnimationFrame(frameHandle);
-        }
-      }
-    };
-  }, [
-    lotCameraOpen,
-    lotCameraStream,
-    lotCameraPreviewReady,
-    lotCameraVideoMountKey,
-    lotCameraPreviewLayoutTick
-  ]);
+  function setLotCameraUiZoom(next: number) {
+    const z = clampLotCameraUiZoom(next);
+    lotCameraZoomRef.current = z;
+    setLotCameraZoom(z);
+    lotCameraZoomWrapRef.current?.style.setProperty("--lot-camera-ui-zoom", String(z));
+  }
 
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
   useEffect(() => {
@@ -2640,6 +2778,7 @@ export default function DashboardPage() {
       if (document.visibilityState === "visible") handleLotCameraForegroundReturn();
     };
     const onOrientation = () => {
+      refreshLotCameraVideoCssRotation();
       setLotCameraPreviewLayoutTick((t) => t + 1);
       handleLotCameraForegroundReturn();
     };
@@ -2731,16 +2870,13 @@ export default function DashboardPage() {
       const { startDist, startZoom } = lotCameraPinchRef.current;
       if (startDist < 1) return;
       const z = clampZoom(startZoom * (d / startDist));
-      scheduleLotCameraZoomApply(z, true);
+      lotCameraZoomRef.current = z;
+      el.style.setProperty("--lot-camera-ui-zoom", String(z));
     };
 
     const onTouchEnd = () => {
       lotCameraPinchRef.current = null;
-      if (lotCameraZoomApplyTimerRef.current != null) {
-        window.clearTimeout(lotCameraZoomApplyTimerRef.current);
-        lotCameraZoomApplyTimerRef.current = null;
-      }
-      void applyLotCameraZoomLevel(lotCameraZoomRef.current);
+      setLotCameraUiZoom(lotCameraZoomRef.current);
     };
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -2755,68 +2891,8 @@ export default function DashboardPage() {
     };
   }, [lotCameraOpen, lotCameraStream]);
 
-  function scheduleLotCameraZoomApply(next: number, duringPinch: boolean) {
-    const z = clampLotCameraUiZoom(next);
-    lotCameraZoomRef.current = z;
-    setLotCameraZoom(z);
-    if (!duringPinch) {
-      void applyLotCameraZoomLevel(z);
-      return;
-    }
-    if (lotCameraZoomApplyTimerRef.current != null) {
-      window.clearTimeout(lotCameraZoomApplyTimerRef.current);
-    }
-    lotCameraZoomApplyTimerRef.current = window.setTimeout(() => {
-      lotCameraZoomApplyTimerRef.current = null;
-      void applyLotCameraZoomLevel(lotCameraZoomRef.current);
-    }, 80);
-  }
-
-  async function applyLotCameraZoomLevel(next: number) {
-    const z = clampLotCameraUiZoom(next);
-    lotCameraZoomRef.current = z;
-    setLotCameraZoom(z);
-
-    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
-    const cap = lotCameraZoomCapRef.current;
-    let hardware = false;
-    if (track && cap && effectiveHardwareZoomRange(cap)) {
-      hardware = await applyHardwareZoomOnTrack(track, cap, z);
-    }
-    lotCameraHardwareZoomRef.current = hardware;
-    setLotCameraHardwareZoom(hardware);
-  }
-
-  /** +/- buttons: nudge optical zoom in small device steps instead of remapping 1–4 to full telephoto range. */
-  async function nudgeLotCameraZoom(direction: -1 | 1) {
-    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
-    const cap = lotCameraZoomCapRef.current;
-    const eff = cap ? effectiveHardwareZoomRange(cap) : null;
-
-    if (track && cap && eff) {
-      const cur = readTrackZoom(track) ?? eff.min;
-      const delta = hardwareZoomNudgeAmount(cap) * direction;
-      const nextHz = Math.min(eff.max, Math.max(eff.min, cur + delta));
-      const hardware = await applyHardwareZoomValue(track, nextHz, cap);
-      if (hardware) {
-        const ui = mapHardwareToUiZoom(readTrackZoom(track) ?? nextHz, cap);
-        lotCameraZoomRef.current = ui;
-        setLotCameraZoom(ui);
-        lotCameraHardwareZoomRef.current = true;
-        setLotCameraHardwareZoom(true);
-        return;
-      }
-    }
-
-    const z = clampLotCameraUiZoom(lotCameraZoomRef.current + direction * LOT_CAMERA_ZOOM_STEP);
-    lotCameraZoomRef.current = z;
-    setLotCameraZoom(z);
-    lotCameraHardwareZoomRef.current = false;
-    setLotCameraHardwareZoom(false);
-  }
-
-  function setLotCameraZoomLevel(next: number) {
-    void applyLotCameraZoomLevel(next);
+  function nudgeLotCameraZoom(direction: -1 | 1) {
+    setLotCameraUiZoom(lotCameraZoomRef.current + direction * LOT_CAMERA_ZOOM_STEP);
   }
 
   async function applyLotCameraTapFocus(clientX: number, clientY: number) {
@@ -2898,16 +2974,23 @@ export default function DashboardPage() {
 
   function restoreSingleLotStaging(files: File[], manualSku: string, skippedCount: number) {
     if (!files.length) return;
-    const thumbUrls = files.map((f) => URL.createObjectURL(f));
+    files.forEach((f) => markStabilizedCaptureFile(f));
     setFolderPick({
       folderLabel:
         files.length === 1 ? folderLabelFromFile(files[0]!) : `One lot (${files.length} photos)`,
       imageFiles: files,
-      thumbUrls,
+      thumbUrls: files.map(() => ""),
       skippedCount,
       singleLotMode: true
     });
     setSingleLotManualSku(manualSku);
+    void createDisplayThumbUrls(files).then((built) => {
+      setFolderPick((prev) => {
+        if (!prev?.singleLotMode || prev.imageFiles.length !== files.length) return prev;
+        const thumbUrls = built.map((u) => u ?? "");
+        return { ...prev, thumbUrls };
+      });
+    });
   }
 
   function tryRemoveStagingImage(index: number) {
@@ -2955,15 +3038,22 @@ export default function DashboardPage() {
   }
 
   function replaceStagingImageFile(index: number, file: File) {
+    markStabilizedCaptureFile(file);
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
       const nextFiles = [...prev.imageFiles];
       nextFiles[index] = file;
-      const thumbUrls = [...prev.thumbUrls];
-      const oldThumb = thumbUrls[index];
-      if (oldThumb) URL.revokeObjectURL(oldThumb);
-      thumbUrls[index] = URL.createObjectURL(file);
-      return { ...prev, imageFiles: nextFiles, thumbUrls };
+      return { ...prev, imageFiles: nextFiles };
+    });
+    void createDisplayThumbUrl(file).then((thumb) => {
+      setFolderPick((prev) => {
+        if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
+        const thumbUrls = [...prev.thumbUrls];
+        const oldThumb = thumbUrls[index];
+        if (oldThumb) URL.revokeObjectURL(oldThumb);
+        thumbUrls[index] = thumb ?? "";
+        return { ...prev, thumbUrls };
+      });
     });
   }
 
@@ -3038,18 +3128,7 @@ export default function DashboardPage() {
   async function bindLotCameraStream(stream: MediaStream) {
     const track = stream.getVideoTracks()[0];
     if (track) {
-      lotCameraZoomCapRef.current = await configureLotCameraTrack(track);
-      setLotCameraOpticalAvailable(!!lotCameraZoomCapRef.current);
-      const cap = lotCameraZoomCapRef.current;
-      const uiZ = lotCameraZoomRef.current;
-      if (cap && uiZ > LOT_CAMERA_ZOOM_MIN + 0.001) {
-        const hw = await applyHardwareZoomOnTrack(track, cap, uiZ);
-        lotCameraHardwareZoomRef.current = hw;
-        setLotCameraHardwareZoom(hw);
-      }
-    } else {
-      lotCameraZoomCapRef.current = null;
-      setLotCameraOpticalAvailable(false);
+      await configureLotCameraTrack(track);
     }
     lotCameraStreamRef.current = stream;
     setLotCameraStream(stream);
@@ -3077,6 +3156,8 @@ export default function DashboardPage() {
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
     setLotCameraPreviewReady(false);
+    setLotCameraVideoCssRotation(0);
+    lotCameraVideoCssRotationRef.current = 0;
   }
 
   /**
@@ -3123,6 +3204,8 @@ export default function DashboardPage() {
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
     setLotCameraPreviewReady(false);
+    setLotCameraVideoCssRotation(0);
+    lotCameraVideoCssRotationRef.current = 0;
     try {
       const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
       await bindLotCameraStream(stream);
@@ -3172,6 +3255,8 @@ export default function DashboardPage() {
     setLotCameraStream(null);
     setLotCameraOpen(false);
     setLotCameraPreviewReady(false);
+    setLotCameraVideoCssRotation(0);
+    lotCameraVideoCssRotationRef.current = 0;
     setLotCameraViewerIndex(null);
     setLotCameraEditIndex(null);
     setLotCameraEditBusy(false);
@@ -3179,40 +3264,64 @@ export default function DashboardPage() {
     setLotCameraEditContrast(100);
     setLotCameraEditSaturation(100);
     lotCameraPinchRef.current = null;
-    if (lotCameraZoomApplyTimerRef.current != null) {
-      window.clearTimeout(lotCameraZoomApplyTimerRef.current);
-      lotCameraZoomApplyTimerRef.current = null;
-    }
-    lotCameraZoomCapRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
-    lotCameraHardwareZoomRef.current = false;
-    setLotCameraHardwareZoom(false);
-    setLotCameraOpticalAvailable(false);
     lotCameraNativePickerOpenRef.current = false;
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
   }
 
-  function clearLotCameraSnapsAndThumbs() {
+  function clearLotCameraSnapsAndThumbs(options?: { revokeThumbs?: boolean }) {
+    const revoke = options?.revokeThumbs !== false;
     setLotCameraSnapThumbUrls((urls) => {
-      urls.forEach((u) => URL.revokeObjectURL(u));
+      if (revoke) urls.forEach((u) => { if (u) URL.revokeObjectURL(u); });
       return [];
     });
     lotCameraSnapsRef.current = [];
     setLotCameraSnaps([]);
   }
 
+  async function ingestNativeCameraFiles(rawFiles: File[]) {
+    let readFailed = 0;
+    for (const raw of rawFiles) {
+      if (
+        CTBIDS_MAX_PHOTOS_PER_LOT != null &&
+        lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+      ) {
+        setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
+        break;
+      }
+      const stable = await stabilizeCapturedFile(raw);
+      if (!stable) {
+        readFailed += 1;
+        continue;
+      }
+      const thumb = await createDisplayThumbUrl(stable);
+      lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, stable];
+      setLotCameraSnaps([...lotCameraSnapsRef.current]);
+      setLotCameraSnapThumbUrls((prev) => [...prev, thumb ?? ""]);
+      triggerLotCameraSnapFeedbackImmediate();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+    if (readFailed > 0) {
+      setError(
+        `${readFailed} photo${readFailed === 1 ? "" : "s"} could not be read from the camera. Try Settings → Camera → Formats → Most Compatible, or take fewer shots before Done.`
+      );
+    }
+  }
+
   function pushLotCameraSnap(file: File): number {
+    markStabilizedCaptureFile(file);
     const index = lotCameraSnapsRef.current.length;
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
-    setLotCameraSnapThumbUrls((prev) => [...prev, URL.createObjectURL(file)]);
+    setLotCameraSnapThumbUrls((prev) => [...prev, ""]);
     return index;
   }
 
   function replaceLotCameraSnapAt(index: number, file: File) {
     if (index < 0 || index >= lotCameraSnapsRef.current.length) return;
+    markStabilizedCaptureFile(file);
     setLotCameraSnaps((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const next = [...prev];
@@ -3220,13 +3329,15 @@ export default function DashboardPage() {
       lotCameraSnapsRef.current = next;
       return next;
     });
-    setLotCameraSnapThumbUrls((prev) => {
-      if (index < 0 || index >= prev.length) return prev;
-      const next = [...prev];
-      const old = next[index];
-      if (old) URL.revokeObjectURL(old);
-      next[index] = URL.createObjectURL(file);
-      return next;
+    void createDisplayThumbUrl(file).then((thumb) => {
+      setLotCameraSnapThumbUrls((prev) => {
+        if (index < 0 || index >= prev.length) return prev;
+        const next = [...prev];
+        const old = next[index];
+        if (old) URL.revokeObjectURL(old);
+        next[index] = thumb ?? "";
+        return next;
+      });
     });
   }
 
@@ -3262,68 +3373,54 @@ export default function DashboardPage() {
         ? `Add ${files.length} more camera photo${files.length === 1 ? "" : "s"} to this lot?`
         : `Add ${files.length} camera photo${files.length === 1 ? "" : "s"} to the upload box?`;
     if (!confirmStagingOverwrite(prev, detail)) return;
-    const stableFiles = await stabilizeCapturedFiles(files);
-    clearLotCameraSnapsAndThumbs();
-    stopLotCameraTracks();
-    const { pick, droppedFromCap } = applySingleLotFilesToStaging(folderPickRef.current, stableFiles, 0);
-    scrollToStagingPendingRef.current = true;
-    setFolderPick(pick);
-    scheduleScrollStagingUploadBoxIntoView();
-    if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
-      setError(
-        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
+    const thumbSnapshot = [...lotCameraSnapThumbUrls];
+
+    setLotCameraFinishing(true);
+    try {
+      const { files: stableFiles, failed } = await stabilizeCapturedFiles(files);
+      if (!stableFiles.length) {
+        setError(
+          "Could not read any photos from this camera session. Try Settings → Camera → Formats → Most Compatible (JPEG), or fewer photos before Done."
+        );
+        return;
+      }
+
+      let thumbUrls: (string | null)[];
+      if (
+        thumbSnapshot.length === stableFiles.length &&
+        thumbSnapshot.every((u) => Boolean(u))
+      ) {
+        thumbUrls = [...thumbSnapshot];
+        clearLotCameraSnapsAndThumbs({ revokeThumbs: false });
+      } else {
+        const built = await createDisplayThumbUrls(stableFiles);
+        thumbUrls = built;
+        clearLotCameraSnapsAndThumbs();
+      }
+
+      stopLotCameraTracks();
+      const { pick, droppedFromCap } = applySingleLotFilesToStaging(
+        folderPickRef.current,
+        stableFiles,
+        0,
+        thumbUrls
       );
-    }
-  }
-
-  function appendLotCameraSnapFiles(files: File[]) {
-    if (!files.length) return;
-    let dropped = 0;
-    let added = 0;
-    const newThumbs: string[] = [];
-    const next = [...lotCameraSnapsRef.current];
-    for (const f of files) {
-      if (CTBIDS_MAX_PHOTOS_PER_LOT != null && next.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
-        dropped += 1;
-        continue;
+      scrollToStagingPendingRef.current = true;
+      setFolderPick(pick);
+      scheduleScrollStagingUploadBoxIntoView();
+      if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
+        setError(
+          `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
+        );
       }
-      next.push(f);
-      newThumbs.push(URL.createObjectURL(f));
-      added += 1;
-    }
-    lotCameraSnapsRef.current = next;
-    setLotCameraSnaps(next);
-    if (newThumbs.length) {
-      setLotCameraSnapThumbUrls((prev) => [...prev, ...newThumbs]);
-    }
-    if (dropped > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
-      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
-    }
-    if (added > 0) triggerLotCameraSnapFeedbackImmediate();
-  }
-
-  function replaceLotCameraSnapTail(stableFiles: File[], startIndex: number) {
-    if (!stableFiles.length) return;
-    const next = [...lotCameraSnapsRef.current];
-    const newThumbs: string[] = [];
-    for (let i = 0; i < stableFiles.length; i++) {
-      const idx = startIndex + i;
-      if (idx < 0 || idx >= next.length) continue;
-      next[idx] = stableFiles[i]!;
-    }
-    lotCameraSnapsRef.current = next;
-    setLotCameraSnaps(next);
-    setLotCameraSnapThumbUrls((prev) => {
-      const thumbs = [...prev];
-      for (let i = 0; i < stableFiles.length; i++) {
-        const idx = startIndex + i;
-        if (idx < 0 || idx >= thumbs.length) continue;
-        const old = thumbs[idx];
-        if (old) URL.revokeObjectURL(old);
-        thumbs[idx] = URL.createObjectURL(stableFiles[i]!);
+      if (failed > 0) {
+        setError(
+          `${failed} photo${failed === 1 ? "" : "s"} could not be read and ${failed === 1 ? "was" : "were"} skipped. ${stableFiles.length} photo${stableFiles.length === 1 ? "" : "s"} added to the upload box.`
+        );
       }
-      return thumbs;
-    });
+    } finally {
+      setLotCameraFinishing(false);
+    }
   }
 
   function markNativePhotoPickerOpening() {
@@ -3374,11 +3471,8 @@ export default function DashboardPage() {
       void resumeInlineLotCameraAfterNativePicker();
       return;
     }
-    const startIndex = lotCameraSnapsRef.current.length;
-    appendLotCameraSnapFiles(imageFiles);
+    await ingestNativeCameraFiles(imageFiles);
     void resumeInlineLotCameraAfterNativePicker();
-    const stableFiles = await stabilizeCapturedFiles(imageFiles);
-    replaceLotCameraSnapTail(stableFiles, startIndex);
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
@@ -3400,7 +3494,7 @@ export default function DashboardPage() {
     flashLotCameraShutter();
     triggerLotCameraSnapFeedbackImmediate();
     const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
-    const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001 && !lotCameraHardwareZoomRef.current;
+    const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001;
 
     const quickBlob = await captureVideoFrameBlob(v, z, useDigitalCrop);
     if (!quickBlob) return;
@@ -3416,6 +3510,18 @@ export default function DashboardPage() {
         : String(Math.random()).slice(2, 10);
     const quickFile = new File([quickBlob], `lot-${Date.now()}-${snapId}.jpg`, { type: "image/jpeg" });
     const snapIndex = pushLotCameraSnap(quickFile);
+    void createDisplayThumbUrl(quickFile).then((thumb) => {
+      if (thumb) {
+        setLotCameraSnapThumbUrls((prev) => {
+          if (snapIndex >= prev.length) return prev;
+          const next = [...prev];
+          const old = next[snapIndex];
+          if (old) URL.revokeObjectURL(old);
+          next[snapIndex] = thumb;
+          return next;
+        });
+      }
+    });
 
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
     // Digital zoom crops the preview frame — still capture must match that crop.
@@ -3560,6 +3666,8 @@ export default function DashboardPage() {
       markNativePhotoPickerOpening();
       clearLotCameraSnapsAndThumbs();
       setLotCameraPreviewReady(false);
+      setLotCameraVideoCssRotation(0);
+      lotCameraVideoCssRotationRef.current = 0;
       setLotCameraViewerIndex(null);
       setLotCameraEditIndex(null);
       setLotCameraEditBusy(false);
@@ -3571,8 +3679,6 @@ export default function DashboardPage() {
       setLotCameraOpen(true);
       try {
         const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
-        lotCameraHardwareZoomRef.current = false;
-        setLotCameraHardwareZoom(false);
         await bindLotCameraStream(stream);
         primeLotCameraAudio();
       } catch {
@@ -3645,8 +3751,10 @@ export default function DashboardPage() {
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
-      void stabilizeCapturedFiles(imageFiles).then((stableImageFiles) => {
+      void (async () => {
+        const { files: stableImageFiles, failed } = await stabilizeCapturedFiles(imageFiles);
         if (!stableImageFiles.length) return;
+        const built = await createDisplayThumbUrls(stableImageFiles);
         setFolderPick((p) => {
           if (!p?.singleLotMode) return p;
           const nextFiles = [...p.imageFiles];
@@ -3657,11 +3765,16 @@ export default function DashboardPage() {
             nextFiles[idx] = stableImageFiles[i]!;
             const oldThumb = nextThumbs[idx];
             if (oldThumb) URL.revokeObjectURL(oldThumb);
-            nextThumbs[idx] = URL.createObjectURL(stableImageFiles[i]!);
+            nextThumbs[idx] = built[i] ?? "";
           }
           return { ...p, imageFiles: nextFiles, thumbUrls: nextThumbs };
         });
-      });
+        if (failed > 0) {
+          setError(
+            `${failed} selected photo${failed === 1 ? "" : "s"} could not be read on this device and ${failed === 1 ? "was" : "were"} skipped.`
+          );
+        }
+      })();
     } else {
       if (
         !confirmStagingOverwrite(
@@ -3728,7 +3841,7 @@ export default function DashboardPage() {
   async function uploadStagedFolder() {
     if (!folderPick?.imageFiles.length) return;
     if (!selectedSaleId) {
-      setError("Select or create a sale first.");
+      setError("Select or create a sale first — choose a sale at the top of the dashboard before Upload.");
       return;
     }
     setError("");
@@ -3741,22 +3854,58 @@ export default function DashboardPage() {
     setStagingEditContrast(100);
     setStagingEditSaturation(100);
     const isSingleLot = folderPick.singleLotMode === true;
-    const files = folderPick.imageFiles;
     const manualSkuBackup = singleLotManualSku;
     const skippedCount = folderPick.skippedCount;
-    const total = files.length;
-    const emptyFiles = files.filter((f) => f.size < 1);
-    if (emptyFiles.length) {
+    const stagedFiles = folderPick.imageFiles;
+    const stagedTotal = stagedFiles.length;
+
+    setUploadProgress(
+      `Preparing ${stagedTotal} photo${stagedTotal === 1 ? "" : "s"} for upload…`
+    );
+    setUploading(true);
+    let readyFiles: File[] = stagedFiles;
+    let prepareSkipped = 0;
+    try {
+      const prepared = await prepareStagedFilesForUpload(stagedFiles);
+      readyFiles = prepared.files;
+      prepareSkipped = prepared.skipped;
+    } catch {
+      setUploading(false);
+      setUploadProgress("");
       setError(
-        `${emptyFiles.length} staged photo${emptyFiles.length === 1 ? "" : "s"} had no image data — retake or re-pick those files before uploading.`
+        "Could not prepare photos for upload on this device. Try fewer photos, retake in the app, or set iPhone Camera → Formats → Most Compatible (JPEG)."
       );
       return;
     }
+
+    if (!readyFiles.length) {
+      setUploading(false);
+      setUploadProgress("");
+      setError(
+        `None of the ${stagedTotal} staged photo${stagedTotal === 1 ? "" : "s"} could be read on this phone. They were not sent to the server. Retake with Phone camera or Snap photo, tap Done, then Upload again. Settings → Camera → Most Compatible helps on older iPhones.`
+      );
+      return;
+    }
+
+    if (prepareSkipped > 0) {
+      const pick = folderPickRef.current;
+      if (pick) {
+        const refreshed = await refreshStagingPickFiles(pick, readyFiles);
+        setFolderPick(refreshed);
+      }
+      setStagingSuccess(
+        `${prepareSkipped} photo${prepareSkipped === 1 ? "" : "s"} could not be read and ${prepareSkipped === 1 ? "was" : "were"} removed. Uploading ${readyFiles.length}…`
+      );
+    }
+
+    const total = readyFiles.length;
     if (
       isSingleLot &&
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       total > CTBIDS_MAX_PHOTOS_PER_LOT
     ) {
+      setUploading(false);
+      setUploadProgress("");
       setError(
         `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove ${total - CTBIDS_MAX_PHOTOS_PER_LOT} photo(s) before uploading.`
       );
@@ -3765,7 +3914,6 @@ export default function DashboardPage() {
     if (isSingleLot) {
       clearFolderPick();
     }
-    setUploading(true);
     try {
       const buildFormForSlice = (slice: File[]) => {
         const form = new FormData();
@@ -3794,7 +3942,7 @@ export default function DashboardPage() {
           await apiUploadFiles(
             "/jobs/upload",
             token,
-            buildFormForSlice(files),
+            buildFormForSlice(readyFiles),
             900_000,
             onUploadPart(`Upload ${total} photos`)
           )
@@ -3802,7 +3950,7 @@ export default function DashboardPage() {
       } else {
         const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
         setUploadProgress(`Uploading batch 1/${batchCount} (${Math.min(UPLOAD_FILE_CHUNK, total)} of ${total} files)…`);
-        const first = files.slice(0, UPLOAD_FILE_CHUNK);
+        const first = readyFiles.slice(0, UPLOAD_FILE_CHUNK);
         created = jobFromUploadResponse(
           await apiUploadFiles(
             "/jobs/upload",
@@ -3815,7 +3963,7 @@ export default function DashboardPage() {
         let uploaded = first.length;
         let batchIndex = 2;
         while (uploaded < total) {
-          const slice = files.slice(uploaded, uploaded + UPLOAD_FILE_CHUNK);
+          const slice = readyFiles.slice(uploaded, uploaded + UPLOAD_FILE_CHUNK);
           setUploadProgress(
             `Uploading batch ${batchIndex}/${batchCount} (${slice.length} files, ${uploaded + slice.length}/${total} total)…`
           );
@@ -3887,7 +4035,7 @@ export default function DashboardPage() {
         return;
       }
       if (isSingleLot) {
-        restoreSingleLotStaging(files, manualSkuBackup, skippedCount);
+        restoreSingleLotStaging(readyFiles, manualSkuBackup, skippedCount + prepareSkipped);
       }
       setError(
         isSingleLot
@@ -5166,7 +5314,7 @@ export default function DashboardPage() {
               >
                 {folderPick.thumbUrls.map((url, i) => (
                   <div
-                    key={url}
+                    key={`staging-${i}-${url || "pending"}`}
                     style={{
                       position: "relative",
                       flex: "0 0 auto",
@@ -5193,12 +5341,9 @@ export default function DashboardPage() {
                         opacity: uploading ? 0.55 : 1
                       }}
                     >
-                      <img
-                        src={url}
-                        alt=""
-                        width={72}
-                        height={72}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none" }}
+                      <StagingStripThumb
+                        url={url || null}
+                        label={folderPick.imageFiles[i]?.name ?? `Photo ${i + 1}`}
                       />
                     </button>
                     <button
@@ -5715,6 +5860,11 @@ export default function DashboardPage() {
                 <div
                   ref={lotCameraZoomWrapRef}
                   className="ct-lot-camera-live"
+                  style={
+                    {
+                      "--lot-camera-ui-zoom": lotCameraZoom
+                    } as React.CSSProperties
+                  }
                   role="button"
                   tabIndex={0}
                   aria-label="Camera preview — tap to focus"
@@ -5738,30 +5888,28 @@ export default function DashboardPage() {
                     muted
                     onLoadedData={() => {
                       setLotCameraPreviewReady(true);
+                      refreshLotCameraVideoCssRotation();
                       setLotCameraPreviewLayoutTick((t) => t + 1);
                     }}
                     onLoadedMetadata={() => {
+                      refreshLotCameraVideoCssRotation();
                       setLotCameraPreviewLayoutTick((t) => t + 1);
                     }}
-                    aria-hidden
-                    tabIndex={-1}
-                    style={{
-                      position: "absolute",
-                      width: 1,
-                      height: 1,
-                      opacity: 0,
-                      pointerEvents: "none",
-                      overflow: "hidden"
-                    }}
-                  />
-                  <canvas
-                    ref={lotCameraPreviewCanvasRef}
-                    className="ct-lot-camera-live-canvas"
-                    aria-hidden
                     style={{
                       width: "100%",
                       height: "100%",
                       display: "block",
+                      objectFit: "cover",
+                      transform: (() => {
+                        void lotCameraPreviewLayoutTick;
+                        const video = lotCameraVideoRef.current;
+                        return lotCameraPreviewTransform(
+                          video,
+                          lotCameraVideoCssRotation,
+                          "var(--lot-camera-ui-zoom, 1)"
+                        );
+                      })(),
+                      transformOrigin: "center center",
                       pointerEvents: "none"
                     }}
                   />
@@ -5783,9 +5931,7 @@ export default function DashboardPage() {
                 <LotCameraZoomControls
                   variant="inline"
                   uiZoom={lotCameraZoom}
-                  hardwareActive={lotCameraHardwareZoom}
-                  opticalAvailable={lotCameraOpticalAvailable}
-                  onNudge={(d) => void nudgeLotCameraZoom(d)}
+                  onNudge={nudgeLotCameraZoom}
                 />
               </>
             )}
@@ -5812,14 +5958,20 @@ export default function DashboardPage() {
                 </p>
                 <div ref={lotCameraStripRef} className="ct-lot-camera-strip">
                   {lotCameraSnapThumbUrls.map((url, i) => (
-                    <div key={url} className="ct-lot-camera-strip-item">
+                    <div key={`snap-${i}-${url || "pending"}`} className="ct-lot-camera-strip-item">
                       <button
                         type="button"
                         className="ct-lot-camera-strip-thumb"
-                        onClick={() => setLotCameraViewerIndex(i)}
+                        onClick={() => {
+                          if (!lotCameraSnaps[i] && !lotCameraSnapsRef.current[i]) return;
+                          setLotCameraViewerIndex(i);
+                        }}
                         aria-label={`Preview captured photo ${i + 1}`}
                       >
-                        <img src={url} alt="" />
+                        <CaptureStripThumb
+                          url={url || null}
+                          label={`Captured photo ${i + 1}`}
+                        />
                       </button>
                       <div className="ct-lot-camera-strip-item-actions">
                         <button
@@ -5861,9 +6013,7 @@ export default function DashboardPage() {
                 <LotCameraZoomControls
                   variant="actions"
                   uiZoom={lotCameraZoom}
-                  hardwareActive={lotCameraHardwareZoom}
-                  opticalAvailable={lotCameraOpticalAvailable}
-                  onNudge={(d) => void nudgeLotCameraZoom(d)}
+                  onNudge={nudgeLotCameraZoom}
                 />
               ) : null}
               <div className="ct-lot-camera-actions-primary ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -5892,8 +6042,13 @@ export default function DashboardPage() {
                 >
                   Snap photo
                 </button>
-                <button type="button" className="ct-btn" onClick={() => void finishLotCameraSession()}>
-                  Done
+                <button
+                  type="button"
+                  className="ct-btn"
+                  onClick={() => void finishLotCameraSession()}
+                  disabled={lotCameraFinishing || lotCameraSnaps.length === 0}
+                >
+                  {lotCameraFinishing ? "Processing…" : "Done"}
                 </button>
               </div>
             </div>
@@ -5929,7 +6084,7 @@ export default function DashboardPage() {
 
           {lotCameraViewerIndex !== null &&
           lotCameraViewerIndex >= 0 &&
-          lotCameraViewerIndex < lotCameraSnapThumbUrls.length ? (
+          lotCameraViewerIndex < lotCameraSnaps.length ? (
             <div
               role="dialog"
               aria-modal="true"
@@ -5962,7 +6117,7 @@ export default function DashboardPage() {
               >
                 <div className="ct-row" style={{ width: "100%", justifyContent: "space-between", alignItems: "center" }}>
                   <span className="ct-muted" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.9rem" }}>
-                    Photo {lotCameraViewerIndex + 1} of {lotCameraSnapThumbUrls.length}
+                    Photo {lotCameraViewerIndex + 1} of {lotCameraSnaps.length}
                   </span>
                   <button
                     type="button"
@@ -5974,10 +6129,10 @@ export default function DashboardPage() {
                     <X size={22} aria-hidden />
                   </button>
                 </div>
-                <img
-                  src={lotCameraSnapThumbUrls[lotCameraViewerIndex] ?? ""}
+                <StagingFilePreviewImage
+                  file={lotCameraSnaps[lotCameraViewerIndex] ?? lotCameraSnapsRef.current[lotCameraViewerIndex]}
                   alt={`Captured photo ${lotCameraViewerIndex + 1}`}
-                  style={{
+                  imgStyle={{
                     maxWidth: "100%",
                     maxHeight: "min(72vh, 640px)",
                     width: "auto",
@@ -5988,7 +6143,7 @@ export default function DashboardPage() {
                   }}
                 />
                 <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", justifyContent: "center" }}>
-                  {lotCameraSnapThumbUrls.length > 1 ? (
+                  {lotCameraSnaps.length > 1 ? (
                     <>
                       <button
                         type="button"
@@ -6004,10 +6159,10 @@ export default function DashboardPage() {
                         type="button"
                         className="ct-btn ct-btn--ghost"
                         aria-label="Next photo"
-                        disabled={lotCameraViewerIndex >= lotCameraSnapThumbUrls.length - 1}
+                        disabled={lotCameraViewerIndex >= lotCameraSnaps.length - 1}
                         onClick={() =>
                           setLotCameraViewerIndex((j) =>
-                            j !== null && j < lotCameraSnapThumbUrls.length - 1 ? j + 1 : j
+                            j !== null && j < lotCameraSnaps.length - 1 ? j + 1 : j
                           )
                         }
                         style={{ color: "#fff", minWidth: 44, minHeight: 44 }}
@@ -6048,7 +6203,7 @@ export default function DashboardPage() {
 
           {lotCameraEditIndex !== null &&
           lotCameraEditIndex >= 0 &&
-          lotCameraEditIndex < lotCameraSnapThumbUrls.length ? (
+          lotCameraEditIndex < lotCameraSnaps.length ? (
             <div
               role="dialog"
               aria-modal="true"
@@ -6113,10 +6268,10 @@ export default function DashboardPage() {
                       transformOrigin: "center center"
                     }}
                   >
-                    <img
-                      src={lotCameraSnapThumbUrls[lotCameraEditIndex] ?? ""}
+                    <StagingFilePreviewImage
+                      file={lotCameraSnaps[lotCameraEditIndex] ?? lotCameraSnapsRef.current[lotCameraEditIndex]}
                       alt=""
-                      style={{
+                      imgStyle={{
                         maxWidth: "min(92vw, 480px)",
                         maxHeight: "min(46dvh, 420px)",
                         width: "auto",
@@ -6320,10 +6475,10 @@ export default function DashboardPage() {
                 <X size={22} aria-hidden />
               </button>
             </div>
-            <img
-              src={folderPick.thumbUrls[stagingViewerIndex] ?? ""}
+            <StagingFilePreviewImage
+              file={folderPick.imageFiles[stagingViewerIndex]}
               alt={`Staged photo ${stagingViewerIndex + 1}`}
-              style={{
+              imgStyle={{
                 maxWidth: "100%",
                 maxHeight: "min(72vh, 640px)",
                 width: "auto",
@@ -6462,10 +6617,10 @@ export default function DashboardPage() {
                   transformOrigin: "center center"
                 }}
               >
-                <img
-                  src={folderPick.thumbUrls[stagingEditIndex] ?? ""}
+                <StagingFilePreviewImage
+                  file={folderPick.imageFiles[stagingEditIndex]}
                   alt=""
-                  style={{
+                  imgStyle={{
                     maxWidth: "min(92vw, 480px)",
                     maxHeight: "min(46dvh, 420px)",
                     width: "auto",
