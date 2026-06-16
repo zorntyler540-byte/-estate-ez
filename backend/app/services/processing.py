@@ -621,7 +621,7 @@ def _lot_sse_payload(row: Lot) -> dict:
 
 
 def _emit_job(job: ProcessingJob, payload: dict) -> None:
-    job_events.publish(job.user_id, job.id, {**payload, "job_id": job.id})
+    job_events.publish(job.account_id, job.id, {**payload, "job_id": job.id})
 
 
 def _emit_job_debug(job: ProcessingJob, message: str) -> None:

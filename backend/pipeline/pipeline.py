@@ -134,7 +134,8 @@ TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 Rules:
 - hero: single best wide shot showing most of the lot (only one file should win hero selection). Use hero even when lot tape with SKU is visible at the edge of the frame.
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
-- angle_only: side, back, detail, damage close-up — not used for hero listing.
+- angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
+  Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
   Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
   Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
   are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
@@ -496,6 +497,10 @@ BRAND_AUDIT_SYSTEM = (
     "You are a senior estate inventory proofreader. Your job is to verify listing accuracy against the "
     "actual photos — title, description, brands, and per-item lines. Fix Flash errors (wrong category, "
     "wrong material, wrong object type). Never invent brands or details not visible in the images. "
+    "When a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly measuring the item(s), "
+    "ensure the lot description acknowledges that dimensions were taken in the photos and that Flash "
+    "specification_lines include **Dimensions:** or **Measurement:** with legible reads (~ inches). "
+    "Do not drop ruler/tape measurements during proofread. "
     "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess from "
     "product type or training knowledge. Never use placeholder tokens like Unknown, Generic, or Unbranded. "
     "Output structured JSON only."
@@ -560,6 +565,9 @@ def run_brand_audit_pro(
             "\n\nFlash listing draft to PROOFREAD and correct (fix title/description if wrong vs images):\n"
             f"{json.dumps(flash_listing_context, indent=2)}\n"
             "Populate final_auction_title and final_professional_description with your corrected lot-level text. "
+            "If images show a ruler or measuring tape on the item, mention dimensions in final_professional_description "
+            "and ensure specification_lines retain **Dimensions:** / **Measurement:** from Flash (add/correct if Flash "
+            "missed visible scale reads). "
             "Set listing_was_corrected_by_pro true when you change title or description meaningfully."
         )
 
@@ -582,6 +590,10 @@ def run_brand_audit_pro(
         "era mark is visible on a tag.\n"
         "10. Do not use the word 'lot' in final_auction_title or final_professional_description — shoppers want "
         "brand, material, and object names (use group, set, collection, or multiple pieces when needed).\n"
+        "11. **Ruler / measuring tape:** When photos show a yellow tape, metal ruler, or yardstick measuring the "
+        "item(s), final_professional_description must briefly note that dimensions were taken in the photos (or cite "
+        "the clearest single span if legible). When proofreading the Flash specification_lines in the listing context, "
+        "preserve or add **Dimensions:** / **Measurement:** lines with ~inch reads — do not strip them.\n"
         f"{valuation_block}"
         f"{listing_block}\n\n"
         f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",

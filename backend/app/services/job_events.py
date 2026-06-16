@@ -1,7 +1,8 @@
 """In-process pub/sub for job SSE (same server process as the API worker thread).
 
 Late subscribers (e.g. EventSource opens after ``POST /run``) still receive recent payloads
-via a bounded in-memory replay deque per ``(user_id, job_id)``.
+via a bounded in-memory replay deque per ``(account_id, job_id)`` so any user on the account
+can watch field uploads live from the dashboard.
 """
 
 from __future__ import annotations
@@ -13,16 +14,16 @@ from collections import deque
 from typing import Any
 
 _lock = threading.Lock()
-# (owner_user_id, job_id) -> subscriber queues (str JSON payloads)
+# (account_id, job_id) -> subscriber queues (str JSON payloads)
 _subscribers: dict[tuple[str, str], list[queue.Queue[str]]] = {}
 # Last N JSON lines per job so a client that connects mid-run can rebuild UI state.
 _replay: dict[tuple[str, str], deque[str]] = {}
 _MAX_REPLAY = 300
 
 
-def subscribe(user_id: str, job_id: str) -> queue.Queue[str]:
+def subscribe(account_id: str, job_id: str) -> queue.Queue[str]:
     q: queue.Queue[str] = queue.Queue(maxsize=200)
-    key = (user_id, job_id)
+    key = (account_id, job_id)
     with _lock:
         _subscribers.setdefault(key, []).append(q)
         replay = list(_replay.get(key, ()))
@@ -34,8 +35,8 @@ def subscribe(user_id: str, job_id: str) -> queue.Queue[str]:
     return q
 
 
-def unsubscribe(user_id: str, job_id: str, q: queue.Queue[str]) -> None:
-    key = (user_id, job_id)
+def unsubscribe(account_id: str, job_id: str, q: queue.Queue[str]) -> None:
+    key = (account_id, job_id)
     with _lock:
         subs = _subscribers.get(key)
         if not subs:
@@ -46,9 +47,9 @@ def unsubscribe(user_id: str, job_id: str, q: queue.Queue[str]) -> None:
             del _subscribers[key]
 
 
-def publish(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
+def publish(account_id: str, job_id: str, payload: dict[str, Any]) -> None:
     line = json.dumps(payload, ensure_ascii=False)
-    key = (user_id, job_id)
+    key = (account_id, job_id)
     with _lock:
         dq = _replay.setdefault(key, deque(maxlen=_MAX_REPLAY))
         dq.append(line)

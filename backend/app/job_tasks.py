@@ -190,7 +190,7 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
                     job.cancel_requested = False
                     db.commit()
                     job_events.publish(
-                        job.user_id,
+                        job.account_id,
                         job.id,
                         {
                             "type": "status",

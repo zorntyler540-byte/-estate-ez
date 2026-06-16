@@ -99,7 +99,11 @@ class FullyAuditedManifest(BaseModel):
     )
     final_professional_description: str = Field(
         default="",
-        description="Pro-corrected lot overview prose grounded in the images.",
+        description=(
+            "Pro-corrected lot overview prose grounded in the images. When a ruler or yellow measuring tape "
+            "is visibly measuring the item(s), briefly note that dimensions were taken in the photos (or cite "
+            "the clearest legible span)."
+        ),
     )
     listing_was_corrected_by_pro: bool = False
     listing_correction_details: str | None = None

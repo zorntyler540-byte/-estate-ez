@@ -2037,7 +2037,8 @@ async def job_events_sse(
     """
     Server-Sent Events for one processing job. Auth: ``Authorization: Bearer`` or query ``access_token``
     (EventSource cannot set custom headers in all browsers).
-    Events are delivered only on the channel ``(user_id, job_id)`` matching the authenticated user and this job.
+    Events are delivered on the channel ``(account_id, job_id)`` so any authenticated user on the
+    account can watch the same sale's catalog job (e.g. office dashboard while field staff upload).
     """
     # Short-lived session: do not use Depends(get_db) on this route — the response stays open for the whole
     # SSE stream and would pin a QueuePool connection until disconnect (same issue as get_current_user_sse).
@@ -2053,7 +2054,7 @@ async def job_events_sse(
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    q = job_events.subscribe(current.id, job_id)
+    q = job_events.subscribe(current.account_id, job_id)
 
     async def event_generator():
         try:
@@ -2074,7 +2075,7 @@ async def job_events_sse(
                 if obj.get("type") == "status" and obj.get("status") in ("completed", "failed"):
                     break
         finally:
-            job_events.unsubscribe(current.id, job_id, q)
+            job_events.unsubscribe(current.account_id, job_id, q)
 
     return EventSourceResponse(
         event_generator(),
