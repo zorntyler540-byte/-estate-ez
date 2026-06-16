@@ -4718,7 +4718,7 @@ export default function DashboardPage() {
       actions={shellActions}
       mobileBottomBar={dashboardMobileBottomBar}
     >
-      <div id="dashboard-top" className="ct-dashboard">
+      <div id="dashboard-top" className="ct-dashboard ct-dashboard--fill">
         <div className="ct-dash-stats-row">
           <div className="ct-dashboard-hero-band">
             <header className="ct-dashboard-hero">
