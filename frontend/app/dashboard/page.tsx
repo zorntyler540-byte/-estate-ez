@@ -4050,18 +4050,6 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
-    const pick = folderPickRef.current;
-    const isSingleLot = pick?.singleLotMode === true && (pick?.imageFiles.length ?? 0) > 0;
-    if (isSingleLot) {
-      clearFolderPick();
-      setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
-    } else if (pick?.imageFiles.length) {
-      const n = pick.imageFiles.length;
-      persistStagingAwaitingGemini(jobId, n);
-      setStagingSuccess(
-        `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
-      );
-    }
     try {
       const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
       if (updated.status === "processing") {
