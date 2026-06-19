@@ -107,9 +107,9 @@ class FullyAuditedManifest(BaseModel):
     final_professional_description: str = Field(
         default="",
         description=(
-            "Pro-corrected lot overview prose grounded in the images. When a ruler or yellow measuring tape "
-            "is visibly measuring the item(s), briefly note that dimensions were taken in the photos (or cite "
-            "the clearest legible span)."
+            "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Lead with appeal, "
+            "not 'This is a…' or feature checklists. Exact sizes and marks belong in final_specification_lines; "
+            "weave size casually in prose if needed."
         ),
     )
     final_specification_lines: list[str] = Field(
