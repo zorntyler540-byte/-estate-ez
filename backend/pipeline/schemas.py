@@ -27,6 +27,13 @@ class PhotoTriageResult(BaseModel):
     quality: PhotoQuality
     duplicate_of_filename: str | None = None
     confidence: ConfidenceLevel
+    shows_measuring_scale: bool = Field(
+        default=False,
+        description=(
+            "True when a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly "
+            "measuring the merchandise (even if photo_role is angle_only)."
+        ),
+    )
 
 
 class LowTierDraftItem(BaseModel):
@@ -103,6 +110,14 @@ class FullyAuditedManifest(BaseModel):
             "Pro-corrected lot overview prose grounded in the images. When a ruler or yellow measuring tape "
             "is visibly measuring the item(s), briefly note that dimensions were taken in the photos (or cite "
             "the clearest legible span)."
+        ),
+    )
+    final_specification_lines: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Pro-corrected spec bullets. When a ruler or measuring tape is visible, include "
+            "**Dimensions:** / **Measurement:** lines with ~inch reads (or note that dimensions are shown in photos). "
+            "Only these labels: Brand, Condition note, Size / tags, Dimensions, Measurement, Weight."
         ),
     )
     listing_was_corrected_by_pro: bool = False

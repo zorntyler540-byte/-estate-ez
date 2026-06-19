@@ -57,6 +57,43 @@ def test_select_analysis_photos_picks_hero_and_fronts() -> None:
     assert selected["hero_triage_metadata"]["photo_role"] == "hero"
 
 
+def test_select_analysis_photos_routes_measuring_scale_frames_to_listing_and_pro() -> None:
+    triage = [
+        {
+            "filename": "hero.jpg",
+            "photo_role": "hero",
+            "shows_whole_lot": True,
+            "label_legibility": "none",
+            "quality": "sharp",
+            "confidence": "high",
+            "is_primary_front_for_item": False,
+        },
+        {
+            "filename": "ruler.jpg",
+            "photo_role": "angle_only",
+            "shows_measuring_scale": True,
+            "label_legibility": "none",
+            "quality": "sharp",
+            "confidence": "high",
+            "shows_whole_lot": False,
+        },
+        {
+            "filename": "angle.jpg",
+            "photo_role": "angle_only",
+            "shows_measuring_scale": False,
+            "label_legibility": "none",
+            "quality": "ok",
+            "confidence": "high",
+            "shows_whole_lot": False,
+        },
+    ]
+    selected = select_analysis_photos(triage)
+    assert "ruler.jpg" in selected["listing_filenames"]
+    assert "ruler.jpg" in selected["pro_filenames"]
+    assert "ruler.jpg" not in selected["catalog_only"]
+    assert "angle.jpg" in selected["catalog_only"]
+
+
 def test_select_analysis_photos_guarantees_maker_foil_sticker_for_pro() -> None:
     """Bottom foil with 22 KT GOLD must reach Pro even when blue tape ranks higher by OCR length."""
     triage = [

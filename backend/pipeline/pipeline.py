@@ -31,6 +31,7 @@ from pipeline.schemas import (
 GEMINI_FLASH_MODEL = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
 GEMINI_PRO_MODEL = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 LISTING_FLASH_MAX_FRAMES = max(1, int(os.environ.get("LISTING_FLASH_MAX_FRAMES", "5")))
+DIMENSION_FLASH_MAX_FRAMES = max(1, int(os.environ.get("DIMENSION_FLASH_MAX_FRAMES", "3")))
 BRAND_PRO_MAX_LABEL_FRAMES = max(1, int(os.environ.get("BRAND_PRO_MAX_LABEL_FRAMES", "4")))
 BRAND_SKIP_PRO_IF_AGREEMENT = os.environ.get("BRAND_SKIP_PRO_IF_AGREEMENT", "1") == "1"
 ENABLE_GROUNDED_VALUATION = os.environ.get("ENABLE_GROUNDED_VALUATION", "0") == "1"
@@ -136,6 +137,8 @@ Rules:
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
 - angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
   Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
+  Set **shows_measuring_scale** true whenever a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly
+  measuring the merchandise — even when photo_role is angle_only.
   Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
   Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
   are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
@@ -205,6 +208,14 @@ def _front_score(row: PhotoTriageResult) -> tuple[int, int, int]:
         LEGIBILITY_SCORE.get(row.label_legibility, 0),
         QUALITY_SCORE.get(row.quality, 0),
         CONFIDENCE_SCORE.get(row.confidence, 0),
+    )
+
+
+def _dimension_score(row: PhotoTriageResult) -> tuple[int, int, int]:
+    return (
+        QUALITY_SCORE.get(row.quality, 0),
+        CONFIDENCE_SCORE.get(row.confidence, 0),
+        1 if row.shows_measuring_scale else 0,
     )
 
 
@@ -315,9 +326,20 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
     ranked_fronts = sorted(fronts_by_item.values(), key=_front_score, reverse=True)
     front_filenames = [r.filename for r in ranked_fronts[:LISTING_FLASH_MAX_FRAMES]]
 
+    dimension_pool = [
+        r
+        for r in rows
+        if r.shows_measuring_scale and r.photo_role != "unusable"
+    ]
+    dimension_pool.sort(key=_dimension_score, reverse=True)
+    dimension_filenames = [r.filename for r in dimension_pool[:DIMENSION_FLASH_MAX_FRAMES]]
+
     listing_filenames: list[str] = []
     if hero_filename:
         listing_filenames.append(hero_filename)
+    for fn in dimension_filenames:
+        if fn not in listing_filenames:
+            listing_filenames.append(fn)
     for fn in front_filenames:
         if fn not in listing_filenames:
             listing_filenames.append(fn)
@@ -352,6 +374,9 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
             pro_filenames = [r.filename for r in pro_candidates[:BRAND_PRO_MAX_LABEL_FRAMES]]
 
     pro_filenames = _ensure_maker_sticker_in_pro_filenames(pro_filenames, rows)
+    for fn in dimension_filenames:
+        if fn and fn not in pro_filenames:
+            pro_filenames.append(fn)
     maker_row = _best_maker_sticker_row(rows)
 
     # D. Catalog-only
@@ -364,6 +389,7 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         "hero_filename": hero_filename,
         "front_filenames": front_filenames,
         "listing_filenames": listing_filenames,
+        "dimension_filenames": dimension_filenames,
         "pro_filenames": pro_filenames,
         "catalog_only": catalog_only,
         "tape_filenames": tape_filenames,
@@ -566,8 +592,8 @@ def run_brand_audit_pro(
             f"{json.dumps(flash_listing_context, indent=2)}\n"
             "Populate final_auction_title and final_professional_description with your corrected lot-level text. "
             "If images show a ruler or measuring tape on the item, mention dimensions in final_professional_description "
-            "and ensure specification_lines retain **Dimensions:** / **Measurement:** from Flash (add/correct if Flash "
-            "missed visible scale reads). "
+            "and populate final_specification_lines with **Dimensions:** / **Measurement:** reads from Flash "
+            "(add/correct if Flash missed visible scale reads). "
             "Set listing_was_corrected_by_pro true when you change title or description meaningfully."
         )
 

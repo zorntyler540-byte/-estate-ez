@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -12,6 +13,7 @@ from app.config import settings
 from app.core.gemini import analyze_path_with_retries, verify_tape_sku
 from app.core.lotting import (
     LotOutput,
+    dedupe_specification_lines_preserve_order,
     filter_brands_to_label_evidence,
     format_auction_title_case,
     infer_brands_from_label_context,
@@ -303,6 +305,22 @@ def _apply_pro_manifest_to_lot(
             kept = [ln for ln in lot.specification_lines if not ln.lower().startswith("item ")]
             lot.specification_lines = kept + item_lines
 
+    pro_spec_lines = [
+        ln.strip()
+        for ln in (manifest.final_specification_lines or [])
+        if ln and ln.strip()
+    ]
+    if pro_spec_lines:
+        measurement_lines = [
+            ln
+            for ln in pro_spec_lines
+            if re.match(r"(?i)^(?:dimensions?|measurements?|weights?)\s*:", ln.strip())
+        ]
+        if measurement_lines:
+            lot.specification_lines = dedupe_specification_lines_preserve_order(
+                lot.specification_lines + measurement_lines
+            )
+
     brand_audit = _manifest_to_brand_audit(manifest_json, [], flash_model)
     _apply_brand_audit(
         lot,
@@ -411,17 +429,19 @@ def run_single_lot_pipeline(
             }
         )
 
-    listing_names: list[str] = []
     hero_name = str(selected.get("hero_filename") or "").strip()
     pro_filenames = list(selected.get("pro_filenames") or [])
-    if hero_name:
-        listing_names.append(hero_name)
-    for fn in pro_filenames:
-        if fn and fn not in listing_names:
-            listing_names.append(fn)
-    for fn in list(selected.get("front_filenames") or []):
-        if fn and fn not in listing_names:
-            listing_names.append(fn)
+
+    listing_names = list(selected.get("listing_filenames") or [])
+    if not listing_names:
+        if hero_name:
+            listing_names.append(hero_name)
+        for fn in pro_filenames:
+            if fn and fn not in listing_names:
+                listing_names.append(fn)
+        for fn in list(selected.get("front_filenames") or []):
+            if fn and fn not in listing_names:
+                listing_names.append(fn)
     listing_names = listing_names[: max(1, settings.listing_flash_max_frames)]
 
     if not listing_names:
