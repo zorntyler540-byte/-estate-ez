@@ -118,8 +118,9 @@ class InventoryTableEntry(BaseModel):
         validation_alias=AliasChoices("sku", "SKU"),
         description=(
             "Handwritten or printed lot code on colored estate adhesive tape: PURPLE, LAVENDER, BLUE, bright NEON GREEN, "
-            "or bright YELLOW masking/painter tape (lot marker — not yellow measuring tape). Read sku from focused crop "
-            "if provided. Never use stamped manufacturer numbers (e.g. 1420) or silverplate pattern numbers as SKU."
+            "or bright YELLOW masking/painter tape (lot marker — not yellow measuring tape). Often on a **tape roll** "
+            "in the foreground (e.g. MS530, MS 530, SR006, #8524). Read sku from focused crop if provided. "
+            "Never use product box numbers (ITEM, ASST, model #), UPC, or stamped manufacturer pattern numbers as SKU."
         ),
     )
     sku_read_confidence: str | None = Field(
@@ -434,7 +435,8 @@ SYSTEM_INSTRUCTION = (
     "When two images are provided, image 1 is the full frame; image 2 is a high-contrast crop of colored estate lot tape "
     "(purple, lavender, blue, neon green, or yellow masking tape) — prioritize image 2 for SKU. "
     "SKU must appear on that estate tape only (not yellow measuring tape, not rulers). "
-    "Never use sewn tags, size tags, or stamped numbers on the item body as SKU. "
+    "Never use sewn tags, size tags, product box ITEM/ASST numbers, or stamped numbers on the item body as SKU. "
+    "Letter-prefix estate codes (MS530, SR006) on purple/lavender/blue/green/yellow tape are valid SKUs.\n"
     "Condition must use exactly one of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
     "Output must match JSON schema only."
 )
@@ -507,7 +509,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "spec lines. In **professional_description**, at most one **casual** size clause — not "
         "'Dimensions are shown in the photos, with a height of…'.\n"
         "- sku: Lot marking on purple, lavender, blue, bright green, or bright yellow estate masking tape ONLY "
-        "(same code you would read from image 2 when provided). null if not on tape.\n"
+        "(same code you would read from image 2 when provided). Often on a **tape roll** in the shot (e.g. MS530). "
+        "Never product box ITEM/ASST/model numbers. null if not on tape.\n"
     )
 
 
@@ -821,7 +824,8 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
     prompt = (
         f"Audit: Is the lot marking {claim!r} clearly visible on estate lot tape? "
         "Tape may be PURPLE, LAVENDER, BLUE, bright NEON GREEN, or bright YELLOW adhesive masking/painter tape "
-        "with handwriting or print on its surface. "
+        "with handwriting or print on its surface — including on a **tape roll** in the foreground. "
+        "Letter-prefix codes (e.g. MS530) count when the letters+digits are on that colored tape. "
         "Set new_lot_from_tape false if the marking is only on a yellow MEASURING tape (inch/cm scale), ruler, "
         "sticker, tag, or item body. "
         "Return JSON {\"new_lot_from_tape\": bool, \"lot_digits_on_tape\": string}. "

@@ -24,6 +24,7 @@ from app.core.lotting import (
     tape_marking_canonical,
     tape_sku_opens_new_lot,
     tape_sku_same_marking,
+    strip_product_box_misread_as_tape_sku,
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
@@ -323,6 +324,10 @@ def _shared_material_and_form_tokens(ta: set[str], tb: set[str]) -> bool:
     """True when both lots mention the same material and the same object class (e.g. ceramic + pitcher)."""
     shared = ta & tb
     return bool((shared & _SHARED_MATERIAL_TOKENS) and (shared & _SHARED_FORM_TOKENS))
+
+
+def _strip_product_box_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
+    strip_product_box_misread_as_tape_sku(lot, raw_payload)
 
 
 def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
@@ -1036,6 +1041,7 @@ def _process_job_body(
             lot_candidate.sku = None
             lot_candidate.sku_needs_review = False
         _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
+        _strip_product_box_misread_as_tape_sku(lot_candidate, payload)
         _emit_job_debug(
             job,
             f"job={job.id} after strip i={i + 1} file={photo_path.name} sku={lot_candidate.sku!r}",
@@ -1077,8 +1083,12 @@ def _process_job_body(
                 ),
             )
             if verified is not True:
-                lot_candidate.sku = None
-                sku_ok = False
+                if verified is None and lot_candidate.sku:
+                    lot_candidate.sku_needs_review = True
+                    sku_ok = tape_sku_opens_new_lot(lot_candidate.sku)
+                else:
+                    lot_candidate.sku = None
+                    sku_ok = False
 
         if current_lot is not None and _is_gemini_placeholder_lot(current_lot):
             saved_pc = current_lot.photo_count
@@ -1360,6 +1370,7 @@ def run_lot_ai_regenerate_and_save(
             except (TypeError, ValueError, KeyError):
                 continue
             _strip_maker_stamp_misread_as_tape_sku(lot_candidate, payload)
+            _strip_product_box_misread_as_tape_sku(lot_candidate, payload)
             if payload.get(_CT_SKU_INJECTED_FALLBACK_KEY):
                 lot_candidate.sku = None
                 lot_candidate.sku_needs_review = False

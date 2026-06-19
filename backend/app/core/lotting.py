@@ -2528,6 +2528,32 @@ def payload_suggests_sku_review(payload: dict[str, Any]) -> bool:
     return conf in ("low", "unsure")
 
 
+def strip_product_box_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | None = None) -> None:
+    """Clear digits-only SKUs that match product packaging text (ITEM 7209) rather than estate tape."""
+    if not lot.sku:
+        return
+    compact = re.sub(r"\s+", "", str(lot.sku).strip()).upper()
+    if re.fullmatch(r"[A-Z]{1,4}\d{2,6}", compact):
+        return
+    digits = sku_digits(lot.sku)
+    if len(digits) < 2:
+        return
+    parts = [
+        lot.auction_title or "",
+        lot.professional_description or "",
+        " ".join(lot.specification_lines or []),
+    ]
+    if raw_payload:
+        parts.extend(
+            str(raw_payload.get(k) or "")
+            for k in ("AuctionTitle", "Title", "item_name", "ProfessionalDescription", "professional_description")
+        )
+    blob = " ".join(parts).lower()
+    if re.search(rf"(?:\bitem\b|\basst\b|model\s*#?|catalog\s*#)\s*[-#:]?\s*{re.escape(digits)}\b", blob):
+        lot.sku = None
+        lot.sku_needs_review = False
+
+
 def normalize_tape_sku_input(raw: str | None) -> str | None:
     """
     Prefer digits after the last ``#`` (estate-tape convention). Take the first 2–6 digit run after ``#``,

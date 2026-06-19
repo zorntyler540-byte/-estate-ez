@@ -34,6 +34,14 @@ class PhotoTriageResult(BaseModel):
             "measuring the merchandise (even if photo_role is angle_only)."
         ),
     )
+    lot_tape_marking: str | None = Field(
+        default=None,
+        description=(
+            "Handwritten or printed lot code on colored estate adhesive tape (purple, lavender, blue, neon green, "
+            "or bright yellow masking/painter tape) when visible anywhere in this frame — e.g. MS530, SR006, #8524. "
+            "Include tape on a roll or strip in the foreground. null if no estate lot tape marking is readable."
+        ),
+    )
 
 
 class LowTierDraftItem(BaseModel):

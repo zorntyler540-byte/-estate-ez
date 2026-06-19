@@ -18,7 +18,9 @@ from app.core.lotting import (
     format_auction_title_case,
     infer_brands_from_label_context,
     normalize_brand_list,
+    strip_product_box_misread_as_tape_sku,
     tape_marking_canonical,
+    tape_sku_opens_new_lot,
 )
 from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
@@ -226,19 +228,77 @@ def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None
     lot._finalize_listing_quality()
 
 
-def _sku_candidate_filenames(selected: dict[str, Any]) -> list[str]:
-    """Tape-tagged frames first; fall back to hero when SKU is only visible on the wide shot."""
+# Cap dedicated SKU re-reads after triage (tape + hero + listing frames with visible marking).
+MAX_SKU_SCAN_FRAMES = 8
+
+
+def _triage_tape_marking(row: dict[str, Any]) -> str | None:
+    """Extract a normalized estate-tape lot code from triage OCR when present."""
+    for key in ("lot_tape_marking", "brand_text"):
+        raw = row.get(key)
+        if raw is None:
+            continue
+        mark = tape_marking_canonical(str(raw).strip() or None)
+        if mark:
+            return mark
+    return None
+
+
+def _sku_candidate_filenames(
+    selected: dict[str, Any],
+    triage_rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Tape-tagged frames, triage OCR hits, listing frames, then hero."""
     out: list[str] = []
     seen: set[str] = set()
-    for fn in selected.get("tape_filenames") or []:
-        s = str(fn).strip()
+
+    def _add(fn: object) -> None:
+        s = str(fn or "").strip()
         if s and s not in seen:
             seen.add(s)
             out.append(s)
-    hero = str(selected.get("hero_filename") or "").strip()
-    if hero and hero not in seen:
-        out.append(hero)
-    return out
+
+    for fn in selected.get("tape_filenames") or []:
+        _add(fn)
+    if triage_rows:
+        for row in triage_rows:
+            if _triage_tape_marking(row):
+                _add(row.get("filename"))
+            elif row.get("photo_role") == "tape":
+                _add(row.get("filename"))
+    for fn in selected.get("listing_filenames") or []:
+        _add(fn)
+    _add(selected.get("hero_filename"))
+    return out[:MAX_SKU_SCAN_FRAMES]
+
+
+def _apply_triage_tape_sku(
+    lot: LotOutput,
+    triage_rows: list[dict[str, Any]],
+    path_by_key: dict[str, Path],
+) -> None:
+    """Apply lot codes triage already read from colored estate tape (no extra Flash listing call)."""
+    if lot.sku and not lot.sku_needs_review:
+        return
+    for row in triage_rows:
+        claimed = _triage_tape_marking(row)
+        if not claimed:
+            continue
+        filename = str(row.get("filename") or "").strip()
+        tape_path = path_by_key.get(filename) if filename else None
+        if settings.skip_tape_verify or tape_path is None:
+            lot.sku = claimed
+            lot.sku_needs_review = bool(not settings.skip_tape_verify)
+            return
+        verified = verify_tape_sku(tape_path, claimed)
+        if verified is True:
+            lot.sku = claimed
+            lot.sku_needs_review = False
+            return
+        if verified is None:
+            lot.sku = claimed
+            lot.sku_needs_review = True
+            return
 
 
 def _apply_tape_sku_from_paths(
@@ -248,8 +308,12 @@ def _apply_tape_sku_from_paths(
     *,
     manifest_tag: str,
 ) -> None:
-    if lot.sku or not tape_filenames:
+    if not tape_filenames:
         return
+    if lot.sku and not lot.sku_needs_review:
+        return
+
+    pending_review: str | None = None
     for filename in tape_filenames:
         tape_path = path_by_key.get(filename)
         if tape_path is None:
@@ -258,17 +322,29 @@ def _apply_tape_sku_from_paths(
         if not payload:
             continue
         candidate = LotOutput.from_model(payload)
+        strip_product_box_misread_as_tape_sku(candidate, payload)
         if not candidate.sku:
             continue
+        claimed = tape_marking_canonical(candidate.sku) or str(candidate.sku).strip()
+        if not claimed or not tape_sku_opens_new_lot(claimed):
+            continue
         if settings.skip_tape_verify:
-            lot.sku = tape_marking_canonical(candidate.sku) or candidate.sku
-            lot.sku_needs_review = False
-            return
-        claimed = tape_marking_canonical(candidate.sku) or candidate.sku or ""
-        if verify_tape_sku(tape_path, claimed) is True:
             lot.sku = claimed
             lot.sku_needs_review = False
             return
+        verified = verify_tape_sku(tape_path, claimed)
+        if verified is True:
+            lot.sku = claimed
+            lot.sku_needs_review = False
+            return
+        if verified is None:
+            pending_review = claimed
+            lot.sku = claimed
+            lot.sku_needs_review = True
+            continue
+        pending_review = pending_review or claimed
+    if pending_review and not lot.sku:
+        lot.sku = pending_review
         lot.sku_needs_review = True
 
 
@@ -530,7 +606,9 @@ def run_single_lot_pipeline(
     pipeline_result["pro_skipped_due_to_agreement"] = pro_skipped
     pipeline_result["ran_pro"] = ran_pro
 
-    sku_sources = _sku_candidate_filenames(selected)
+    sku_sources = _sku_candidate_filenames(selected, triage_rows)
+    strip_product_box_misread_as_tape_sku(lot)
+    _apply_triage_tape_sku(lot, triage_rows, path_by_key)
     _apply_tape_sku_from_paths(
         lot,
         sku_sources,

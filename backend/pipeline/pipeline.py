@@ -144,6 +144,7 @@ Rules:
   are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
   readable sticker text verbatim into brand_text (maker mark, material, tune — not just a guessed brand name).
 - tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image.
+  When **any** colored estate lot tape with a lot number is visible (even on a **tape roll** in the foreground of a hero shot), copy the marking into **lot_tape_marking** (e.g. MS530, MS 530, #8524).
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.
