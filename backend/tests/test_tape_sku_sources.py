@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.lotting import LotOutput, strip_product_box_misread_as_tape_sku, tape_marking_canonical
+from app.core.lotting import (
+    LotOutput,
+    strip_product_box_misread_as_tape_sku,
+    tape_marking_canonical,
+    tape_sku_same_marking,
+)
 from app.services.pipeline_integration import _sku_candidate_filenames, _triage_tape_marking
 from app.services.tape_focus import _is_blue_masking_tape_pixel
 
@@ -17,6 +22,12 @@ class TestTapeSkuSources(unittest.TestCase):
     def test_tape_marking_canonical_ms_prefix(self) -> None:
         self.assertEqual(tape_marking_canonical("MS 530"), "MS530")
         self.assertEqual(tape_marking_canonical("ms530"), "MS530")
+
+    def test_tape_sku_same_marking_keeps_letter_prefix_significant(self) -> None:
+        self.assertTrue(tape_sku_same_marking("MS 530", "ms530"))
+        self.assertTrue(tape_sku_same_marking("530", "SKU #530"))
+        self.assertFalse(tape_sku_same_marking("530", "MS530"))
+        self.assertFalse(tape_sku_same_marking("MS006", "SR006"))
 
     def test_triage_tape_marking_prefers_lot_tape_field(self) -> None:
         row = {"lot_tape_marking": "MS 530", "brand_text": "ERTL"}

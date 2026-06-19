@@ -3046,17 +3046,19 @@ select.ct-input option {
   background: var(--ct-error-bg);
 }
 
-.ct-dash-lots .ct-dashboard-table-desktop {
-  margin-top: 0;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
+@media (min-width: 769px) {
+  .ct-dash-lots .ct-dashboard-table-desktop {
+    margin-top: 0;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
 
-.ct-dash-lots .ct-dash-lots-table.ct-table-wrap {
-  flex: 1;
-  min-height: 360px;
+  .ct-dash-lots .ct-dash-lots-table.ct-table-wrap {
+    flex: 1;
+    min-height: 360px;
+  }
 }
 
 @media (max-width: 1280px) {

@@ -2489,12 +2489,7 @@ def tape_sku_same_marking(a: str | None, b: str | None) -> bool:
     """True when two tape sku strings refer to the same marking (letters + digits or digits-only)."""
     ca = tape_marking_canonical(a)
     cb = tape_marking_canonical(b)
-    if ca is not None and cb is not None and ca == cb:
-        return True
-    da = sku_digits(a)
-    db = sku_digits(b)
-    # Same numeric tail when one frame is digits-only and another is letter+digit (e.g. 006 vs SR006).
-    return len(da) >= 2 and len(db) >= 2 and da == db
+    return ca is not None and cb is not None and ca == cb
 
 
 def sku_digits(value: Any) -> str:
