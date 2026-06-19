@@ -2181,7 +2181,7 @@ select.ct-input option {
 
 .ct-dash-lots-table.ct-table-wrap {
   margin-bottom: 0;
-  max-height: min(calc(100dvh - 14rem), 780px);
+  max-height: min(calc(100dvh - 12rem), 1100px);
   overflow: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--ct-border);
@@ -2688,7 +2688,7 @@ select.ct-input option {
     "left right"
     "exports right";
   gap: 1.15rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .ct-dash-col--left {
@@ -2698,6 +2698,9 @@ select.ct-input option {
 .ct-dash-col--right {
   grid-area: right;
   grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .ct-dash-col--exports {
@@ -2965,10 +2968,14 @@ select.ct-input option {
 }
 
 .ct-dash-lots {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 320px;
 }
 
 .ct-dash-lots__header {
+  flex-shrink: 0;
   margin-bottom: 0.85rem;
 }
 
@@ -3041,6 +3048,15 @@ select.ct-input option {
 
 .ct-dash-lots .ct-dashboard-table-desktop {
   margin-top: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ct-dash-lots .ct-dash-lots-table.ct-table-wrap {
+  flex: 1;
+  min-height: 360px;
 }
 
 @media (max-width: 1280px) {
