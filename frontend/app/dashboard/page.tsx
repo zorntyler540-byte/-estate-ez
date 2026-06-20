@@ -3911,9 +3911,6 @@ export default function DashboardPage() {
       );
       return;
     }
-    if (isSingleLot) {
-      clearFolderPick();
-    }
     try {
       const buildFormForSlice = (slice: File[]) => {
         const form = new FormData();
@@ -3987,6 +3984,9 @@ export default function DashboardPage() {
         setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
       setJobs((prev) => [created, ...prev]);
+      if (isSingleLot) {
+        clearFolderPick();
+      }
       if (!isSingleLot) {
         persistStagingAwaitingGemini(created.id, total);
       }
@@ -4050,18 +4050,6 @@ export default function DashboardPage() {
 
   async function runJob(jobId: string) {
     setError("");
-    const pick = folderPickRef.current;
-    const isSingleLot = pick?.singleLotMode === true && (pick?.imageFiles.length ?? 0) > 0;
-    if (isSingleLot) {
-      clearFolderPick();
-      setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
-    } else if (pick?.imageFiles.length) {
-      const n = pick.imageFiles.length;
-      persistStagingAwaitingGemini(jobId, n);
-      setStagingSuccess(
-        `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
-      );
-    }
     try {
       const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
       if (updated.status === "processing") {
@@ -4069,7 +4057,15 @@ export default function DashboardPage() {
         setLiveProgressJobId(updated.id);
       }
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
-      if (updated.status === "queued") {
+      const pick = folderPickRef.current;
+      if (pick?.imageFiles.length && readStagingAwaitingGeminiJobId() === updated.id) {
+        const n = pick.imageFiles.length;
+        setStagingSuccess(
+          updated.status === "queued"
+            ? "Job queued — it will start automatically when the current lot finishes."
+            : `Catalog started — staged photos clear automatically after all ${n} photo${n === 1 ? " is" : "s are"} sent to Gemini.`
+        );
+      } else if (updated.status === "queued") {
         setStagingSuccess("Job queued — it will start automatically when the current lot finishes.");
       }
     } catch (e) {
