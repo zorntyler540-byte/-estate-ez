@@ -25,12 +25,17 @@ from app.core.lotting import (
 from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
     PipelineCancelled,
+    _build_flash_draft,
     _build_pro_image_payload,
     _hero_triage_block,
     _manifest_to_brand_audit,
+    _run_parallel_triage,
+    aggregate_triage_ocr,
+    is_complex_lot_for_pro_author,
     run_brand_audit_pro,
+    select_analysis_photos,
 )
-from pipeline.schemas import FullyAuditedManifest, InventoryLotDraft
+from pipeline.schemas import FullyAuditedManifest, InventoryLotDraft, PhotoTriageResult
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +237,7 @@ def _merge_flash_item_specs(lot: LotOutput, flash_draft: dict[str, Any]) -> None
 MAX_SKU_SCAN_FRAMES = 8
 
 
-def _triage_tape_marking(row: dict[str, Any]) -> str | None:
+def triage_tape_marking_from_row(row: dict[str, Any]) -> str | None:
     """Extract a normalized estate-tape lot code from triage OCR when present."""
     for key in ("lot_tape_marking", "brand_text"):
         raw = row.get(key)
@@ -242,6 +247,72 @@ def _triage_tape_marking(row: dict[str, Any]) -> str | None:
         if mark:
             return mark
     return None
+
+
+def _triage_tape_marking(row: dict[str, Any]) -> str | None:
+    return triage_tape_marking_from_row(row)
+
+
+def _default_unusable_triage_row(filename: str) -> dict[str, Any]:
+    return PhotoTriageResult(
+        filename=filename,
+        photo_role="unusable",
+        label_legibility="none",
+        quality="blur",
+        confidence="low",
+    ).model_dump()
+
+
+def triage_ordered_photo_batch(
+    photos: list[Path] | list[PhotoEntry],
+    *,
+    emit: EmitFn | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[tuple[Path, str, dict[str, Any]]]:
+    """Parallel Stage-1 triage; return rows in the same order as ``photos``."""
+    _sync_pipeline_env_from_settings()
+    entries, _path_by_key = _coerce_photo_entries(photos)
+    images: dict[str, bytes] = {}
+    for path, key in entries:
+        images[key] = path.read_bytes()
+
+    total_photos = len(entries)
+    filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
+
+    if emit:
+        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": total_photos})
+
+    def _emit_triage_row(triage_row: dict[str, Any]) -> None:
+        if not emit:
+            return
+        filename = str(triage_row.get("filename") or "")
+        emit(
+            {
+                "type": "photo_analyzed",
+                "index": filename_to_index.get(filename, 0),
+                "total": total_photos,
+                "file_name": filename,
+                "preview": {
+                    "auction_title": str(triage_row.get("photo_role") or ""),
+                    "sku": triage_row.get("lot_tape_marking") or triage_row.get("brand_text") or None,
+                },
+                "pipeline_role": triage_row.get("photo_role"),
+            }
+        )
+
+    if should_cancel and should_cancel():
+        raise PipelineCancelled()
+    triage_list = _run_parallel_triage(
+        images,
+        on_triage_complete=_emit_triage_row,
+        should_cancel=should_cancel,
+    )
+    by_name = {str(r.get("filename") or ""): r for r in triage_list}
+    ordered: list[tuple[Path, str, dict[str, Any]]] = []
+    for path, key in entries:
+        row = by_name.get(key) or _default_unusable_triage_row(key)
+        ordered.append((path, key, row))
+    return ordered
 
 
 def _sku_candidate_filenames(
@@ -436,6 +507,7 @@ def run_single_lot_pipeline(
     manifest_tag: str,
     emit: EmitFn | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    pre_triage_rows: list[dict[str, Any]] | None = None,
 ) -> tuple[LotOutput, dict[str, Any]]:
     """
     Stage 1 triage + selection, capped Flash listing, then Pro proofreads title/brands/items.
@@ -454,7 +526,7 @@ def run_single_lot_pipeline(
     total_photos = len(entries)
     filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
 
-    if emit:
+    if emit and pre_triage_rows is None:
         emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": total_photos})
 
     def _emit_triage_row(triage_row: dict[str, Any]) -> None:
@@ -483,11 +555,26 @@ def run_single_lot_pipeline(
     )
     if should_cancel and should_cancel():
         raise PipelineCancelled()
-    pipeline_result = triage_and_select_field_lot(
-        images,
-        on_triage_complete=_emit_triage_row,
-        should_cancel=should_cancel,
-    )
+    if pre_triage_rows is not None:
+        triage_rows = [r for r in pre_triage_rows if str(r.get("filename") or "") in path_by_key]
+        have = {str(r.get("filename") or "") for r in triage_rows}
+        for key in path_by_key:
+            if key not in have:
+                triage_rows.append(_default_unusable_triage_row(key))
+        selected = select_analysis_photos(triage_rows)
+        flash_draft_obj = _build_flash_draft(triage_rows, selected)
+        pipeline_result = {
+            "triage": triage_rows,
+            "selected": selected,
+            "flash_draft": flash_draft_obj.model_dump(),
+            "catalog_only_count": len(selected.get("catalog_only") or []),
+        }
+    else:
+        pipeline_result = triage_and_select_field_lot(
+            images,
+            on_triage_complete=_emit_triage_row,
+            should_cancel=should_cancel,
+        )
     selected = dict(pipeline_result.get("selected") or {})
     flash_draft = dict(pipeline_result.get("flash_draft") or {})
     triage_rows = list(pipeline_result.get("triage") or [])
@@ -508,20 +595,28 @@ def run_single_lot_pipeline(
     hero_name = str(selected.get("hero_filename") or "").strip()
     pro_filenames = list(selected.get("pro_filenames") or [])
 
-    listing_names = list(selected.get("listing_filenames") or [])
-    if not listing_names:
-        if hero_name:
-            listing_names.append(hero_name)
-        for fn in pro_filenames:
-            if fn and fn not in listing_names:
-                listing_names.append(fn)
-        for fn in list(selected.get("front_filenames") or []):
-            if fn and fn not in listing_names:
-                listing_names.append(fn)
-    listing_names = listing_names[: max(1, settings.listing_flash_max_frames)]
+    ocr_aggregate = aggregate_triage_ocr(triage_rows)
+    complex_lot = is_complex_lot_for_pro_author(triage_rows, selected)
+    pipeline_result["pro_author_mode"] = True
+    pipeline_result["complex_lot"] = complex_lot
+    pipeline_result["triage_ocr_lines"] = len(ocr_aggregate)
 
-    if not listing_names:
-        listing_names = list(path_by_key.keys())[: max(1, settings.listing_flash_max_frames)]
+    listing_names: list[str] = []
+    if complex_lot:
+        pipeline_result["flash_listing_skipped"] = True
+        logger.info(
+            "Pipeline complex lot — skipping Flash listing (%d photos, %d OCR lines); Pro author",
+            len(entries),
+            len(ocr_aggregate),
+        )
+    else:
+        pipeline_result["flash_listing_skipped"] = False
+        if hero_name:
+            listing_names = [hero_name]
+        else:
+            listing_fallback = list(selected.get("listing_filenames") or [])
+            if listing_fallback:
+                listing_names = [listing_fallback[0]]
 
     lot: LotOutput | None = None
     listing_calls = 0
@@ -560,25 +655,29 @@ def run_single_lot_pipeline(
         _merge_flash_item_specs(lot, flash_draft)
 
     hero_triage = _hero_triage_block(triage_rows, hero_name)
-    should_run_pro = bool(hero_name or pro_filenames or lot)
+    should_run_pro = bool(hero_name or pro_filenames or lot or ocr_aggregate)
     if should_run_pro:
         if should_cancel and should_cancel():
             raise PipelineCancelled()
         pro_images = _build_pro_image_payload(images, pro_filenames, hero_filename=hero_name)
-        flash_listing_context = {
-            "auction_title": lot.auction_title,
-            "professional_description": lot.professional_description,
-            "specification_lines": list(lot.specification_lines),
-            "brands": list(lot.brands),
-        }
+        flash_listing_context: dict[str, Any] | None = None
+        if lot and listing_calls > 0:
+            flash_listing_context = {
+                "auction_title": lot.auction_title,
+                "professional_description": lot.professional_description,
+                "specification_lines": list(lot.specification_lines),
+                "brands": list(lot.brands),
+            }
         if emit:
-            emit({"type": "batch_phase", "phase": "pipeline_pro_proofread", "total_photos": len(entries)})
+            emit({"type": "batch_phase", "phase": "pipeline_pro_author", "total_photos": len(entries)})
         try:
             manifest_json = run_brand_audit_pro(
                 pro_images,
                 flash_draft,
                 hero_triage_metadata=hero_triage,
                 flash_listing_context=flash_listing_context,
+                triage_ocr_aggregate=ocr_aggregate,
+                pro_author_mode=True,
             )
             brand_audit = _apply_pro_manifest_to_lot(
                 lot,
@@ -590,10 +689,15 @@ def run_single_lot_pipeline(
             pro_skipped = False
             ran_pro = True
             pipeline_result["pro_model"] = settings.gemini_pro_model
-            logger.info("Pipeline Pro proofread succeeded model=%s", settings.gemini_pro_model)
+            logger.info(
+                "Pipeline Pro author succeeded model=%s complex=%s listing_calls=%d",
+                settings.gemini_pro_model,
+                complex_lot,
+                listing_calls,
+            )
         except Exception as exc:
             logger.warning(
-                "Pipeline Pro proofread failed (%s); falling back to Flash + triage brands.",
+                "Pipeline Pro author failed (%s); falling back to Flash + triage brands.",
                 exc,
                 exc_info=True,
             )

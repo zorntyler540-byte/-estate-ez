@@ -28,7 +28,12 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import infer_ct_category
-from app.services.pipeline_integration import is_weak_pipeline_lot, run_single_lot_pipeline
+from app.services.pipeline_integration import (
+    is_weak_pipeline_lot,
+    run_single_lot_pipeline,
+    triage_ordered_photo_batch,
+    triage_tape_marking_from_row,
+)
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import (
@@ -682,6 +687,190 @@ def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_i
     return row
 
 
+def _segment_batch_lots_by_tape(
+    folder: Path,
+    ordered: list[tuple[Path, str, dict]],
+) -> list[list[tuple[Path, str]]]:
+    """
+    Split a batch upload into lot segments using estate tape SKU (and subfolder boundaries).
+
+    Matches the legacy inventory loop: a new colored tape marking starts the next catalog lot.
+    """
+    segments: list[list[tuple[Path, str]]] = []
+    current: list[tuple[Path, str]] = []
+    open_sku: str | None = None
+    prev_batch_key: str | None = None
+
+    for path, key, row in ordered:
+        batch_key = _subfolder_batch_key(folder, path)
+        if prev_batch_key is not None and batch_key != prev_batch_key and current:
+            segments.append(current)
+            current = []
+            open_sku = None
+
+        marking = triage_tape_marking_from_row(row)
+        sku_candidate = tape_marking_canonical(marking) if marking else None
+        sku_ok = bool(sku_candidate and tape_sku_opens_new_lot(sku_candidate))
+
+        if sku_ok and sku_candidate and not settings.skip_tape_verify:
+            verified = verify_tape_sku(path, sku_candidate)
+            if verified is False:
+                sku_ok = False
+
+        if (
+            sku_ok
+            and sku_candidate
+            and open_sku is not None
+            and not tape_sku_same_marking(open_sku, sku_candidate)
+        ):
+            if current:
+                segments.append(current)
+                current = []
+            open_sku = sku_candidate
+        elif sku_ok and sku_candidate and open_sku is None:
+            open_sku = sku_candidate
+
+        current.append((path, key))
+        prev_batch_key = batch_key
+
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _process_job_batch_pipeline(
+    db: Session,
+    job: ProcessingJob,
+    photos: list[Path],
+    folder: Path,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    """Choose photos / folder batch: triage once, split on tape SKU, pipeline each lot."""
+    total_photos = len(photos)
+    _emit_job(job, {"type": "batch_start", "total_photos": total_photos, "phase": "pipeline"})
+
+    if _cancel_signaled(db, job.id, cancel_event):
+        job.status = JobStatus.failed
+        job.error_message = "Cancelled"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+
+    def _emit(payload: dict) -> None:
+        _emit_job(job, payload)
+
+    def _should_cancel() -> bool:
+        return _cancel_signaled(db, job.id, cancel_event)
+
+    try:
+        ordered = triage_ordered_photo_batch(
+            photos,
+            emit=_emit,
+            should_cancel=_should_cancel,
+        )
+    except PipelineCancelled:
+        job.status = JobStatus.failed
+        job.error_message = "Cancelled"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    if not segments:
+        job.status = JobStatus.failed
+        job.error_message = "No photos to catalog after triage"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+
+    job.analyzed_photos = int(total_photos)
+    job.failed_photos = 0
+    job.est_input_tokens = int(total_photos * EST_INPUT_TOKENS_PER_PHOTO)
+    job.est_output_tokens = int(len(segments) * EST_OUTPUT_TOKENS_PER_SUCCESS)
+    db.commit()
+    _heartbeat_job(db, job)
+
+    _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
+
+    triage_by_key = {key: row for _path, key, row in ordered}
+    lots_saved = 0
+
+    for seg_idx, segment in enumerate(segments):
+        if _cancel_signaled(db, job.id, cancel_event):
+            job.status = JobStatus.failed
+            job.error_message = "Cancelled"
+            job.cancel_requested = False
+            db.commit()
+            _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+            return
+
+        seg_entries = list(segment)
+        seg_paths = [p for p, _k in seg_entries]
+        seg_triage = [triage_by_key[k] for _p, k in seg_entries if k in triage_by_key]
+
+        try:
+            lot, _pipeline_result = run_single_lot_pipeline(
+                seg_entries,
+                manifest_tag=f"{job.id}-seg{seg_idx}",
+                emit=_emit,
+                should_cancel=_should_cancel,
+                pre_triage_rows=seg_triage,
+            )
+        except PipelineCancelled:
+            job.status = JobStatus.failed
+            job.error_message = "Cancelled"
+            job.cancel_requested = False
+            db.commit()
+            _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+            return
+
+        batch_key = _subfolder_batch_key(folder, seg_paths[0])
+        _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
+        _strip_maker_stamp_misread_as_tape_sku(lot, None)
+
+        pending_photo_ids: list[str] = []
+        for i, photo_path in enumerate(seg_paths):
+            _emit_job(
+                job,
+                {
+                    "type": "inventory_step",
+                    "index": i,
+                    "total": len(seg_paths),
+                    "file_name": photo_path.name,
+                },
+            )
+            row = _add_catalog_photo(db, job, photo_path)
+            pending_photo_ids.append(row.id)
+            db.commit()
+
+        lot.photo_count = len(seg_paths)
+        _, pending_photo_ids, finalized = _finalize_open_lot(
+            db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
+        )
+        db.commit()
+        if finalized is not None:
+            lots_saved += 1
+            _emit_job(job, {"type": "lot_ready", "lot": _lot_sse_payload(finalized)})
+
+    recompute_sku_sanity_flags_for_sale(db, job.sale_id, job.account_id)
+    job.status = JobStatus.completed
+    job.cancel_requested = False
+    db.commit()
+    _verify_job_catalog_files_on_disk(db, job)
+    _emit_job(job, {"type": "status", "status": "completed"})
+    _LOG.info(
+        "batch pipeline completed job_id=%s photos=%d lots=%d segments=%d",
+        job.id,
+        total_photos,
+        lots_saved,
+        len(segments),
+    )
+
+
 def _process_job_single_lot_pipeline(
     db: Session,
     job: ProcessingJob,
@@ -890,8 +1079,11 @@ def _process_job_body(
         return
 
     single_lot_mode = bool(getattr(job, "single_lot_mode", False))
-    if single_lot_mode and settings.pipeline_triage_brand_audit:
-        _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
+    if settings.pipeline_triage_brand_audit:
+        if single_lot_mode:
+            _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
+        else:
+            _process_job_batch_pipeline(db, job, photos, folder, cancel_event=cancel_event)
         return
 
     total_photos = len(photos)

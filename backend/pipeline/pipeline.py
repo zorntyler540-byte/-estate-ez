@@ -56,10 +56,34 @@ _MAKER_STICKER_SIGNAL_RE = re.compile(
     r"hand[- ]?sculpted\s+glass|"
     r"\btune\s*:\s*|"
     r"hand[- ]?sculpted|"
-    r"made\s+in\s+(?:china|usa|taiwan|japan|korea)|"
+    r"made\s+in\s+(?:china|usa|taiwan|japan|korea|italy)|"
     r"\b(?:ug|wg)\b"
     r")"
 )
+
+# Engraved/stamped marks, firearms tags, handwritten inventory notes — also prioritize for Pro.
+_MAKER_MARK_SIGNAL_RE = re.compile(
+    r"(?i)(?:"
+    r"\bpedersoli\b|\buberti\b|\btaylor'?s?\b|\barmi\s+san\s+paolo\b|"
+    r"\bbrown\s+bess\b|\btower\b|\block\s*plate\b|"
+    r"\b(?:cal\.?|caliber)\s*[\d./]+|"
+    r"\b(?:flintlock|musket|rifle|pistol|revolver|shotgun|firearm)\b|"
+    r"\b(?:engraved|stamped|etched|embossed)\b|"
+    r"\b(?:serial|model|pat\.?|patent)\s*#?\s*[\w-]+|"
+    r"\b(?:gr|grice)\s*\d{4}\b|\b(?:georgius|victoria)\s+rex\b|"
+    r"\bmade\s+in\s+(?:italy|usa|germany|japan|china)\b"
+    r")"
+)
+
+_HANDWRITTEN_TAG_SIGNAL_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:mine|estate|consign|inventory)\b|"
+    r"#[\s]*\d{3,}|"
+    r"\b(?:with|includes?)\s+(?:sling|case|box|accessories)\b"
+    r")"
+)
+
+_COMPLEX_LOT_MIN_PHOTOS = max(8, int(os.environ.get("PIPELINE_COMPLEX_LOT_MIN_PHOTOS", "10")))
 
 _genai_client: genai.Client | None = None
 
@@ -143,14 +167,20 @@ Rules:
   Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
   are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
   readable sticker text verbatim into brand_text (maker mark, material, tune — not just a guessed brand name).
+  **Engraved or stamped metal marks** (lock plates, barrels, undersides, silver/pewter hallmarks): use angle_only
+  or item_front; set label_legibility clear/partial when any letters/numbers are readable; copy **all** engraved
+  text verbatim into brand_text (e.g. PEDERSOLI, TOWER, GR, maker name + date).
+  **Handwritten inventory tags** (paper/card in plastic, tied to item): use item_front when the tag fills much of
+  the frame; copy every readable line into brand_text (model name, caliber, maker, serial).
 - tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image.
   When **any** colored estate lot tape with a lot number is visible (even on a **tape roll** in the foreground of a hero shot), copy the marking into **lot_tape_marking** (e.g. MS530, MS 530, #8524).
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.
 - Flag every image with any readable tag text (label_legibility clear or partial), even if corner of frame.
-- brand_text: verbatim OCR from labels/tags/stickers — copy readable text exactly (maker logo letters, material
-  lines like "22 KT GOLD", tune lines like "Tune: Amazing Grace", care/size when on same tag); empty string if
+- brand_text: verbatim OCR from labels/tags/stickers/**engravings** — copy readable text exactly (maker logo letters,
+  material lines like "22 KT GOLD", tune lines like "Tune: Amazing Grace", care/size when on same tag, lock-plate
+  engravings like "PEDERSOLI MADE IN ITALY", handwritten tag lines like "Brown Bess Cal. 80"); empty string if
   not readable (never use Unknown/Generic/Unbranded).
 - duplicate_of_filename: set when this image is a near-duplicate of another file in the lot.
 
@@ -227,10 +257,26 @@ def _row_has_maker_sticker_signal(row: PhotoTriageResult) -> bool:
     return bool(_MAKER_STICKER_SIGNAL_RE.search(text))
 
 
+def _row_has_maker_mark_signal(row: PhotoTriageResult) -> bool:
+    """True when triage OCR suggests engravings, firearms tags, or handwritten inventory notes."""
+    if row.photo_role == "tape":
+        return False
+    text = str(row.brand_text or "")
+    if not text.strip():
+        return False
+    if _MAKER_STICKER_SIGNAL_RE.search(text) or _MAKER_MARK_SIGNAL_RE.search(text):
+        return True
+    if _HANDWRITTEN_TAG_SIGNAL_RE.search(text) and row.label_legibility in ("clear", "partial"):
+        return True
+    if row.label_legibility in ("clear", "partial") and len(text.strip()) >= 24:
+        return True
+    return False
+
+
 def _pro_score(row: PhotoTriageResult) -> tuple[int, int, int, int, int]:
     ocr = (row.brand_text or "").strip()
     brand_len = len(_normalize_brand(ocr) or ocr)
-    maker_boost = 1 if _row_has_maker_sticker_signal(row) else 0
+    maker_boost = 1 if _row_has_maker_mark_signal(row) else 0
     return (
         maker_boost,
         LEGIBILITY_SCORE.get(row.label_legibility, 0),
@@ -244,7 +290,23 @@ def _best_maker_sticker_row(rows: list[PhotoTriageResult]) -> PhotoTriageResult 
     pool = [
         r
         for r in rows
-        if r.label_legibility in ("clear", "partial") and _row_has_maker_sticker_signal(r)
+        if r.label_legibility in ("clear", "partial") and _row_has_maker_mark_signal(r)
+    ]
+    if not pool:
+        return None
+    return max(pool, key=_pro_score)
+
+
+def _best_handwritten_tag_row(rows: list[PhotoTriageResult]) -> PhotoTriageResult | None:
+    pool = [
+        r
+        for r in rows
+        if r.photo_role != "tape"
+        and r.label_legibility in ("clear", "partial")
+        and (
+            _HANDWRITTEN_TAG_SIGNAL_RE.search(str(r.brand_text or ""))
+            or (r.photo_role == "item_front" and len(str(r.brand_text or "").strip()) >= 12)
+        )
     ]
     if not pool:
         return None
@@ -255,28 +317,32 @@ def _ensure_maker_sticker_in_pro_filenames(
     pro_filenames: list[str],
     rows: list[PhotoTriageResult],
 ) -> list[str]:
-    """Reserve one Pro slot for a bottom foil / maker sticker when triage OCR flagged it."""
-    best = _best_maker_sticker_row(rows)
-    if best is None or best.filename in pro_filenames:
-        return pro_filenames
-
+    """Reserve Pro slots for maker marks / foil stickers and handwritten inventory tags."""
     cap = BRAND_PRO_MAX_LABEL_FRAMES
     out = list(pro_filenames)
-    out.append(best.filename)
-    if len(out) <= cap:
-        return out
-
     row_by_fn = {r.filename: r for r in rows}
-    droppable = [
-        fn
-        for fn in out
-        if fn != best.filename
-        and not _row_has_maker_sticker_signal(row_by_fn[fn])
-    ]
-    while len(out) > cap and droppable:
-        drop = min(droppable, key=lambda fn: _pro_score(row_by_fn[fn]))
-        out.remove(drop)
-        droppable.remove(drop)
+    must_include: list[PhotoTriageResult] = []
+    for picker in (_best_maker_sticker_row, _best_handwritten_tag_row):
+        best = picker(rows)
+        if best is not None and best.filename not in {r.filename for r in must_include}:
+            must_include.append(best)
+
+    for best in must_include:
+        if best.filename in out:
+            continue
+        out.append(best.filename)
+        if len(out) <= cap:
+            continue
+        droppable = [
+            fn
+            for fn in out
+            if fn not in {b.filename for b in must_include}
+            and not _row_has_maker_mark_signal(row_by_fn[fn])
+        ]
+        while len(out) > cap and droppable:
+            drop = min(droppable, key=lambda fn: _pro_score(row_by_fn[fn]))
+            out.remove(drop)
+            droppable.remove(drop)
     return out[:cap]
 
 
@@ -521,17 +587,80 @@ def _brand_audit_from_flash_draft(flash_draft: InventoryLotDraft) -> BrandAuditR
 
 
 BRAND_AUDIT_SYSTEM = (
-    "You are a senior estate inventory proofreader and listing editor. Verify accuracy against the photos — title, "
-    "description, brands, and per-item lines. Fix Flash errors (wrong category, material, object type). "
-    "When rewriting final_professional_description, make it sound like a **warm CTBids specialist selling the piece** — "
+    "You are a senior estate inventory specialist writing CTBids auction listings. "
+    "Use the photos and triage OCR transcripts to produce accurate shopper-facing title, description, brands, "
+    "and specification lines. Fix category errors (apparel vs tableware vs firearms). "
+    "When rewriting final_professional_description, sound like a **warm CTBids specialist selling the piece** — "
     "not a stiff catalog ('This is a set of…', 'Each … features…'). Lead with appeal; put marks and exact sizes in "
     "final_specification_lines / **Dimensions:**. "
     "When a yellow measuring tape, metal ruler, or yardstick is visibly measuring the item(s), ensure "
     "final_specification_lines include **Dimensions:** or **Measurement:** with legible reads (~ inches). "
-    "Never invent brands or details not visible in the images. "
+    "Never invent brands or details not visible in the images or triage OCR. "
     "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess. "
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
+
+
+def aggregate_triage_ocr(triage_results: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Deduped verbatim OCR from every triage row — fed to Pro even for catalog-only frames."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in triage_results:
+        row = PhotoTriageResult.model_validate(raw)
+        parts: list[str] = []
+        if (row.brand_text or "").strip():
+            parts.append(str(row.brand_text).strip())
+        tape = (row.lot_tape_marking or "").strip()
+        if tape:
+            parts.append(f"lot tape: {tape}")
+        text = " | ".join(parts).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "filename": row.filename,
+                "photo_role": row.photo_role,
+                "label_legibility": row.label_legibility,
+                "text": text,
+            }
+        )
+    return out
+
+
+def is_complex_lot_for_pro_author(
+    triage_results: list[dict[str, Any]],
+    selected: dict[str, Any],
+) -> bool:
+    """
+    Complex lots skip Flash listing (cost offset) and rely on Pro author + triage OCR.
+    Heuristic: many photos, multiple markings, engravings/firearms signals, or brand review flag.
+    """
+    rows = _parse_triage_rows(triage_results)
+    if len(rows) >= _COMPLEX_LOT_MIN_PHOTOS:
+        return True
+    if selected.get("brand_needs_review"):
+        return True
+    marking_rows = [
+        r
+        for r in rows
+        if _row_has_maker_mark_signal(r)
+        or (
+            r.label_legibility in ("clear", "partial")
+            and len(str(r.brand_text or "").strip()) > 20
+        )
+    ]
+    if len(marking_rows) >= 2:
+        return True
+    if any(_row_has_maker_mark_signal(r) for r in rows):
+        return True
+    ocrs = {_normalize_brand(r.brand_text) for r in rows if _normalize_brand(r.brand_text)}
+    if len(ocrs) >= 2:
+        return True
+    return False
 
 
 def _hero_triage_block(
@@ -569,8 +698,10 @@ def run_brand_audit_pro(
     *,
     hero_triage_metadata: dict[str, Any] | None = None,
     flash_listing_context: dict[str, Any] | None = None,
+    triage_ocr_aggregate: list[dict[str, str]] | None = None,
+    pro_author_mode: bool = True,
 ) -> str:
-    """Stage 2: Pro proofreads listing + brands using hero, labels, and Flash draft/listing JSON."""
+    """Stage 2: Pro writes (or proofreads) listing + brands using hero, labels, and triage OCR."""
     client = _get_client()
 
     valuation_block = ""
@@ -586,8 +717,17 @@ def run_brand_audit_pro(
         )
 
     hero_filename = str((hero_triage_metadata or {}).get("filename") or "").strip()
+    ocr_block = ""
+    if triage_ocr_aggregate:
+        ocr_block = (
+            "\n\nTriage OCR transcript (verbatim text Flash read from **every** photo in this lot — "
+            "including frames not attached as images below). Treat as primary evidence for maker, model, "
+            "caliber, and serial when legibility is clear/partial:\n"
+            f"{json.dumps(triage_ocr_aggregate, indent=2)}\n"
+        )
+
     listing_block = ""
-    if flash_listing_context:
+    if flash_listing_context and not pro_author_mode:
         listing_block = (
             "\n\nFlash listing draft to PROOFREAD and correct (fix title/description if wrong vs images):\n"
             f"{json.dumps(flash_listing_context, indent=2)}\n"
@@ -597,32 +737,60 @@ def run_brand_audit_pro(
             "size casually in final_professional_description if needed. "
             "Set listing_was_corrected_by_pro true when you change title or description meaningfully."
         )
+    elif flash_listing_context and pro_author_mode:
+        listing_block = (
+            "\n\nOptional Flash listing seed (may be incomplete — prefer photos + triage OCR when they disagree):\n"
+            f"{json.dumps(flash_listing_context, indent=2)}\n"
+        )
+
+    if pro_author_mode:
+        task_block = (
+            "Write the CTBids auction listing for this estate lot using the hero, marking/label images, "
+            "triage OCR transcript, and JSON context below.\n"
+            "Tasks:\n"
+            "1. Use the hero wide shot for lot context (every distinct sellable piece visible).\n"
+            "2. Transcribe and **use** visible tags, engravings, and lock-plate marks on label/detail frames.\n"
+            "3. **Author** final_auction_title and final_professional_description — accurate shopper-facing search text. "
+            "Do not rely on a vague object guess when triage OCR or tags name the maker/model.\n"
+            "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
+            "5. **Manufacturer vs model:** put the maker in confirmed_brand (e.g. Pedersoli, Levi's) and the model/pattern "
+            "in final_auction_title or final_specification_lines (e.g. Brown Bess, Model: …).\n"
+            "6. **Firearms / militaria / engraved antiques:** when lock plates, tags, or OCR show maker + model + caliber, "
+            "lead final_auction_title with maker + model + caliber when readable. Historical marks (TOWER, GR crown) on "
+            "reproductions go in specification lines; prefer the actual manufacturer name from engravings/tags for brand.\n"
+            "7. **Handwritten inventory tags** (paper in plastic, tied to item): treat as authoritative for model/serial when "
+            "legible — they override a generic hero guess.\n"
+            "8. Leave confirmed_brand empty only when no readable maker mark exists on any frame or OCR line — "
+            "never guess from object type alone.\n"
+            "9. When one primary brand is clearly readable, lead final_auction_title with it for search.\n"
+            "10. When maker foil stickers show material lines (e.g. 22 KT GOLD) or tune names, include exact phrases — "
+            "do not downgrade to vague 'gold-tone' when text is legible.\n"
+            "11. Do not add 'vintage' or 'antique' as filler unless a specific decade or era mark is visible.\n"
+            "12. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
+            "13. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
+            "14. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"
+        )
+    else:
+        task_block = (
+            "Audit and proofread this estate lot using the hero, label/front images, and JSON context below.\n"
+            "Tasks:\n"
+            "1. Use the hero wide shot for lot context (every distinct sellable piece visible).\n"
+            "2. Transcribe visible tags exactly on label/front frames.\n"
+            "3. PROOFREAD the Flash listing title and description — fix wrong category, wrong material, or missing brands.\n"
+            "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
+            "5. When label/tag images show a maker name, set confirmed_brand on that item.\n"
+            "6. Leave confirmed_brand empty when no readable maker mark exists — never guess.\n"
+            "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
+            "8. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
+            "9. **Ruler / measuring tape:** Put **Dimensions:** in final_specification_lines when visible.\n"
+        )
 
     parts: list[Any] = [
-        "Audit and proofread this estate lot using the hero, label/front images, and JSON context below.\n"
-        "Tasks:\n"
-        "1. Use the hero wide shot for lot context (every distinct sellable piece visible).\n"
-        "2. Transcribe visible tags exactly on label/front frames.\n"
-        "3. PROOFREAD the Flash listing title and description — fix wrong category (e.g. apparel vs tableware), "
-        "wrong material, or missing brands. final_auction_title must be accurate shopper-facing search text.\n"
-        "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
-        "5. When label/tag images show a maker name, set confirmed_brand on that item (e.g. St. John's Bay, Mirabeau).\n"
-        "6. Leave confirmed_brand empty when no readable maker mark exists on any frame for that piece — "
-        "never guess a brand from object type alone.\n"
-        "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
-        "8. When maker foil stickers show material lines (e.g. 22 KT GOLD, Hand-Sculpted Glass) or tune names, "
-        "include those exact phrases in final_auction_title or final_professional_description — do not downgrade "
-        "to vague 'gold-tone accents' when the sticker text is legible.\n"
-        "9. Do not add 'vintage' or 'antique' as filler — use material + object type unless a specific decade or "
-        "era mark is visible on a tag.\n"
-        "10. Do not use the word 'lot' in final_auction_title or final_professional_description — shoppers want "
-        "brand, material, and object names (use group, set, collection, or multiple pieces when needed).\n"
-        "11. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when "
-        "visible. In final_professional_description use **warm seller voice** — casual size clause at most, not "
-        "'Dimensions are shown in the photos, with a height of…'.\n"
-        f"{valuation_block}"
-        f"{listing_block}\n\n"
-        f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
+        task_block
+        + f"{valuation_block}"
+        + f"{ocr_block}"
+        + f"{listing_block}\n\n"
+        + f"Flash triage draft JSON:\n{json.dumps(flash_item_draft_json, indent=2)}",
     ]
 
     for filename, img_bytes in item_specific_images_dict.items():

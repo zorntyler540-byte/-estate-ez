@@ -1298,13 +1298,16 @@ function photoProgressPhaseLine({
       catalogStepProgress.fileName ? ` (${catalogStepProgress.fileName})` : ""
     }`;
   }
-  if (singleLotMode && pipelinePhase) {
+  if (pipelinePhase) {
     if (pipelinePhase === "pipeline_triage") {
-      return `Sorting photos for one lot (${analyzedDone} / ${analyzedTotal || "…"} classified)`;
+      return singleLotMode
+        ? `Sorting photos for one lot (${analyzedDone} / ${analyzedTotal || "…"} classified)`
+        : `Sorting photos (${analyzedDone} / ${analyzedTotal || "…"} classified)`;
     }
     if (pipelinePhase === "pipeline_listing") return "Writing the listing draft…";
+    if (pipelinePhase === "pipeline_pro_author") return "Pro is writing title, brands, and details…";
     if (pipelinePhase === "pipeline_pro_proofread") return "Pro is proofreading title and details…";
-    return "Working on this lot…";
+    return singleLotMode ? "Working on this lot…" : "Working on your photos…";
   }
   if (analyzedTotal > 0) {
     if (analyzedDone < analyzedTotal) {
@@ -2521,6 +2524,7 @@ export default function DashboardPage() {
           if (
             (msg.phase === "pipeline_triage" ||
               msg.phase === "pipeline_listing" ||
+              msg.phase === "pipeline_pro_author" ||
               msg.phase === "pipeline_pro_proofread") &&
             (!msg.job_id || msg.job_id === processingJobId)
           ) {
@@ -4826,16 +4830,20 @@ export default function DashboardPage() {
               {cancelNotice}
             </p>
           ) : null}
-          {processingJob?.single_lot_mode && pipelinePhase && !inInventoryPhase ? (
+          {pipelinePhase && !inInventoryPhase ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
-              <strong>Step 1 — Add one lot:</strong>{" "}
+              <strong>
+                {processingJob?.single_lot_mode ? "Step 1 — Add one lot:" : "Step 1 — Reading photos:"}
+              </strong>{" "}
               {pipelinePhase === "pipeline_triage"
                 ? `Sorting ${geminiAnalyzedCount.total || "your"} photos (${geminiAnalyzedCount.done} / ${geminiAnalyzedCount.total || "…"} done). Rows update as each frame is classified.`
                 : pipelinePhase === "pipeline_listing"
                   ? "Writing the listing draft from the best photos."
-                  : pipelinePhase === "pipeline_pro_proofread"
-                    ? "Pro is proofreading title, brands, and details."
-                    : "Working…"}
+                  : pipelinePhase === "pipeline_pro_author"
+                    ? "Pro is writing the listing from tags, engravings, and the best photos."
+                    : pipelinePhase === "pipeline_pro_proofread"
+                      ? "Pro is proofreading title, brands, and details."
+                      : "Working…"}
             </p>
           ) : geminiAnalyzedCount.total > 0 && !inInventoryPhase ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>
@@ -5122,7 +5130,7 @@ export default function DashboardPage() {
                     <div className="ct-upload-option__text">
                       <span className="ct-upload-option__title">Choose photos</span>
                       <span className="ct-upload-option__desc">
-                        Individual files with thumbnail preview in the picker.
+                        Pick files in order; a new colored estate tape SKU starts the next lot.
                       </span>
                     </div>
                     <button

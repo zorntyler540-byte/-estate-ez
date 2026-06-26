@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
-from pipeline.pipeline import _build_pro_image_payload, select_analysis_photos
+from pipeline.pipeline import (
+    _build_pro_image_payload,
+    aggregate_triage_ocr,
+    is_complex_lot_for_pro_author,
+    select_analysis_photos,
+)
 
 
 def test_select_analysis_photos_picks_hero_and_fronts() -> None:
@@ -221,3 +226,96 @@ def test_lot_from_flash_draft_uses_brand_audit() -> None:
     lot = _lot_from_flash_draft(flash_draft, brand_audit)
     assert lot.brands == ["Levi's"]
     assert "Levi's" in lot.auction_title or "denim" in lot.auction_title.lower()
+
+
+def test_aggregate_triage_ocr_dedupes_and_includes_tape() -> None:
+    triage = [
+        {
+            "filename": "tag.jpg",
+            "photo_role": "item_front",
+            "label_legibility": "clear",
+            "brand_text": "BROWN BESS Pedersoli Cal. 80",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+        {
+            "filename": "lock.jpg",
+            "photo_role": "angle_only",
+            "label_legibility": "partial",
+            "brand_text": "PEDERSOLI MADE IN ITALY",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+        {
+            "filename": "tape.jpg",
+            "photo_role": "tape",
+            "label_legibility": "clear",
+            "brand_text": "",
+            "lot_tape_marking": "SA1000",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+    ]
+    rows = aggregate_triage_ocr(triage)
+    assert len(rows) == 3
+    assert any("Pedersoli" in r["text"] for r in rows)
+    assert any("lot tape: SA1000" in r["text"] for r in rows)
+
+
+def test_is_complex_lot_many_photos_or_maker_marks() -> None:
+    many = [
+        {
+            "filename": f"p{i}.jpg",
+            "photo_role": "angle_only",
+            "label_legibility": "none",
+            "quality": "ok",
+            "confidence": "high",
+        }
+        for i in range(12)
+    ]
+    assert is_complex_lot_for_pro_author(many, {"brand_needs_review": False}) is True
+
+    musket = [
+        {
+            "filename": "tag.jpg",
+            "photo_role": "item_front",
+            "label_legibility": "clear",
+            "brand_text": "BROWN BESS Cal. 80 Pedersoli #10908 with sling",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+        {
+            "filename": "lock.jpg",
+            "photo_role": "angle_only",
+            "label_legibility": "clear",
+            "brand_text": "PEDERSOLI TOWER GR",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+    ]
+    selected = select_analysis_photos(musket)
+    assert is_complex_lot_for_pro_author(musket, selected) is True
+
+    simple = [
+        {
+            "filename": "hero.jpg",
+            "photo_role": "hero",
+            "shows_whole_lot": True,
+            "label_legibility": "none",
+            "quality": "sharp",
+            "confidence": "high",
+        },
+        {
+            "filename": "tag.jpg",
+            "photo_role": "item_front",
+            "label_legibility": "clear",
+            "brand_text": "Levi's",
+            "quality": "sharp",
+            "confidence": "high",
+            "is_primary_front_for_item": True,
+            "distinct_item_id": "ITEM_1",
+        },
+    ]
+    sel = select_analysis_photos(simple)
+    assert is_complex_lot_for_pro_author(simple, sel) is False
+
