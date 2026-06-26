@@ -276,6 +276,19 @@ class TestBrandResolution(unittest.TestCase):
         )
         self.assertLessEqual(len(re.findall(r"vintage", lot.auction_title + lot.professional_description, re.I)), 1)
 
+    def test_replaces_overused_handsome_in_description(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Pedersoli Brown Bess Musket",
+                "professional_description": (
+                    "A handsome flintlock musket with a handsome brass buttplate and handsome wood stock."
+                ),
+            }
+        )
+        low = lot.professional_description.lower()
+        self.assertNotIn("handsome", low)
+        self.assertGreaterEqual(len(low.split()), 8)
+
 
 if __name__ == "__main__":
     unittest.main()

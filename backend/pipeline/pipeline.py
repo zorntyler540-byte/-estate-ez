@@ -593,6 +593,9 @@ BRAND_AUDIT_SYSTEM = (
     "When rewriting final_professional_description, sound like a **warm CTBids specialist selling the piece** — "
     "not a stiff catalog ('This is a set of…', 'Each … features…'). Lead with appeal; put marks and exact sizes in "
     "final_specification_lines / **Dimensions:**. "
+    "**Vary descriptive vocabulary** — do not lean on the same adjective across listings (especially **handsome**). "
+    "Prefer specific visual details; rotate natural appeal words (classic, striking, solid, crisp, polished, "
+    "display-ready, timeless, inviting) that fit the item type. "
     "When a yellow measuring tape, metal ruler, or yardstick is visibly measuring the item(s), ensure "
     "final_specification_lines include **Dimensions:** or **Measurement:** with legible reads (~ inches). "
     "Never invent brands or details not visible in the images or triage OCR. "
@@ -767,8 +770,11 @@ def run_brand_audit_pro(
             "do not downgrade to vague 'gold-tone' when text is legible.\n"
             "11. Do not add 'vintage' or 'antique' as filler unless a specific decade or era mark is visible.\n"
             "12. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
-            "13. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
-            "14. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"
+            "13. **Vary descriptive words** — avoid repeating **handsome** (and similar default compliments). "
+            "Use at most one generic praise word; prefer concrete visual details. Rotate: classic, striking, solid, "
+            "crisp, polished, display-ready, timeless, inviting, sharp-looking.\n"
+            "14. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
+            "15. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"
         )
     else:
         task_block = (

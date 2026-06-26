@@ -2782,6 +2782,38 @@ def scrub_gratuitous_lot_from_listing(
     return _rephrase_lot_filler(auction_title), _rephrase_lot_filler(professional_description)
 
 
+_COMPLIMENT_ALTERNATIVES = (
+    "sharp-looking",
+    "classic",
+    "solid",
+    "striking",
+    "appealing",
+    "well-made",
+    "display-ready",
+    "crisp",
+    "timeless",
+    "inviting",
+    "polished",
+)
+
+
+def vary_overused_compliment_adjectives(text: str) -> str:
+    """Replace overused generic praise (especially 'handsome') with varied alternatives."""
+    t = (text or "").strip()
+    if not t or not re.search(r"(?i)\bhandsome\b", t):
+        return t
+    seed = sum(ord(c) for c in t[:96]) % len(_COMPLIMENT_ALTERNATIVES)
+    i = 0
+
+    def _repl(_match: re.Match[str]) -> str:
+        nonlocal i
+        word = _COMPLIMENT_ALTERNATIVES[(seed + i) % len(_COMPLIMENT_ALTERNATIVES)]
+        i += 1
+        return word
+
+    return re.sub(r"(?i)\bhandsome\b", _repl, t)
+
+
 def scrub_gratuitous_vintage_from_listing(
     auction_title: str,
     professional_description: str,
@@ -3316,6 +3348,7 @@ class LotOutput:
             self.auction_title,
             self.professional_description,
         )
+        self.professional_description = vary_overused_compliment_adjectives(self.professional_description)
         self.auction_title = format_auction_title_case(self.auction_title, self.brands)
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines

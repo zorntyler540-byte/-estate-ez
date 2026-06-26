@@ -116,8 +116,8 @@ class FullyAuditedManifest(BaseModel):
         default="",
         description=(
             "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Lead with appeal, "
-            "not 'This is a…' or feature checklists. Exact sizes and marks belong in final_specification_lines; "
-            "weave size casually in prose if needed."
+            "not 'This is a…' or feature checklists. Vary adjectives — do not overuse handsome; prefer specific "
+            "visual details. Exact sizes and marks belong in final_specification_lines; weave size casually in prose if needed."
         ),
     )
     final_specification_lines: list[str] = Field(
