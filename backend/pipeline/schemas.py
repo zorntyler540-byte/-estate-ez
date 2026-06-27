@@ -110,13 +110,14 @@ class FullyAuditedManifest(BaseModel):
 
     final_auction_title: str = Field(
         default="",
-        description="Pro-corrected single-line auction title; lead with confirmed brand when readable.",
+        description="Pro-corrected single-line auction title; lead with confirmed brand when readable. Put distinctive material/handle/finish before the object name (hook-first), not trailing 'with …'.",
     )
     final_professional_description: str = Field(
         default="",
         description=(
-            "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Lead with appeal, "
-            "not 'This is a…' or feature checklists. Vary adjectives — do not overuse handsome; prefer specific "
+            "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Open with a short flair "
+            "clause, then immediately restate the title hook (material/handle/finish + object) in natural words. "
+            "Not 'This is a…' or feature checklists. Vary adjectives — do not overuse handsome; prefer specific "
             "visual details. Exact sizes and marks belong in final_specification_lines; weave size casually in prose if needed."
         ),
     )
