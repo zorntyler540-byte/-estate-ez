@@ -10,6 +10,8 @@ import {
   APPRAISER_CAMERA_MEDIA,
   captureVideoFrameAsJpegFile,
   isCatalogImageFile,
+  isCoarsePointerDevice,
+  isMobileLikeDevice,
   saveCaptureFilesToPhotos,
   stabilizeCapturedFiles
 } from "../../lib/cameraCapture";
@@ -114,6 +116,8 @@ export default function AppraiserPage() {
   const [cameraSnaps, setCameraSnaps] = useState<File[]>([]);
   const [cameraSnapThumbUrls, setCameraSnapThumbUrls] = useState<string[]>([]);
   const [cameraSnapBusy, setCameraSnapBusy] = useState(false);
+  const [cameraVideoMountKey, setCameraVideoMountKey] = useState(0);
+  const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
   const [coarsePointer, setCoarsePointer] = useState(false);
 
   const maxPhotos = health?.appraiser_max_photos ?? 3;
@@ -287,6 +291,7 @@ export default function AppraiserPage() {
   async function openAppraiserCamera() {
     if (pendingFiles.length >= maxPhotos) return;
     clearCameraSnapsAndThumbs();
+    setCameraPreviewReady(false);
     setCameraOpen(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia(APPRAISER_CAMERA_MEDIA);
@@ -377,6 +382,13 @@ export default function AppraiserPage() {
     await appendPendingFiles(imageFiles);
   }
 
+  function refreshCameraPreviewAfterCapture() {
+    if (!cameraOpen || !cameraStreamRef.current) return;
+    if (!isCoarsePointerDevice() && !isMobileLikeDevice()) return;
+    setCameraPreviewReady(false);
+    setCameraVideoMountKey((k) => k + 1);
+  }
+
   async function snapCameraPhoto() {
     if (cameraSnapBusy) return;
     const room = maxPhotos - pendingFiles.length - cameraSnapsRef.current.length;
@@ -394,6 +406,7 @@ export default function AppraiserPage() {
       setCameraSnapThumbUrls((prev) => [...prev, URL.createObjectURL(stable)]);
     } finally {
       setCameraSnapBusy(false);
+      refreshCameraPreviewAfterCapture();
     }
   }
 
@@ -414,13 +427,34 @@ export default function AppraiserPage() {
   }, []);
 
   useEffect(() => {
-    if (!cameraOpen || !cameraStream) return;
-    const v = cameraVideoRef.current;
-    if (v && v.srcObject !== cameraStream) {
-      v.srcObject = cameraStream;
-      void v.play().catch(() => {});
-    }
-  }, [cameraOpen, cameraStream]);
+    const el = cameraVideoRef.current;
+    const s = cameraStream;
+    if (!cameraOpen || !el || !s) return;
+    let cancelled = false;
+    void (async () => {
+      el.pause();
+      el.srcObject = null;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+      if (cancelled) return;
+      el.srcObject = s;
+      el.muted = true;
+      try {
+        await el.play();
+        if (!cancelled && (el.readyState >= 2 || el.videoWidth > 0)) {
+          setCameraPreviewReady(true);
+        }
+      } catch {
+        if (!cancelled) setCameraPreviewReady(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      el.pause();
+      el.srcObject = null;
+    };
+  }, [cameraOpen, cameraStream, cameraVideoMountKey]);
 
   function removePending(index: number) {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
@@ -839,10 +873,12 @@ export default function AppraiserPage() {
                 <>
                   <div className="ct-lot-camera-live">
                     <video
+                      key={cameraVideoMountKey}
                       ref={cameraVideoRef}
                       autoPlay
                       playsInline
                       muted
+                      onLoadedData={() => setCameraPreviewReady(true)}
                       style={{
                         width: "100%",
                         height: "100%",
@@ -867,6 +903,7 @@ export default function AppraiserPage() {
                       onClick={() => void snapCameraPhoto()}
                       disabled={
                         cameraSnapBusy ||
+                        !cameraPreviewReady ||
                         pendingFiles.length + cameraSnaps.length >= maxPhotos
                       }
                     >

@@ -73,6 +73,48 @@ export const APPRAISER_CAMERA_MEDIA: MediaStreamConstraints = {
   audio: false
 };
 
+export function isCoarsePointerDevice(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches
+  );
+}
+
+export function isMobileLikeDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
+}
+
+/**
+ * ``ImageCapture.takePhoto()`` often leaves the live ``<video>`` preview black on iOS / Android
+ * even though the track is still live — prefer canvas capture on those devices.
+ */
+export function shouldUseImageCaptureForStill(): boolean {
+  if (isCoarsePointerDevice() || isMobileLikeDevice()) return false;
+  return typeof window !== "undefined" && "ImageCapture" in window;
+}
+
+/** Re-bind the same stream to recover a frozen black preview without restarting getUserMedia. */
+export async function refreshVideoElementPreview(
+  video: HTMLVideoElement,
+  stream: MediaStream
+): Promise<boolean> {
+  video.pause();
+  video.srcObject = null;
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  );
+  video.srcObject = stream;
+  video.muted = true;
+  try {
+    await video.play();
+    return video.readyState >= 2 || video.videoWidth > 0;
+  } catch {
+    return false;
+  }
+}
+
 export type SaveToPhotosResult = {
   attempted: number;
   shared: number;

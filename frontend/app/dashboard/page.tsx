@@ -31,7 +31,12 @@ import {
   saveStagingDraft,
   stagingDraftSupported
 } from "../../lib/stagingDraft";
-import { saveCaptureFilesToPhotos } from "../../lib/cameraCapture";
+import {
+  isCoarsePointerDevice,
+  isMobileLikeDevice,
+  saveCaptureFilesToPhotos,
+  shouldUseImageCaptureForStill
+} from "../../lib/cameraCapture";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
@@ -3220,6 +3225,23 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshLotCameraVideoAfterCapture(usedImageCapture: boolean) {
+    if (!lotCameraOpen || lotCameraNativePickerOpenRef.current) return;
+    const stream = lotCameraStreamRef.current;
+    const track = stream?.getVideoTracks()[0];
+    if (!stream || !track || track.readyState === "ended") {
+      scheduleResumeLotCameraPreview();
+      return;
+    }
+
+    const needsRefresh =
+      usedImageCapture || isCoarsePointerDevice() || isMobileLikeDevice();
+    if (!needsRefresh) return;
+
+    setLotCameraPreviewReady(false);
+    setLotCameraVideoMountKey((k) => k + 1);
+  }
+
   async function resumeLotCameraPreview() {
     if (!lotCameraOpen) return;
     if (lotCameraNativePickerOpenRef.current) return;
@@ -3530,17 +3552,24 @@ export default function DashboardPage() {
     });
 
     const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+    const useImageCapture = Boolean(track && !useDigitalCrop && shouldUseImageCaptureForStill());
     // Digital zoom crops the preview frame — still capture must match that crop.
-    if (track && !useDigitalCrop) {
+    if (useImageCapture && track) {
       void (async () => {
-        const hqBlob = await captureLotCameraPhotoBlob(track);
-        if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
-        const hqFile = new File([hqBlob], quickFile.name, {
-          type: hqBlob.type || "image/jpeg"
-        });
-        const normalized = await normalizeCaptureFileOrientation(hqFile);
-        replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
+        try {
+          const hqBlob = await captureLotCameraPhotoBlob(track);
+          if (!hqBlob || snapIndex >= lotCameraSnapsRef.current.length) return;
+          const hqFile = new File([hqBlob], quickFile.name, {
+            type: hqBlob.type || "image/jpeg"
+          });
+          const normalized = await normalizeCaptureFileOrientation(hqFile);
+          replaceLotCameraSnapAt(snapIndex, normalized ?? hqFile);
+        } finally {
+          void refreshLotCameraVideoAfterCapture(true);
+        }
       })();
+    } else {
+      void refreshLotCameraVideoAfterCapture(false);
     }
   }
 
