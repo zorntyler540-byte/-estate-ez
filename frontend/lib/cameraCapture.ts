@@ -72,3 +72,68 @@ export const APPRAISER_CAMERA_MEDIA: MediaStreamConstraints = {
   },
   audio: false
 };
+
+export type SaveToPhotosResult = {
+  attempted: number;
+  shared: number;
+  unsupported: boolean;
+};
+
+/** True when the browser can hand files to the OS share sheet (Save Image → Photos on iOS). */
+export function canSaveFilesToPhotos(): boolean {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") return false;
+  if (typeof navigator.canShare !== "function") return false;
+  try {
+    const probe = new File(["x"], "probe.jpg", { type: "image/jpeg" });
+    return navigator.canShare({ files: [probe] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort backup after camera Done — opens the native share sheet so the user can Save Image(s).
+ * Browsers cannot write to the camera roll silently; AbortError (dismissed sheet) is ignored.
+ */
+export async function saveCaptureFilesToPhotos(files: File[]): Promise<SaveToPhotosResult> {
+  const images = files.filter((f) => f.size > 0 && isCatalogImageFile(f));
+  if (!images.length) {
+    return { attempted: 0, shared: 0, unsupported: !canSaveFilesToPhotos() };
+  }
+  if (!canSaveFilesToPhotos()) {
+    return { attempted: images.length, shared: 0, unsupported: true };
+  }
+
+  const shareBatch = async (batch: File[]): Promise<"shared" | "aborted" | "failed"> => {
+    if (!navigator.canShare?.({ files: batch })) return "failed";
+    try {
+      await navigator.share({
+        files: batch,
+        title: batch.length === 1 ? batch[0].name : `${batch.length} photos`
+      });
+      return "shared";
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return "aborted";
+      return "failed";
+    }
+  };
+
+  const batchResult = await shareBatch(images);
+  if (batchResult === "shared") {
+    return { attempted: images.length, shared: images.length, unsupported: false };
+  }
+  if (batchResult === "aborted") {
+    return { attempted: images.length, shared: 0, unsupported: false };
+  }
+
+  let shared = 0;
+  for (const file of images) {
+    const one = await shareBatch([file]);
+    if (one === "shared") {
+      shared += 1;
+      continue;
+    }
+    break;
+  }
+  return { attempted: images.length, shared, unsupported: false };
+}

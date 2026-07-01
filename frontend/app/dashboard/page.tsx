@@ -31,6 +31,7 @@ import {
   saveStagingDraft,
   stagingDraftSupported
 } from "../../lib/stagingDraft";
+import { saveCaptureFilesToPhotos } from "../../lib/cameraCapture";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
@@ -3422,6 +3423,7 @@ export default function DashboardPage() {
           `${failed} photo${failed === 1 ? "" : "s"} could not be read and ${failed === 1 ? "was" : "were"} skipped. ${stableFiles.length} photo${stableFiles.length === 1 ? "" : "s"} added to the upload box.`
         );
       }
+      void saveCaptureFilesToPhotos(stableFiles);
     } finally {
       setLotCameraFinishing(false);
     }
@@ -5841,7 +5843,7 @@ export default function DashboardPage() {
             <div className="ct-card ct-card--padded ct-lot-camera-card">
             <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload. Tap the preview to focus; pinch or +/− to zoom (see the zoom mode label). For maximum sharpness you
+              upload. After Done, your phone may offer to <strong>Save Image</strong> as a backup copy. Tap the preview to focus; pinch or +/− to zoom (see the zoom mode label). For maximum sharpness you
               can use <strong>Phone camera</strong> — same multi-photo session, then <strong>Done</strong>. Tap a
               thumbnail to preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation
               when needed; use the trash control to remove one shot.

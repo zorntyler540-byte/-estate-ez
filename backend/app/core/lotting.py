@@ -2814,6 +2814,37 @@ def vary_overused_compliment_adjectives(text: str) -> str:
     return re.sub(r"(?i)\bhandsome\b", _repl, t)
 
 
+def apply_title_hook_casing_to_description(auction_title: str, professional_description: str) -> str:
+    """
+    When description restates the title hook in lowercase, apply the title's Title Case to that phrase.
+    """
+    title = clean_listing_text(auction_title).strip()
+    desc = (professional_description or "").strip()
+    if not title or not desc:
+        return professional_description or ""
+
+    words = title.split()
+    if len(words) < 2:
+        return desc
+
+    phrases: list[str] = []
+    for i in range(len(words)):
+        for j in range(len(words), i, -1):
+            phrase = " ".join(words[i:j])
+            if j - i < 2 and len(phrase) < 12:
+                continue
+            phrases.append(phrase)
+    phrases.sort(key=len, reverse=True)
+
+    result = desc
+    for phrase in phrases:
+        match = re.search(re.escape(phrase), result, flags=re.IGNORECASE)
+        if not match or match.group(0) == phrase:
+            continue
+        result = result[: match.start()] + phrase + result[match.end() :]
+    return result
+
+
 def scrub_gratuitous_vintage_from_listing(
     auction_title: str,
     professional_description: str,
@@ -3350,6 +3381,10 @@ class LotOutput:
         )
         self.professional_description = vary_overused_compliment_adjectives(self.professional_description)
         self.auction_title = format_auction_title_case(self.auction_title, self.brands)
+        self.professional_description = apply_title_hook_casing_to_description(
+            self.auction_title,
+            self.professional_description,
+        )
         self.professional_description = _drop_prose_sentences_conflicting_with_components(
             self.professional_description, self.specification_lines
         )

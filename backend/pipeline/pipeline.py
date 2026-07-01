@@ -781,6 +781,7 @@ def run_brand_audit_pro(
             "14. **Description flair + hook:** final_professional_description = one paragraph. Start with a short warm "
             "**flair** clause (appeal, display, who would love it), then **right after** restate the title hook "
             "(material/handle/finish + object) in natural words — e.g. flair, then 'deer hoof handled hunting knives'. "
+            "Use the **same Title Case** as final_auction_title for the hook phrase (not all lowercase). "
             "Do not paste the full title verbatim; weave the same hook in after the opening flair.\n"
             "15. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
             "16. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"

@@ -289,6 +289,21 @@ class TestBrandResolution(unittest.TestCase):
         self.assertNotIn("handsome", low)
         self.assertGreaterEqual(len(low.split()), 8)
 
+    def test_description_hook_uses_title_case_from_auction_title(self) -> None:
+        lot = LotOutput.from_model(
+            {
+                "item_name": "Stag Antler Handle Hunting Knife with Leather Sheath",
+                "professional_description": (
+                    "A classic for any outdoorsman's collection—this stag antler handle hunting knife "
+                    "offers a rugged, traditional feel."
+                ),
+            }
+        )
+        self.assertRegex(
+            lot.professional_description,
+            r"this Stag Antler Handle Hunting Knife offers",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ import {
   APPRAISER_CAMERA_MEDIA,
   captureVideoFrameAsJpegFile,
   isCatalogImageFile,
+  saveCaptureFilesToPhotos,
   stabilizeCapturedFiles
 } from "../../lib/cameraCapture";
 import { API_BASE, apiFetch, parseApiErrorMessage } from "../../lib/api";
@@ -212,15 +213,18 @@ export default function AppraiserPage() {
     router.replace("/");
   }
 
-  async function appendPendingFiles(incoming: File[]) {
+  async function appendPendingFiles(incoming: File[]): Promise<File[]> {
     const imageFiles = incoming.filter((f) => f.size > 0 && isCatalogImageFile(f));
     if (!imageFiles.length) {
       setBanner("No usable image was returned from the camera. Try again or pick from gallery.");
-      return;
+      return [];
     }
     const stable = await stabilizeCapturedFiles(imageFiles);
-    setPendingFiles((prev) => [...prev, ...stable].slice(0, maxPhotos));
-    setBanner("");
+    if (stable.length) {
+      setPendingFiles((prev) => [...prev, ...stable].slice(0, maxPhotos));
+      setBanner("");
+    }
+    return stable;
   }
 
   function clearCameraSnapsAndThumbs() {
@@ -262,7 +266,8 @@ export default function AppraiserPage() {
     stopCameraTracks();
     setCameraOpen(false);
     if (!files.length) return;
-    await appendPendingFiles(files);
+    const stable = await appendPendingFiles(files);
+    if (stable.length) void saveCaptureFilesToPhotos(stable);
   }
 
   async function bindCameraStream(stream: MediaStream) {
