@@ -7,14 +7,15 @@ import { Camera, Loader2, Plus, Trash2 } from "lucide-react";
 import { AppraisalPhotoThumb } from "../../components/AppraisalPhotoThumb";
 import { AppShell } from "../../components/AppShell";
 import {
-  APPRAISER_CAMERA_MEDIA,
   captureVideoFrameAsJpegFile,
+  getAppraiserCameraMediaConstraints,
   isCatalogImageFile,
   isCoarsePointerDevice,
   isMobileLikeDevice,
   saveCaptureFilesToPhotos,
   stabilizeCapturedFiles
 } from "../../lib/cameraCapture";
+import { readCameraSaveBackupPref, writeCameraSaveBackupPref } from "../../lib/cameraSessionDraft";
 import { API_BASE, apiFetch, parseApiErrorMessage } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
@@ -118,6 +119,8 @@ export default function AppraiserPage() {
   const [cameraSnapBusy, setCameraSnapBusy] = useState(false);
   const [cameraVideoMountKey, setCameraVideoMountKey] = useState(0);
   const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
+  const [cameraSaveBackup, setCameraSaveBackup] = useState(false);
+  const [cameraPreviewRestarting, setCameraPreviewRestarting] = useState(false);
   const [coarsePointer, setCoarsePointer] = useState(false);
 
   const maxPhotos = health?.appraiser_max_photos ?? 3;
@@ -205,6 +208,10 @@ export default function AppraiserPage() {
   }, [token, selectedSaleId, hasInProgress, loadChecks]);
 
   useEffect(() => {
+    setCameraSaveBackup(readCameraSaveBackupPref());
+  }, []);
+
+  useEffect(() => {
     const urls = pendingFiles.map((f) => URL.createObjectURL(f));
     setPreviewUrls(urls);
     return () => {
@@ -271,7 +278,34 @@ export default function AppraiserPage() {
     setCameraOpen(false);
     if (!files.length) return;
     const stable = await appendPendingFiles(files);
-    if (stable.length) void saveCaptureFilesToPhotos(stable);
+    if (stable.length && cameraSaveBackup) void saveCaptureFilesToPhotos(stable);
+  }
+
+  async function restartAppraiserCameraPreview() {
+    if (!cameraOpen || cameraPreviewRestarting) return;
+    setCameraPreviewRestarting(true);
+    try {
+      setCameraPreviewReady(false);
+      setCameraVideoMountKey((k) => k + 1);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 220));
+      const v = cameraVideoRef.current;
+      if (v && v.readyState >= 2 && v.videoWidth > 0) {
+        setCameraPreviewReady(true);
+        return;
+      }
+      stopCameraTracks();
+      setCameraOpen(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(getAppraiserCameraMediaConstraints());
+        await bindCameraStream(stream);
+        setCameraVideoMountKey((k) => k + 1);
+      } catch {
+        setCameraOpen(false);
+        setBanner("Camera stopped — close and try again.");
+      }
+    } finally {
+      setCameraPreviewRestarting(false);
+    }
   }
 
   async function bindCameraStream(stream: MediaStream) {
@@ -294,8 +328,13 @@ export default function AppraiserPage() {
     setCameraPreviewReady(false);
     setCameraOpen(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(APPRAISER_CAMERA_MEDIA);
+      const stream = await navigator.mediaDevices.getUserMedia(getAppraiserCameraMediaConstraints());
       await bindCameraStream(stream);
+      if (isCoarsePointerDevice() || isMobileLikeDevice()) {
+        window.setTimeout(() => {
+          if (cameraStreamRef.current) openPhoneCameraFromDialog();
+        }, 450);
+      }
     } catch {
       stopCameraTracks();
       setCameraOpen(false);
@@ -865,8 +904,24 @@ export default function AppraiserPage() {
           <div className="ct-lot-camera-scroll">
             <div className="ct-card ct-card--padded ct-lot-camera-card">
               <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-                Snap, then <strong>Done</strong> to add to the check. Prefer <strong>Phone camera</strong> for sharper shots.
+                Prefer <strong>Phone camera</strong> on mobile. Snap, then <strong>Done</strong> to add to the check.
               </p>
+              <label
+                className="ct-lot-camera-backup-opt ct-muted"
+                style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: "0.35rem", fontSize: "0.82rem" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={cameraSaveBackup}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setCameraSaveBackup(on);
+                    writeCameraSaveBackupPref(on);
+                  }}
+                  style={{ marginTop: 3 }}
+                />
+                <span>Offer Photos backup after Done</span>
+              </label>
               {!cameraStream ? (
                 <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
               ) : (
@@ -887,6 +942,14 @@ export default function AppraiserPage() {
                         pointerEvents: "none"
                       }}
                     />
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--ghost ct-lot-camera-restart"
+                      onClick={() => void restartAppraiserCameraPreview()}
+                      disabled={!cameraStream || cameraPreviewRestarting}
+                    >
+                      {cameraPreviewRestarting ? "Restarting…" : "Restart preview"}
+                    </button>
                   </div>
                   {cameraSnapThumbUrls.length > 0 && (
                     <div className="ct-lot-camera-thumbs" style={{ marginTop: "0.65rem" }}>
@@ -899,23 +962,24 @@ export default function AppraiserPage() {
                   <div className="ct-lot-camera-actions" style={{ marginTop: "0.75rem" }}>
                     <button
                       type="button"
-                      className="ct-btn ct-btn--secondary"
-                      onClick={() => void snapCameraPhoto()}
-                      disabled={
-                        cameraSnapBusy ||
-                        !cameraPreviewReady ||
-                        pendingFiles.length + cameraSnaps.length >= maxPhotos
-                      }
-                    >
-                      Snap
-                    </button>
-                    <button
-                      type="button"
-                      className="ct-btn ct-btn--ghost"
+                      className="ct-btn ct-btn--primary"
                       onClick={openPhoneCameraFromDialog}
                       disabled={pendingFiles.length + cameraSnaps.length >= maxPhotos}
                     >
                       Phone camera
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn"
+                      onClick={() => void snapCameraPhoto()}
+                      disabled={
+                        cameraSnapBusy ||
+                        !cameraPreviewReady ||
+                        cameraPreviewRestarting ||
+                        pendingFiles.length + cameraSnaps.length >= maxPhotos
+                      }
+                    >
+                      Snap
                     </button>
                     <button type="button" className="ct-btn ct-btn--ghost" onClick={cancelCameraSession}>
                       Cancel

@@ -73,6 +73,39 @@ export const APPRAISER_CAMERA_MEDIA: MediaStreamConstraints = {
   audio: false
 };
 
+/** Lighter live stream on phones — less heat and memory; stills use canvas at stream resolution. */
+export const MOBILE_CAMERA_MEDIA: MediaStreamConstraints = {
+  video: {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 30 }
+  },
+  audio: false
+};
+
+export function getLotCameraMediaConstraints(): MediaStreamConstraints {
+  if (isCoarsePointerDevice() || isMobileLikeDevice()) {
+    return MOBILE_CAMERA_MEDIA;
+  }
+  return {
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      frameRate: { ideal: 30 }
+    },
+    audio: false
+  };
+}
+
+export function getAppraiserCameraMediaConstraints(): MediaStreamConstraints {
+  if (isCoarsePointerDevice() || isMobileLikeDevice()) {
+    return MOBILE_CAMERA_MEDIA;
+  }
+  return APPRAISER_CAMERA_MEDIA;
+}
+
 export function isCoarsePointerDevice(): boolean {
   return (
     typeof window !== "undefined" &&

@@ -32,6 +32,14 @@ import {
   stagingDraftSupported
 } from "../../lib/stagingDraft";
 import {
+  clearCameraSessionDraft,
+  loadCameraSessionDraft,
+  readCameraSaveBackupPref,
+  saveCameraSessionDraft,
+  writeCameraSaveBackupPref
+} from "../../lib/cameraSessionDraft";
+import {
+  getLotCameraMediaConstraints,
   isCoarsePointerDevice,
   isMobileLikeDevice,
   saveCaptureFilesToPhotos,
@@ -129,17 +137,6 @@ function isStabilizedCaptureFile(file: File): boolean {
   return stabilizedCaptureFiles.has(file);
 }
 
-const LOT_CAMERA_MEDIA: MediaStreamConstraints = {
-  video: {
-    facingMode: { ideal: "environment" },
-    // 1080p live stream keeps canvas preview smooth; still captures use takePhoto() at full sensor.
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    frameRate: { ideal: 30 }
-  },
-  audio: false
-};
-
 type VideoTrackSettings = { width?: number; height?: number };
 
 /** Quarter-turn needed for raw sensor buffer (canvas capture math). */
@@ -235,25 +232,30 @@ function clampLotCameraUiZoom(z: number): number {
   return Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
 }
 
-/** Configure focus and keep the live stream at preview resolution (not 4K). */
+/** Configure focus and keep the live stream at preview resolution (720p phones, 1080p desktop). */
 async function configureLotCameraTrack(track: MediaStreamTrack): Promise<void> {
+  const mobile = isCoarsePointerDevice() || isMobileLikeDevice();
+  const idealW = mobile ? 1280 : 1920;
+  const idealH = mobile ? 720 : 1080;
   if (track.applyConstraints) {
     try {
       await track.applyConstraints({
         facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
+        width: { ideal: idealW },
+        height: { ideal: idealH },
         frameRate: { ideal: 30 }
       });
     } catch {
-      try {
-        await track.applyConstraints({
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
-        });
-      } catch {
-        /* keep default stream size */
+      if (mobile) {
+        try {
+          await track.applyConstraints({
+            width: { ideal: 960 },
+            height: { ideal: 540 },
+            frameRate: { ideal: 24 }
+          });
+        } catch {
+          /* keep default stream size */
+        }
       }
     }
   }
@@ -1694,6 +1696,17 @@ export default function DashboardPage() {
   const lotCameraStripRef = useRef<HTMLDivElement | null>(null);
   /** Scrollable column inside the camera modal — kept at bottom so Snap/Done stay in view on mobile. */
   const lotCameraScrollRef = useRef<HTMLDivElement | null>(null);
+  const lotCameraPersistTimerRef = useRef<number | null>(null);
+  const lotCameraAutoPhoneRef = useRef(false);
+  const lotCameraOpenRef = useRef(false);
+  const singleLotManualSkuRef = useRef("");
+  const [lotCameraRecoverPrompt, setLotCameraRecoverPrompt] = useState<{
+    files: File[];
+    singleLotManualSku?: string;
+    savedAt: number;
+  } | null>(null);
+  const [lotCameraPreviewRestarting, setLotCameraPreviewRestarting] = useState(false);
+  const [cameraSaveBackup, setCameraSaveBackup] = useState(false);
   const inventoryFirstLoad = useRef(true);
   const salesLoadId = useRef(0);
   const inventoryLoadId = useRef(0);
@@ -1781,6 +1794,8 @@ export default function DashboardPage() {
   const [liveProgressJobId, setLiveProgressJobId] = useState<string | null>(null);
   folderPickRef.current = folderPick;
   selectedSaleIdRef.current = selectedSaleId;
+  lotCameraOpenRef.current = lotCameraOpen;
+  singleLotManualSkuRef.current = singleLotManualSku;
 
   const busyProcessing = jobs.some((j) => j.status === "processing");
   const busyProcessingRef = useRef(false);
@@ -1995,6 +2010,15 @@ export default function DashboardPage() {
         /* job row may be gone */
       });
   }, [token]);
+
+  useEffect(() => {
+    setCameraSaveBackup(readCameraSaveBackupPref());
+  }, []);
+
+  useEffect(() => {
+    if (!lotCameraOpen) return;
+    schedulePersistCameraSessionDraft();
+  }, [singleLotManualSku, lotCameraOpen]);
 
   useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
@@ -3217,7 +3241,7 @@ export default function DashboardPage() {
     setLotCameraVideoCssRotation(0);
     lotCameraVideoCssRotationRef.current = 0;
     try {
-      const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
+      const stream = await md.getUserMedia(getLotCameraMediaConstraints());
       await bindLotCameraStream(stream);
       setLotCameraVideoMountKey((k) => k + 1);
     } catch {
@@ -3247,23 +3271,87 @@ export default function DashboardPage() {
     if (lotCameraNativePickerOpenRef.current) return;
     const stream = lotCameraStreamRef.current;
     const track = stream?.getVideoTracks()[0];
-    const coarse =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches;
 
     if (!stream || !track || track.readyState === "ended") {
       await reinitLotCameraStream();
       return;
     }
 
-    if (coarse) {
-      // iOS keeps the track live (snaps look fine) but the preview layer stays black after app switch.
-      await reinitLotCameraStream();
+    setLotCameraPreviewReady(false);
+    setLotCameraVideoMountKey((k) => k + 1);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 220));
+    const v = lotCameraVideoRef.current;
+    if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      setLotCameraPreviewReady(true);
       return;
     }
 
-    setLotCameraPreviewReady(false);
-    setLotCameraVideoMountKey((k) => k + 1);
+    await reinitLotCameraStream();
+  }
+
+  async function restartLotCameraPreview() {
+    if (!lotCameraOpen || lotCameraPreviewRestarting) return;
+    setLotCameraPreviewRestarting(true);
+    try {
+      await resumeLotCameraPreview();
+    } finally {
+      setLotCameraPreviewRestarting(false);
+    }
+  }
+
+  function schedulePersistCameraSessionDraft() {
+    if (lotCameraPersistTimerRef.current != null) {
+      window.clearTimeout(lotCameraPersistTimerRef.current);
+    }
+    lotCameraPersistTimerRef.current = window.setTimeout(() => {
+      lotCameraPersistTimerRef.current = null;
+      if (!lotCameraSnapsRef.current.length) {
+        void clearCameraSessionDraft();
+        return;
+      }
+      void saveCameraSessionDraft(lotCameraSnapsRef.current, {
+        singleLotManualSku: singleLotManualSkuRef.current
+      });
+    }, 500);
+  }
+
+  async function recoverLotCameraSessionDraft() {
+    const prompt = lotCameraRecoverPrompt;
+    if (!prompt?.files.length) return;
+    setLotCameraRecoverPrompt(null);
+    lotCameraAutoPhoneRef.current = false;
+    const thumbs: string[] = [];
+    const stable: File[] = [];
+    for (const raw of prompt.files) {
+      const file = await stabilizeCapturedFile(raw);
+      if (!file) continue;
+      markStabilizedCaptureFile(file);
+      stable.push(file);
+      thumbs.push((await createDisplayThumbUrl(file)) ?? "");
+    }
+    lotCameraSnapsRef.current = stable;
+    setLotCameraSnaps(stable);
+    setLotCameraSnapThumbUrls(thumbs);
+    if (prompt.singleLotManualSku) setSingleLotManualSku(prompt.singleLotManualSku);
+    schedulePersistCameraSessionDraft();
+  }
+
+  function discardLotCameraRecoverPrompt() {
+    setLotCameraRecoverPrompt(null);
+    lotCameraAutoPhoneRef.current = false;
+    void clearCameraSessionDraft();
+    scheduleAutoPhoneCameraOnMobile(false);
+  }
+
+  function scheduleAutoPhoneCameraOnMobile(skipWhenRecoverPending = false) {
+    if (skipWhenRecoverPending) return;
+    if (!isCoarsePointerDevice() && !isMobileLikeDevice()) return;
+    lotCameraAutoPhoneRef.current = true;
+    window.setTimeout(() => {
+      if (!lotCameraOpenRef.current || !lotCameraAutoPhoneRef.current) return;
+      lotCameraAutoPhoneRef.current = false;
+      openPhoneCameraForLot();
+    }, 450);
   }
 
   function stopLotCameraTracks() {
@@ -3296,6 +3384,13 @@ export default function DashboardPage() {
     lotCameraNativePickerOpenRef.current = false;
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
+    lotCameraAutoPhoneRef.current = false;
+    setLotCameraRecoverPrompt(null);
+    setLotCameraPreviewRestarting(false);
+    if (lotCameraPersistTimerRef.current != null) {
+      window.clearTimeout(lotCameraPersistTimerRef.current);
+      lotCameraPersistTimerRef.current = null;
+    }
   }
 
   function clearLotCameraSnapsAndThumbs(options?: { revokeThumbs?: boolean }) {
@@ -3335,6 +3430,7 @@ export default function DashboardPage() {
         `${readFailed} photo${readFailed === 1 ? "" : "s"} could not be read from the camera. Try Settings → Camera → Formats → Most Compatible, or take fewer shots before Done.`
       );
     }
+    schedulePersistCameraSessionDraft();
   }
 
   function pushLotCameraSnap(file: File): number {
@@ -3343,6 +3439,7 @@ export default function DashboardPage() {
     lotCameraSnapsRef.current = [...lotCameraSnapsRef.current, file];
     setLotCameraSnaps([...lotCameraSnapsRef.current]);
     setLotCameraSnapThumbUrls((prev) => [...prev, ""]);
+    schedulePersistCameraSessionDraft();
     return index;
   }
 
@@ -3366,10 +3463,12 @@ export default function DashboardPage() {
         return next;
       });
     });
+    schedulePersistCameraSessionDraft();
   }
 
   function cancelLotCameraSession() {
     clearLotCameraSnapsAndThumbs();
+    void clearCameraSessionDraft();
     stopLotCameraTracks();
   }
 
@@ -3445,7 +3544,8 @@ export default function DashboardPage() {
           `${failed} photo${failed === 1 ? "" : "s"} could not be read and ${failed === 1 ? "was" : "were"} skipped. ${stableFiles.length} photo${stableFiles.length === 1 ? "" : "s"} added to the upload box.`
         );
       }
-      void saveCaptureFilesToPhotos(stableFiles);
+      void clearCameraSessionDraft();
+      if (cameraSaveBackup) void saveCaptureFilesToPhotos(stableFiles);
     } finally {
       setLotCameraFinishing(false);
     }
@@ -3616,6 +3716,7 @@ export default function DashboardPage() {
       if (cur > index) return cur - 1;
       return cur;
     });
+    schedulePersistCameraSessionDraft();
   }
 
   function openLotCameraEdit(i: number) {
@@ -3673,13 +3774,10 @@ export default function DashboardPage() {
     }
   }
 
-  /** Desktop: open multi-file picker as one listing. Touch devices: camera when available, else picker. */
+  /** Desktop: open multi-file picker as one listing. Touch devices: in-app camera (Phone camera opens first). */
   async function openAddOneLotFlow() {
     if (typeof window === "undefined") return;
-    const coarse =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches;
-    if (coarse) {
+    if (isCoarsePointerDevice() || isMobileLikeDevice()) {
       await openCreateOneLotCameraFlow();
       return;
     }
@@ -3699,6 +3797,17 @@ export default function DashboardPage() {
     const md = navigator.mediaDevices;
     if (window.isSecureContext && md?.getUserMedia) {
       markNativePhotoPickerOpening();
+      const draft = await loadCameraSessionDraft();
+      const hasRecover = Boolean(draft?.files.length);
+      if (hasRecover && draft) {
+        setLotCameraRecoverPrompt({
+          files: draft.files,
+          singleLotManualSku: draft.singleLotManualSku,
+          savedAt: draft.savedAt
+        });
+      } else {
+        setLotCameraRecoverPrompt(null);
+      }
       clearLotCameraSnapsAndThumbs();
       setLotCameraPreviewReady(false);
       setLotCameraVideoCssRotation(0);
@@ -3713,9 +3822,10 @@ export default function DashboardPage() {
       setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
       setLotCameraOpen(true);
       try {
-        const stream = await md.getUserMedia(LOT_CAMERA_MEDIA);
+        const stream = await md.getUserMedia(getLotCameraMediaConstraints());
         await bindLotCameraStream(stream);
         primeLotCameraAudio();
+        scheduleAutoPhoneCameraOnMobile(hasRecover);
       } catch {
         lotCameraStreamRef.current = null;
         setLotCameraStream(null);
@@ -5871,12 +5981,29 @@ export default function DashboardPage() {
           <div ref={lotCameraScrollRef} className="ct-lot-camera-scroll">
             <div className="ct-card ct-card--padded ct-lot-camera-card">
             <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-              Snap as many photos as you need for this listing, then <strong>Done</strong> to return here and
-              upload. After Done, your phone may offer to <strong>Save Image</strong> as a backup copy. Tap the preview to focus; pinch or +/− to zoom (see the zoom mode label). For maximum sharpness you
-              can use <strong>Phone camera</strong> — same multi-photo session, then <strong>Done</strong>. Tap a
-              thumbnail to preview; use the pencil to rotate, trim edges, or tweak brightness / contrast / saturation
-              when needed; use the trash control to remove one shot.
+              On phones, <strong>Phone camera</strong> opens first (sharpest, most reliable). Snap more with Phone
+              camera or use <strong>Snap photo</strong> for the in-app preview. Tap <strong>Done</strong> when finished
+              to add photos to the upload box. Tap the preview to focus; pinch or +/− to zoom. Thumbnails scroll below —
+              tap to preview, pencil to edit, trash to remove.
             </p>
+            <label
+              className="ct-lot-camera-backup-opt ct-muted"
+              style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: "0.5rem", fontSize: "0.82rem" }}
+            >
+              <input
+                type="checkbox"
+                checked={cameraSaveBackup}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setCameraSaveBackup(on);
+                  writeCameraSaveBackupPref(on);
+                }}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                After <strong>Done</strong>, offer to save copies to Photos (optional backup while testing)
+              </span>
+            </label>
             <label
               className="ct-muted ct-lot-camera-sku"
               style={{ display: "block", marginTop: "0.55rem", fontSize: "0.85rem" }}
@@ -5966,6 +6093,19 @@ export default function DashboardPage() {
                   {lotCameraShutterFlash ? (
                     <span className="ct-lot-camera-shutter-flash" aria-hidden />
                   ) : null}
+                  {!lotCameraPreviewReady && lotCameraStream ? (
+                    <span className="ct-lot-camera-preview-hint" aria-live="polite">
+                      Preview loading…
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost ct-lot-camera-restart"
+                    onClick={() => void restartLotCameraPreview()}
+                    disabled={!lotCameraStream || lotCameraPreviewRestarting}
+                  >
+                    {lotCameraPreviewRestarting ? "Restarting…" : "Restart preview"}
+                  </button>
                 </div>
                 <LotCameraZoomControls
                   variant="inline"
@@ -6058,8 +6198,8 @@ export default function DashboardPage() {
               <div className="ct-lot-camera-actions-primary ct-row" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                 <button
                   type="button"
-                  className="ct-btn"
-                  title="Use your phone’s built-in camera app (full quality); returns here after each shot"
+                  className="ct-btn ct-btn--primary"
+                  title="Use your phone’s built-in camera app (recommended on mobile)"
                   onClick={() => openPhoneCameraForLot()}
                   disabled={
                     CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -6070,11 +6210,12 @@ export default function DashboardPage() {
                 </button>
                 <button
                   type="button"
-                  className="ct-btn ct-btn--primary"
+                  className="ct-btn"
                   onClick={() => void snapLotPhoto()}
                   disabled={
                     !lotCameraStream ||
                     !lotCameraPreviewReady ||
+                    lotCameraPreviewRestarting ||
                     (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
                       lotCameraSnaps.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
                   }
@@ -6092,6 +6233,45 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {lotCameraRecoverPrompt ? (
+            <div
+              className="ct-lot-camera-confirm"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="lot-camera-recover-title"
+              aria-describedby="lot-camera-recover-desc"
+            >
+              <div
+                className="ct-card ct-card--padded ct-lot-camera-confirm-card"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <p id="lot-camera-recover-title" style={{ marginTop: 0, fontWeight: 600 }}>
+                  Recover unsaved photos?
+                </p>
+                <p id="lot-camera-recover-desc" className="ct-muted" style={{ marginBottom: "0.85rem" }}>
+                  {lotCameraRecoverPrompt.files.length} photo
+                  {lotCameraRecoverPrompt.files.length === 1 ? "" : "s"} from your last camera session
+                  {lotCameraRecoverPrompt.singleLotManualSku
+                    ? ` (SKU ${lotCameraRecoverPrompt.singleLotManualSku})`
+                    : ""}{" "}
+                  can be restored.
+                </p>
+                <div className="ct-row" style={{ gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button type="button" className="ct-btn ct-btn--ghost" onClick={discardLotCameraRecoverPrompt}>
+                    Discard
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary"
+                    onClick={() => void recoverLotCameraSessionDraft()}
+                  >
+                    Recover photos
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {lotCameraDeleteConfirmIndex !== null ? (
             <div

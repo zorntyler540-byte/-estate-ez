@@ -688,6 +688,37 @@ a.ct-btn:hover {
   backface-visibility: hidden;
 }
 
+.ct-lot-camera-restart {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  font-size: 0.78rem !important;
+  padding: 0.35rem 0.55rem !important;
+  min-height: 0 !important;
+  background: rgba(12, 15, 18, 0.82) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  color: #fff !important;
+}
+
+.ct-lot-camera-preview-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.ct-lot-camera-backup-opt {
+  cursor: pointer;
+  user-select: none;
+}
+
 .ct-staging-thumb-failed,
 .ct-capture-thumb-failed,
 .ct-file-preview-failed {
