@@ -1697,9 +1697,9 @@ export default function DashboardPage() {
   /** Scrollable column inside the camera modal — kept at bottom so Snap/Done stay in view on mobile. */
   const lotCameraScrollRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPersistTimerRef = useRef<number | null>(null);
-  const lotCameraAutoPhoneRef = useRef(false);
   const lotCameraOpenRef = useRef(false);
   const singleLotManualSkuRef = useRef("");
+  const [lotCameraNativePickerOpen, setLotCameraNativePickerOpen] = useState(false);
   const [lotCameraRecoverPrompt, setLotCameraRecoverPrompt] = useState<{
     files: File[];
     singleLotManualSku?: string;
@@ -3160,12 +3160,12 @@ export default function DashboardPage() {
   }
 
   async function bindLotCameraStream(stream: MediaStream) {
-    const track = stream.getVideoTracks()[0];
-    if (track) {
-      await configureLotCameraTrack(track);
-    }
     lotCameraStreamRef.current = stream;
     setLotCameraStream(stream);
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      void configureLotCameraTrack(track);
+    }
   }
 
   function scheduleResumeLotCameraPreview() {
@@ -3207,6 +3207,7 @@ export default function DashboardPage() {
       lotCameraResumeTimerRef.current = null;
       if (!lotCameraOpen || !lotCameraNativePickerOpenRef.current) return;
       lotCameraNativePickerOpenRef.current = false;
+      setLotCameraNativePickerOpen(false);
       void resumeInlineLotCameraAfterNativePicker();
     }, 150);
   }
@@ -3234,6 +3235,7 @@ export default function DashboardPage() {
     if (typeof window === "undefined" || !window.isSecureContext || !lotCameraOpen) return;
     const md = navigator.mediaDevices;
     if (!md?.getUserMedia) return;
+    setLotCameraPreviewRestarting(true);
     lotCameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     lotCameraStreamRef.current = null;
     setLotCameraStream(null);
@@ -3246,6 +3248,8 @@ export default function DashboardPage() {
       setLotCameraVideoMountKey((k) => k + 1);
     } catch {
       setError("Camera stopped — close this screen and tap Add one lot again.");
+    } finally {
+      setLotCameraPreviewRestarting(false);
     }
   }
 
@@ -3319,7 +3323,6 @@ export default function DashboardPage() {
     const prompt = lotCameraRecoverPrompt;
     if (!prompt?.files.length) return;
     setLotCameraRecoverPrompt(null);
-    lotCameraAutoPhoneRef.current = false;
     const thumbs: string[] = [];
     const stable: File[] = [];
     for (const raw of prompt.files) {
@@ -3338,20 +3341,7 @@ export default function DashboardPage() {
 
   function discardLotCameraRecoverPrompt() {
     setLotCameraRecoverPrompt(null);
-    lotCameraAutoPhoneRef.current = false;
     void clearCameraSessionDraft();
-    scheduleAutoPhoneCameraOnMobile(false);
-  }
-
-  function scheduleAutoPhoneCameraOnMobile(skipWhenRecoverPending = false) {
-    if (skipWhenRecoverPending) return;
-    if (!isCoarsePointerDevice() && !isMobileLikeDevice()) return;
-    lotCameraAutoPhoneRef.current = true;
-    window.setTimeout(() => {
-      if (!lotCameraOpenRef.current || !lotCameraAutoPhoneRef.current) return;
-      lotCameraAutoPhoneRef.current = false;
-      openPhoneCameraForLot();
-    }, 450);
   }
 
   function stopLotCameraTracks() {
@@ -3382,9 +3372,9 @@ export default function DashboardPage() {
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
     lotCameraNativePickerOpenRef.current = false;
+    setLotCameraNativePickerOpen(false);
     setLotCameraFocusRing(null);
     lotCameraTapStartRef.current = null;
-    lotCameraAutoPhoneRef.current = false;
     setLotCameraRecoverPrompt(null);
     setLotCameraPreviewRestarting(false);
     if (lotCameraPersistTimerRef.current != null) {
@@ -3575,11 +3565,13 @@ export default function DashboardPage() {
     }
     suspendInlineLotCameraForNativePicker();
     lotCameraNativePickerOpenRef.current = true;
+    setLotCameraNativePickerOpen(true);
     markNativePhotoPickerOpening();
     const el = lotCameraNativeInputRef.current;
     if (el) {
       const onNativePickerCancel = () => {
         lotCameraNativePickerOpenRef.current = false;
+        setLotCameraNativePickerOpen(false);
         void resumeInlineLotCameraAfterNativePicker();
       };
       el.addEventListener("cancel", onNativePickerCancel, { once: true });
@@ -3589,6 +3581,7 @@ export default function DashboardPage() {
 
   async function onLotCameraNativeInputChange(list: FileList | null) {
     lotCameraNativePickerOpenRef.current = false;
+    setLotCameraNativePickerOpen(false);
     if (!list?.length) {
       void resumeInlineLotCameraAfterNativePicker();
       return;
@@ -3825,7 +3818,6 @@ export default function DashboardPage() {
         const stream = await md.getUserMedia(getLotCameraMediaConstraints());
         await bindLotCameraStream(stream);
         primeLotCameraAudio();
-        scheduleAutoPhoneCameraOnMobile(hasRecover);
       } catch {
         lotCameraStreamRef.current = null;
         setLotCameraStream(null);
@@ -5981,10 +5973,9 @@ export default function DashboardPage() {
           <div ref={lotCameraScrollRef} className="ct-lot-camera-scroll">
             <div className="ct-card ct-card--padded ct-lot-camera-card">
             <p className="ct-muted ct-lot-camera-intro" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-              On phones, <strong>Phone camera</strong> opens first (sharpest, most reliable). Snap more with Phone
-              camera or use <strong>Snap photo</strong> for the in-app preview. Tap <strong>Done</strong> when finished
-              to add photos to the upload box. Tap the preview to focus; pinch or +/− to zoom. Thumbnails scroll below —
-              tap to preview, pencil to edit, trash to remove.
+              Tap <strong>Phone camera</strong> for the sharpest shots (recommended on mobile). Use{" "}
+              <strong>Snap photo</strong> for the in-app preview, then <strong>Done</strong> to add photos to the
+              upload box. Tap the preview to focus; pinch or +/− to zoom.
             </p>
             <label
               className="ct-lot-camera-backup-opt ct-muted"
@@ -6020,7 +6011,27 @@ export default function DashboardPage() {
               />
             </label>
             {!lotCameraStream ? (
-              <p style={{ margin: "0.75rem 0", textAlign: "center" }}>Starting camera…</p>
+              <div style={{ margin: "0.75rem 0", textAlign: "center" }}>
+                {lotCameraNativePickerOpen ? (
+                  <p className="ct-muted" style={{ margin: 0 }}>
+                    Phone camera open — return here after each shot.
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ margin: "0 0 0.65rem" }}>
+                      {lotCameraPreviewRestarting ? "Starting camera…" : "Camera preview is not running."}
+                    </p>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary"
+                      disabled={lotCameraPreviewRestarting}
+                      onClick={() => void reinitLotCameraStream()}
+                    >
+                      Start preview
+                    </button>
+                  </>
+                )}
+              </div>
             ) : (
               <>
                 <div

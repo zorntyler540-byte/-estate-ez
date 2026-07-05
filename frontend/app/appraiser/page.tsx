@@ -330,11 +330,6 @@ export default function AppraiserPage() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia(getAppraiserCameraMediaConstraints());
       await bindCameraStream(stream);
-      if (isCoarsePointerDevice() || isMobileLikeDevice()) {
-        window.setTimeout(() => {
-          if (cameraStreamRef.current) openPhoneCameraFromDialog();
-        }, 450);
-      }
     } catch {
       stopCameraTracks();
       setCameraOpen(false);
