@@ -140,8 +140,6 @@ function isStabilizedCaptureFile(file: File): boolean {
   return stabilizedCaptureFiles.has(file);
 }
 
-type VideoTrackSettings = { width?: number; height?: number };
-
 /** Zoom factor for CSS transform — number or ``var(--lot-camera-ui-zoom)`` for pinch without re-renders. */
 type LotCameraPreviewZoomExpr = number | "var(--lot-camera-ui-zoom, 1)";
 
