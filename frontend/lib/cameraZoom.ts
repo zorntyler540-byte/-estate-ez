@@ -52,9 +52,19 @@ export async function applyOpticalZoom(track: MediaStreamTrack, zoom: number): P
   const snapped =
     Math.round(Math.min(range.max, Math.max(range.min, zoom)) / step) * step;
   const target = Math.round(snapped * 100) / 100;
+  const current = readAppliedOpticalZoom(track);
+  if (Math.abs(target - current) < Math.max(step * 0.45, 0.04)) {
+    return current;
+  }
+
+  const caps = track.getCapabilities?.() as { focusMode?: string[] } | undefined;
+  const keepContinuous = caps?.focusMode?.includes("continuous");
+  const zoomConstraints = keepContinuous
+    ? ({ zoom: target, focusMode: "continuous" } as MediaTrackConstraints)
+    : ({ zoom: target } as MediaTrackConstraints);
 
   try {
-    await track.applyConstraints({ zoom: target } as MediaTrackConstraints);
+    await track.applyConstraints(zoomConstraints);
     return readAppliedOpticalZoom(track);
   } catch {
     try {

@@ -184,13 +184,16 @@ async function configureLotCameraTrack(track: MediaStreamTrack): Promise<void> {
   const mobile = isCoarsePointerDevice() || isMobileLikeDevice();
   const idealW = mobile ? 1280 : 1920;
   const idealH = mobile ? 720 : 1080;
+  const caps = track.getCapabilities?.() as VideoTrackCaps | undefined;
+  const focusMode = caps?.focusMode?.includes("continuous") ? "continuous" : undefined;
   if (track.applyConstraints) {
     try {
       await track.applyConstraints({
         facingMode: { ideal: "environment" },
         width: { ideal: idealW },
         height: { ideal: idealH },
-        frameRate: { ideal: 30 }
+        frameRate: { ideal: 30 },
+        ...(focusMode ? { focusMode } : {})
       });
     } catch {
       if (mobile) {
@@ -1629,6 +1632,8 @@ export default function DashboardPage() {
   const [lotCameraZoomMax, setLotCameraZoomMax] = useState(LOT_CAMERA_ZOOM_MAX);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
+  const lotCameraPinchingRef = useRef(false);
+  const lotCameraSuppressTapFocusUntilRef = useRef(0);
   const lotCameraTapStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const [lotCameraFocusRing, setLotCameraFocusRing] = useState<{
     xPct: number;
@@ -2762,9 +2767,13 @@ export default function DashboardPage() {
     const opticalMax = lotCameraOpticalMaxRef.current;
     const { optical, digital } = splitTotalZoom(z, opticalMax);
 
-    let applied = 1;
+    let applied = lotCameraOpticalAppliedRef.current;
     if (track && opticalMax > 1.001) {
-      applied = await applyOpticalZoom(track, optical);
+      if (Math.abs(optical - applied) >= 0.04) {
+        applied = await applyOpticalZoom(track, optical);
+      }
+    } else {
+      applied = 1;
     }
     lotCameraOpticalAppliedRef.current = applied;
     setLotCameraOpticalApplied(applied);
@@ -2772,6 +2781,11 @@ export default function DashboardPage() {
     lotCameraZoomRef.current = z;
     setLotCameraZoom(z);
     lotCameraZoomWrapRef.current?.style.setProperty("--lot-camera-ui-zoom", String(digital));
+  }
+
+  function lotCameraPreviewCssZoomDuringPinch(totalZoom: number): number {
+    const opticalNow = Math.max(1, lotCameraOpticalAppliedRef.current);
+    return totalZoom / opticalNow;
   }
 
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
@@ -2867,6 +2881,9 @@ export default function DashboardPage() {
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
+        lotCameraPinchingRef.current = true;
+        lotCameraSuppressTapFocusUntilRef.current = Date.now() + 500;
+        lotCameraTapStartRef.current = null;
         const d = lotCameraPinchDistance(e);
         if (d > 0) {
           lotCameraPinchRef.current = { startDist: d, startZoom: lotCameraZoomRef.current };
@@ -2883,13 +2900,22 @@ export default function DashboardPage() {
       if (startDist < 1) return;
       const z = clampZoom(startZoom * (d / startDist));
       lotCameraZoomRef.current = z;
-      const { digital } = splitTotalZoom(z, lotCameraOpticalMaxRef.current);
-      el.style.setProperty("--lot-camera-ui-zoom", String(digital));
+      el.style.setProperty(
+        "--lot-camera-ui-zoom",
+        String(lotCameraPreviewCssZoomDuringPinch(z))
+      );
     };
 
-    const onTouchEnd = () => {
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length > 0) return;
+      const hadPinch = lotCameraPinchingRef.current || lotCameraPinchRef.current;
+      lotCameraPinchingRef.current = false;
       lotCameraPinchRef.current = null;
-      void applyLotCameraUiZoom(lotCameraZoomRef.current);
+      lotCameraSuppressTapFocusUntilRef.current = Date.now() + 450;
+      lotCameraTapStartRef.current = null;
+      if (hadPinch) {
+        void applyLotCameraUiZoom(lotCameraZoomRef.current);
+      }
     };
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -2950,14 +2976,24 @@ export default function DashboardPage() {
 
   function onLotCameraPreviewPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (lotCameraPinchingRef.current || lotCameraPinchRef.current) return;
+    if (e.pointerType === "touch" && e.isPrimary === false) return;
     lotCameraTapStartRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
   }
 
   function onLotCameraPreviewPointerUp(e: React.PointerEvent<HTMLDivElement>) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (
+      lotCameraPinchingRef.current ||
+      lotCameraPinchRef.current ||
+      Date.now() < lotCameraSuppressTapFocusUntilRef.current
+    ) {
+      lotCameraTapStartRef.current = null;
+      return;
+    }
     const start = lotCameraTapStartRef.current;
     lotCameraTapStartRef.current = null;
-    if (!start || lotCameraPinchRef.current) return;
+    if (!start) return;
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
     if (dx * dx + dy * dy > 24 * 24) return;
@@ -3359,6 +3395,8 @@ export default function DashboardPage() {
     setLotCameraEditContrast(100);
     setLotCameraEditSaturation(100);
     lotCameraPinchRef.current = null;
+    lotCameraPinchingRef.current = false;
+    lotCameraSuppressTapFocusUntilRef.current = 0;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
     lotCameraDigitalZoomRef.current = 1;
     lotCameraOpticalAppliedRef.current = 1;
@@ -6038,11 +6076,6 @@ export default function DashboardPage() {
                 <div
                   ref={lotCameraZoomWrapRef}
                   className="ct-lot-camera-live"
-                  style={
-                    {
-                      "--lot-camera-ui-zoom": lotCameraZoom
-                    } as React.CSSProperties
-                  }
                   role="button"
                   tabIndex={0}
                   aria-label="Camera preview — tap to focus"
