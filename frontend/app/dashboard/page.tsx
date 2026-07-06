@@ -42,6 +42,9 @@ import {
   getLotCameraMediaConstraints,
   isCoarsePointerDevice,
   isMobileLikeDevice,
+  isScreenLandscapeOrientation,
+  lotCameraCaptureCanvasRotationDeg,
+  lotCameraPreviewCssRotationDeg,
   saveCaptureFilesToPhotos,
   shouldUseImageCaptureForStill
 } from "../../lib/cameraCapture";
@@ -139,64 +142,6 @@ function isStabilizedCaptureFile(file: File): boolean {
 
 type VideoTrackSettings = { width?: number; height?: number };
 
-/** Quarter-turn needed for raw sensor buffer (canvas capture math). */
-function lotCameraSensorQuarterTurnDeg(video: HTMLVideoElement): number {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (vw < 2 || vh < 2) return 0;
-
-  const frameLandscape = vw > vh * 1.05;
-  const framePortrait = vh > vw * 1.05;
-
-  if (isScreenLandscape()) {
-    return framePortrait ? 90 : 0;
-  }
-  return frameLandscape ? 90 : 0;
-}
-
-/** True when Safari already maps the sensor buffer upright on the ``<video>`` element. */
-function lotCameraVideoDisplayIsUpright(video: HTMLVideoElement, track: MediaStreamTrack | null): boolean {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (vw < 2 || vh < 2) return false;
-
-  const settings = (track?.getSettings?.() ?? {}) as VideoTrackSettings;
-  const sw = settings.width ?? 0;
-  const sh = settings.height ?? 0;
-  if (sw >= 2 && sh >= 2) {
-    const dimsSwapped =
-      (Math.abs(sw - vh) <= Math.max(4, vh * 0.02) && Math.abs(sh - vw) <= Math.max(4, vw * 0.02)) ||
-      (sw === vh && sh === vw);
-    if (dimsSwapped) return true;
-    const settingsPortrait = sh > sw * 1.05;
-    const bufferLandscape = vw > vh * 1.05;
-    if (settingsPortrait && bufferLandscape) return true;
-  }
-
-  const bufferPortrait = vh > vw * 1.05;
-  if (!isScreenLandscape() && bufferPortrait) return true;
-  if (isScreenLandscape() && vw > vh * 1.05) return true;
-  return false;
-}
-
-/**
- * CSS rotation for the visible ``<video>`` preview (hardware composited). Probed once per stream
- * so we do not fight iOS display correction with a per-frame canvas loop.
- */
-function probeLotCameraVideoCssRotationDeg(
-  video: HTMLVideoElement,
-  track: MediaStreamTrack | null
-): number {
-  const sensorTurn = lotCameraSensorQuarterTurnDeg(video);
-  if (sensorTurn === 0) return 0;
-  if (lotCameraVideoDisplayIsUpright(video, track)) return 0;
-  return sensorTurn;
-}
-
-function lotCameraFrameRotationDeg(video: HTMLVideoElement): number {
-  return lotCameraSensorQuarterTurnDeg(video);
-}
-
 /** Zoom factor for CSS transform — number or ``var(--lot-camera-ui-zoom)`` for pinch without re-renders. */
 type LotCameraPreviewZoomExpr = number | "var(--lot-camera-ui-zoom, 1)";
 
@@ -289,32 +234,15 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   });
 }
 
-function readScreenOrientationAngle(): number {
-  if (typeof screen !== "undefined" && screen.orientation?.angle != null) {
-    return ((screen.orientation.angle % 360) + 360) % 360;
-  }
-  const legacy = typeof window !== "undefined" ? (window as Window & { orientation?: number }).orientation : undefined;
-  if (typeof legacy === "number" && Number.isFinite(legacy)) {
-    return ((legacy % 360) + 360) % 360;
-  }
-  if (typeof window !== "undefined") {
-    return window.innerWidth > window.innerHeight ? 90 : 0;
-  }
-  return 0;
-}
-
-/** True when the device is held in either landscape orientation. */
 function isScreenLandscape(): boolean {
-  const angle = readScreenOrientationAngle();
-  return angle === 90 || angle === 270;
+  return isScreenLandscapeOrientation();
 }
 
 /**
  * Rotation baked into saved JPEGs from canvas ``drawImage(video)`` (raw sensor buffer).
  */
 function lotCameraCaptureRotationDeg(video: HTMLVideoElement): number {
-  const sensorTurn = lotCameraSensorQuarterTurnDeg(video);
-  return sensorTurn === 0 ? 0 : -sensorTurn;
+  return lotCameraCaptureCanvasRotationDeg(video);
 }
 
 function drawOrientedVideoFrameToCanvas(
@@ -2783,7 +2711,7 @@ export default function DashboardPage() {
     };
   }, [lotCameraStream, lotCameraVideoMountKey]);
 
-  /** One-time orientation probe per stream — visible preview stays on hardware ``<video>``. */
+  /** Keep preview rotation in sync when the stream binds or the device rotates. */
   useEffect(() => {
     if (!lotCameraOpen || !lotCameraStream || !lotCameraPreviewReady) return;
     refreshLotCameraVideoCssRotation();
@@ -2793,9 +2721,22 @@ export default function DashboardPage() {
     const video = lotCameraVideoRef.current;
     if (!video || video.readyState < 2 || video.videoWidth < 2) return;
     const track = lotCameraStreamRef.current?.getVideoTracks()[0] ?? null;
-    const deg = probeLotCameraVideoCssRotationDeg(video, track);
+    const deg = lotCameraPreviewCssRotationDeg(video, track);
     lotCameraVideoCssRotationRef.current = deg;
     setLotCameraVideoCssRotation(deg);
+  }
+
+  function scheduleLotCameraOrientationRefresh() {
+    refreshLotCameraVideoCssRotation();
+    setLotCameraPreviewLayoutTick((t) => t + 1);
+    window.setTimeout(() => {
+      refreshLotCameraVideoCssRotation();
+      setLotCameraPreviewLayoutTick((t) => t + 1);
+    }, 120);
+    window.setTimeout(() => {
+      refreshLotCameraVideoCssRotation();
+      setLotCameraPreviewLayoutTick((t) => t + 1);
+    }, 320);
   }
 
   function setLotCameraUiZoom(next: number) {
@@ -2812,8 +2753,7 @@ export default function DashboardPage() {
       if (document.visibilityState === "visible") handleLotCameraForegroundReturn();
     };
     const onOrientation = () => {
-      refreshLotCameraVideoCssRotation();
-      setLotCameraPreviewLayoutTick((t) => t + 1);
+      scheduleLotCameraOrientationRefresh();
       handleLotCameraForegroundReturn();
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -2829,6 +2769,16 @@ export default function DashboardPage() {
       screen.orientation?.removeEventListener("change", onOrientation);
     };
   }, [lotCameraOpen]);
+
+  /** Re-probe preview rotation when the decoded frame size changes (common after rotate). */
+  useEffect(() => {
+    if (!lotCameraOpen || !lotCameraStream) return;
+    const video = lotCameraVideoRef.current;
+    if (!video) return;
+    const onResize = () => scheduleLotCameraOrientationRefresh();
+    video.addEventListener("resize", onResize);
+    return () => video.removeEventListener("resize", onResize);
+  }, [lotCameraOpen, lotCameraStream, lotCameraVideoMountKey]);
 
   useEffect(() => {
     const strip = lotCameraStripRef.current;

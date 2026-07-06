@@ -119,6 +119,134 @@ export function isMobileLikeDevice(): boolean {
   return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
 }
 
+export function isIosDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+}
+
+export function readScreenOrientationAngle(): number {
+  if (typeof screen !== "undefined" && screen.orientation?.angle != null) {
+    return ((screen.orientation.angle % 360) + 360) % 360;
+  }
+  const legacy =
+    typeof window !== "undefined" ? (window as Window & { orientation?: number }).orientation : undefined;
+  if (typeof legacy === "number" && Number.isFinite(legacy)) {
+    return ((legacy % 360) + 360) % 360;
+  }
+  if (typeof window !== "undefined") {
+    return window.innerWidth > window.innerHeight ? 90 : 0;
+  }
+  return 0;
+}
+
+export function isScreenLandscapeOrientation(): boolean {
+  const angle = readScreenOrientationAngle();
+  return angle === 90 || angle === 270;
+}
+
+type VideoTrackDims = { width?: number; height?: number };
+
+function desktopPreviewCssRotationDeg(
+  video: HTMLVideoElement,
+  track: MediaStreamTrack | null
+): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  const frameLandscape = vw > vh * 1.05;
+  const framePortrait = vh > vw * 1.05;
+  const landscape = isScreenLandscapeOrientation();
+
+  let sensorTurn = 0;
+  if (landscape) {
+    sensorTurn = framePortrait ? 90 : 0;
+  } else {
+    sensorTurn = frameLandscape ? 90 : 0;
+  }
+  if (sensorTurn === 0) return 0;
+
+  const settings = (track?.getSettings?.() ?? {}) as VideoTrackDims;
+  const sw = settings.width ?? 0;
+  const sh = settings.height ?? 0;
+  if (sw >= 2 && sh >= 2) {
+    const dimsSwapped =
+      (Math.abs(sw - vh) <= Math.max(4, vh * 0.02) && Math.abs(sh - vw) <= Math.max(4, vw * 0.02)) ||
+      (sw === vh && sh === vw);
+    if (dimsSwapped) return 0;
+    const settingsPortrait = sh > sw * 1.05;
+    if (settingsPortrait && frameLandscape) return 0;
+  }
+
+  const bufferPortrait = vh > vw * 1.05;
+  if (!landscape && bufferPortrait) return 0;
+  if (landscape && frameLandscape) return 0;
+  return sensorTurn;
+}
+
+/**
+ * CSS rotation for the live ``<video>`` preview.
+ * iOS Safari auto-orients the element — extra CSS rotation breaks on portrait ↔ landscape turns.
+ */
+export function lotCameraPreviewCssRotationDeg(
+  video: HTMLVideoElement,
+  track: MediaStreamTrack | null = null
+): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  if (isIosDevice()) {
+    return 0;
+  }
+
+  if (!isCoarsePointerDevice() && !isMobileLikeDevice()) {
+    return desktopPreviewCssRotationDeg(video, track);
+  }
+
+  const angle = readScreenOrientationAngle();
+  const bufferLandscape = vw > vh * 1.05;
+  const bufferPortrait = vh > vw * 1.05;
+  const portrait = angle === 0 || angle === 180;
+
+  if (portrait && bufferPortrait) return 0;
+  if (!portrait && bufferLandscape) return angle === 90 ? 180 : 0;
+
+  if (portrait && bufferLandscape) {
+    return angle === 180 ? -90 : 90;
+  }
+
+  if (!portrait && bufferPortrait) {
+    return angle === 90 ? 90 : -90;
+  }
+
+  return 0;
+}
+
+/** Canvas rotation when capturing a still from ``<video>`` (uses raw sensor buffer + screen angle). */
+export function lotCameraCaptureCanvasRotationDeg(video: HTMLVideoElement): number {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw < 2 || vh < 2) return 0;
+
+  if (!isCoarsePointerDevice() && !isMobileLikeDevice()) {
+    const frameLandscape = vw > vh * 1.05;
+    const portrait = !isScreenLandscapeOrientation();
+    if (portrait && frameLandscape) return -90;
+    if (!portrait && vh > vw * 1.05) return 90;
+    return 0;
+  }
+
+  const angle = readScreenOrientationAngle();
+  const bufferLandscape = vw > vh * 1.05;
+  if (!bufferLandscape) return 0;
+
+  if (angle === 0) return -90;
+  if (angle === 180) return 90;
+  if (angle === 90) return 180;
+  return 0;
+}
+
 /**
  * ``ImageCapture.takePhoto()`` often leaves the live ``<video>`` preview black on iOS / Android
  * even though the track is still live — prefer canvas capture on those devices.
