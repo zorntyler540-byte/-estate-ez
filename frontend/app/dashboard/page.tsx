@@ -48,6 +48,14 @@ import {
   saveCaptureFilesToPhotos,
   shouldUseImageCaptureForStill
 } from "../../lib/cameraCapture";
+import {
+  applyOpticalZoom,
+  getOpticalZoomRange,
+  lotCameraZoomModeLabel,
+  readAppliedOpticalZoom,
+  splitTotalZoom,
+  totalZoomMaxForDevice
+} from "../../lib/cameraZoom";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
@@ -170,10 +178,6 @@ type VideoTrackCaps = MediaTrackCapabilities & {
   focusMode?: string[];
   pointsOfInterest?: boolean;
 };
-
-function clampLotCameraUiZoom(z: number): number {
-  return Math.round(Math.min(LOT_CAMERA_ZOOM_MAX, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
-}
 
 /** Configure focus and keep the live stream at preview resolution (720p phones, 1080p desktop). */
 async function configureLotCameraTrack(track: MediaStreamTrack): Promise<void> {
@@ -304,23 +308,28 @@ async function normalizeCaptureFileOrientation(file: File): Promise<File | null>
   return new File([blob], file.name, { type: "image/jpeg" });
 }
 
-/** Short label for the zoom row. Preview always uses CSS scale so WYSIWYG matches capture crop. */
-function lotCameraZoomModeLabel(uiZoom: number): string {
-  if (uiZoom <= LOT_CAMERA_ZOOM_MIN + 0.001) return "1×";
-  return "Digital zoom — move closer for sharpest detail";
+function clampLotCameraTotalZoom(z: number, max: number): number {
+  return Math.round(Math.min(max, Math.max(LOT_CAMERA_ZOOM_MIN, z)) * 100) / 100;
 }
 
 type LotCameraZoomControlsProps = {
   variant: "inline" | "actions";
   uiZoom: number;
+  zoomMax: number;
+  opticalApplied: number;
+  opticalMax: number;
   onNudge: (direction: -1 | 1) => void;
 };
 
 function LotCameraZoomControls({
   variant,
   uiZoom,
+  zoomMax,
+  opticalApplied,
+  opticalMax,
   onNudge
 }: LotCameraZoomControlsProps) {
+  const modeLabel = lotCameraZoomModeLabel(uiZoom, opticalApplied, opticalMax);
   const compact = variant === "actions";
   return (
     <div
@@ -351,7 +360,7 @@ function LotCameraZoomControls({
             type="button"
             className="ct-btn ct-btn--ghost"
             aria-label="Zoom in"
-            disabled={uiZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
+            disabled={uiZoom >= zoomMax - 0.001}
             onClick={() => onNudge(1)}
           >
             <Plus size={20} aria-hidden />
@@ -365,12 +374,14 @@ function LotCameraZoomControls({
             </span>
             <span
               className={`ct-lot-camera-zoom-mode${
-                uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001 ? " ct-lot-camera-zoom-mode--digital" : ""
+                uiZoom > LOT_CAMERA_ZOOM_MIN + 0.001 && opticalApplied <= 1.001
+                  ? " ct-lot-camera-zoom-mode--digital"
+                  : ""
               }`}
               role="status"
               aria-live="polite"
             >
-              {lotCameraZoomModeLabel(uiZoom)}
+              {modeLabel}
             </span>
           </div>
           <div className="ct-row" style={{ gap: 6, alignItems: "center" }}>
@@ -388,7 +399,7 @@ function LotCameraZoomControls({
               type="button"
               className="ct-btn ct-btn--ghost"
               aria-label="Zoom in"
-              disabled={uiZoom >= LOT_CAMERA_ZOOM_MAX - 0.001}
+              disabled={uiZoom >= zoomMax - 0.001}
               onClick={() => onNudge(1)}
               style={{ minWidth: 44, minHeight: 44, padding: 0, color: "#fff" }}
             >
@@ -1609,6 +1620,13 @@ export default function DashboardPage() {
   const [lotCameraEditBusy, setLotCameraEditBusy] = useState(false);
   const [lotCameraZoom, setLotCameraZoom] = useState(LOT_CAMERA_ZOOM_MIN);
   const lotCameraZoomRef = useRef(LOT_CAMERA_ZOOM_MIN);
+  const lotCameraOpticalMaxRef = useRef(1);
+  const lotCameraOpticalAppliedRef = useRef(1);
+  const lotCameraDigitalZoomRef = useRef(1);
+  const lotCameraTotalMaxRef = useRef(LOT_CAMERA_ZOOM_MAX);
+  const [lotCameraOpticalMax, setLotCameraOpticalMax] = useState(1);
+  const [lotCameraOpticalApplied, setLotCameraOpticalApplied] = useState(1);
+  const [lotCameraZoomMax, setLotCameraZoomMax] = useState(LOT_CAMERA_ZOOM_MAX);
   const lotCameraZoomWrapRef = useRef<HTMLDivElement | null>(null);
   const lotCameraPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
   const lotCameraTapStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -2737,11 +2755,23 @@ export default function DashboardPage() {
     }, 320);
   }
 
-  function setLotCameraUiZoom(next: number) {
-    const z = clampLotCameraUiZoom(next);
+  async function applyLotCameraUiZoom(next: number) {
+    const max = lotCameraTotalMaxRef.current;
+    const z = clampLotCameraTotalZoom(next, max);
+    const track = lotCameraStreamRef.current?.getVideoTracks()[0];
+    const opticalMax = lotCameraOpticalMaxRef.current;
+    const { optical, digital } = splitTotalZoom(z, opticalMax);
+
+    let applied = 1;
+    if (track && opticalMax > 1.001) {
+      applied = await applyOpticalZoom(track, optical);
+    }
+    lotCameraOpticalAppliedRef.current = applied;
+    setLotCameraOpticalApplied(applied);
+    lotCameraDigitalZoomRef.current = digital;
     lotCameraZoomRef.current = z;
     setLotCameraZoom(z);
-    lotCameraZoomWrapRef.current?.style.setProperty("--lot-camera-ui-zoom", String(z));
+    lotCameraZoomWrapRef.current?.style.setProperty("--lot-camera-ui-zoom", String(digital));
   }
 
   /** iOS pauses or ends the camera when the tab/app backgrounds (home screen, app switch, native dialogs). */
@@ -2833,7 +2863,7 @@ export default function DashboardPage() {
     const el = lotCameraZoomWrapRef.current;
     if (!el || !lotCameraOpen || !lotCameraStream) return;
 
-    const clampZoom = (z: number) => clampLotCameraUiZoom(z);
+    const clampZoom = (z: number) => clampLotCameraTotalZoom(z, lotCameraTotalMaxRef.current);
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
@@ -2853,12 +2883,13 @@ export default function DashboardPage() {
       if (startDist < 1) return;
       const z = clampZoom(startZoom * (d / startDist));
       lotCameraZoomRef.current = z;
-      el.style.setProperty("--lot-camera-ui-zoom", String(z));
+      const { digital } = splitTotalZoom(z, lotCameraOpticalMaxRef.current);
+      el.style.setProperty("--lot-camera-ui-zoom", String(digital));
     };
 
     const onTouchEnd = () => {
       lotCameraPinchRef.current = null;
-      setLotCameraUiZoom(lotCameraZoomRef.current);
+      void applyLotCameraUiZoom(lotCameraZoomRef.current);
     };
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -2874,7 +2905,7 @@ export default function DashboardPage() {
   }, [lotCameraOpen, lotCameraStream]);
 
   function nudgeLotCameraZoom(direction: -1 | 1) {
-    setLotCameraUiZoom(lotCameraZoomRef.current + direction * LOT_CAMERA_ZOOM_STEP);
+    void applyLotCameraUiZoom(lotCameraZoomRef.current + direction * LOT_CAMERA_ZOOM_STEP);
   }
 
   async function applyLotCameraTapFocus(clientX: number, clientY: number) {
@@ -3112,7 +3143,17 @@ export default function DashboardPage() {
     setLotCameraStream(stream);
     const track = stream.getVideoTracks()[0];
     if (track) {
-      void configureLotCameraTrack(track);
+      await configureLotCameraTrack(track);
+      const range = getOpticalZoomRange(track);
+      const oMax = range?.max ?? 1;
+      lotCameraOpticalMaxRef.current = oMax;
+      setLotCameraOpticalMax(oMax);
+      const totalMax = totalZoomMaxForDevice(oMax, LOT_CAMERA_ZOOM_MAX);
+      lotCameraTotalMaxRef.current = totalMax;
+      setLotCameraZoomMax(totalMax);
+      const applied = readAppliedOpticalZoom(track);
+      lotCameraOpticalAppliedRef.current = applied;
+      setLotCameraOpticalApplied(applied);
     }
   }
 
@@ -3193,6 +3234,7 @@ export default function DashboardPage() {
     try {
       const stream = await md.getUserMedia(getLotCameraMediaConstraints());
       await bindLotCameraStream(stream);
+      await applyLotCameraUiZoom(lotCameraZoomRef.current);
       setLotCameraVideoMountKey((k) => k + 1);
     } catch {
       setError("Camera stopped — close this screen and tap Add one lot again.");
@@ -3318,7 +3360,14 @@ export default function DashboardPage() {
     setLotCameraEditSaturation(100);
     lotCameraPinchRef.current = null;
     lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
+    lotCameraDigitalZoomRef.current = 1;
+    lotCameraOpticalAppliedRef.current = 1;
+    lotCameraOpticalMaxRef.current = 1;
+    lotCameraTotalMaxRef.current = LOT_CAMERA_ZOOM_MAX;
     setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
+    setLotCameraOpticalMax(1);
+    setLotCameraOpticalApplied(1);
+    setLotCameraZoomMax(LOT_CAMERA_ZOOM_MAX);
     lotCameraNativePickerOpenRef.current = false;
     setLotCameraNativePickerOpen(false);
     setLotCameraFocusRing(null);
@@ -3562,10 +3611,10 @@ export default function DashboardPage() {
     if (!v || v.readyState < 2 || v.videoWidth < 2) return;
     flashLotCameraShutter();
     triggerLotCameraSnapFeedbackImmediate();
-    const z = Math.max(LOT_CAMERA_ZOOM_MIN, lotCameraZoomRef.current);
-    const useDigitalCrop = z > LOT_CAMERA_ZOOM_MIN + 0.001;
+    const digital = lotCameraDigitalZoomRef.current;
+    const useDigitalCrop = digital > LOT_CAMERA_ZOOM_MIN + 0.001;
 
-    const quickBlob = await captureVideoFrameBlob(v, z, useDigitalCrop);
+    const quickBlob = await captureVideoFrameBlob(v, digital, useDigitalCrop);
     if (!quickBlob) return;
     if (
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -3760,11 +3809,15 @@ export default function DashboardPage() {
       setLotCameraEditContrast(100);
       setLotCameraEditSaturation(100);
       lotCameraZoomRef.current = LOT_CAMERA_ZOOM_MIN;
+      lotCameraDigitalZoomRef.current = 1;
+      lotCameraOpticalAppliedRef.current = 1;
       setLotCameraZoom(LOT_CAMERA_ZOOM_MIN);
+      setLotCameraOpticalApplied(1);
       setLotCameraOpen(true);
       try {
         const stream = await md.getUserMedia(getLotCameraMediaConstraints());
         await bindLotCameraStream(stream);
+        await applyLotCameraUiZoom(1);
         primeLotCameraAudio();
       } catch {
         lotCameraStreamRef.current = null;
@@ -6069,6 +6122,9 @@ export default function DashboardPage() {
                 <LotCameraZoomControls
                   variant="inline"
                   uiZoom={lotCameraZoom}
+                  zoomMax={lotCameraZoomMax}
+                  opticalApplied={lotCameraOpticalApplied}
+                  opticalMax={lotCameraOpticalMax}
                   onNudge={nudgeLotCameraZoom}
                 />
               </>
@@ -6151,6 +6207,9 @@ export default function DashboardPage() {
                 <LotCameraZoomControls
                   variant="actions"
                   uiZoom={lotCameraZoom}
+                  zoomMax={lotCameraZoomMax}
+                  opticalApplied={lotCameraOpticalApplied}
+                  opticalMax={lotCameraOpticalMax}
                   onNudge={nudgeLotCameraZoom}
                 />
               ) : null}
