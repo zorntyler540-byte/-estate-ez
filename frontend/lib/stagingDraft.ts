@@ -3,6 +3,8 @@
  * does not silently drop captured photos (still in-browser only).
  */
 
+import { getStagedUploadRel, markStagedUploadRel, readSourceUploadRel } from "./stagedUploadPath";
+
 const DB_NAME = "ct-staging-draft";
 const STORE = "draft";
 const KEY = "current";
@@ -11,6 +13,7 @@ type SerializedFile = {
   name: string;
   type: string;
   lastModified: number;
+  uploadRel?: string;
   data: ArrayBuffer;
 };
 
@@ -81,6 +84,7 @@ export async function saveStagingDraft(
       name: f.name,
       type: f.type || "image/jpeg",
       lastModified: f.lastModified,
+      uploadRel: readSourceUploadRel(f) || getStagedUploadRel(f),
       data: await f.arrayBuffer()
     }))
   );
@@ -104,9 +108,11 @@ export async function loadStagingDraft(): Promise<StagingDraftPayload | null> {
     return null;
   }
   if (!record?.files?.length) return null;
-  const imageFiles = record.files.map(
-    (f) => new File([f.data], f.name, { type: f.type, lastModified: f.lastModified })
-  );
+  const imageFiles = record.files.map((f) => {
+    const file = new File([f.data], f.name, { type: f.type, lastModified: f.lastModified });
+    if (f.uploadRel) markStagedUploadRel(file, f.uploadRel);
+    return file;
+  });
   const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
   return {
     folderLabel: record.folderLabel,

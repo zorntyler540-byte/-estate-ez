@@ -38,7 +38,7 @@ export function buildStagedUploadRel(
   usedLeaves: Set<string>
 ): { fileName: string; uploadRel: string } {
   const uniqueLeaf = allocateUniqueLeafName(leafName, usedLeaves);
-  const sourceRel = readSourceUploadRel(source);
+  const sourceRel = readSourceUploadRel(source) || stagedUploadRel.get(source) || null;
   if (sourceRel && sourceRel.includes("/")) {
     const parts = sourceRel.replace(/\\/g, "/").split("/");
     parts[parts.length - 1] = uniqueLeaf;

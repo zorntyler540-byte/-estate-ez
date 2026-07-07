@@ -4827,7 +4827,7 @@ export default function DashboardPage() {
                   Waiting for current lot…
                 </span>
               ) : null}
-              {(job.status === "queued" || job.status === "failed") && (
+              {(job.status === "uploading" || job.status === "queued" || job.status === "failed") && (
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"
