@@ -109,11 +109,12 @@ def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_p
     names = [p.name for p in photo_paths if p.name]
     if not names:
         return False
+    needed = set(names)
     created_after = job.created_at
     if created_after is not None and created_after.tzinfo is None:
         created_after = created_after.replace(tzinfo=timezone.utc)
     q = (
-        db.query(Photo.id)
+        db.query(Photo.lot_id, Photo.original_name)
         .join(Lot, Photo.lot_id == Lot.id)
         .filter(
             Lot.sale_id == job.sale_id,
@@ -123,7 +124,11 @@ def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_p
     )
     if created_after is not None:
         q = q.filter(Lot.created_at >= created_after)
-    return q.count() >= len(names)
+    by_lot: dict[str, set[str]] = {}
+    for lot_id, original_name in q.all():
+        if lot_id and original_name:
+            by_lot.setdefault(str(lot_id), set()).add(str(original_name))
+    return any(found >= needed for found in by_lot.values())
 
 
 def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
