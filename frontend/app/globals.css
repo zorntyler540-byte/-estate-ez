@@ -2258,6 +2258,7 @@ select.ct-input option {
 
 .ct-table--lots {
   table-layout: fixed;
+  min-width: 980px;
 }
 
 .ct-table--lots th,
@@ -2274,6 +2275,11 @@ select.ct-input option {
 .ct-table--lots th:nth-child(2),
 .ct-table--lots td:nth-child(2) {
   width: 5.25rem;
+}
+
+.ct-table--lots th:nth-child(3),
+.ct-table--lots td:nth-child(3) {
+  width: 26rem;
 }
 
 .ct-table--lots th:nth-child(4),
@@ -2306,14 +2312,28 @@ select.ct-input option {
   width: 4.75rem;
 }
 
-.ct-table--lots td:nth-child(3) {
+.ct-lots-table__title {
+  min-width: 0;
+}
+
+.ct-lots-table__title-text {
+  font-weight: 600;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ct-lots-table__title {
-  font-weight: 500;
+.ct-lots-table__desc {
+  margin-top: 0.18rem;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--ct-text-muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
 .ct-lots-table__price {
@@ -2432,6 +2452,13 @@ select.ct-input option {
   font-weight: 600;
   font-size: 0.95rem;
   line-height: 1.35;
+}
+
+.ct-lot-mobile-card__desc {
+  margin: 0.35rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  color: var(--ct-text-muted);
 }
 
 .ct-lot-mobile-card__meta {

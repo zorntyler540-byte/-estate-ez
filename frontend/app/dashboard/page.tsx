@@ -1037,6 +1037,7 @@ type Lot = {
   sale_id: string;
   sku: string | null;
   auction_title: string;
+  professional_description: string;
   is_completed: boolean;
   completed_at: string | null;
   starting_price: number | null;
@@ -1089,6 +1090,7 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     ),
     sku_text_mismatch: Boolean((row as { sku_text_mismatch?: unknown }).sku_text_mismatch),
     auction_title: row.auction_title ?? "",
+    professional_description: row.professional_description ?? "",
     is_completed: Boolean(row.is_completed),
     completed_at: row.completed_at ?? null,
     condition_text: row.condition_text ?? "",
@@ -1097,6 +1099,13 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     has_thumbnail: Boolean(row.has_thumbnail),
     created_at: row.created_at ?? ""
   };
+}
+
+function lotDescriptionPreview(text: string, maxLen = 140): string {
+  const collapsed = (text || "").replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  if (collapsed.length <= maxLen) return collapsed;
+  return `${collapsed.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
 }
 
 function formatLotPrice(price: number | null): string {
@@ -5775,6 +5784,9 @@ export default function DashboardPage() {
                   {lot.sku || "—"}
                 </span>
                 <div className="ct-lot-mobile-card__title">{lot.auction_title || "—"}</div>
+                {lot.professional_description.trim() ? (
+                  <p className="ct-lot-mobile-card__desc">{lotDescriptionPreview(lot.professional_description, 150)}</p>
+                ) : null}
                 <div className="ct-lot-mobile-card__meta">
                   <span className="ct-lot-mobile-card__meta-item">
                     <strong>{lot.photo_count}</strong> photo{lot.photo_count === 1 ? "" : "s"}
@@ -5830,7 +5842,7 @@ export default function DashboardPage() {
           <tr>
             <th scope="col">Photo</th>
             <th scope="col">SKU</th>
-            <th scope="col">Auction Title</th>
+            <th scope="col">Title / Description</th>
             <th scope="col">Price</th>
             <th scope="col">Condition</th>
             <th scope="col">Status</th>
@@ -5858,8 +5870,14 @@ export default function DashboardPage() {
               <td className="ct-sku-cell" title={lotSkuCellTitle(lot)}>
                 <span className={lotSkuBadgeClass(lot)}>{lot.sku || "—"}</span>
               </td>
-              <td className="ct-lots-table__title" title={lot.auction_title || undefined}>
-                {lot.auction_title || "—"}
+              <td
+                className="ct-lots-table__title"
+                title={(lot.auction_title || "").trim() || lot.professional_description || undefined}
+              >
+                <div className="ct-lots-table__title-text">{lot.auction_title || "—"}</div>
+                {lot.professional_description.trim() ? (
+                  <div className="ct-lots-table__desc">{lotDescriptionPreview(lot.professional_description)}</div>
+                ) : null}
               </td>
               <td className="ct-lots-table__price">{formatLotPrice(lot.starting_price)}</td>
               <td>
