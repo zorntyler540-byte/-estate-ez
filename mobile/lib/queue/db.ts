@@ -130,6 +130,25 @@ export async function setDraftStatus(
   );
 }
 
+/** Fill missing ``sale_name`` on local drafts from the server sale list. */
+export async function backfillDraftSaleNames(nameById: Map<string, string>): Promise<void> {
+  if (!nameById.size) return;
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: string; sale_id: string; sale_name: string | null }>(
+    "SELECT id, sale_id, sale_name FROM lot_drafts WHERE sale_name IS NULL OR TRIM(sale_name) = ''"
+  );
+  const now = Date.now();
+  for (const row of rows) {
+    const name = nameById.get(row.sale_id)?.trim();
+    if (!name) continue;
+    await db.runAsync("UPDATE lot_drafts SET sale_name = ?, updated_at = ? WHERE id = ?", [
+      name,
+      now,
+      row.id
+    ]);
+  }
+}
+
 export async function deletePhotoFromDraft(draftId: string, fileUri: string): Promise<boolean> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ id: string }>(

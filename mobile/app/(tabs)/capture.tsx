@@ -3,10 +3,12 @@ import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
+import { useSales } from "@/context/SalesContext";
 import { countPendingDrafts } from "@/lib/queue/db";
 
 export default function CaptureScreen() {
   const { selectedSaleId, selectedSaleName, signOut } = useAuth();
+  const { getSaleName } = useSales();
   const [pending, setPending] = useState(0);
 
   useFocusEffect(
@@ -33,7 +35,7 @@ export default function CaptureScreen() {
         <Text style={styles.warn}>Choose a sale on the Sale tab before capturing.</Text>
       ) : (
         <Text style={styles.saleBanner}>
-          Uploading to: <Text style={styles.saleName}>{selectedSaleName || "(sale name unknown)"}</Text>
+          Uploading to: <Text style={styles.saleName}>{getSaleName(selectedSaleId, selectedSaleName)}</Text>
           {"\n"}
           <Text style={styles.meta}>Wrong sale? Change it on the Sale tab before capturing.</Text>
         </Text>

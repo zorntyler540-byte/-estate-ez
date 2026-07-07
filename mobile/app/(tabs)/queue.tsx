@@ -15,6 +15,7 @@ import NetInfo from "@react-native-community/netinfo";
 
 import { draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
+import { useSales } from "@/context/SalesContext";
 import { useSync } from "@/context/SyncContext";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftStatus } from "@/lib/queue/db";
 import type { LotDraft } from "@/lib/types";
@@ -22,6 +23,7 @@ type DraftRow = LotDraft & { photoUris: string[] };
 
 export default function QueueScreen() {
   const { selectedSaleId } = useAuth();
+  const { getSaleName, refreshSales } = useSales();
   const { syncing, lastMessage, refreshKey, syncNow } = useSync();
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
@@ -31,6 +33,7 @@ export default function QueueScreen() {
   const [previewTotal, setPreviewTotal] = useState(0);
 
   const refresh = useCallback(async () => {
+    await refreshSales();
     const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
     const enriched = await Promise.all(
       drafts.map(async (draft) => {
@@ -40,7 +43,7 @@ export default function QueueScreen() {
     );
     setRows(enriched);
     setOnline(net.isConnected ?? false);
-  }, []);
+  }, [refreshSales]);
 
   useFocusEffect(
     useCallback(() => {
@@ -159,7 +162,7 @@ export default function QueueScreen() {
                   </View>
                   <Text style={styles.cardStatus}>{status.label}</Text>
                   <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
-                    Sale: {item.sale_name || "(unknown)"}
+                    Sale: {getSaleName(item.sale_id, item.sale_name)}
                     {otherSale ? " — not the sale currently selected" : ""}
                   </Text>
                   <Text style={styles.cardHint}>{status.hint}</Text>

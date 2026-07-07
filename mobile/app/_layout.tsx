@@ -1,4 +1,5 @@
 import { AuthProvider } from "@/context/AuthContext";
+import { SalesProvider } from "@/context/SalesContext";
 import { SyncProvider } from "@/context/SyncContext";
 import { useColorScheme } from "@/components/useColorScheme";
 import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
@@ -29,9 +30,11 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <SyncProvider>
-        <RootNav />
-      </SyncProvider>
+      <SalesProvider>
+        <SyncProvider>
+          <RootNav />
+        </SyncProvider>
+      </SalesProvider>
     </AuthProvider>
   );
 }
