@@ -1,4 +1,5 @@
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -23,7 +24,7 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
       {uris.map((uri, index) => (
         <View key={uri} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
           <Pressable style={styles.thumbPress} onPress={() => onPressPhoto?.(uri, index)}>
-            <Image source={{ uri }} style={styles.thumbImage} />
+            <Image source={{ uri }} style={styles.thumbImage} contentFit="cover" />
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{index + 1}</Text>
             </View>
@@ -61,7 +62,7 @@ export function PhotoPreviewModal({ uri, index, total, onClose, onDelete }: Phot
           <Text style={styles.modalTitle}>
             Photo {index + 1} of {total}
           </Text>
-          {uri ? <Image source={{ uri }} style={styles.modalImage} resizeMode="contain" /> : null}
+          {uri ? <Image source={{ uri }} style={styles.modalImage} contentFit="contain" /> : null}
           <View style={styles.modalActions}>
             {onDelete ? (
               <Pressable style={styles.modalDelete} onPress={onDelete}>

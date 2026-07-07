@@ -35,7 +35,7 @@ DIMENSION_FLASH_MAX_FRAMES = max(1, int(os.environ.get("DIMENSION_FLASH_MAX_FRAM
 BRAND_PRO_MAX_LABEL_FRAMES = max(1, int(os.environ.get("BRAND_PRO_MAX_LABEL_FRAMES", "4")))
 BRAND_SKIP_PRO_IF_AGREEMENT = os.environ.get("BRAND_SKIP_PRO_IF_AGREEMENT", "1") == "1"
 ENABLE_GROUNDED_VALUATION = os.environ.get("ENABLE_GROUNDED_VALUATION", "0") == "1"
-TRIAGE_IMAGE_MAX_EDGE = max(256, int(os.environ.get("TRIAGE_IMAGE_MAX_EDGE", "1024")))
+TRIAGE_IMAGE_MAX_EDGE = max(256, int(os.environ.get("TRIAGE_IMAGE_MAX_EDGE", "2048")))
 
 CONFIDENCE_SCORE = {"high": 3, "medium": 2, "low": 1}
 QUALITY_SCORE = {"sharp": 3, "ok": 2, "blur": 1}
@@ -127,7 +127,7 @@ def _maybe_downscale(img_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
             nh = max(1, int(h * scale))
             im = im.resize((nw, nh), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=85, optimize=True)
+            im.save(buf, format="JPEG", quality=95, optimize=True)
             return buf.getvalue(), "image/jpeg"
     except Exception:
         return img_bytes, mime_type
@@ -605,6 +605,7 @@ BRAND_AUDIT_SYSTEM = (
     "When a yellow measuring tape, metal ruler, or yardstick is visibly measuring the item(s), ensure "
     "final_specification_lines include **Dimensions:** or **Measurement:** with legible reads (~ inches). "
     "Never invent brands or details not visible in the images or triage OCR. "
+    "Do not use redundant **Pair of** when the object type is already plural (Sculptures, Knives, Figurines…). "
     "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess. "
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
@@ -761,8 +762,10 @@ def run_brand_audit_pro(
             "2. Transcribe and **use** visible tags, engravings, and lock-plate marks on label/detail frames.\n"
             "3. **Author** final_auction_title and final_professional_description — accurate shopper-facing search text. "
             "**Hook-first titles:** put the distinctive material, handle, finish, or feature **before** the object name — "
-            "not trailing 'with …'. Good: 'Pair of Deer Hoof Handled Hunting Knives'. "
+            "not trailing 'with …'. Good: 'Deer Hoof Handled Hunting Knives'. "
             "Bad: 'Pair of Hunting Knives with Deer Hoof Handles'. "
+            "Do **not** lead with **Pair of** when the object noun is already plural (Sculptures, Knives, Figurines…) — "
+            "plural forms already imply quantity.\n"
             "Do not rely on a vague object guess when triage OCR or tags name the maker/model.\n"
             "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
             "5. **Manufacturer vs model:** put the maker in confirmed_brand (e.g. Pedersoli, Levi's) and the model/pattern "

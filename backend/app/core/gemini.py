@@ -216,8 +216,13 @@ SYSTEM_INSTRUCTION = (
     "- When the maker is confirmed, **start the title with the brand** as the first keywords shoppers search (same spelling as brand).\n"
     "- **Hook-first descriptors:** put the eye-catching material, handle, finish, or feature **before** the object name — "
     "not as a trailing **with …** phrase. Shoppers scan the first words.\n"
-    "  * **Good:** 'Pair of Deer Hoof Handled Hunting Knives' — 'Walnut Dining Table' — 'Cut-Crystal Highball Set'.\n"
-    "  * **Bad:** 'Pair of Hunting Knives with Deer Hoof Handles' — 'Dining Table with Walnut Top' — 'Highball Set with Cut Crystal'.\n"
+    "  * **Good:** 'Deer Hoof Handled Hunting Knives' — 'Walnut Dining Table' — 'Cut-Crystal Highball Set' — "
+    "'Vibrant Hand-Painted Folk Art Parrot & Cockatoo Hanging Sculptures'.\n"
+    "  * **Bad:** 'Pair of Hunting Knives with Deer Hoof Handles' — 'Dining Table with Walnut Top' — "
+    "'Pair of Vibrant … Sculptures' (plural nouns already imply quantity — do **not** lead with **Pair of**).\n"
+    "- **Quantity wording:** when the object type is already plural (Sculptures, Knives, Figurines, Candlesticks, "
+    "Earrings, etc.), skip **Pair of** / **Set of two** — the plural noun carries count. Use **Two …** or **Pair of** "
+    "only when the head noun stays singular (e.g. 'Pair of Matching Table Lamps' if you must — prefer 'Matching Table Lamps').\n"
     "- Typical shape: **Brand** (when known) + **hook descriptor** + material + garment/type "
     "(e.g. 'St. John's Bay Cotton-Blend Zip-Up Jacket', 'Pedersoli Brown Bess Flintlock Musket'). "
     "Use a dated era word only when a tag or visible style clearly supports it — not as a default filler.\n"
@@ -860,7 +865,11 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
         "lot_digits_on_tape: exact marking read from the tape (letters+digits as seen), or null if none/unreadable."
     )
     prompt = prompt + _tape_verify_prompt_extra()
-    img_bytes, mime = prepare_gemini_image_file(photo_path, max_edge=1536, quality=85)
+    img_bytes, mime = prepare_gemini_image_file(
+        photo_path,
+        max_edge=settings.triage_image_max_edge,
+        quality=settings.gemini_jpeg_quality,
+    )
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": base64.b64encode(img_bytes).decode("utf-8")}}]}]
     }

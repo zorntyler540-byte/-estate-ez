@@ -1,10 +1,10 @@
 import { useFocusEffect } from "expo-router";
+import { Image } from "expo-image";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -137,7 +137,7 @@ export default function QueueScreen() {
               <View style={styles.cardTop}>
                 {hero ? (
                   <Pressable onPress={() => openPreview(item.photoUris, 0)}>
-                    <Image source={{ uri: hero }} style={styles.hero} />
+                    <Image source={{ uri: hero }} style={styles.hero} contentFit="cover" />
                   </Pressable>
                 ) : (
                   <View style={[styles.hero, styles.heroEmpty]}>
@@ -171,7 +171,7 @@ export default function QueueScreen() {
                 <View style={styles.moreRow}>
                   {item.photoUris.slice(1, 4).map((uri, i) => (
                     <Pressable key={uri} onPress={() => openPreview(item.photoUris, i + 1)}>
-                      <Image source={{ uri }} style={styles.moreThumb} />
+                      <Image source={{ uri }} style={styles.moreThumb} contentFit="cover" />
                     </Pressable>
                   ))}
                   {item.photoUris.length > 4 ? (

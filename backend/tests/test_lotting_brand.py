@@ -12,6 +12,7 @@ from app.core.lotting import (
     filter_brands_to_label_evidence,
     infer_brands_from_label_context,
     resolve_lot_brands,
+    scrub_redundant_pair_from_listing,
     strip_leading_brands_from_text,
 )
 
@@ -303,6 +304,28 @@ class TestBrandResolution(unittest.TestCase):
             lot.professional_description,
             r"this Stag Antler Handle Hunting Knife offers",
         )
+
+
+class TestRedundantPairScrub(unittest.TestCase):
+    def test_drops_pair_of_when_title_uses_plural_sculptures(self) -> None:
+        title, desc = scrub_redundant_pair_from_listing(
+            "Pair of Vibrant Hand-Painted Folk Art Parrot & Cockatoo Hanging Sculptures",
+            "This is a delightful pair of vibrant hand-painted parrot and cockatoo hanging sculptures.",
+        )
+        self.assertEqual(
+            title,
+            "Vibrant Hand-Painted Folk Art Parrot & Cockatoo Hanging Sculptures",
+        )
+        self.assertNotRegex(desc, r"(?i)\bpair of\b")
+        self.assertIn("sculptures", desc.lower())
+
+    def test_drops_pair_of_when_plural_lamps(self) -> None:
+        title, _ = scrub_redundant_pair_from_listing(
+            "Pair of Matching Table Lamps",
+            "A warm pair of matching table lamps for the bedside.",
+        )
+        self.assertEqual(title, "Matching Table Lamps")
+        self.assertNotRegex(_, r"(?i)\bpair of\b")
 
 
 if __name__ == "__main__":

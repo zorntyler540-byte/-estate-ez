@@ -2782,6 +2782,35 @@ def scrub_gratuitous_lot_from_listing(
     return _rephrase_lot_filler(auction_title), _rephrase_lot_filler(professional_description)
 
 
+_PLURAL_NOUN_RE = re.compile(
+    r"\b(?!(?:glass|brass|cross|ss|us|is\b))(\w+(?:ies|ves|oes|ses|xes|zes|ches|shes|s))\b",
+    re.I,
+)
+
+
+def _listing_has_plural_object_noun(text: str) -> bool:
+    """True when prose names a plural object type (Sculptures, Knives, Lamps, …)."""
+    return bool(_PLURAL_NOUN_RE.search(text or ""))
+
+
+def scrub_redundant_pair_from_text(text: str) -> str:
+    """Drop leading or inline ``pair of`` when plural nouns already imply quantity."""
+    t = clean_listing_text(text or "").strip()
+    if not t or not _listing_has_plural_object_noun(t):
+        return t
+    t = re.sub(r"(?i)^pair of\s+", "", t)
+    t = re.sub(r"(?i)\b(?:a|an|this|the|delightful|charming|lovely|beautiful|wonderful)\s+pair of\s+", "", t)
+    t = re.sub(r"(?i)\bpair of\s+", "", t)
+    return re.sub(r"\s{2,}", " ", t).strip(" ,-–—")
+
+
+def scrub_redundant_pair_from_listing(
+    auction_title: str,
+    professional_description: str,
+) -> tuple[str, str]:
+    return scrub_redundant_pair_from_text(auction_title), scrub_redundant_pair_from_text(professional_description)
+
+
 _COMPLIMENT_ALTERNATIVES = (
     "sharp-looking",
     "classic",
@@ -3376,6 +3405,10 @@ class LotOutput:
             )
         )
         self.auction_title, self.professional_description = scrub_gratuitous_lot_from_listing(
+            self.auction_title,
+            self.professional_description,
+        )
+        self.auction_title, self.professional_description = scrub_redundant_pair_from_listing(
             self.auction_title,
             self.professional_description,
         )

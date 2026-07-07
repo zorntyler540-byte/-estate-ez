@@ -17,6 +17,7 @@ import {
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
+import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import {
   addPhotoToDraft,
   createLotDraft,
@@ -50,6 +51,8 @@ export default function CaptureSessionScreen() {
   const [error, setError] = useState("");
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [pictureSize, setPictureSize] = useState<string | undefined>();
 
   // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
   const [zoom, setZoom] = useState(0);
@@ -132,17 +135,27 @@ export default function CaptureSessionScreen() {
     return id;
   }
 
+  async function handleCameraReady() {
+    setCameraReady(true);
+    try {
+      const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
+      if (sizes?.length) {
+        const largest = pickLargestPictureSize(sizes);
+        if (largest) setPictureSize(largest);
+      }
+    } catch {
+      /* device may not expose sizes; native default still used */
+    }
+  }
+
   async function snap() {
-    if (!cameraRef.current || busy) return;
+    if (!cameraRef.current || busy || !cameraReady) return;
     setError("");
     setBusy(true);
     try {
       const id = await ensureDraft();
       if (!id) return;
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.92,
-        skipProcessing: false
-      });
+      const photo = await cameraRef.current.takePictureAsync(MAX_DETAIL_CAPTURE_OPTIONS);
       if (!photo?.uri) {
         setError("Camera returned no image.");
         return;
@@ -266,6 +279,8 @@ export default function CaptureSessionScreen() {
           zoom={zoom}
           enableTorch={torchOn}
           autofocus={autofocus}
+          pictureSize={pictureSize}
+          onCameraReady={() => void handleCameraReady()}
         />
         <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
         {focusPoint ? (
@@ -343,7 +358,7 @@ export default function CaptureSessionScreen() {
           <Pressable style={styles.secondary} onPress={() => router.back()}>
             <Text style={styles.secondaryText}>Cancel</Text>
           </Pressable>
-          <Pressable style={[styles.snap, busy && styles.disabled]} disabled={busy} onPress={() => void snap()}>
+          <Pressable style={[styles.snap, (busy || !cameraReady) && styles.disabled]} disabled={busy || !cameraReady} onPress={() => void snap()}>
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
           </Pressable>
           <Pressable
