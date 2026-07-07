@@ -11,6 +11,7 @@ from app.db import Base
 
 
 class JobStatus(str, enum.Enum):
+    uploading = "uploading"
     queued = "queued"
     processing = "processing"
     completed = "completed"

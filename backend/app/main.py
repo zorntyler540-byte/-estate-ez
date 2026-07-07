@@ -1793,7 +1793,7 @@ async def create_job_from_upload(
         account_id=current.account_id,
         user_id=current.id,
         sale_id=sale.id,
-        status=JobStatus.queued,
+        status=JobStatus.uploading,
         input_folder=str(dest.resolve()),
         inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
         single_lot_mode=bool(single_lot_mode),
@@ -1825,7 +1825,7 @@ async def append_files_to_queued_job(
     db: Session = Depends(get_db),
     files: list[UploadFile] = File(),
 ) -> JobOut:
-    """Append more images to a **queued** browser-upload job (same folder as the first ``/jobs/upload``)."""
+    """Append more images to an in-progress browser-upload job (same folder as the first ``/jobs/upload``)."""
     job = (
         db.query(ProcessingJob)
         .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == current.account_id)
@@ -1833,10 +1833,10 @@ async def append_files_to_queued_job(
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != JobStatus.queued:
+    if job.status != JobStatus.uploading:
         raise HTTPException(
             status_code=409,
-            detail="Job must be queued to add files (wait if it is still processing, or cancel first).",
+            detail="Job must still be uploading to add files.",
         )
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -1913,14 +1913,20 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status == JobStatus.failed:
+    if job.status == JobStatus.uploading:
+        job.status = JobStatus.queued
+        job.error_message = None
+        job.cancel_requested = False
+        db.commit()
+        db.refresh(job)
+    elif job.status == JobStatus.failed:
         job.status = JobStatus.queued
         job.error_message = None
         job.cancel_requested = False
         db.commit()
         db.refresh(job)
     elif job.status != JobStatus.queued:
-        raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
+        raise HTTPException(status_code=409, detail="Job must be queued, uploading, or failed to run")
     job_tasks.kick_queue_if_idle(current.account_id)
     started = False
     try:
