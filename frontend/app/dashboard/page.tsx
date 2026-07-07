@@ -57,6 +57,11 @@ import {
   totalZoomMaxForDevice
 } from "../../lib/cameraZoom";
 import { convertHeicFileToJpeg, isHeicLikeFile } from "../../lib/heicConvert";
+import {
+  buildStagedUploadRel,
+  getStagedUploadRel,
+  markStagedUploadRel
+} from "../../lib/stagedUploadPath";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
@@ -508,7 +513,12 @@ async function encodeCanvasSourceToJpegFile(
   return out;
 }
 
-async function stabilizeCapturedFile(file: File): Promise<File | null> {
+type StabilizeCapturedBatchResult = { files: File[]; failed: number };
+
+async function stabilizeCapturedFile(
+  file: File,
+  usedLeafNames: Set<string>
+): Promise<File | null> {
   if (isStabilizedCaptureFile(file)) return file;
 
   let bytes: ArrayBuffer;
@@ -522,6 +532,17 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
   const type = (file.type || "").trim().toLowerCase() || "application/octet-stream";
   const base = captureStabilizeBaseName(file);
 
+  const finalize = (blob: Blob, leafName: string, mime: string): File => {
+    const { fileName, uploadRel } = buildStagedUploadRel(file, leafName, usedLeafNames);
+    const out = new File([blob], fileName, {
+      type: mime,
+      lastModified: file.lastModified || Date.now()
+    });
+    markStagedUploadRel(out, uploadRel);
+    markStabilizedCaptureFile(out);
+    return out;
+  };
+
   if (isHeicLikeFile(file)) {
     const temp = new File([bytes], file.name || `${base}.heic`, {
       type: type || "image/heic",
@@ -529,8 +550,7 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
     });
     const jpeg = await convertHeicFileToJpeg(temp, `${base}.jpg`);
     if (jpeg) {
-      markStabilizedCaptureFile(jpeg);
-      return jpeg;
+      return finalize(jpeg, `${base}.jpg`, "image/jpeg");
     }
   }
 
@@ -543,12 +563,7 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
           : "jpg";
     const mime =
       ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    const out = new File([bytes], `${base}.${ext}`, {
-      type: mime,
-      lastModified: file.lastModified || Date.now()
-    });
-    markStabilizedCaptureFile(out);
-    return out;
+    return finalize(new Blob([bytes], { type: mime }), `${base}.${ext}`, mime);
   }
 
   const temp = new File([bytes], file.name || `${base}.heic`, {
@@ -558,18 +573,19 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
   const decoded = await decodeImageForCanvas(temp);
   if (!decoded) return null;
   const { source, width, height, release } = decoded;
-  const out = await encodeCanvasSourceToJpegFile(source, width, height, `${base}.jpg`);
+  const canvasOut = await encodeCanvasSourceToJpegFile(source, width, height, `${base}.jpg`);
   release?.();
-  return out;
+  if (!canvasOut) return null;
+  const canvasBytes = await canvasOut.arrayBuffer();
+  return finalize(new Blob([canvasBytes], { type: "image/jpeg" }), `${base}.jpg`, "image/jpeg");
 }
-
-type StabilizeCapturedBatchResult = { files: File[]; failed: number };
 
 async function stabilizeCapturedFiles(files: File[]): Promise<StabilizeCapturedBatchResult> {
   const out: File[] = [];
+  const usedLeafNames = new Set<string>();
   let failed = 0;
   for (const f of files) {
-    const stable = await stabilizeCapturedFile(f);
+    const stable = await stabilizeCapturedFile(f, usedLeafNames);
     if (stable) out.push(stable);
     else failed += 1;
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -614,9 +630,10 @@ async function createDisplayThumbUrls(files: File[]): Promise<(string | null)[]>
 /** Re-clone bytes and verify readability immediately before multipart upload (iOS stale File handles). */
 async function prepareStagedFilesForUpload(files: File[]): Promise<{ files: File[]; skipped: number }> {
   const out: File[] = [];
+  const usedLeafNames = new Set<string>();
   let skipped = 0;
   for (const f of files) {
-    const ready = await stabilizeCapturedFile(f);
+    const ready = await stabilizeCapturedFile(f, usedLeafNames);
     if (!ready || ready.size < 1) {
       skipped += 1;
       continue;
@@ -3377,8 +3394,9 @@ export default function DashboardPage() {
     setLotCameraRecoverPrompt(null);
     const thumbs: string[] = [];
     const stable: File[] = [];
+    const usedLeafNames = new Set<string>();
     for (const raw of prompt.files) {
-      const file = await stabilizeCapturedFile(raw);
+      const file = await stabilizeCapturedFile(raw, usedLeafNames);
       if (!file) continue;
       markStabilizedCaptureFile(file);
       stable.push(file);
@@ -3456,6 +3474,7 @@ export default function DashboardPage() {
 
   async function ingestNativeCameraFiles(rawFiles: File[]) {
     let readFailed = 0;
+    const usedLeafNames = new Set<string>();
     for (const raw of rawFiles) {
       if (
         CTBIDS_MAX_PHOTOS_PER_LOT != null &&
@@ -3464,7 +3483,7 @@ export default function DashboardPage() {
         setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
         break;
       }
-      const stable = await stabilizeCapturedFile(raw);
+      const stable = await stabilizeCapturedFile(raw, usedLeafNames);
       if (!stable) {
         readFailed += 1;
         continue;
@@ -4141,8 +4160,7 @@ export default function DashboardPage() {
           form.append("single_lot_manual_sku", manualSkuBackup.trim());
         }
         for (const file of slice) {
-          const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-          form.append("files", file, rel);
+          form.append("files", file, getStagedUploadRel(file));
         }
         return form;
       };
@@ -4186,8 +4204,7 @@ export default function DashboardPage() {
           );
           const form = new FormData();
           for (const file of slice) {
-            const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-            form.append("files", file, rel);
+            form.append("files", file, getStagedUploadRel(file));
           }
           created = jobFromUploadResponse(
             await apiUploadFiles(
