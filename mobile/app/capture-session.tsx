@@ -1,15 +1,17 @@
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { CameraView, useCameraPermissions, type FocusMode } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { router } from "expo-router";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
+  type GestureResponderEvent
 } from "react-native";
 
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
@@ -23,6 +25,19 @@ import {
   setDraftStatus
 } from "@/lib/queue/db";
 
+/** Pinch spread doubling ≈ this much extra zoom (0–1 native zoom range). */
+const PINCH_ZOOM_SENSITIVITY = 0.6;
+
+const ZOOM_PRESETS: { label: string; value: number }[] = [
+  { label: "1×", value: 0 },
+  { label: "2×", value: 0.25 },
+  { label: "4×", value: 0.5 }
+];
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
 export default function CaptureSessionScreen() {
   const { selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
@@ -35,6 +50,76 @@ export default function CaptureSessionScreen() {
   const [error, setError] = useState("");
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
+
+  // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
+  const [zoom, setZoom] = useState(0);
+  const [torchOn, setTorchOn] = useState(false);
+  const [autofocus, setAutofocus] = useState<FocusMode>("on");
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const zoomRef = useRef(0);
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef(0);
+  const focusRingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyZoom = useCallback((next: number) => {
+    const clamped = clamp01(next);
+    zoomRef.current = clamped;
+    setZoom(clamped);
+  }, []);
+
+  function handleFocusTap(e: GestureResponderEvent) {
+    const { locationX, locationY } = e.nativeEvent;
+    setFocusPoint({ x: locationX, y: locationY });
+    // expo-camera has no focus-point API; toggling autofocus off→on retriggers an AF pass.
+    setAutofocus("off");
+    if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
+    refocusTimerRef.current = setTimeout(() => setAutofocus("on"), 120);
+    if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
+    focusRingTimerRef.current = setTimeout(() => setFocusPoint(null), 900);
+  }
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (e) => e.nativeEvent.touches.length >= 2,
+      onPanResponderMove: (e) => {
+        const touches = e.nativeEvent.touches;
+        if (touches.length < 2) {
+          pinchStartDistRef.current = null;
+          return;
+        }
+        const dx = touches[0]!.pageX - touches[1]!.pageX;
+        const dy = touches[0]!.pageY - touches[1]!.pageY;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= 0) return;
+        if (pinchStartDistRef.current == null) {
+          pinchStartDistRef.current = dist;
+          pinchStartZoomRef.current = zoomRef.current;
+          return;
+        }
+        const scale = dist / pinchStartDistRef.current;
+        applyZoom(pinchStartZoomRef.current + (scale - 1) * PINCH_ZOOM_SENSITIVITY);
+      },
+      onPanResponderRelease: (e, gesture) => {
+        const wasPinch = pinchStartDistRef.current != null;
+        pinchStartDistRef.current = null;
+        if (!wasPinch && Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) {
+          handleFocusTap(e);
+        }
+      },
+      onPanResponderTerminate: () => {
+        pinchStartDistRef.current = null;
+      }
+    })
+  ).current;
+
+  useEffect(() => {
+    return () => {
+      if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
+      if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
+    };
+  }, []);
 
   async function ensureDraft(): Promise<string | null> {
     if (draftId) return draftId;
@@ -174,8 +259,22 @@ export default function CaptureSessionScreen() {
   return (
     <View style={styles.root}>
       <View style={[styles.cameraWrap, thumbs.length > 0 && styles.cameraWrapCompact]}>
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-        <View style={styles.cameraOverlay}>
+        <CameraView
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          zoom={zoom}
+          enableTorch={torchOn}
+          autofocus={autofocus}
+        />
+        <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
+        {focusPoint ? (
+          <View
+            pointerEvents="none"
+            style={[styles.focusRing, { left: focusPoint.x - 36, top: focusPoint.y - 36 }]}
+          />
+        ) : null}
+        <View style={styles.cameraOverlay} pointerEvents="none">
           <Text style={styles.cameraLabel}>
             {thumbs.length ? `Lot in progress · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}` : "Aim and tap Snap"}
           </Text>
@@ -183,6 +282,40 @@ export default function CaptureSessionScreen() {
             <Text style={styles.cameraSale}>Sale: {selectedSaleName}</Text>
           ) : null}
         </View>
+        <View style={styles.cameraControls}>
+          <View style={styles.zoomRow}>
+            {ZOOM_PRESETS.map((preset) => {
+              const active =
+                Math.abs(zoom - preset.value) <
+                (preset.value === 0 ? 0.02 : 0.08);
+              return (
+                <Pressable
+                  key={preset.label}
+                  style={[styles.zoomBtn, active && styles.zoomBtnActive]}
+                  onPress={() => applyZoom(preset.value)}
+                >
+                  <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
+                    {preset.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+            {zoom > 0.02 ? (
+              <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
+            ) : null}
+          </View>
+          <Pressable
+            style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
+            onPress={() => setTorchOn((v) => !v)}
+          >
+            <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
+              {torchOn ? "Torch on" : "Torch off"}
+            </Text>
+          </Pressable>
+        </View>
+        <Text style={styles.cameraHint} pointerEvents="none">
+          Pinch to zoom · tap to refocus
+        </Text>
       </View>
 
       <View style={styles.panel}>
@@ -250,6 +383,70 @@ const styles = StyleSheet.create({
   },
   cameraLabel: { color: "#f8fafc", fontSize: 14, fontWeight: "600", textAlign: "center" },
   cameraSale: { color: "#5eead4", fontSize: 12, fontWeight: "600", textAlign: "center", marginTop: 2 },
+  cameraControls: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
+  },
+  zoomRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5
+  },
+  zoomBtn: {
+    minWidth: 40,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    alignItems: "center",
+    backgroundColor: "transparent"
+  },
+  zoomBtnActive: { backgroundColor: "#0d9488" },
+  zoomBtnText: { color: "#e2e8f0", fontSize: 13, fontWeight: "700" },
+  zoomBtnTextActive: { color: "#fff" },
+  zoomReadout: { color: "#94a3b8", fontSize: 12, fontWeight: "600", paddingHorizontal: 4 },
+  torchBtn: {
+    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.35)"
+  },
+  torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
+  torchBtnText: { color: "#e2e8f0", fontSize: 13, fontWeight: "700" },
+  torchBtnTextActive: { color: "#1c1917" },
+  cameraHint: {
+    position: "absolute",
+    bottom: 10,
+    left: 0,
+    right: 0,
+    textAlign: "center",
+    color: "rgba(226, 232, 240, 0.75)",
+    fontSize: 11,
+    fontWeight: "600"
+  },
+  focusRing: {
+    position: "absolute",
+    width: 72,
+    height: 72,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#fde047",
+    shadowColor: "#000",
+    shadowOpacity: 0.4,
+    shadowRadius: 2,
+    zIndex: 3
+  },
   panel: {
     flex: 1,
     padding: 14,
