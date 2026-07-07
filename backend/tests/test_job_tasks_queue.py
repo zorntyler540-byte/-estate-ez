@@ -92,7 +92,8 @@ class JobTasksQueueTests(unittest.TestCase):
         mock_claim: object,
     ) -> None:
         mock_thread.return_value.start = lambda: None
-        ok = job_tasks.start_job_in_background("job-a", "acct-1")
+        with patch.object(job_tasks, "_processing_job_ids_in_db", return_value=set()):
+            ok = job_tasks.start_job_in_background("job-a", "acct-1")
         self.assertTrue(ok)
         mock_claim.assert_called_once_with("job-a", "acct-1")
 
@@ -105,14 +106,16 @@ class JobTasksQueueTests(unittest.TestCase):
         _mock_can: object,
         mock_claim: object,
     ) -> None:
-        ok = job_tasks.start_job_in_background("job-uploading", "acct-1")
+        with patch.object(job_tasks, "_processing_job_ids_in_db", return_value=set()):
+            ok = job_tasks.start_job_in_background("job-uploading", "acct-1")
         self.assertFalse(ok)
         mock_claim.assert_called_once_with("job-uploading", "acct-1")
         self.assertFalse(job_tasks.is_job_running("job-uploading"))
 
     @patch.object(job_tasks, "can_start_job_for_account", return_value=False)
     def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
-        ok = job_tasks.start_job_in_background("job-b", "acct-1")
+        with patch.object(job_tasks, "_processing_job_ids_in_db", return_value=set()):
+            ok = job_tasks.start_job_in_background("job-b", "acct-1")
         self.assertFalse(ok)
 
     def test_reconcile_does_not_fail_recent_processing_on_other_replica(self) -> None:
