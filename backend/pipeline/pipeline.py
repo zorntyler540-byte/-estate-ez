@@ -183,6 +183,10 @@ Rules:
   engravings like "PEDERSOLI MADE IN ITALY", handwritten tag lines like "Brown Bess Cal. 80"); empty string if
   not readable (never use Unknown/Generic/Unbranded).
 - duplicate_of_filename: set when this image is a near-duplicate of another file in the lot.
+- **Device screens are not the merchandise:** when the photographed item is a phone, tablet, monitor, or TV whose
+  screen is showing a photo, gallery, video, or app, classify and describe the **device itself** (e.g. Apple iPhone,
+  Samsung tablet). Never treat the on-screen picture content as the sellable item, and never copy on-screen photo
+  content into brand_text unless it is the device's own UI text identifying the device.
 
 The preceding image filename is: {filename}
 """
@@ -785,6 +789,9 @@ def run_brand_audit_pro(
             "Do not paste the full title verbatim; weave the same hook in after the opening flair.\n"
             "15. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
             "16. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"
+            "17. **Device screens are not the merchandise:** when the item is a phone, tablet, monitor, or TV whose "
+            "screen shows a photo, gallery, or app, write the listing for the **device itself** — never for the "
+            "on-screen picture content.\n"
         )
     else:
         task_block = (

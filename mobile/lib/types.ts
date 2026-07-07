@@ -31,6 +31,8 @@ export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "fa
 export type LotDraft = {
   id: string;
   sale_id: string;
+  /** Sale name at capture time, so the queue can show where each lot will upload. */
+  sale_name: string | null;
   manual_sku: string | null;
   status: LotDraftStatus;
   error_message: string | null;

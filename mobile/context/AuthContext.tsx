@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { login as apiLogin } from "@/lib/api";
-import { SELECTED_SALE_KEY } from "@/lib/config";
+import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
 
 const TOKEN_KEY = "ct_mobile_access_token";
 
@@ -18,9 +18,11 @@ type AuthContextValue = {
   token: string | null;
   ready: boolean;
   selectedSaleId: string | null;
+  /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
+  selectedSaleName: string | null;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
-  setSelectedSaleId: (saleId: string | null) => Promise<void>;
+  setSelectedSale: (saleId: string | null, saleName?: string | null) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -28,17 +30,20 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleIdState] = useState<string | null>(null);
+  const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     void (async () => {
       try {
-        const [storedToken, storedSale] = await Promise.all([
+        const [storedToken, storedSale, storedSaleName] = await Promise.all([
           SecureStore.getItemAsync(TOKEN_KEY),
-          SecureStore.getItemAsync(SELECTED_SALE_KEY)
+          SecureStore.getItemAsync(SELECTED_SALE_KEY),
+          SecureStore.getItemAsync(SELECTED_SALE_NAME_KEY)
         ]);
         setToken(storedToken);
         setSelectedSaleIdState(storedSale);
+        setSelectedSaleNameState(storedSaleName);
       } finally {
         setReady(true);
       }
@@ -54,24 +59,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await Promise.all([
       SecureStore.deleteItemAsync(TOKEN_KEY),
-      SecureStore.deleteItemAsync(SELECTED_SALE_KEY)
+      SecureStore.deleteItemAsync(SELECTED_SALE_KEY),
+      SecureStore.deleteItemAsync(SELECTED_SALE_NAME_KEY)
     ]);
     setToken(null);
     setSelectedSaleIdState(null);
+    setSelectedSaleNameState(null);
   }, []);
 
-  const setSelectedSaleId = useCallback(async (saleId: string | null) => {
+  const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
+    const name = saleName?.trim() || null;
     if (saleId) {
       await SecureStore.setItemAsync(SELECTED_SALE_KEY, saleId);
+      if (name) {
+        await SecureStore.setItemAsync(SELECTED_SALE_NAME_KEY, name);
+      } else {
+        await SecureStore.deleteItemAsync(SELECTED_SALE_NAME_KEY);
+      }
     } else {
       await SecureStore.deleteItemAsync(SELECTED_SALE_KEY);
+      await SecureStore.deleteItemAsync(SELECTED_SALE_NAME_KEY);
     }
     setSelectedSaleIdState(saleId);
+    setSelectedSaleNameState(saleId ? name : null);
   }, []);
 
   const value = useMemo(
-    () => ({ token, ready, selectedSaleId, signIn, signOut, setSelectedSaleId }),
-    [token, ready, selectedSaleId, signIn, signOut, setSelectedSaleId]
+    () => ({ token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale }),
+    [token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

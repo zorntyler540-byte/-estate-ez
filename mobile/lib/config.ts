@@ -2,3 +2,5 @@
 export const API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? "http://localhost:8000").replace(/\/$/, "");
 
 export const SELECTED_SALE_KEY = "ct_mobile_selected_sale_id";
+
+export const SELECTED_SALE_NAME_KEY = "ct_mobile_selected_sale_name";

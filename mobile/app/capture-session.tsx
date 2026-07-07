@@ -24,7 +24,7 @@ import {
 } from "@/lib/queue/db";
 
 export default function CaptureSessionScreen() {
-  const { selectedSaleId } = useAuth();
+  const { selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -42,7 +42,7 @@ export default function CaptureSessionScreen() {
       setError("Select a sale first.");
       return null;
     }
-    const id = await createLotDraft(selectedSaleId, manualSku);
+    const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku);
     setDraftId(id);
     return id;
   }
@@ -147,7 +147,7 @@ export default function CaptureSessionScreen() {
     void syncNow();
     Alert.alert(
       "Lot saved",
-      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} queued for this sale.\n\nThey'll upload automatically when you're online. Review the listing on the web dashboard after processing.`,
+      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}.\n\nThey'll upload automatically when you're online. Review the listing on the web dashboard after processing.`,
       [{ text: "OK", onPress: () => router.back() }]
     );
   }
@@ -179,6 +179,9 @@ export default function CaptureSessionScreen() {
           <Text style={styles.cameraLabel}>
             {thumbs.length ? `Lot in progress · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}` : "Aim and tap Snap"}
           </Text>
+          {selectedSaleName ? (
+            <Text style={styles.cameraSale}>Sale: {selectedSaleName}</Text>
+          ) : null}
         </View>
       </View>
 
@@ -246,6 +249,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8
   },
   cameraLabel: { color: "#f8fafc", fontSize: 14, fontWeight: "600", textAlign: "center" },
+  cameraSale: { color: "#5eead4", fontSize: 12, fontWeight: "600", textAlign: "center", marginTop: 2 },
   panel: {
     flex: 1,
     padding: 14,

@@ -14,12 +14,14 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 import { draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
+import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftStatus } from "@/lib/queue/db";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
 
 export default function QueueScreen() {
+  const { selectedSaleId } = useAuth();
   const { syncing, lastMessage, refreshKey, syncNow } = useSync();
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
@@ -129,6 +131,7 @@ export default function QueueScreen() {
         renderItem={({ item }) => {
           const status = draftStatusDisplay(item.status);
           const hero = item.photoUris[0];
+          const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           return (
             <View style={styles.card}>
               <View style={styles.cardTop}>
@@ -155,6 +158,10 @@ export default function QueueScreen() {
                     </Pressable>
                   </View>
                   <Text style={styles.cardStatus}>{status.label}</Text>
+                  <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
+                    Sale: {item.sale_name || "(unknown)"}
+                    {otherSale ? " — not the sale currently selected" : ""}
+                  </Text>
                   <Text style={styles.cardHint}>{status.hint}</Text>
                   {item.manual_sku ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}
                 </View>
@@ -234,6 +241,8 @@ const styles = StyleSheet.create({
   },
   deleteBtnText: { color: "#fecaca", fontSize: 12, fontWeight: "600" },
   cardStatus: { color: "#2dd4bf", fontSize: 14, fontWeight: "600" },
+  cardSale: { color: "#94a3b8", fontSize: 13, fontWeight: "600" },
+  cardSaleOther: { color: "#fcd34d" },
   cardHint: { color: "#94a3b8", fontSize: 13, lineHeight: 18 },
   cardMeta: { color: "#64748b", fontSize: 12, marginTop: 2 },
   moreRow: { flexDirection: "row", alignItems: "center", gap: 8 },

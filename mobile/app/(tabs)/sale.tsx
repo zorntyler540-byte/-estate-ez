@@ -15,7 +15,7 @@ import { listSales } from "@/lib/api";
 import type { Sale } from "@/lib/types";
 
 export default function SaleScreen() {
-  const { token, selectedSaleId, setSelectedSaleId } = useAuth();
+  const { token, selectedSaleId, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,12 +27,17 @@ export default function SaleScreen() {
     try {
       const rows = await listSales(token);
       setSales(rows.filter((s) => !s.closed_at));
+      // Backfill/refresh the stored sale name for installs that saved only the id.
+      const current = selectedSaleId ? rows.find((s) => s.id === selectedSaleId) : undefined;
+      if (current) {
+        void setSelectedSale(current.id, current.name);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load sales");
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, selectedSaleId, setSelectedSale]);
 
   useFocusEffect(
     useCallback(() => {
@@ -57,7 +62,7 @@ export default function SaleScreen() {
             return (
               <Pressable
                 style={[styles.row, active && styles.rowActive]}
-                onPress={() => void setSelectedSaleId(item.id)}
+                onPress={() => void setSelectedSale(item.id, item.name)}
               >
                 <Text style={styles.rowTitle}>{item.name}</Text>
                 <Text style={styles.rowMeta}>{active ? "Selected" : "Tap to select"}</Text>

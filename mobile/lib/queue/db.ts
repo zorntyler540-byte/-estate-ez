@@ -32,6 +32,10 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
         CREATE INDEX IF NOT EXISTS idx_lot_photos_draft ON lot_photos(draft_id);
       `);
+      const cols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_drafts)");
+      if (!cols.some((c) => c.name === "sale_name")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN sale_name TEXT");
+      }
       return db;
     })();
   }
@@ -42,6 +46,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
   return {
     id: String(row.id),
     sale_id: String(row.sale_id),
+    sale_name: row.sale_name != null ? String(row.sale_name) : null,
     manual_sku: row.manual_sku != null ? String(row.manual_sku) : null,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
@@ -51,14 +56,18 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
   };
 }
 
-export async function createLotDraft(saleId: string, manualSku?: string): Promise<string> {
+export async function createLotDraft(
+  saleId: string,
+  saleName: string | null,
+  manualSku?: string
+): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
   const now = Date.now();
   await db.runAsync(
-    `INSERT INTO lot_drafts (id, sale_id, manual_sku, status, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, 'draft', NULL, ?, ?)`,
-    [id, saleId, manualSku?.trim() || null, now, now]
+    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, status, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'draft', NULL, ?, ?)`,
+    [id, saleId, saleName?.trim() || null, manualSku?.trim() || null, now, now]
   );
   return id;
 }

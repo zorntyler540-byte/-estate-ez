@@ -6,7 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { countPendingDrafts } from "@/lib/queue/db";
 
 export default function CaptureScreen() {
-  const { selectedSaleId, signOut } = useAuth();
+  const { selectedSaleId, selectedSaleName, signOut } = useAuth();
   const [pending, setPending] = useState(0);
 
   useFocusEffect(
@@ -32,7 +32,11 @@ export default function CaptureScreen() {
       {!selectedSaleId ? (
         <Text style={styles.warn}>Choose a sale on the Sale tab before capturing.</Text>
       ) : (
-        <Text style={styles.meta}>Active sale selected — ready to capture.</Text>
+        <Text style={styles.saleBanner}>
+          Uploading to: <Text style={styles.saleName}>{selectedSaleName || "(sale name unknown)"}</Text>
+          {"\n"}
+          <Text style={styles.meta}>Wrong sale? Change it on the Sale tab before capturing.</Text>
+        </Text>
       )}
 
       <Pressable style={styles.primary} onPress={startCapture}>
@@ -55,6 +59,8 @@ const styles = StyleSheet.create({
   lead: { fontSize: 15, lineHeight: 22, color: "#cbd5e1" },
   warn: { color: "#fcd34d", fontSize: 14 },
   meta: { color: "#94a3b8", fontSize: 14 },
+  saleBanner: { color: "#cbd5e1", fontSize: 15, lineHeight: 22 },
+  saleName: { color: "#2dd4bf", fontWeight: "700" },
   primary: {
     backgroundColor: "#0d9488",
     borderRadius: 12,
