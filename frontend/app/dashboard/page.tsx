@@ -56,6 +56,7 @@ import {
   splitTotalZoom,
   totalZoomMaxForDevice
 } from "../../lib/cameraZoom";
+import { convertHeicFileToJpeg, isHeicLikeFile } from "../../lib/heicConvert";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
@@ -477,12 +478,6 @@ function captureStabilizeBaseName(file: File): string {
   return raw.replace(/\.[a-z0-9]{2,6}$/i, "") || raw;
 }
 
-function isHeicLikeFile(file: File): boolean {
-  const type = (file.type || "").toLowerCase();
-  if (type.includes("heic") || type.includes("heif")) return true;
-  return /\.heic$|\.heif$/i.test(file.name || "");
-}
-
 function isBrowserDisplayableImageFile(file: File): boolean {
   const type = (file.type || "").toLowerCase();
   if (type === "image/jpeg" || type === "image/jpg" || type === "image/png" || type === "image/webp") {
@@ -526,6 +521,18 @@ async function stabilizeCapturedFile(file: File): Promise<File | null> {
 
   const type = (file.type || "").trim().toLowerCase() || "application/octet-stream";
   const base = captureStabilizeBaseName(file);
+
+  if (isHeicLikeFile(file)) {
+    const temp = new File([bytes], file.name || `${base}.heic`, {
+      type: type || "image/heic",
+      lastModified: file.lastModified || Date.now()
+    });
+    const jpeg = await convertHeicFileToJpeg(temp, `${base}.jpg`);
+    if (jpeg) {
+      markStabilizedCaptureFile(jpeg);
+      return jpeg;
+    }
+  }
 
   if (!isHeicLikeFile(file) && isBrowserDisplayableImageFile(file)) {
     const ext =
@@ -1409,6 +1416,7 @@ function applySingleLotFilesToStaging(
 ): SingleLotStagingApply {
   const thumbFor = (f: File, i: number): string => {
     if (incomingThumbUrls) return incomingThumbUrls[i] ?? "";
+    if (isHeicLikeFile(f)) return "";
     return URL.createObjectURL(f);
   };
   const appendSingleLot = Boolean(prev?.singleLotMode);
@@ -1450,8 +1458,17 @@ function applySingleLotFilesToStaging(
 
 function CaptureStripThumb({ url, label }: { url: string | null; label: string }) {
   const [failed, setFailed] = useState(false);
-  const showFailed = failed || !url;
-  if (showFailed) {
+  if (!url) {
+    return (
+      <span
+        className="ct-capture-thumb-pending"
+        title={`${label} — preparing preview`}
+        aria-label={`${label} loading`}
+        aria-busy="true"
+      />
+    );
+  }
+  if (failed) {
     return (
       <span
         className="ct-capture-thumb-failed"
@@ -1474,8 +1491,17 @@ function CaptureStripThumb({ url, label }: { url: string | null; label: string }
 
 function StagingStripThumb({ url, label }: { url: string | null; label: string }) {
   const [failed, setFailed] = useState(false);
-  const showFailed = failed || !url;
-  if (showFailed) {
+  if (!url) {
+    return (
+      <span
+        className="ct-staging-thumb-pending"
+        title={`${label} — preparing preview`}
+        aria-label={`${label} loading`}
+        aria-busy="true"
+      />
+    );
+  }
+  if (failed) {
     return (
       <span
         className="ct-staging-thumb-failed"
@@ -3912,45 +3938,40 @@ export default function DashboardPage() {
         if (photosInputRef.current) photosInputRef.current.value = "";
         return;
       }
-      const tailStart = folderPickRef.current?.singleLotMode
-        ? (folderPickRef.current?.imageFiles.length ?? 0)
-        : 0;
+      const preparingHeic = imageFiles.some(isHeicLikeFile);
+      if (preparingHeic) {
+        setStagingSuccess("Converting HEIC photos for preview…");
+      }
+      const { files: stableImageFiles, failed } = await stabilizeCapturedFiles(imageFiles);
+      if (!stableImageFiles.length) {
+        setStagingSuccess("");
+        setError(
+          "Could not read the selected photos. If they are iPhone HEIC files, try again in a moment or export as JPEG from your computer."
+        );
+        if (photosInputRef.current) photosInputRef.current.value = "";
+        return;
+      }
+      const built = await createDisplayThumbUrls(stableImageFiles);
       const { pick, droppedFromCap } = applySingleLotFilesToStaging(
         folderPickRef.current,
-        imageFiles,
-        skippedCount
+        stableImageFiles,
+        skippedCount,
+        built.map((u) => u ?? "")
       );
       setFolderPick(pick);
       setStagingSuccess("");
+      scrollToStagingPendingRef.current = true;
+      scheduleScrollStagingUploadBoxIntoView();
       if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
         setError(
           `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
-      void (async () => {
-        const { files: stableImageFiles, failed } = await stabilizeCapturedFiles(imageFiles);
-        if (!stableImageFiles.length) return;
-        const built = await createDisplayThumbUrls(stableImageFiles);
-        setFolderPick((p) => {
-          if (!p?.singleLotMode) return p;
-          const nextFiles = [...p.imageFiles];
-          const nextThumbs = [...p.thumbUrls];
-          for (let i = 0; i < stableImageFiles.length; i++) {
-            const idx = tailStart + i;
-            if (idx < 0 || idx >= nextFiles.length) continue;
-            nextFiles[idx] = stableImageFiles[i]!;
-            const oldThumb = nextThumbs[idx];
-            if (oldThumb) URL.revokeObjectURL(oldThumb);
-            nextThumbs[idx] = built[i] ?? "";
-          }
-          return { ...p, imageFiles: nextFiles, thumbUrls: nextThumbs };
-        });
-        if (failed > 0) {
-          setError(
-            `${failed} selected photo${failed === 1 ? "" : "s"} could not be read on this device and ${failed === 1 ? "was" : "were"} skipped.`
-          );
-        }
-      })();
+      if (failed > 0) {
+        setError(
+          `${failed} selected photo${failed === 1 ? "" : "s"} could not be read and ${failed === 1 ? "was" : "were"} skipped. ${stableImageFiles.length} photo${stableImageFiles.length === 1 ? "" : "s"} added to the upload box.`
+        );
+      }
     } else {
       if (
         !confirmStagingOverwrite(
@@ -3961,18 +3982,38 @@ export default function DashboardPage() {
         if (folderInputRef.current) folderInputRef.current.value = "";
         return;
       }
-      setFolderPick((prev) => {
-        if (prev?.thumbUrls.length) revokeObjectUrls(prev.thumbUrls);
-        const thumbUrls = imageFiles.map((f) => URL.createObjectURL(f));
-        return {
-          folderLabel: label,
-          imageFiles,
-          thumbUrls,
-          skippedCount,
-          singleLotMode
-        };
+      setFolderPick({
+        folderLabel: label,
+        imageFiles,
+        thumbUrls: imageFiles.map(() => ""),
+        skippedCount,
+        singleLotMode
       });
       setStagingSuccess("");
+      void (async () => {
+        const { files: stableFiles, failed } = await stabilizeCapturedFiles(imageFiles);
+        if (!stableFiles.length) {
+          setError(
+            "Could not read any selected photos on this device. For iPhone HEIC shots, wait a moment and try again, or set Settings → Camera → Formats → Most Compatible (JPEG)."
+          );
+          return;
+        }
+        const built = await createDisplayThumbUrls(stableFiles);
+        setFolderPick((p) => {
+          if (!p || p.singleLotMode || p.folderLabel !== label) return p;
+          if (p.imageFiles.length !== imageFiles.length) return p;
+          return {
+            ...p,
+            imageFiles: stableFiles,
+            thumbUrls: built.map((u) => u ?? "")
+          };
+        });
+        if (failed > 0) {
+          setError(
+            `${failed} selected photo${failed === 1 ? "" : "s"} could not be read on this device and ${failed === 1 ? "was" : "were"} skipped. ${stableFiles.length} photo${stableFiles.length === 1 ? "" : "s"} ready to upload.`
+          );
+        }
+      })();
     }
     if (folderInputRef.current) folderInputRef.current.value = "";
     if (photosInputRef.current) photosInputRef.current.value = "";

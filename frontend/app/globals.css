@@ -734,6 +734,25 @@ a.ct-btn:hover {
   border: 1px dashed var(--ct-error-border);
 }
 
+.ct-staging-thumb-pending,
+.ct-capture-thumb-pending {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ct-thumb-loading);
+  animation: ct-thumb-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ct-thumb-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
 .ct-file-preview-failed {
   font-weight: 500;
   font-size: 0.88rem;
