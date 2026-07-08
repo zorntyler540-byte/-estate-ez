@@ -7,7 +7,6 @@ from pydantic import BaseModel, EmailStr, Field
 
 class HealthResponse(BaseModel):
     status: str
-    pipeline_triage_brand_audit: bool = False
     enable_appraiser: bool = False
     appraiser_max_photos: int = 3
     gemini_pro_model: str = ""

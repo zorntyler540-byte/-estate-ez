@@ -233,7 +233,6 @@ def health() -> HealthResponse:
     root = upload_root()
     return HealthResponse(
         status="ok",
-        pipeline_triage_brand_audit=settings.pipeline_triage_brand_audit,
         enable_appraiser=settings.enable_appraiser,
         appraiser_max_photos=settings.appraiser_max_photos,
         gemini_pro_model=settings.gemini_pro_model,
