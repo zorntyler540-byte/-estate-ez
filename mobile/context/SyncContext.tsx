@@ -12,7 +12,7 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { countUploadPending } from "@/lib/queue/db";
+import { countUploadPending, recoverInterruptedUploads } from "@/lib/queue/db";
 import { syncPendingLots } from "@/lib/queue/sync";
 
 export type SyncResult = {
@@ -40,7 +40,7 @@ function formatSyncMessage(result: SyncResult): string {
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { token, accountId } = useAuth();
   const [syncing, setSyncing] = useState(false);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -51,7 +51,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const syncNow = useCallback(async (): Promise<SyncResult | null> => {
-    if (!token) return null;
+    if (!token || !accountId) return null;
 
     if (syncInProgressRef.current) {
       syncAgainRef.current = true;
@@ -68,13 +68,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      const pending = await countUploadPending();
+      await recoverInterruptedUploads(accountId);
+      const pending = await countUploadPending(accountId);
       if (pending === 0) {
         setLastMessage(null);
         return { uploaded: 0, failed: 0 };
       }
 
-      const result = await syncPendingLots(token);
+      const result = await syncPendingLots(accountId, token);
       setLastMessage(formatSyncMessage(result));
       setRefreshKey((k) => k + 1);
       return result;
@@ -90,10 +91,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         void syncNow();
       }
     }
-  }, [token]);
+  }, [token, accountId]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !accountId) return;
 
     void NetInfo.fetch().then((state) => {
       wasConnectedRef.current = state.isConnected ?? false;
@@ -124,7 +125,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       netSub();
       appSub.remove();
     };
-  }, [token, syncNow]);
+  }, [token, accountId, syncNow]);
 
   const value = useMemo(
     () => ({ syncing, lastMessage, refreshKey, syncNow }),

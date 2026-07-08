@@ -23,12 +23,12 @@ type SalesContextValue = {
 const SalesContext = createContext<SalesContextValue | null>(null);
 
 export function SalesProvider({ children }: { children: ReactNode }) {
-  const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
+  const { token, accountId, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refreshSales = useCallback(async () => {
-    if (!token) {
+    if (!token || !accountId) {
       setSales([]);
       return;
     }
@@ -39,7 +39,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       setSales(open);
 
       const nameById = new Map(open.map((s) => [s.id, s.name]));
-      await backfillDraftSaleNames(nameById);
+      await backfillDraftSaleNames(accountId, nameById);
 
       if (selectedSaleId) {
         const current = open.find((s) => s.id === selectedSaleId);
@@ -52,7 +52,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
+  }, [token, accountId, selectedSaleId, selectedSaleName, setSelectedSale]);
 
   useFocusEffect(
     useCallback(() => {

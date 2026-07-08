@@ -16,8 +16,10 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         PRAGMA journal_mode = WAL;
         CREATE TABLE IF NOT EXISTS lot_drafts (
           id TEXT PRIMARY KEY NOT NULL,
+          account_id TEXT NOT NULL,
           sale_id TEXT NOT NULL,
           manual_sku TEXT,
+          server_job_id TEXT,
           status TEXT NOT NULL,
           error_message TEXT,
           created_at INTEGER NOT NULL,
@@ -33,9 +35,18 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         CREATE INDEX IF NOT EXISTS idx_lot_photos_draft ON lot_photos(draft_id);
       `);
       const cols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_drafts)");
+      if (!cols.some((c) => c.name === "account_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN account_id TEXT");
+      }
       if (!cols.some((c) => c.name === "sale_name")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN sale_name TEXT");
       }
+      if (!cols.some((c) => c.name === "server_job_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_job_id TEXT");
+      }
+      await db.execAsync(
+        "CREATE INDEX IF NOT EXISTS idx_lot_drafts_account_status ON lot_drafts(account_id, status)"
+      );
       return db;
     })();
   }
@@ -45,9 +56,11 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft {
   return {
     id: String(row.id),
+    account_id: String(row.account_id),
     sale_id: String(row.sale_id),
     sale_name: row.sale_name != null ? String(row.sale_name) : null,
     manual_sku: row.manual_sku != null ? String(row.manual_sku) : null,
+    server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
     created_at: Number(row.created_at),
@@ -57,6 +70,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
 }
 
 export async function createLotDraft(
+  accountId: string,
   saleId: string,
   saleName: string | null,
   manualSku?: string
@@ -65,9 +79,9 @@ export async function createLotDraft(
   const id = newLocalId();
   const now = Date.now();
   await db.runAsync(
-    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, status, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'draft', NULL, ?, ?)`,
-    [id, saleId, saleName?.trim() || null, manualSku?.trim() || null, now, now]
+    `INSERT INTO lot_drafts (id, account_id, sale_id, sale_name, manual_sku, status, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'draft', NULL, ?, ?)`,
+    [id, accountId, saleId, saleName?.trim() || null, manualSku?.trim() || null, now, now]
   );
   return id;
 }
@@ -88,10 +102,11 @@ export async function addPhotoToDraft(draftId: string, fileUri: string): Promise
   return id;
 }
 
-export async function listLotDrafts(): Promise<LotDraft[]> {
+export async function listLotDrafts(accountId: string): Promise<LotDraft[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Record<string, unknown>>(
-    "SELECT * FROM lot_drafts ORDER BY updated_at DESC"
+    "SELECT * FROM lot_drafts WHERE account_id = ? ORDER BY updated_at DESC",
+    [accountId]
   );
   const out: LotDraft[] = [];
   for (const row of rows) {
@@ -130,12 +145,25 @@ export async function setDraftStatus(
   );
 }
 
+export async function setDraftServerJob(draftId: string, jobId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
+    jobId,
+    Date.now(),
+    draftId
+  ]);
+}
+
 /** Fill missing ``sale_name`` on local drafts from the server sale list. */
-export async function backfillDraftSaleNames(nameById: Map<string, string>): Promise<void> {
+export async function backfillDraftSaleNames(
+  accountId: string,
+  nameById: Map<string, string>
+): Promise<void> {
   if (!nameById.size) return;
   const db = await getDb();
   const rows = await db.getAllAsync<{ id: string; sale_id: string; sale_name: string | null }>(
-    "SELECT id, sale_id, sale_name FROM lot_drafts WHERE sale_name IS NULL OR TRIM(sale_name) = ''"
+    "SELECT id, sale_id, sale_name FROM lot_drafts WHERE account_id = ? AND (sale_name IS NULL OR TRIM(sale_name) = '')",
+    [accountId]
   );
   const now = Date.now();
   for (const row of rows) {
@@ -175,18 +203,28 @@ export async function deleteLotDraft(draftId: string): Promise<void> {
   await db.runAsync("DELETE FROM lot_drafts WHERE id = ?", [draftId]);
 }
 
-export async function countPendingDrafts(): Promise<number> {
+export async function recoverInterruptedUploads(accountId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE lot_drafts SET status = 'queued', error_message = NULL, updated_at = ? WHERE account_id = ? AND status = 'uploading'",
+    [Date.now(), accountId]
+  );
+}
+
+export async function countPendingDrafts(accountId: string): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('draft', 'queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE account_id = ? AND status IN ('draft', 'queued', 'failed')",
+    [accountId]
   );
   return Number(row?.c ?? 0);
 }
 
-export async function countUploadPending(): Promise<number> {
+export async function countUploadPending(accountId: string): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE account_id = ? AND status IN ('queued', 'failed')",
+    [accountId]
   );
   return Number(row?.c ?? 0);
 }
