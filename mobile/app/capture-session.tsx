@@ -40,7 +40,7 @@ function clamp01(n: number): number {
 }
 
 export default function CaptureSessionScreen() {
-  const { selectedSaleId, selectedSaleName } = useAuth();
+  const { accountId, selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -130,7 +130,11 @@ export default function CaptureSessionScreen() {
       setError("Select a sale first.");
       return null;
     }
-    const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku);
+    if (!accountId) {
+      setError("Sign in again before capturing.");
+      return null;
+    }
+    const id = await createLotDraft(accountId, selectedSaleId, selectedSaleName, manualSku);
     setDraftId(id);
     return id;
   }

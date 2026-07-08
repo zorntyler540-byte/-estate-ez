@@ -7,14 +7,18 @@ import { useSales } from "@/context/SalesContext";
 import { countPendingDrafts } from "@/lib/queue/db";
 
 export default function CaptureScreen() {
-  const { selectedSaleId, selectedSaleName, signOut } = useAuth();
+  const { accountId, selectedSaleId, selectedSaleName, signOut } = useAuth();
   const { getSaleName } = useSales();
   const [pending, setPending] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
-      void countPendingDrafts().then(setPending);
-    }, [])
+      if (!accountId) {
+        setPending(0);
+        return;
+      }
+      void countPendingDrafts(accountId).then(setPending);
+    }, [accountId])
   );
 
   function startCapture() {

@@ -3,6 +3,13 @@ export type TokenResponse = {
   token_type?: string;
 };
 
+export type AccessTokenClaims = {
+  sub?: string;
+  account_id?: string;
+  role?: string;
+  exp?: number;
+};
+
 export type Sale = {
   id: string;
   account_id: string;
@@ -30,10 +37,12 @@ export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "fa
 
 export type LotDraft = {
   id: string;
+  account_id: string;
   sale_id: string;
   /** Sale name at capture time, so the queue can show where each lot will upload. */
   sale_name: string | null;
   manual_sku: string | null;
+  server_job_id: string | null;
   status: LotDraftStatus;
   error_message: string | null;
   created_at: number;

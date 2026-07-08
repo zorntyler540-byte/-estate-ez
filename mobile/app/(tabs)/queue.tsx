@@ -22,7 +22,7 @@ import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
 
 export default function QueueScreen() {
-  const { selectedSaleId } = useAuth();
+  const { accountId, selectedSaleId } = useAuth();
   const { getSaleName, refreshSales } = useSales();
   const { syncing, lastMessage, refreshKey, syncNow } = useSync();
   const [rows, setRows] = useState<DraftRow[]>([]);
@@ -34,7 +34,10 @@ export default function QueueScreen() {
 
   const refresh = useCallback(async () => {
     await refreshSales();
-    const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
+    const [drafts, net] = await Promise.all([
+      accountId ? listLotDrafts(accountId) : Promise.resolve([]),
+      NetInfo.fetch()
+    ]);
     const enriched = await Promise.all(
       drafts.map(async (draft) => {
         const photos = await listDraftPhotos(draft.id);
@@ -43,7 +46,7 @@ export default function QueueScreen() {
     );
     setRows(enriched);
     setOnline(net.isConnected ?? false);
-  }, [refreshSales]);
+  }, [accountId, refreshSales]);
 
   useFocusEffect(
     useCallback(() => {
