@@ -17,7 +17,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         CREATE TABLE IF NOT EXISTS lot_drafts (
           id TEXT PRIMARY KEY NOT NULL,
           sale_id TEXT NOT NULL,
+          sale_name TEXT,
           manual_sku TEXT,
+          server_job_id TEXT,
           status TEXT NOT NULL,
           error_message TEXT,
           created_at INTEGER NOT NULL,
@@ -33,9 +35,17 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         CREATE INDEX IF NOT EXISTS idx_lot_photos_draft ON lot_photos(draft_id);
       `);
       const cols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_drafts)");
-      if (!cols.some((c) => c.name === "sale_name")) {
+      const hasColumn = (name: string) => cols.some((c) => c.name === name);
+      if (!hasColumn("sale_name")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN sale_name TEXT");
       }
+      if (!hasColumn("server_job_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_job_id TEXT");
+      }
+      await db.runAsync(
+        "UPDATE lot_drafts SET status = 'queued', error_message = ?, updated_at = ? WHERE status = 'uploading'",
+        ["Upload interrupted; retrying with the existing server job when available.", Date.now()]
+      );
       return db;
     })();
   }
@@ -48,6 +58,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     sale_id: String(row.sale_id),
     sale_name: row.sale_name != null ? String(row.sale_name) : null,
     manual_sku: row.manual_sku != null ? String(row.manual_sku) : null,
+    server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
     created_at: Number(row.created_at),
@@ -128,6 +139,15 @@ export async function setDraftStatus(
     "UPDATE lot_drafts SET status = ?, error_message = ?, updated_at = ? WHERE id = ?",
     [status, errorMessage ?? null, Date.now(), draftId]
   );
+}
+
+export async function setDraftServerJobId(draftId: string, serverJobId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
+    serverJobId,
+    Date.now(),
+    draftId
+  ]);
 }
 
 /** Fill missing ``sale_name`` on local drafts from the server sale list. */
