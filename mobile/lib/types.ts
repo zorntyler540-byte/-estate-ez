@@ -34,6 +34,7 @@ export type LotDraft = {
   /** Sale name at capture time, so the queue can show where each lot will upload. */
   sale_name: string | null;
   manual_sku: string | null;
+  server_job_id: string | null;
   status: LotDraftStatus;
   error_message: string | null;
   created_at: number;

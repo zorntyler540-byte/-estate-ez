@@ -101,7 +101,7 @@ from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_by
 from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path, upload_root
 from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
-from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
+from app.upload_storage import UPLOAD_ROOT, new_batch_dir, resolve_account_upload_folder, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
     count_catalog_image_files,
@@ -1806,15 +1806,7 @@ async def create_job_from_upload(
 
 def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
     """Resolve ``job.input_folder`` under this account's upload root, or raise."""
-    root = (UPLOAD_ROOT / account_id).resolve()
-    folder = Path(job.input_folder).resolve()
-    try:
-        folder.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid job upload path") from exc
-    if not folder.is_dir():
-        raise HTTPException(status_code=400, detail="Job upload folder is missing")
-    return folder
+    return resolve_account_upload_folder(account_id, job.input_folder)
 
 
 @app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
@@ -1862,13 +1854,14 @@ def create_job(
 ) -> JobOut:
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
+    input_folder = resolve_account_upload_folder(current.account_id, payload.input_folder)
     _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
         sale_id=sale.id,
         status=JobStatus.queued,
-        input_folder=payload.input_folder,
+        input_folder=str(input_folder),
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
         single_lot_mode=bool(payload.single_lot_mode),
         single_lot_manual_sku=_manual_sku,

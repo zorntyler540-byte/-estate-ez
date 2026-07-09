@@ -19,6 +19,19 @@ def new_batch_dir(account_id: str) -> Path:
     return dest
 
 
+def resolve_account_upload_folder(account_id: str, input_folder: str) -> Path:
+    """Resolve a job input folder, restricted to this account's upload root."""
+    root = (upload_root() / account_id).resolve()
+    folder = Path(input_folder).expanduser().resolve()
+    try:
+        folder.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid job upload path") from exc
+    if not folder.is_dir():
+        raise HTTPException(status_code=400, detail="Job upload folder is missing")
+    return folder
+
+
 async def save_uploaded_files(
     dest_root: Path,
     files: list[UploadFile],
