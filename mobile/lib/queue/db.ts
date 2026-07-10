@@ -36,6 +36,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "sale_name")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN sale_name TEXT");
       }
+      if (!cols.some((c) => c.name === "server_job_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_job_id TEXT");
+      }
       return db;
     })();
   }
@@ -47,6 +50,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     id: String(row.id),
     sale_id: String(row.sale_id),
     sale_name: row.sale_name != null ? String(row.sale_name) : null,
+    server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
     manual_sku: row.manual_sku != null ? String(row.manual_sku) : null,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
@@ -130,6 +134,27 @@ export async function setDraftStatus(
   );
 }
 
+export async function setDraftServerJobId(draftId: string, serverJobId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
+    serverJobId,
+    Date.now(),
+    draftId
+  ]);
+}
+
+export async function recoverInterruptedUploads(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE lot_drafts
+     SET status = 'queued',
+         error_message = 'Upload interrupted; retrying.',
+         updated_at = ?
+     WHERE status = 'uploading'`,
+    [Date.now()]
+  );
+}
+
 /** Fill missing ``sale_name`` on local drafts from the server sale list. */
 export async function backfillDraftSaleNames(nameById: Map<string, string>): Promise<void> {
   if (!nameById.size) return;
@@ -178,7 +203,7 @@ export async function deleteLotDraft(draftId: string): Promise<void> {
 export async function countPendingDrafts(): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('draft', 'queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('draft', 'queued', 'uploading', 'failed')"
   );
   return Number(row?.c ?? 0);
 }
@@ -186,7 +211,7 @@ export async function countPendingDrafts(): Promise<number> {
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'uploading', 'failed')"
   );
   return Number(row?.c ?? 0);
 }
