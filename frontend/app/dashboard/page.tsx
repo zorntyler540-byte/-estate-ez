@@ -68,6 +68,7 @@ const SALE_STORAGE_KEY = "ct_selected_sale_id";
 const STAGING_AWAIT_GEMINI_JOB_KEY = "ct_staging_await_gemini_job";
 const STAGING_AWAIT_GEMINI_TOTAL_KEY = "ct_staging_await_gemini_total";
 const STAGING_AWAIT_GEMINI_SEEN_KEY = "ct_staging_await_gemini_seen";
+const STAGING_AWAIT_GEMINI_FINGERPRINT_KEY = "ct_staging_await_gemini_fingerprint";
 
 /** Saved when opening lot Details; restored after ``← Back to dashboard`` on the lot page. */
 const DASHBOARD_SCROLL_Y_KEY = "ct_dashboard_scroll_y";
@@ -1424,6 +1425,12 @@ type FolderPickPreview = {
   singleLotMode?: boolean;
 };
 
+function stagingFilesFingerprint(files: File[]): string {
+  return files
+    .map((f) => `${getStagedUploadRel(f)}\u0000${f.size}\u0000${f.lastModified}`)
+    .join("\n");
+}
+
 type SingleLotStagingApply = { pick: FolderPickPreview; droppedFromCap: number };
 
 function capIncomingSingleLotFiles(existingCount: number, incoming: File[]): { files: File[]; dropped: number } {
@@ -1639,6 +1646,7 @@ export default function DashboardPage() {
   const stagingAwaitingGeminiJobIdRef = useRef<string | null>(null);
   const stagingAwaitingGeminiTotalRef = useRef(0);
   const stagingAwaitingGeminiSeenRef = useRef<Set<number>>(new Set());
+  const stagingAwaitingGeminiFingerprintRef = useRef<string | null>(null);
   /** Inline multi-snap camera (getUserMedia); avoids iOS blocking repeated file-picker opens. */
   const lotCameraVideoRef = useRef<HTMLVideoElement | null>(null);
   /** Probed CSS quarter-turn for the visible ``<video>`` preview. */
@@ -1879,20 +1887,41 @@ export default function DashboardPage() {
     try {
       const id = sessionStorage.getItem(STAGING_AWAIT_GEMINI_JOB_KEY);
       if (id) stagingAwaitingGeminiJobIdRef.current = id;
+      const fingerprint = sessionStorage.getItem(STAGING_AWAIT_GEMINI_FINGERPRINT_KEY);
+      if (fingerprint) stagingAwaitingGeminiFingerprintRef.current = fingerprint;
       return id;
     } catch {
       return null;
     }
   }
 
+  function currentStagingFingerprint(): string | null {
+    const p = folderPickRef.current;
+    if (!p?.imageFiles.length) return null;
+    return stagingFilesFingerprint(p.imageFiles);
+  }
+
+  function stagingMatchesAwaitingGemini(): boolean {
+    const fingerprint = stagingAwaitingGeminiFingerprintRef.current;
+    const current = currentStagingFingerprint();
+    return Boolean(fingerprint && current && fingerprint === current);
+  }
+
   function persistStagingAwaitingGemini(jobId: string, totalPhotos: number) {
+    const fingerprint = currentStagingFingerprint();
     stagingAwaitingGeminiJobIdRef.current = jobId;
     stagingAwaitingGeminiTotalRef.current = totalPhotos;
     stagingAwaitingGeminiSeenRef.current = new Set();
+    stagingAwaitingGeminiFingerprintRef.current = fingerprint;
     try {
       sessionStorage.setItem(STAGING_AWAIT_GEMINI_JOB_KEY, jobId);
       sessionStorage.setItem(STAGING_AWAIT_GEMINI_TOTAL_KEY, String(totalPhotos));
       sessionStorage.setItem(STAGING_AWAIT_GEMINI_SEEN_KEY, "");
+      if (fingerprint) {
+        sessionStorage.setItem(STAGING_AWAIT_GEMINI_FINGERPRINT_KEY, fingerprint);
+      } else {
+        sessionStorage.removeItem(STAGING_AWAIT_GEMINI_FINGERPRINT_KEY);
+      }
     } catch {
       /* private mode */
     }
@@ -1903,6 +1932,8 @@ export default function DashboardPage() {
       const jobId = sessionStorage.getItem(STAGING_AWAIT_GEMINI_JOB_KEY);
       if (!jobId) return;
       stagingAwaitingGeminiJobIdRef.current = jobId;
+      stagingAwaitingGeminiFingerprintRef.current =
+        sessionStorage.getItem(STAGING_AWAIT_GEMINI_FINGERPRINT_KEY);
       const total = parseInt(sessionStorage.getItem(STAGING_AWAIT_GEMINI_TOTAL_KEY) || "0", 10);
       stagingAwaitingGeminiTotalRef.current = Number.isFinite(total) ? total : 0;
       const seenRaw = sessionStorage.getItem(STAGING_AWAIT_GEMINI_SEEN_KEY) || "";
@@ -1930,10 +1961,12 @@ export default function DashboardPage() {
     stagingAwaitingGeminiJobIdRef.current = null;
     stagingAwaitingGeminiTotalRef.current = 0;
     stagingAwaitingGeminiSeenRef.current = new Set();
+    stagingAwaitingGeminiFingerprintRef.current = null;
     try {
       sessionStorage.removeItem(STAGING_AWAIT_GEMINI_JOB_KEY);
       sessionStorage.removeItem(STAGING_AWAIT_GEMINI_TOTAL_KEY);
       sessionStorage.removeItem(STAGING_AWAIT_GEMINI_SEEN_KEY);
+      sessionStorage.removeItem(STAGING_AWAIT_GEMINI_FINGERPRINT_KEY);
     } catch {
       /* private mode */
     }
@@ -1941,6 +1974,10 @@ export default function DashboardPage() {
 
   function clearStagingAfterAllGeminiPhotos() {
     if (!readStagingAwaitingGeminiJobId()) return;
+    if (!stagingMatchesAwaitingGemini()) {
+      clearStagingAwaitingGeminiJobId();
+      return;
+    }
     clearFolderPick();
     clearStagingAwaitingGeminiJobId();
     setStagingSuccess(
@@ -1952,6 +1989,10 @@ export default function DashboardPage() {
   function noteStagingGeminiPhotoAnalyzed(jobId: string, index: number, totalFromEvent: number) {
     const awaiting = readStagingAwaitingGeminiJobId();
     if (!awaiting || awaiting !== jobId) return;
+    if (!stagingMatchesAwaitingGemini()) {
+      clearStagingAwaitingGeminiJobId();
+      return;
+    }
     let total = stagingAwaitingGeminiTotalRef.current;
     if (total <= 0 && totalFromEvent > 0) {
       total = totalFromEvent;
@@ -1975,6 +2016,11 @@ export default function DashboardPage() {
   function maybeClearStagingAfterJobTerminal(jobId: string, status: string) {
     const awaiting = readStagingAwaitingGeminiJobId();
     if (!awaiting || awaiting !== jobId) return;
+    const matchesStaging = stagingMatchesAwaitingGemini();
+    if (!matchesStaging) {
+      clearStagingAwaitingGeminiJobId();
+      return;
+    }
     if (status === "failed") {
       setStagingSuccess("");
       setError(
@@ -3139,9 +3185,10 @@ export default function DashboardPage() {
   }
 
   function replaceStagingImageFile(index: number, file: File) {
-    markStabilizedCaptureFile(file);
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
+      markStagedUploadRel(file, getStagedUploadRel(prev.imageFiles[index]!));
+      markStabilizedCaptureFile(file);
       const nextFiles = [...prev.imageFiles];
       nextFiles[index] = file;
       return { ...prev, imageFiles: nextFiles };
@@ -4298,7 +4345,11 @@ export default function DashboardPage() {
     if (isSingleLot) {
       clearFolderPick();
       setStagingSuccess("Catalog started — upload box cleared so you can stage the next lot.");
-    } else if (pick?.imageFiles.length) {
+    } else if (
+      pick?.imageFiles.length &&
+      readStagingAwaitingGeminiJobId() === jobId &&
+      stagingMatchesAwaitingGemini()
+    ) {
       const n = pick.imageFiles.length;
       persistStagingAwaitingGemini(jobId, n);
       setStagingSuccess(

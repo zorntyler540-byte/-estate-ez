@@ -12,7 +12,7 @@ export function markStagedUploadRel(file: File, relPath: string): void {
 }
 
 export function getStagedUploadRel(file: File): string {
-  return stagedUploadRel.get(file) || file.name;
+  return stagedUploadRel.get(file) || readSourceUploadRel(file) || file.name;
 }
 
 /** Unique leaf name within one staging batch (``IMG.jpg``, ``IMG_2.jpg``, …). */
