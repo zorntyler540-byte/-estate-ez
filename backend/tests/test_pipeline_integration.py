@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
+from unittest.mock import patch
+
+from app.services.pipeline_integration import (
+    TRIAGE_READ_BATCH_SIZE,
+    _brands_from_triage_and_draft,
+    _lot_from_flash_draft,
+    triage_ordered_photo_batch,
+)
 from pipeline.pipeline import (
     _build_pro_image_payload,
     aggregate_triage_ocr,
@@ -185,6 +192,33 @@ def test_build_pro_image_payload_puts_hero_first() -> None:
         hero_filename="hero.jpg",
     )
     assert list(payload.keys()) == ["hero.jpg", "label.jpg", "front.jpg"]
+
+
+def test_ordered_triage_bounds_each_image_read_batch(tmp_path) -> None:
+    photos = [tmp_path / f"photo-{index}.jpg" for index in range(TRIAGE_READ_BATCH_SIZE * 2 + 3)]
+    for index, photo in enumerate(photos):
+        photo.write_bytes(f"image-{index}".encode())
+
+    batch_sizes: list[int] = []
+
+    def fake_triage(images, **_kwargs):
+        batch_sizes.append(len(images))
+        return [
+            {
+                "filename": filename,
+                "photo_role": "hero",
+                "label_legibility": "none",
+                "quality": "sharp",
+                "confidence": "high",
+            }
+            for filename in images
+        ]
+
+    with patch("app.services.pipeline_integration._run_parallel_triage", side_effect=fake_triage):
+        ordered = triage_ordered_photo_batch(photos)
+
+    assert batch_sizes == [TRIAGE_READ_BATCH_SIZE, TRIAGE_READ_BATCH_SIZE, 3]
+    assert [key for _path, key, _row in ordered] == [photo.name for photo in photos]
 
 
 def test_brands_from_triage_infers_label_makers() -> None:
