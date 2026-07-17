@@ -22,7 +22,6 @@ from app.core.lotting import (
     tape_marking_canonical,
     tape_sku_opens_new_lot,
 )
-from pipeline import triage_and_select_field_lot
 from pipeline.pipeline import (
     PipelineCancelled,
     _build_flash_draft,
@@ -41,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 EmitFn = Callable[[dict[str, Any]], None]
 PhotoEntry = tuple[Path, str]
+TRIAGE_READ_BATCH_SIZE = 8
 
 # Per-photo triage is small; one listing + optional Pro dominate estimates.
 EST_PIPELINE_INPUT_TOKENS_PER_PHOTO = 450
@@ -268,10 +268,6 @@ def triage_ordered_photo_batch(
     """Parallel Stage-1 triage; return rows in the same order as ``photos``."""
     _sync_pipeline_env_from_settings()
     entries, _path_by_key = _coerce_photo_entries(photos)
-    images: dict[str, bytes] = {}
-    for path, key in entries:
-        images[key] = path.read_bytes()
-
     total_photos = len(entries)
     filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
 
@@ -296,13 +292,21 @@ def triage_ordered_photo_batch(
             }
         )
 
-    if should_cancel and should_cancel():
-        raise PipelineCancelled()
-    triage_list = _run_parallel_triage(
-        images,
-        on_triage_complete=_emit_triage_row,
-        should_cancel=should_cancel,
-    )
+    triage_list: list[dict[str, Any]] = []
+    for start in range(0, total_photos, TRIAGE_READ_BATCH_SIZE):
+        if should_cancel and should_cancel():
+            raise PipelineCancelled()
+        images = {
+            key: path.read_bytes()
+            for path, key in entries[start : start + TRIAGE_READ_BATCH_SIZE]
+        }
+        triage_list.extend(
+            _run_parallel_triage(
+                images,
+                on_triage_complete=_emit_triage_row,
+                should_cancel=should_cancel,
+            )
+        )
     by_name = {str(r.get("filename") or ""): r for r in triage_list}
     ordered: list[tuple[Path, str, dict[str, Any]]] = []
     for path, key in entries:
@@ -515,33 +519,8 @@ def run_single_lot_pipeline(
     _sync_pipeline_env_from_settings()
 
     entries, path_by_key = _coerce_photo_entries(photos)
-    images: dict[str, bytes] = {}
-    for path, key in entries:
-        images[key] = path.read_bytes()
 
     total_photos = len(entries)
-    filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
-
-    if emit and pre_triage_rows is None:
-        emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": total_photos})
-
-    def _emit_triage_row(triage_row: dict[str, Any]) -> None:
-        if not emit:
-            return
-        filename = str(triage_row.get("filename") or "")
-        emit(
-            {
-                "type": "photo_analyzed",
-                "index": filename_to_index.get(filename, 0),
-                "total": total_photos,
-                "file_name": filename,
-                "preview": {
-                    "auction_title": str(triage_row.get("photo_role") or ""),
-                    "sku": triage_row.get("brand_text") or None,
-                },
-                "pipeline_role": triage_row.get("photo_role"),
-            }
-        )
 
     logger.info(
         "Pipeline start: photos=%d pro_model=%s flash_model=%s",
@@ -566,11 +545,20 @@ def run_single_lot_pipeline(
             "catalog_only_count": len(selected.get("catalog_only") or []),
         }
     else:
-        pipeline_result = triage_and_select_field_lot(
-            images,
-            on_triage_complete=_emit_triage_row,
+        ordered_triage = triage_ordered_photo_batch(
+            entries,
+            emit=emit,
             should_cancel=should_cancel,
         )
+        triage_rows = [row for _path, _key, row in ordered_triage]
+        selected = select_analysis_photos(triage_rows)
+        flash_draft_obj = _build_flash_draft(triage_rows, selected)
+        pipeline_result = {
+            "triage": triage_rows,
+            "selected": selected,
+            "flash_draft": flash_draft_obj.model_dump(),
+            "catalog_only_count": len(selected.get("catalog_only") or []),
+        }
     selected = dict(pipeline_result.get("selected") or {})
     flash_draft = dict(pipeline_result.get("flash_draft") or {})
     triage_rows = list(pipeline_result.get("triage") or [])
@@ -655,6 +643,11 @@ def run_single_lot_pipeline(
     if should_run_pro:
         if should_cancel and should_cancel():
             raise PipelineCancelled()
+        images: dict[str, bytes] = {}
+        for filename in dict.fromkeys([hero_name, *pro_filenames]):
+            path = path_by_key.get(filename)
+            if filename and path is not None:
+                images[filename] = path.read_bytes()
         pro_images = _build_pro_image_payload(images, pro_filenames, hero_filename=hero_name)
         flash_listing_context: dict[str, Any] | None = None
         if lot and listing_calls > 0:
