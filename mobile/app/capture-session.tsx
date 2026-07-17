@@ -17,7 +17,7 @@ import {
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
-import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
+import { MAX_DETAIL_CAPTURE_OPTIONS, pickDetailPictureSize } from "@/lib/cameraCapture";
 import {
   addPhotoToDraft,
   createLotDraft,
@@ -140,8 +140,8 @@ export default function CaptureSessionScreen() {
     try {
       const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
       if (sizes?.length) {
-        const largest = pickLargestPictureSize(sizes);
-        if (largest) setPictureSize(largest);
+        const safeSize = pickDetailPictureSize(sizes);
+        if (safeSize) setPictureSize(safeSize);
       }
     } catch {
       /* device may not expose sizes; native default still used */
