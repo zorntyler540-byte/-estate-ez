@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
+import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.services.pipeline_integration import (
@@ -194,31 +197,46 @@ def test_build_pro_image_payload_puts_hero_first() -> None:
     assert list(payload.keys()) == ["hero.jpg", "label.jpg", "front.jpg"]
 
 
-def test_ordered_triage_bounds_each_image_read_batch(tmp_path) -> None:
-    photos = [tmp_path / f"photo-{index}.jpg" for index in range(TRIAGE_READ_BATCH_SIZE * 2 + 3)]
-    for index, photo in enumerate(photos):
-        photo.write_bytes(f"image-{index}".encode())
+class TestPipelineTriageMemory(unittest.TestCase):
+    def test_ordered_triage_bounds_each_image_read_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            photos = [
+                root / f"photo-{index}.jpg"
+                for index in range(TRIAGE_READ_BATCH_SIZE * 2 + 3)
+            ]
+            for index, photo in enumerate(photos):
+                photo.write_bytes(f"image-{index}".encode())
 
-    batch_sizes: list[int] = []
+            batch_sizes: list[int] = []
 
-    def fake_triage(images, **_kwargs):
-        batch_sizes.append(len(images))
-        return [
-            {
-                "filename": filename,
-                "photo_role": "hero",
-                "label_legibility": "none",
-                "quality": "sharp",
-                "confidence": "high",
-            }
-            for filename in images
-        ]
+            def fake_triage(images, **_kwargs):
+                batch_sizes.append(len(images))
+                return [
+                    {
+                        "filename": filename,
+                        "photo_role": "hero",
+                        "label_legibility": "none",
+                        "quality": "sharp",
+                        "confidence": "high",
+                    }
+                    for filename in images
+                ]
 
-    with patch("app.services.pipeline_integration._run_parallel_triage", side_effect=fake_triage):
-        ordered = triage_ordered_photo_batch(photos)
+            with patch(
+                "app.services.pipeline_integration._run_parallel_triage",
+                side_effect=fake_triage,
+            ):
+                ordered = triage_ordered_photo_batch(photos)
 
-    assert batch_sizes == [TRIAGE_READ_BATCH_SIZE, TRIAGE_READ_BATCH_SIZE, 3]
-    assert [key for _path, key, _row in ordered] == [photo.name for photo in photos]
+            self.assertEqual(
+                batch_sizes,
+                [TRIAGE_READ_BATCH_SIZE, TRIAGE_READ_BATCH_SIZE, 3],
+            )
+            self.assertEqual(
+                [key for _path, key, _row in ordered],
+                [photo.name for photo in photos],
+            )
 
 
 def test_brands_from_triage_infers_label_makers() -> None:
