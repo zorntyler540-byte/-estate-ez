@@ -33,6 +33,8 @@ export type LotDraft = {
   sale_id: string;
   /** Sale name at capture time, so the queue can show where each lot will upload. */
   sale_name: string | null;
+  /** Server processing job created for this local draft; used to resume retries without re-uploading. */
+  server_job_id: string | null;
   manual_sku: string | null;
   status: LotDraftStatus;
   error_message: string | null;

@@ -46,7 +46,7 @@ export default function CaptureScreen() {
       </Pressable>
 
       <Text style={styles.meta}>
-        {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / failed)
+        {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / uploading / failed)
       </Text>
 
       <Pressable style={styles.link} onPress={() => void signOut()}>

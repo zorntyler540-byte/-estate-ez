@@ -1,8 +1,8 @@
-import { useFocusEffect } from "expo-router";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode
@@ -23,7 +23,7 @@ type SalesContextValue = {
 const SalesContext = createContext<SalesContextValue | null>(null);
 
 export function SalesProvider({ children }: { children: ReactNode }) {
-  const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
+  const { token, selectedSaleId, selectedSaleName } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -40,25 +40,16 @@ export function SalesProvider({ children }: { children: ReactNode }) {
 
       const nameById = new Map(open.map((s) => [s.id, s.name]));
       await backfillDraftSaleNames(nameById);
-
-      if (selectedSaleId) {
-        const current = open.find((s) => s.id === selectedSaleId);
-        if (current && current.name !== selectedSaleName) {
-          await setSelectedSale(current.id, current.name);
-        }
-      }
     } catch {
       /* keep cached names for offline queue display */
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
+  }, [token]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void refreshSales();
-    }, [refreshSales])
-  );
+  useEffect(() => {
+    void refreshSales();
+  }, [refreshSales]);
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>();

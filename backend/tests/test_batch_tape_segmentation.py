@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from app.services.processing import _segment_batch_lots_by_tape
 
@@ -45,6 +46,31 @@ def test_segment_keeps_same_tape_in_one_lot(tmp_path: Path) -> None:
         (paths[2], paths[2].name, _row(paths[2].name, "MS530")),
     ]
     segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert len(segments) == 1
+    assert len(segments[0]) == 3
+
+
+def test_segment_ignores_product_label_numbers_in_brand_text(tmp_path: Path) -> None:
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    paths = [folder / f"a{i}.jpg" for i in range(3)]
+    product_label = _row(paths[2].name)
+    product_label.update(
+        {
+            "label_legibility": "clear",
+            "brand_text": "ERTL model 7209",
+        }
+    )
+    ordered = [
+        (paths[0], paths[0].name, _row(paths[0].name, "100")),
+        (paths[1], paths[1].name, _row(paths[1].name)),
+        (paths[2], paths[2].name, product_label),
+    ]
+
+    # A transient verifier failure must not turn ordinary product OCR into a lot boundary.
+    with patch("app.services.processing.verify_tape_sku", return_value=None):
+        segments = _segment_batch_lots_by_tape(folder, ordered)
+
     assert len(segments) == 1
     assert len(segments[0]) == 3
 
