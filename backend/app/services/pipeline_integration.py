@@ -50,7 +50,7 @@ EST_PIPELINE_LISTING_OUTPUT = 280
 EST_PIPELINE_PRO_INPUT = 3200
 EST_PIPELINE_PRO_OUTPUT = 600
 
-_PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
+_PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", "estate grouping", ""})
 
 
 def _sync_pipeline_env_from_settings() -> None:
@@ -98,7 +98,11 @@ def is_weak_pipeline_lot(lot: LotOutput) -> bool:
     title = (lot.auction_title or "").strip()
     desc = (lot.professional_description or "").strip()
     title_low = title.lower()
-    if title_low in _PLACEHOLDER_TITLES or title_low.startswith("estate item ("):
+    if (
+        title_low in _PLACEHOLDER_TITLES
+        or title_low.startswith("estate item (")
+        or title_low.startswith("estate grouping (")
+    ):
         if not lot.brands and not lot.specification_lines:
             return True
     if not title and not desc and not lot.specification_lines and not lot.brands:
