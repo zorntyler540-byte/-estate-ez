@@ -53,5 +53,8 @@ Thumbs.db
 # Logs
 *.log
 
+# Large Windows desktop suite zip (host externally in production)
+frontend/public/downloads/*.zip
+
 # Pipeline planning (local until approved for commit)
 estate_pipeline_spec.md
