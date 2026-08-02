@@ -89,7 +89,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
       try {
         const res = await fetch(`${API_BASE}/lots/${lotId}/thumbnail?max_px=${maxPx}`, {
           headers: { Authorization: `Bearer ${token}` },
-          cache: "default",
+          cache: "no-store",
           signal: ac.signal
         });
         if (!res.ok || cancelled) {

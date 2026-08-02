@@ -936,7 +936,7 @@ def lot_thumbnail(
     return Response(
         content=body,
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={"Cache-Control": "private, no-cache"},
     )
 
 
@@ -1303,6 +1303,26 @@ def split_selected_photos_into_new_lot(
         ph.user_id = current.id
         ph.sort_order = i
 
+    # Source keeps remaining photos but often the old AI title (e.g. muskets) no longer matches
+    # what is left (e.g. jewelry). Force a review placeholder instead of a stale listing.
+    source.auction_title = (
+        f"Needs retitle after split ({source.sku.strip()})"
+        if (source.sku or "").strip()
+        else "Needs retitle after split"
+    )[:500]
+    source.professional_description = ""
+    source.sku_needs_review = True
+    src_specs = json.loads(source.specification_lines_json or "[]")
+    if not isinstance(src_specs, list):
+        src_specs = []
+    note = (
+        "Photos were split into another listing — regenerate AI or rewrite title/description "
+        "to match the remaining photos."
+    )
+    if note not in src_specs:
+        src_specs.append(note)
+    source.specification_lines_json = json.dumps(src_specs, ensure_ascii=True)
+
     renormalize_photo_sort_orders(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, source_lot_id, current.account_id)
     _reconcile_lot_photo_count(db, new_lot.id, current.account_id)
@@ -1381,11 +1401,23 @@ def merge_lot_into_target(
         target.sku = source.sku
         target.sku_needs_review = bool(source.sku_needs_review)
 
-    db.execute(
-        update(Photo)
-        .where(Photo.lot_id == source.id, Photo.account_id == current.account_id)
-        .values(lot_id=target.id, user_id=current.id)
+    # Append source photos after the target gallery — do not keep their old 0..n indices
+    # (renormalize would interleave and put a jewelry close-up first while title stays muskets).
+    mx = db.query(func.max(Photo.sort_order)).filter(
+        Photo.lot_id == target.id, Photo.account_id == current.account_id
+    ).scalar()
+    base = (int(mx) if mx is not None else -1) + 1
+    source_photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == source.id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
     )
+    for slot, ph in enumerate(source_photos):
+        ph.lot_id = target.id
+        ph.user_id = current.id
+        ph.sort_order = base + slot
+
     db.delete(source)
     renormalize_photo_sort_orders(db, target.id, current.account_id)
     _reconcile_lot_photo_count(db, target.id, current.account_id)

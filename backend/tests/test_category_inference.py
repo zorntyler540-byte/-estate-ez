@@ -1,4 +1,4 @@
-"""CT category inference for art supplies and jewelry false positives."""
+"""CT category inference for art supplies, jewelry, glassware, and kitchenware."""
 
 from __future__ import annotations
 
@@ -44,6 +44,41 @@ class TestCategoryInference(unittest.TestCase):
         )
         category, _sub = infer_ct_category(lot)
         self.assertEqual(category, "Art Other")
+
+    def test_portmeirion_bakeware_not_household_other(self) -> None:
+        lot = LotOutput(
+            sku="23001",
+            auction_title="Portmeirion Pomona & The Botanic Garden Bakeware Collection",
+            professional_description=(
+                "English garden charm with botanical illustrations of Susan Williams-Ellis. "
+                "Oven-safe ceramic pieces for baking and serving."
+            ),
+            brands=["Portmeirion"],
+            condition="good",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertIn(category, {"Kitchen & Home", "Dining Room"})
+        self.assertNotEqual(category, "Household Goods Other")
+
+    def test_crystal_highballs_are_glassware_or_crystal(self) -> None:
+        lot = LotOutput(
+            sku="88",
+            auction_title="Ralph Lauren Cut-Crystal Highball Set",
+            professional_description="Six cut-crystal highballs with deep cross-hatch pattern.",
+            condition="good",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertIn(category, {"Glassware", "Crystal"})
+
+    def test_stemware_maps_to_glassware(self) -> None:
+        lot = LotOutput(
+            sku="89",
+            auction_title="Set of Wine Glasses Stemware",
+            professional_description="Clear stemware wine glasses for entertaining.",
+            condition="good",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertEqual(category, "Glassware")
 
 
 if __name__ == "__main__":

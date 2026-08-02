@@ -320,8 +320,8 @@ function buildDescriptionPayload(lot) {
 const CATEGORY_RULES = [
   { category: "Handbags & Wallets", keywords: ["handbag", "purse", "wallet", "crossbody", "tote", "satchel", "clutch"] },
   { category: "Shoes", keywords: ["shoe", "heel", "loafer", "sneaker", "boot", "sandals", "rockport", "cole haan"] },
-  { category: "Women's", keywords: ["women", "dress", "blouse", "sweater", "cardigan", "skirt", "size ", "knit"] },
-  { category: "Men's", keywords: ["men", "mens", "necktie", "tie", "fedora", "hat", "akubra", "shirt"] },
+  { category: "Women's", keywords: ["women", "dress", "blouse", "sweater", "cardigan", "skirt", "knit"] },
+  { category: "Men's", keywords: ["men", "mens", "necktie", "tie", "fedora", "hat", "akubra"] },
   { category: "Earrings", keywords: ["earring", "stud earring", "hoop earring"] },
   { category: "Bracelets", keywords: ["bracelet", "bangle", "cuff bracelet", "figaro"] },
   {
@@ -344,24 +344,133 @@ const CATEGORY_RULES = [
   },
   { category: "Rings", keywords: ["ring", "band ring", "engagement ring"] },
   { category: "Jewelry Other", keywords: ["jewelry", "brooch", "necklace", "pendant", "tie clip", "cufflink"] },
+  { category: "Costume Jewelry", keywords: ["rhinestone", "costume jewelry", "clip-on"] },
   { category: "Luxury & Designer Items", keywords: ["louis vuitton", "gucci", "prada", "michael kors", "coach", "designer"] },
   { category: "Dolls", keywords: ["doll", "barbie", "matryoshka"] },
   { category: "Figures & Figurines", keywords: ["figurine", "figure", "disney", "collectible figure"] },
   { category: "Paintings", keywords: ["painting", "canvas", "acrylic", "oil on", "watercolor", "batik", "signed art"] },
   { category: "Photography", keywords: ["camera", "photography", "lens", "nikon", "canon"] },
   { category: "Clocks", keywords: ["clock", "timepiece", "mantel clock", "wall clock"] },
-  { category: "Glassware", keywords: ["glass vase", "art glass", "glassware", "crystal", "decanter", "goblet"] },
-  { category: "Decorative Collectibles", keywords: ["collectible", "decorative collectible", "display piece", "novelty"] },
   { category: "Coins", keywords: ["coin", "coins", "peso", "mint", "bullion", "numismatic"] },
-  { category: "Costume Jewelry", keywords: ["rhinestone", "costume jewelry", "brooch", "clip-on"] },
-  { category: "Kitchen & Home", keywords: ["kitchen", "cookware", "dish", "plate", "glassware", "mug", "vase"] },
+  {
+    category: "Crystal",
+    keywords: [
+      "cut crystal",
+      "lead crystal",
+      "crystal glass",
+      "crystal stemware",
+      "crystal vase",
+      "waterford",
+      "baccarat"
+    ]
+  },
+  {
+    category: "Glassware",
+    keywords: [
+      "glassware",
+      "art glass",
+      "glass vase",
+      "stained glass",
+      "pressed glass",
+      "depression glass",
+      "stemware",
+      "wine glass",
+      "champagne flute",
+      "highball",
+      "tumbler",
+      "goblet",
+      "decanter",
+      "drinking glass",
+      "barware",
+      "crystal",
+      "glass plate",
+      "glass bowl",
+      "glass dish"
+    ]
+  },
+  {
+    category: "Dining Room",
+    keywords: [
+      "dining",
+      "china set",
+      "dinnerware",
+      "place setting",
+      "tableware",
+      "serving platter",
+      "charger plate",
+      "salad plate",
+      "soup bowl",
+      "teacup",
+      "saucer",
+      "flatware",
+      "silverware",
+      "portmeirion",
+      "spode",
+      "wedgwood",
+      "lenox",
+      "noritake",
+      "mikasa",
+      "fitz and floyd",
+      "botanic garden",
+      "pomona"
+    ]
+  },
+  {
+    category: "Kitchen & Home",
+    keywords: [
+      "kitchen",
+      "cookware",
+      "bakeware",
+      "baking dish",
+      "casserole",
+      "ramekin",
+      "pie dish",
+      "roasting pan",
+      "dutch oven",
+      "dish",
+      "plate",
+      "platter",
+      "bowl",
+      "mug",
+      "teapot",
+      "coffee mug",
+      "ceramic",
+      "porcelain",
+      "stoneware",
+      "earthenware",
+      "china",
+      "pottery",
+      "oven-safe",
+      "oven safe",
+      "vase",
+      "portmeirion",
+      "pyrex",
+      "corningware",
+      "fiestaware"
+    ]
+  },
   { category: "Bedroom Goods", keywords: ["bedding", "linen", "bedspread", "comforter", "sheet", "pillowcase"] },
   { category: "Music Other", keywords: ["speaker", "stereo", "record player", "turntable", "audio", "music"] },
   { category: "Art Other", keywords: ["framed art", "wall art", "print", "decor art", "fine art"] },
-  { category: "Antiques Other", keywords: ["antique", "vintage", "heirloom", "collectible antique"] },
+  { category: "Decorative Collectibles", keywords: ["collectible", "decorative collectible", "display piece", "novelty"] },
+  { category: "Decor", keywords: ["home decor", "wall decor", "shelf decor", "centerpiece"] },
+  { category: "Antiques Other", keywords: ["antique", "heirloom", "collectible antique"] },
   { category: "Accessories", keywords: ["belt", "scarf", "hat", "accessory"] },
-  { category: "Household Goods Other", keywords: ["household", "home goods", "furniture", "lamp"] }
+  { category: "Household Goods Other", keywords: ["household", "home goods", "furniture", "lamp", "nightstand", "dresser"] }
 ];
+
+const SPECIFIC_OVER_HOUSEHOLD = new Set([
+  "Glassware",
+  "Crystal",
+  "Dining Room",
+  "Kitchen & Home",
+  "Decor",
+  "Decorative Collectibles",
+  "Art",
+  "Art Other",
+  "Paintings",
+  "Figures & Figurines"
+]);
 
 function hayKeywordMatch(hay, kw) {
   const k = String(kw || "").trim().toLowerCase();
@@ -375,26 +484,31 @@ function inferCategory(lot, description) {
   const specs = Array.isArray(lot?.specification_lines) ? lot.specification_lines.join(" ") : "";
   const tags = Array.isArray(lot?.labels_and_tags) ? lot.labels_and_tags.join(" ") : "";
   const hay = `${lot.auction_title || ""}\n${description || ""}\n${(lot.brands || []).join(" ")}\n${specs}\n${tags}`.toLowerCase();
-  let best = { category: "", score: 0 };
+  const scored = [];
   for (const rule of CATEGORY_RULES) {
     let score = 0;
     for (const kw of rule.keywords) {
       if (hayKeywordMatch(hay, kw)) score += kw.length;
     }
-    if (score > best.score) {
-      best = { category: rule.category, score };
+    if (score > 0) scored.push({ category: rule.category, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  if (!scored.length || scored[0].score < 6) {
+    if (
+      /\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay|trunk)\b/i.test(
+        hay
+      )
+    ) {
+      return "Household Goods Other";
     }
+    return "";
   }
-  if (best.score >= 6) return best.category;
-  // Strong furniture fallback keywords often missed by generic rules.
-  if (
-    /\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay|box|keepsake|trunk|storage)\b/i.test(
-      hay
-    )
-  ) {
-    return "Household Goods Other";
+  let best = scored[0];
+  if (best.category === "Household Goods Other") {
+    const preferred = scored.find((s) => SPECIFIC_OVER_HOUSEHOLD.has(s.category) && s.score >= 5);
+    if (preferred) best = preferred;
   }
-  return "";
+  return best.category;
 }
 
 function sleep(ms) {
@@ -583,7 +697,15 @@ function mapCategoryCandidates(category) {
     "art other": "Art",
     "art supplies": "Art",
     paintings: "Paintings",
-    "housewares": "Household Goods Other",
+    glassware: "Glassware",
+    crystal: "Crystal",
+    "dining room": "Dining Room",
+    dining: "Dining Room",
+    decor: "Decor",
+    "housewares": "Kitchen & Home",
+    "bakeware": "Kitchen & Home",
+    "dinnerware": "Dining Room",
+    "china": "Dining Room",
     "furniture": "Household Goods Other",
     "home": "Household Goods Other",
     "jewelry other": "Costume Jewelry"

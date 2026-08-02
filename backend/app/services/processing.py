@@ -346,6 +346,39 @@ def _assign_photos_to_lot(db: Session, lot_id: str, photo_ids: list[str]) -> Non
         )
 
 
+def _hero_filename_from_pipeline(pipeline_result: dict | None) -> str | None:
+    """Pipeline hero key used for listing text — should also be the dashboard thumbnail."""
+    if not pipeline_result:
+        return None
+    selected = pipeline_result.get("selected") or {}
+    name = str(selected.get("hero_filename") or "").strip()
+    return name or None
+
+
+def _order_paths_hero_first(paths: list[Path], hero_filename: str | None) -> list[Path]:
+    """
+    Put the AI hero frame first so ``/lots/{id}/thumbnail`` (first by sort_order) matches the title.
+
+    Without this, jewelry close-ups uploaded first become the thumb while Pro titles a musket
+    wide shot chosen as hero — the jewelry/musket mismatch on the dashboard.
+    """
+    if not paths or not hero_filename:
+        return list(paths)
+    hero_key = hero_filename.replace("\\", "/").lower()
+    hero_name = Path(hero_filename).name.lower()
+    match_idx: int | None = None
+    for i, path in enumerate(paths):
+        resolved = str(path).replace("\\", "/").lower()
+        if path.name.lower() == hero_name or resolved.endswith("/" + hero_key) or resolved.endswith(hero_key):
+            match_idx = i
+            break
+    if match_idx is None or match_idx == 0:
+        return list(paths)
+    ordered = list(paths)
+    hero_path = ordered.pop(match_idx)
+    return [hero_path, *ordered]
+
+
 def _cancel_signaled(
     db: Session, job_id: str, cancel_event: threading.Event | None
 ) -> bool:
@@ -543,7 +576,7 @@ def _process_job_batch_pipeline(
         seg_triage = [triage_by_key[k] for _p, k in seg_entries if k in triage_by_key]
 
         try:
-            lot, _pipeline_result = run_single_lot_pipeline(
+            lot, pipeline_result = run_single_lot_pipeline(
                 seg_entries,
                 manifest_tag=f"{job.id}-seg{seg_idx}",
                 emit=_emit,
@@ -562,14 +595,17 @@ def _process_job_batch_pipeline(
         _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
         _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
+        catalog_paths = _order_paths_hero_first(
+            seg_paths, _hero_filename_from_pipeline(pipeline_result)
+        )
         pending_photo_ids: list[str] = []
-        for i, photo_path in enumerate(seg_paths):
+        for i, photo_path in enumerate(catalog_paths):
             _emit_job(
                 job,
                 {
                     "type": "inventory_step",
                     "index": i,
-                    "total": len(seg_paths),
+                    "total": len(catalog_paths),
                     "file_name": photo_path.name,
                 },
             )
@@ -577,7 +613,7 @@ def _process_job_batch_pipeline(
             pending_photo_ids.append(row.id)
             db.commit()
 
-        lot.photo_count = len(seg_paths)
+        lot.photo_count = len(catalog_paths)
         _, pending_photo_ids, finalized = _finalize_open_lot(
             db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
         )
@@ -665,7 +701,8 @@ def _process_job_single_lot_pipeline(
     _apply_single_lot_manual_sku(job, lot)
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-    for i, photo_path in enumerate(photos):
+    catalog_paths = _order_paths_hero_first(photos, _hero_filename_from_pipeline(pipeline_result))
+    for i, photo_path in enumerate(catalog_paths):
         if _cancel_signaled(db, job.id, cancel_event):
             job.status = JobStatus.failed
             job.error_message = "Cancelled"
@@ -697,7 +734,7 @@ def _process_job_single_lot_pipeline(
         _finish_job_completed(db, job)
         return
 
-    lot.photo_count = len(photos)
+    lot.photo_count = len(catalog_paths)
     _, pending_photo_ids, finalized = _finalize_open_lot(
         db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
     )
