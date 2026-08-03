@@ -18,6 +18,33 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
     ("Jewelry Other", ("jewelry", "brooch", "necklace", "pendant", "tie clip", "cufflink")),
     ("Costume Jewelry", ("rhinestone", "costume jewelry", "clip-on")),
     ("Luxury & Designer Items", ("louis vuitton", "gucci", "prada", "michael kors", "coach", "designer")),
+    (
+        "Books",
+        (
+            "hardcover book",
+            "paperback book",
+            "hardcover",
+            "paperback",
+            "softcover",
+            "first edition",
+            "coffee table book",
+            "children's book",
+            "childrens book",
+            "picture book",
+            "novel",
+            "textbook",
+            "cookbook",
+            "biography",
+            "autobiography",
+            "yearbook",
+            "magazine",
+            "comic book",
+            "comics",
+            "book set",
+            "book lot",
+            "book",
+        ),
+    ),
     ("Dolls", ("doll", "barbie", "matryoshka")),
     ("Figures & Figurines", ("figurine", "figure", "disney", "collectible figure")),
     (
@@ -144,7 +171,8 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
     ("Bedroom Goods", ("bedding", "linen", "bedspread", "comforter", "sheet", "pillowcase")),
     ("Music Other", ("speaker", "stereo", "record player", "turntable", "audio", "music")),
     ("Art Other", ("framed art", "wall art", "print", "decor art", "fine art")),
-    ("Decorative Collectibles", ("collectible", "decorative collectible", "display piece", "novelty")),
+    # Avoid bare "collectible" — it steals books, china, and other specific lots.
+    ("Decorative Collectibles", ("decorative collectible", "display piece", "novelty figurine", "knickknack", "knick knack")),
     ("Decor", ("home decor", "wall decor", "shelf decor", "centerpiece")),
     ("Antiques Other", ("antique", "heirloom", "collectible antique")),
     ("Accessories", ("belt", "scarf", "hat", "accessory")),
@@ -155,6 +183,7 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
 # Prefer these over Household Goods Other when scores are close.
 _SPECIFIC_OVER_HOUSEHOLD = frozenset(
     {
+        "Books",
         "Glassware",
         "Crystal",
         "Dining Room",
@@ -165,6 +194,16 @@ _SPECIFIC_OVER_HOUSEHOLD = frozenset(
         "Art Other",
         "Paintings",
         "Figures & Figurines",
+    }
+)
+
+# Weak catch-alls the AI often picks; keyword inference should override when clearer.
+_WEAK_CATCHALL_CATEGORIES = frozenset(
+    {
+        "Decorative Collectibles",
+        "Household Goods Other",
+        "Antiques Other",
+        "Decor",
     }
 )
 
@@ -202,9 +241,31 @@ def infer_ct_category(lot: LotOutput) -> tuple[str | None, str | None]:
     best_category, best_score = scored[0]
     if best_score < 6:
         return None, None
-    # If Household Goods Other barely wins, prefer a specific kitchen/glass/dining hit.
+    # If Household Goods Other barely wins, prefer a specific kitchen/glass/dining/books hit.
     if best_category == "Household Goods Other" and len(scored) > 1:
         for category, score in scored[1:]:
             if category in _SPECIFIC_OVER_HOUSEHOLD and score >= 5:
                 return category, None
+    # Books beat decorative/antique catch-alls even when those also match.
+    if best_category in _WEAK_CATCHALL_CATEGORIES:
+        for category, score in scored:
+            if category == "Books" and score >= 4:
+                return "Books", None
     return best_category, None
+
+
+def prefer_keyword_category_over_stored(
+    stored: str | None, lot: LotOutput
+) -> tuple[str | None, str | None]:
+    """Prefer keyword inference when the stored AI category is a weak catch-all."""
+    inferred, sub = infer_ct_category(lot)
+    stored_norm = (stored or "").strip()
+    if not stored_norm:
+        return inferred, sub
+    if not inferred:
+        return stored_norm, None
+    if stored_norm in _WEAK_CATCHALL_CATEGORIES and inferred not in _WEAK_CATCHALL_CATEGORIES:
+        return inferred, sub
+    if inferred == "Books" and stored_norm != "Books":
+        return inferred, sub
+    return stored_norm, None

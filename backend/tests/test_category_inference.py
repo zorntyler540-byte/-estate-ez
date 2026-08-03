@@ -80,6 +80,34 @@ class TestCategoryInference(unittest.TestCase):
         category, _sub = infer_ct_category(lot)
         self.assertEqual(category, "Glassware")
 
+    def test_hardcover_book_is_books_not_decorative_collectibles(self) -> None:
+        from app.services.category_inference import prefer_keyword_category_over_stored
+
+        lot = LotOutput(
+            sku="Z3130",
+            auction_title='1943 Johnny Gruelle "Raggedy Ann and Betsy Bonnet String" Hardcover Book',
+            professional_description=(
+                "A delightful piece of childhood history—this is the 1943 hardcover edition "
+                'of "Raggedy Ann and Betsy Bonnet String" by Johnny Gruelle.'
+            ),
+            condition="good",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertEqual(category, "Books")
+        preferred, _ = prefer_keyword_category_over_stored("Decorative Collectibles", lot)
+        self.assertEqual(preferred, "Books")
+
+    def test_collectible_word_does_not_steal_books(self) -> None:
+        lot = LotOutput(
+            sku="90",
+            auction_title="Vintage Collectible Hardcover Book",
+            professional_description="A collectible childhood classic book in hardcover.",
+            condition="good",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertEqual(category, "Books")
+        self.assertNotEqual(category, "Decorative Collectibles")
+
 
 if __name__ == "__main__":
     unittest.main()

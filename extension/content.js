@@ -346,6 +346,33 @@ const CATEGORY_RULES = [
   { category: "Jewelry Other", keywords: ["jewelry", "brooch", "necklace", "pendant", "tie clip", "cufflink"] },
   { category: "Costume Jewelry", keywords: ["rhinestone", "costume jewelry", "clip-on"] },
   { category: "Luxury & Designer Items", keywords: ["louis vuitton", "gucci", "prada", "michael kors", "coach", "designer"] },
+  {
+    category: "Books",
+    keywords: [
+      "hardcover book",
+      "paperback book",
+      "hardcover",
+      "paperback",
+      "softcover",
+      "first edition",
+      "coffee table book",
+      "children's book",
+      "childrens book",
+      "picture book",
+      "novel",
+      "textbook",
+      "cookbook",
+      "biography",
+      "autobiography",
+      "yearbook",
+      "magazine",
+      "comic book",
+      "comics",
+      "book set",
+      "book lot",
+      "book"
+    ]
+  },
   { category: "Dolls", keywords: ["doll", "barbie", "matryoshka"] },
   { category: "Figures & Figurines", keywords: ["figurine", "figure", "disney", "collectible figure"] },
   { category: "Paintings", keywords: ["painting", "canvas", "acrylic", "oil on", "watercolor", "batik", "signed art"] },
@@ -452,7 +479,10 @@ const CATEGORY_RULES = [
   { category: "Bedroom Goods", keywords: ["bedding", "linen", "bedspread", "comforter", "sheet", "pillowcase"] },
   { category: "Music Other", keywords: ["speaker", "stereo", "record player", "turntable", "audio", "music"] },
   { category: "Art Other", keywords: ["framed art", "wall art", "print", "decor art", "fine art"] },
-  { category: "Decorative Collectibles", keywords: ["collectible", "decorative collectible", "display piece", "novelty"] },
+  {
+    category: "Decorative Collectibles",
+    keywords: ["decorative collectible", "display piece", "novelty figurine", "knickknack", "knick knack"]
+  },
   { category: "Decor", keywords: ["home decor", "wall decor", "shelf decor", "centerpiece"] },
   { category: "Antiques Other", keywords: ["antique", "heirloom", "collectible antique"] },
   { category: "Accessories", keywords: ["belt", "scarf", "hat", "accessory"] },
@@ -460,6 +490,7 @@ const CATEGORY_RULES = [
 ];
 
 const SPECIFIC_OVER_HOUSEHOLD = new Set([
+  "Books",
   "Glassware",
   "Crystal",
   "Dining Room",
@@ -470,6 +501,13 @@ const SPECIFIC_OVER_HOUSEHOLD = new Set([
   "Art Other",
   "Paintings",
   "Figures & Figurines"
+]);
+
+const WEAK_CATCHALL_CATEGORIES = new Set([
+  "Decorative Collectibles",
+  "Household Goods Other",
+  "Antiques Other",
+  "Decor"
 ]);
 
 function hayKeywordMatch(hay, kw) {
@@ -507,6 +545,10 @@ function inferCategory(lot, description) {
   if (best.category === "Household Goods Other") {
     const preferred = scored.find((s) => SPECIFIC_OVER_HOUSEHOLD.has(s.category) && s.score >= 5);
     if (preferred) best = preferred;
+  }
+  if (WEAK_CATCHALL_CATEGORIES.has(best.category)) {
+    const books = scored.find((s) => s.category === "Books" && s.score >= 4);
+    if (books) best = books;
   }
   return best.category;
 }
@@ -662,6 +704,7 @@ function mapConditionOptions(conditionText) {
 const CTSELLER_ALLOWED_CATEGORIES = [
   "Antiques Other",
   "Art",
+  "Books",
   "Coins",
   "Costume Jewelry",
   "Crystal",
@@ -706,6 +749,10 @@ function mapCategoryCandidates(category) {
     "bakeware": "Kitchen & Home",
     "dinnerware": "Dining Room",
     "china": "Dining Room",
+    books: "Books",
+    book: "Books",
+    "books and magazines": "Books",
+    magazine: "Books",
     "furniture": "Household Goods Other",
     "home": "Household Goods Other",
     "jewelry other": "Costume Jewelry"
@@ -1042,14 +1089,21 @@ async function fillFromLot(lot) {
   const price = lot.starting_price != null ? String(lot.starting_price) : "";
   const condition = lot.condition_text || "";
   const inferredCategoryRaw = String(lot.ct_category || "").trim();
-  let inferredCategory = inferredCategoryRaw || inferCategory(lot, description);
+  const keywordCategory = inferCategory(lot, description);
+  // Prefer keyword hit when AI stored a weak catch-all (e.g. books → Decorative Collectibles).
+  let inferredCategory = inferredCategoryRaw || keywordCategory;
+  if (
+    keywordCategory &&
+    (!inferredCategoryRaw ||
+      (WEAK_CATCHALL_CATEGORIES.has(inferredCategoryRaw) && !WEAK_CATCHALL_CATEGORIES.has(keywordCategory)) ||
+      (keywordCategory === "Books" && inferredCategoryRaw !== "Books"))
+  ) {
+    inferredCategory = keywordCategory;
+  }
   let categoryCandidates = mapCategoryCandidates(inferredCategory);
-  if (!categoryCandidates.length) {
-    const fallback = inferCategory(lot, description);
-    if (fallback) {
-      categoryCandidates = mapCategoryCandidates(fallback);
-      if (categoryCandidates.length) inferredCategory = fallback;
-    }
+  if (!categoryCandidates.length && keywordCategory) {
+    categoryCandidates = mapCategoryCandidates(keywordCategory);
+    if (categoryCandidates.length) inferredCategory = keywordCategory;
   }
   const inferredSubcategory = lot.ct_subcategory || "";
   const inferredArea = inferAreaFromCategory(inferredCategory);
