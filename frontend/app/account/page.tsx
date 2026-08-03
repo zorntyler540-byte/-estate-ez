@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
-import { apiFetch } from "../../lib/api";
+import { API_BASE, apiFetch } from "../../lib/api";
 
 type Me = {
   id: string;
@@ -105,7 +105,7 @@ export default function AccountPage() {
       .catch(() => {
         /* optional until backend redeploys */
       });
-    void fetch(`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/health`, { cache: "no-store" })
+    void fetch(`${API_BASE}/health`, { cache: "no-store" })
       .then((r) => r.json())
       .then((h: { catalog_r2_configured?: boolean }) => setR2Configured(Boolean(h.catalog_r2_configured)))
       .catch(() => setR2Configured(false));
