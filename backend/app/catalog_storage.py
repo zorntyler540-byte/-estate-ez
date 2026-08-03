@@ -161,16 +161,22 @@ def migrate_local_photos_to_r2(
     photo_rows: list[tuple[str, str | None]],
     *,
     limit: int = 500,
+    offset: int = 0,
     skip_if_remote: bool = True,
-) -> dict[str, int | list[str]]:
+) -> dict[str, int | list[str] | bool | None]:
     """
     Upload existing local catalog files to R2 using the same object keys.
 
-    ``photo_rows`` is a list of ``(photo_id, storage_path)``.
-    Safe to re-run: objects already in R2 are skipped when ``skip_if_remote``.
+    Processes ``photo_rows[offset : offset + limit]`` so callers can page through
+    large catalogs without re-checking earlier rows each time.
     """
     if not object_storage.r2_configured():
         raise RuntimeError("R2 is not configured")
+
+    total = len(photo_rows)
+    start = max(0, int(offset))
+    end = min(total, start + max(1, int(limit)))
+    window = photo_rows[start:end]
 
     uploaded = 0
     skipped_remote = 0
@@ -178,16 +184,13 @@ def migrate_local_photos_to_r2(
     failed = 0
     errors: list[str] = []
 
-    for photo_id, storage_path in photo_rows:
-        if uploaded >= limit:
-            break
+    for photo_id, storage_path in window:
         key = _object_key_from_storage_path(storage_path or "")
         if not key:
             skipped_missing += 1
             continue
         local = _local_catalog_file(storage_path)
         if local is None:
-            # Already only on R2, or truly gone
             if skip_if_remote and object_storage.object_exists(key):
                 skipped_remote += 1
             else:
@@ -205,12 +208,17 @@ def migrate_local_photos_to_r2(
                 errors.append(f"{photo_id}: {exc}")
             logger.warning("R2 migrate failed for %s (%s): %s", photo_id, key, exc)
 
+    next_offset: int | None = end if end < total else None
     return {
         "uploaded": uploaded,
         "skipped_already_in_r2": skipped_remote,
         "skipped_missing_local": skipped_missing,
         "failed": failed,
         "errors": errors,
+        "offset": start,
+        "next_offset": next_offset,
+        "total_photos": total,
+        "done": next_offset is None,
     }
 
 

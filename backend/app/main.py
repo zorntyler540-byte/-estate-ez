@@ -685,7 +685,12 @@ def migrate_catalog_to_r2(
     )
     photo_rows = [(str(r.id), r.storage_path) for r in rows]
     try:
-        result = migrate_local_photos_to_r2(photo_rows, limit=body.limit, skip_if_remote=True)
+        result = migrate_local_photos_to_r2(
+            photo_rows,
+            limit=body.limit,
+            offset=body.offset,
+            skip_if_remote=True,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CatalogR2MigrateOut(
@@ -695,6 +700,10 @@ def migrate_catalog_to_r2(
         failed=int(result["failed"]),
         errors=list(result.get("errors") or []),
         r2_configured=True,
+        offset=int(result.get("offset") or 0),
+        next_offset=result.get("next_offset"),  # type: ignore[arg-type]
+        total_photos=int(result.get("total_photos") or 0),
+        done=bool(result.get("done")),
     )
 
 

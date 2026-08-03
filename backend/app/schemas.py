@@ -246,6 +246,7 @@ class CatalogR2MigrateIn(BaseModel):
     """Upload local catalog files to R2. Safe to re-run."""
 
     limit: int = Field(default=500, ge=1, le=5000)
+    offset: int = Field(default=0, ge=0, le=5_000_000)
     account_id: str | None = None  # master admin only; owners always migrate their own account
 
 
@@ -256,6 +257,10 @@ class CatalogR2MigrateOut(BaseModel):
     failed: int
     errors: list[str] = []
     r2_configured: bool = True
+    offset: int = 0
+    next_offset: int | None = None
+    total_photos: int = 0
+    done: bool = False
 
 
 class CreateJobRequest(BaseModel):
