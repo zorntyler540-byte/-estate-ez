@@ -86,6 +86,8 @@ class CTSellerSaleRow:
     id: int
     title: str
     status: str | None = None
+    starttime: str | None = None
+    endtime: str | None = None
 
 
 class CTSellerClient:
@@ -151,30 +153,67 @@ class CTSellerClient:
         return new_token
 
     def list_open_sales(self) -> list[CTSellerSaleRow]:
-        payload = {
-            "filter": [
-                {"field": "status", "value": "Closed", "op": "!=", "join": "AND"},
-                {"field": "isDeleted", "value": 1, "op": "!=", "join": "AND"},
-            ],
-            "field": ["id", "title", "status"],
-        }
-        data = self._post_json("/sale/list", payload)
-        rows = data if isinstance(data, list) else []
+        """
+        Sales still open for cataloging — same idea as CT Seller Sales list \"active\":
+        not deleted and endtime still in the future (includes Pending / not-yet-started).
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        base_filter = [
+            {"field": "isDeleted", "value": 1, "op": "!=", "join": "AND"},
+            # Match SaleList \"active\" tab: endtime > now (Pending + Started).
+            {"field": "endtime", "value": now, "op": ">", "join": "AND"},
+        ]
+        fields = ["id", "title", "status", "starttime", "endtime"]
         out: list[CTSellerSaleRow] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            try:
-                sid = int(row.get("id"))
-            except (TypeError, ValueError):
-                continue
-            out.append(
-                CTSellerSaleRow(
-                    id=sid,
-                    title=str(row.get("title") or f"Sale {sid}"),
-                    status=str(row.get("status") or "") or None,
+        seen: set[int] = set()
+        next_key: str | None = None
+        for _ in range(15):
+            page: dict[str, Any] = {"size": 100}
+            if next_key:
+                page["next"] = next_key
+            payload: dict[str, Any] = {
+                "filter": base_filter,
+                "field": fields,
+                "sort": [{"field": "starttime", "direction": "asc"}],
+                "page": page,
+            }
+            body = self._post_raw("/sale/list", payload)
+            data = body.get("data")
+            rows = data if isinstance(data, list) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    sid = int(row.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                status = str(row.get("status") or "").strip() or None
+                # Skip fully closed/inactive if API still returns them.
+                if status and status.lower() in ("closed", "inactive"):
+                    continue
+                out.append(
+                    CTSellerSaleRow(
+                        id=sid,
+                        title=str(row.get("title") or f"Sale {sid}"),
+                        status=status,
+                        starttime=str(row.get("starttime") or "") or None,
+                        endtime=str(row.get("endtime") or "") or None,
+                    )
                 )
-            )
+            page_meta = body.get("page") if isinstance(body.get("page"), dict) else {}
+            nxt = None
+            if isinstance(page_meta, dict):
+                keyset = page_meta.get("keyset")
+                if isinstance(keyset, dict):
+                    nxt = keyset.get("next") or None
+            if not nxt or not rows:
+                break
+            next_key = str(nxt)
         return out
 
     def sale_detail(self, sale_id: int) -> dict[str, Any]:

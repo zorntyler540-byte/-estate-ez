@@ -49,6 +49,8 @@ type CTSellerRemoteSale = {
   id: number;
   title: string;
   status?: string | null;
+  starttime?: string | null;
+  endtime?: string | null;
 };
 
 type SaleLotOption = {
@@ -1193,7 +1195,8 @@ export default function LotDetailPage() {
                 {ctSellerRemoteSales.map((s) => (
                   <option key={s.id} value={String(s.id)}>
                     {s.title}
-                    {s.status ? ` (${s.status})` : ""} · #{s.id}
+                    {s.status ? ` (${s.status})` : ""}
+                    {s.starttime ? ` · starts ${String(s.starttime).slice(0, 10)}` : ""} · #{s.id}
                   </option>
                 ))}
               </select>

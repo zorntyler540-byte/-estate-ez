@@ -944,7 +944,16 @@ def ctseller_list_sales(
         rows = client.list_open_sales()
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return [CTSellerRemoteSaleOut(id=r.id, title=r.title, status=r.status) for r in rows]
+    return [
+        CTSellerRemoteSaleOut(
+            id=r.id,
+            title=r.title,
+            status=r.status,
+            starttime=r.starttime,
+            endtime=r.endtime,
+        )
+        for r in rows
+    ]
 
 
 def _post_one_lot_to_ctseller(

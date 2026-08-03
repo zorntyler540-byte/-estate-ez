@@ -192,6 +192,8 @@ class CTSellerRemoteSaleOut(BaseModel):
     id: int
     title: str
     status: str | None = None
+    starttime: str | None = None
+    endtime: str | None = None
 
 
 class LotPostToCTSellerIn(BaseModel):
