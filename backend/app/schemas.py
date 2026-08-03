@@ -242,6 +242,22 @@ class SalePostToCTSellerOut(BaseModel):
     results: list[SalePostToCTSellerLotResult]
 
 
+class CatalogR2MigrateIn(BaseModel):
+    """Upload local catalog files to R2. Safe to re-run."""
+
+    limit: int = Field(default=500, ge=1, le=5000)
+    account_id: str | None = None  # master admin only; owners always migrate their own account
+
+
+class CatalogR2MigrateOut(BaseModel):
+    uploaded: int
+    skipped_already_in_r2: int
+    skipped_missing_local: int
+    failed: int
+    errors: list[str] = []
+    r2_configured: bool = True
+
+
 class CreateJobRequest(BaseModel):
     input_folder: str
     sale_id: str

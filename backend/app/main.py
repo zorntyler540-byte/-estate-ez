@@ -45,6 +45,8 @@ from app.schemas import (
     CTSellerCredentialsIn,
     CTSellerRemoteSaleOut,
     CTSellerStatusOut,
+    CatalogR2MigrateIn,
+    CatalogR2MigrateOut,
     DeleteLotPhotosIn,
     HealthResponse,
     JobOut,
@@ -113,7 +115,13 @@ from app.services.suggestion_email import (
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
-from app.catalog_storage import delete_catalog_photo, persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.catalog_storage import (
+    delete_catalog_photo,
+    migrate_local_photos_to_r2,
+    persist_catalog_photo,
+    resolve_catalog_storage_path,
+    upload_root,
+)
 from app.object_storage import r2_configured as catalog_r2_configured
 from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
@@ -650,6 +658,44 @@ def admin_delete_account(
     db.query(Account).filter(Account.id == account_id).delete(synchronize_session=False)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/integrations/r2/migrate-catalog", response_model=CatalogR2MigrateOut)
+def migrate_catalog_to_r2(
+    payload: CatalogR2MigrateIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogR2MigrateOut:
+    """
+    Copy existing local catalog photos into R2 (same keys). Run once after enabling R2
+    while files still exist on the API disk/volume. Safe to re-run.
+    """
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured on this API")
+    body = payload or CatalogR2MigrateIn()
+    account_id = current.account_id
+    if body.account_id and body.account_id != current.account_id:
+        _require_master_admin(current)
+        account_id = body.account_id.strip()
+    rows = (
+        db.query(Photo.id, Photo.storage_path)
+        .filter(Photo.account_id == account_id)
+        .order_by(Photo.created_at.asc())
+        .all()
+    )
+    photo_rows = [(str(r.id), r.storage_path) for r in rows]
+    try:
+        result = migrate_local_photos_to_r2(photo_rows, limit=body.limit, skip_if_remote=True)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CatalogR2MigrateOut(
+        uploaded=int(result["uploaded"]),
+        skipped_already_in_r2=int(result["skipped_already_in_r2"]),
+        skipped_missing_local=int(result["skipped_missing_local"]),
+        failed=int(result["failed"]),
+        errors=list(result.get("errors") or []),
+        r2_configured=True,
+    )
 
 
 @app.get("/admin/analytics", response_model=AdminUsageSummaryOut)

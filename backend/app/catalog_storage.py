@@ -130,10 +130,11 @@ def resolve_catalog_storage_path(storage_path: str | None) -> Path:
     return candidates[0].resolve() if candidates else p.resolve()
 
 
-def catalog_photo_file_on_disk(storage_path: str | None) -> bool:
-    if not storage_path or not str(storage_path).strip():
-        return False
-    raw = str(storage_path).strip()
+def _local_catalog_file(storage_path: str | None) -> Path | None:
+    """Return an existing local file for this storage path (no R2 download)."""
+    raw = (storage_path or "").strip()
+    if not raw:
+        return None
     root = upload_root()
     candidates: list[Path] = []
     p = Path(raw)
@@ -148,11 +149,77 @@ def catalog_photo_file_on_disk(storage_path: str | None) -> bool:
             candidates.append(root / tail)
     for c in candidates:
         try:
-            if c.resolve().is_file():
-                return True
+            resolved = c.resolve()
+            if resolved.is_file():
+                return resolved
         except OSError:
             continue
-    key = _object_key_from_storage_path(raw)
+    return None
+
+
+def migrate_local_photos_to_r2(
+    photo_rows: list[tuple[str, str | None]],
+    *,
+    limit: int = 500,
+    skip_if_remote: bool = True,
+) -> dict[str, int | list[str]]:
+    """
+    Upload existing local catalog files to R2 using the same object keys.
+
+    ``photo_rows`` is a list of ``(photo_id, storage_path)``.
+    Safe to re-run: objects already in R2 are skipped when ``skip_if_remote``.
+    """
+    if not object_storage.r2_configured():
+        raise RuntimeError("R2 is not configured")
+
+    uploaded = 0
+    skipped_remote = 0
+    skipped_missing = 0
+    failed = 0
+    errors: list[str] = []
+
+    for photo_id, storage_path in photo_rows:
+        if uploaded >= limit:
+            break
+        key = _object_key_from_storage_path(storage_path or "")
+        if not key:
+            skipped_missing += 1
+            continue
+        local = _local_catalog_file(storage_path)
+        if local is None:
+            # Already only on R2, or truly gone
+            if skip_if_remote and object_storage.object_exists(key):
+                skipped_remote += 1
+            else:
+                skipped_missing += 1
+            continue
+        try:
+            if skip_if_remote and object_storage.object_exists(key):
+                skipped_remote += 1
+                continue
+            object_storage.put_file(key, str(local))
+            uploaded += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            if len(errors) < 20:
+                errors.append(f"{photo_id}: {exc}")
+            logger.warning("R2 migrate failed for %s (%s): %s", photo_id, key, exc)
+
+    return {
+        "uploaded": uploaded,
+        "skipped_already_in_r2": skipped_remote,
+        "skipped_missing_local": skipped_missing,
+        "failed": failed,
+        "errors": errors,
+    }
+
+
+def catalog_photo_file_on_disk(storage_path: str | None) -> bool:
+    if not storage_path or not str(storage_path).strip():
+        return False
+    if _local_catalog_file(storage_path) is not None:
+        return True
+    key = _object_key_from_storage_path(str(storage_path))
     if key and object_storage.r2_configured():
         return object_storage.object_exists(key)
     return False

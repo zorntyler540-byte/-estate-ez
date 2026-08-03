@@ -113,6 +113,10 @@ Set these on the **API** Railway service so catalog photos survive redeploys and
 
 When configured, new catalog photos are uploaded to R2 under the same keys as before (`catalog/{account_id}/{photo_id}.ext`). The API keeps a local cache under `backend/data/uploads` for fast reads; if the cache is missing after a redeploy, it downloads from R2 on demand.
 
+**Migrate existing photos (once):** after R2 vars are live, call while files still exist on the API disk:
+
+`POST /integrations/r2/migrate-catalog` with body `{ "limit": 500 }` (auth as account owner). Re-run until `uploaded` is 0. Check the R2 bucket for `catalog/…` objects.
+
 `GET /health` reports `catalog_r2_configured: true` when the vars are present.
 
 Keep the R2 bucket **private**. Do not enable the public development URL.
