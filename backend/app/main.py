@@ -113,7 +113,8 @@ from app.services.suggestion_email import (
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
-from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.catalog_storage import delete_catalog_photo, persist_catalog_photo, resolve_catalog_storage_path, upload_root
+from app.object_storage import r2_configured as catalog_r2_configured
 from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
@@ -308,6 +309,7 @@ def health() -> HealthResponse:
         gemini_flash_model=settings.gemini_flash_model,
         catalog_upload_root=str(root),
         catalog_image_files_on_disk=_count_catalog_image_files(),
+        catalog_r2_configured=catalog_r2_configured(),
     )
 
 
@@ -1475,14 +1477,14 @@ def delete_lot_photos(
             detail=f"Photo id(s) not on this lot: {preview}{more}" if preview else "No matching photos on this lot.",
         )
 
-    paths = [resolve_catalog_storage_path(p.storage_path) for p in to_delete]
+    storage_paths = [ph.storage_path for ph in to_delete]
     for ph in to_delete:
         db.delete(ph)
     renormalize_photo_sort_orders(db, lot_id, current.account_id)
     _reconcile_lot_photo_count(db, lot_id, current.account_id)
     db.commit()
-    for path in paths:
-        path.unlink(missing_ok=True)
+    for sp in storage_paths:
+        delete_catalog_photo(sp)
     return _lot_out_for_id(db, current.account_id, lot_id)
 
 

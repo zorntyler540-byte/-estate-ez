@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
     gemini_flash_model: str = ""
     catalog_upload_root: str = ""
     catalog_image_files_on_disk: int = 0
+    catalog_r2_configured: bool = False
 
 
 class RegisterRequest(BaseModel):

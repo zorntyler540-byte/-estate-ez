@@ -99,36 +99,53 @@ If the browser console shows **CORS** errors, `CORS_ORIGINS` on the API does not
 
 ## 7. Uploads and redeploys
 
-Images are stored under **`backend/data/uploads`** inside the API container. Many hosts **wipe the filesystem** on redeploy unless you attach a **persistent volume** mounted at `/app/backend/data` (or move to S3/R2 later).
+### Cloudflare R2 (recommended)
 
-For a first pilot: avoid redeploying the API unnecessarily, or add a volume in your host’s UI.
+Set these on the **API** Railway service so catalog photos survive redeploys and skip Railway disk egress for durable storage:
 
-**Multiple API replicas:** Catalog photos are stored on the container filesystem. If your host runs more than one API instance without a **shared volume**, uploads can land on instance A while thumbnails and health checks hit instance B — new lots will show photo counts but “missing on server.” Use **one replica** until you add shared storage (volume mount at `/app/backend/data` or S3/R2).
+| Variable | Example |
+|----------|---------|
+| `R2_ACCESS_KEY_ID` | from R2 Account API token |
+| `R2_SECRET_ACCESS_KEY` | from R2 Account API token |
+| `R2_BUCKET` | `estate-catalog` |
+| `R2_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (no bucket suffix) |
+| `R2_ACCOUNT_ID` | optional, for your notes |
 
-New uploads are copied into **`data/uploads/catalog/{account_id}/{photo_id}.jpg`** so catalog JPEGs are **not** tied to temporary job batch folders. Clearing lots in the app removes database rows only — it does not delete files under `catalog/` (you can prune old files manually if needed).
+When configured, new catalog photos are uploaded to R2 under the same keys as before (`catalog/{account_id}/{photo_id}.ext`). The API keeps a local cache under `backend/data/uploads` for fast reads; if the cache is missing after a redeploy, it downloads from R2 on demand.
+
+`GET /health` reports `catalog_r2_configured: true` when the vars are present.
+
+Keep the R2 bucket **private**. Do not enable the public development URL.
+
+### Local disk / volume (fallback)
+
+Without R2, images are stored only under **`backend/data/uploads`** inside the API container. Many hosts **wipe the filesystem** on redeploy unless you attach a **persistent volume** mounted at `/app/backend/data`.
+
+For a first pilot without R2: avoid redeploying the API unnecessarily, or add a volume in your host’s UI.
+
+**Multiple API replicas:** Without R2 (or a shared volume), uploads can land on instance A while thumbnails hit instance B. Prefer **one replica**, or use R2.
+
+New uploads use keys **`catalog/{account_id}/{photo_id}.jpg`**. Deleting photos in the app removes the DB row and the R2/local object for that photo.
 
 ---
 
 ## 7b. Backups (photos + database)
 
-Postgres backups and API volume backups protect **different things**:
+Postgres backups and photo storage protect **different things**:
 
-| What | Where | Railway action |
-|------|--------|----------------|
-| Titles, SKUs, photo rows, paths | **Postgres** | Postgres service → **Backups** → restore / PITR |
-| JPEG files | **API volume** (`caringtransitions-ai-volume` → `/app/backend/data`) | API service → **Volume** → snapshots / restore |
+| What | Where | Action |
+|------|--------|--------|
+| Titles, SKUs, photo rows, paths | **Postgres** | Postgres service → **Backups** |
+| JPEG files | **R2** (if configured) or **API volume** | R2 is durable by default; optional volume still helps local cache |
 
-**Recommended on Pro:**
+**Recommended:**
 
-1. **Mount** the API volume at `/app/backend/data` (see §7).
-2. Enable **Postgres** automated backups (daily + point-in-time if available).
-3. Enable **volume snapshots** on `caringtransitions-ai-volume` (or your platform’s equivalent).
-4. Periodically download a **sale photo ZIP** from the dashboard (Exports) after major catalog days.
-5. Keep a copy of original camera/upload folders on your PC until the sale is published.
+1. Configure **R2** (§7) on the API service.
+2. Enable **Postgres** automated backups.
+3. Periodically download a **sale photo ZIP** from the dashboard after major catalog days.
+4. Keep a copy of original camera/upload folders on your PC until the sale is published.
 
-**Future (not built yet):** cloud object storage (S3 / Cloudflare R2) with versioning so images are off-server and survive any single host failure. The app already documents this in `README_SAAS.md`.
-
-**After a mistake:** Restoring **only** Postgres brings back listing text but not JPEGs if files were deleted from the volume. Restore **both** Postgres and the API volume to the same timestamp, or re-upload photos and keep the restored text.
+**After a mistake:** Restoring **only** Postgres brings back listing text but not JPEGs if objects were deleted from R2. Re-upload photos or restore objects if you have a backup copy.
 
 ---
 

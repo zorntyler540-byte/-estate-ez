@@ -134,6 +134,14 @@ class Settings(BaseSettings):
     smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
     smtp_from_email: str = Field(default="", alias="SMTP_FROM_EMAIL")
 
+    # Cloudflare R2 (S3-compatible). When all of access key, secret, bucket, and endpoint are set,
+    # catalog photos are stored in R2 (with a local cache under data/uploads for fast reads).
+    r2_account_id: str = Field(default="", alias="R2_ACCOUNT_ID")
+    r2_access_key_id: str = Field(default="", alias="R2_ACCESS_KEY_ID")
+    r2_secret_access_key: str = Field(default="", alias="R2_SECRET_ACCESS_KEY")
+    r2_bucket: str = Field(default="", alias="R2_BUCKET")
+    r2_endpoint: str = Field(default="", alias="R2_ENDPOINT")
+
     @property
     def is_production(self) -> bool:
         return (self.environment or "").strip().lower() in ("production", "prod")
