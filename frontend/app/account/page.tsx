@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
-import { API_BASE, apiFetch } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 
 type Me = {
   id: string;
@@ -70,10 +70,6 @@ export default function AccountPage() {
   const [ctSellerBusy, setCtSellerBusy] = useState(false);
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
-  const [r2Configured, setR2Configured] = useState(false);
-  const [r2MigrateBusy, setR2MigrateBusy] = useState(false);
-  const [r2MigrateMsg, setR2MigrateMsg] = useState("");
-  const [r2MigrateErr, setR2MigrateErr] = useState("");
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -105,80 +101,7 @@ export default function AccountPage() {
       .catch(() => {
         /* optional until backend redeploys */
       });
-    void fetch(`${API_BASE}/health`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((h: { catalog_r2_configured?: boolean }) => setR2Configured(Boolean(h.catalog_r2_configured)))
-      .catch(() => setR2Configured(false));
   }, [router]);
-
-  async function migratePhotosToR2() {
-    if (!token) return;
-    if (
-      !window.confirm(
-        "Copy existing catalog photos from this server into Cloudflare R2?\n\nThis can take several minutes for large libraries. Keep this tab open."
-      )
-    ) {
-      return;
-    }
-    setR2MigrateBusy(true);
-    setR2MigrateErr("");
-    setR2MigrateMsg("Starting migration…");
-    let offset = 0;
-    let uploaded = 0;
-    let failed = 0;
-    let skippedRemote = 0;
-    let skippedMissing = 0;
-    try {
-      for (let i = 0; i < 500; i++) {
-        const row = (await apiFetch("/integrations/r2/migrate-catalog", token, {
-          method: "POST",
-          body: JSON.stringify({ limit: 200, offset })
-        })) as {
-          uploaded: number;
-          failed: number;
-          skipped_already_in_r2: number;
-          skipped_missing_local: number;
-          next_offset?: number | null;
-          total_photos?: number;
-          done?: boolean;
-          errors?: string[];
-        };
-        uploaded += row.uploaded || 0;
-        failed += row.failed || 0;
-        skippedRemote += row.skipped_already_in_r2 || 0;
-        skippedMissing += row.skipped_missing_local || 0;
-        if (row.errors?.length) {
-          setR2MigrateErr(row.errors.slice(0, 3).join(" · "));
-        }
-        const total = row.total_photos || 0;
-        const next = row.next_offset;
-        setR2MigrateMsg(
-          `Migrating… ${Math.min(next ?? total, total)} / ${total} scanned · ${uploaded} uploaded` +
-            (failed ? ` · ${failed} failed` : "")
-        );
-        if (row.failed && row.uploaded === 0 && (row.errors?.length || 0) > 0) {
-          // Stop early on total-failure batches so we can fix credentials.
-          throw new Error(row.errors![0] || "All uploads in this batch failed");
-        }
-        if (row.done || next == null) break;
-        offset = next;
-      }
-      setR2MigrateMsg(
-        `Done. Uploaded ${uploaded}` +
-          (skippedRemote ? `, ${skippedRemote} already in R2` : "") +
-          (skippedMissing ? `, ${skippedMissing} missing on disk` : "") +
-          (failed ? `, ${failed} failed` : "") +
-          "."
-      );
-      if (failed) {
-        setR2MigrateErr("Some uploads failed — re-run migrate to retry remaining files.");
-      }
-    } catch (e) {
-      setR2MigrateErr(e instanceof Error ? e.message : "Migration failed");
-    } finally {
-      setR2MigrateBusy(false);
-    }
-  }
 
   async function connectCtSeller() {
     if (!token || !ctSellerUserInput.trim() || !ctSellerPassword) return;
@@ -470,75 +393,6 @@ export default function AccountPage() {
             {selfPasswordBusy ? "Updating…" : "Update password"}
           </button>
         </div>
-      </section>
-
-      <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
-        <h2 className="ct-section-title" style={{ marginTop: 0 }}>
-          Photo cloud storage (R2)
-        </h2>
-        <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
-          Catalog photos live in Cloudflare R2. Migrate once if older files are still only on the API disk. Apply R2
-          CORS so the photo viewer can load full-size images from R2 (uses the same origins as API{" "}
-          <code>CORS_ORIGINS</code>).
-        </p>
-        {r2MigrateMsg ? <div className="ct-banner ct-banner--success">{r2MigrateMsg}</div> : null}
-        {r2MigrateErr ? <div className="ct-banner ct-banner--error">{r2MigrateErr}</div> : null}
-        <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-          R2 status: {r2Configured ? "configured" : "not detected on API /health yet"}
-        </p>
-        <button
-          type="button"
-          className="ct-btn"
-          style={{ marginLeft: "0.5rem" }}
-          disabled={r2MigrateBusy || !token || !r2Configured}
-          onClick={() => {
-            void (async () => {
-              setR2MigrateErr("");
-              setR2MigrateMsg("Testing R2 connection…");
-              try {
-                await apiFetch("/integrations/r2/ping", token);
-                setR2MigrateMsg("R2 ping OK — credentials can write to the bucket.");
-              } catch (e) {
-                setR2MigrateErr(e instanceof Error ? e.message : "R2 ping failed");
-                setR2MigrateMsg("");
-              }
-            })();
-          }}
-        >
-          Test R2 connection
-        </button>
-        <button
-          type="button"
-          className="ct-btn"
-          style={{ marginLeft: "0.5rem" }}
-          disabled={r2MigrateBusy || !token || !r2Configured}
-          onClick={() => {
-            void (async () => {
-              setR2MigrateErr("");
-              setR2MigrateMsg("Applying R2 CORS…");
-              try {
-                const row = (await apiFetch("/integrations/r2/cors", token, { method: "POST" })) as {
-                  origins?: string[];
-                };
-                const list = (row.origins || []).join(", ") || "(none)";
-                setR2MigrateMsg(`R2 CORS applied for: ${list}`);
-              } catch (e) {
-                setR2MigrateErr(e instanceof Error ? e.message : "R2 CORS failed");
-                setR2MigrateMsg("");
-              }
-            })();
-          }}
-        >
-          Apply R2 CORS
-        </button>
-        <button
-          type="button"
-          className="ct-btn ct-btn--primary"
-          disabled={r2MigrateBusy || !token || !r2Configured}
-          onClick={() => void migratePhotosToR2()}
-        >
-          {r2MigrateBusy ? "Migrating photos…" : "Migrate photos to R2"}
-        </button>
       </section>
 
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>

@@ -115,15 +115,25 @@ When configured, new catalog photos are uploaded to R2 under the same keys as be
 
 **Migrate existing photos (once):** after R2 vars are live, call while files still exist on the API disk:
 
-`POST /integrations/r2/migrate-catalog` with body `{ "limit": 500 }` (auth as account owner). Re-run until `uploaded` is 0. Check the R2 bucket for `catalog/…` objects. Or use **Account → Migrate photos to R2** in the web UI.
+`POST /integrations/r2/migrate-catalog` with body `{ "limit": 500 }` (auth as account owner). Re-run until `uploaded` is 0. Check the R2 bucket for `catalog/…` objects. (Ops endpoint only — not shown in the Account UI.)
 
 `GET /health` reports `catalog_r2_configured: true` when the vars are present.
 
 **Signed URLs (lower Railway egress):** the web app requests a short-lived URL (`GET /lots/{id}/media-url` or `…/photos/{photoId}/media-url`), then the browser loads the JPEG from R2. Cached thumbs are stored as `*.thumb.{px}.jpg` beside the original. Keep the bucket **private** — do not enable the public development URL.
 
-**R2 CORS (for photo viewer/edit):** `<img src="signed-url">` works without CORS; `fetch(signed-url)` for crop/rotate needs it. After deploy, open **Account → Apply R2 CORS** (uses the API’s `CORS_ORIGINS` plus local Next.js defaults). Or set the same policy manually in Cloudflare → R2 → bucket → **Settings → CORS**.
+**R2 CORS (for photo viewer/edit):** `<img src="signed-url">` works without CORS; `fetch(signed-url)` for crop/rotate needs it. Set once in Cloudflare → R2 → bucket → **Settings → CORS** (Object Read & Write tokens cannot call PutBucketCors). Use your web origin from `CORS_ORIGINS`, plus `http://localhost:3000` / `http://127.0.0.1:3000` if you develop locally. Example:
 
-If Apply fails with a permission error, recreate the R2 API token with **Admin Read & Write** (or Edit CORS) on the bucket, update Railway secrets, and retry.
+```json
+[
+  {
+    "AllowedOrigins": ["https://YOUR-WEB.up.railway.app", "http://localhost:3000", "http://127.0.0.1:3000"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Type"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
 
 ### Local disk / volume (fallback)
 
