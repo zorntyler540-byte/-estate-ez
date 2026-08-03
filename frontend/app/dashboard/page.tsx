@@ -1050,6 +1050,14 @@ type Lot = {
   many_photos_review: boolean;
   sku_duplicate_in_sale: boolean;
   sku_text_mismatch: boolean;
+  ctseller_item_id?: number | null;
+  ctseller_posted_at?: string | null;
+};
+
+type CTSellerRemoteSale = {
+  id: number;
+  title: string;
+  status?: string | null;
 };
 
 type LotPhotoHealthRow = {
@@ -1098,7 +1106,15 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     starting_price: row.starting_price ?? null,
     photo_count: typeof row.photo_count === "number" ? row.photo_count : Number(row.photo_count) || 0,
     has_thumbnail: Boolean(row.has_thumbnail),
-    created_at: row.created_at ?? ""
+    created_at: row.created_at ?? "",
+    ctseller_item_id:
+      typeof (row as { ctseller_item_id?: unknown }).ctseller_item_id === "number"
+        ? (row as { ctseller_item_id: number }).ctseller_item_id
+        : null,
+    ctseller_posted_at:
+      typeof (row as { ctseller_posted_at?: unknown }).ctseller_posted_at === "string"
+        ? (row as { ctseller_posted_at: string }).ctseller_posted_at
+        : null
   };
 }
 
@@ -1756,6 +1772,11 @@ export default function DashboardPage() {
   const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
+  const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
+  const [ctSellerPickId, setCtSellerPickId] = useState("");
+  const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
+  const [ctSellerBulkMsg, setCtSellerBulkMsg] = useState("");
+  const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
   /** Full-screen preview index for staged upload thumbnails, or null. */
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null);
@@ -1835,6 +1856,16 @@ export default function DashboardPage() {
   }, [jobs]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+  const ctSellerUnpostedEligible = useMemo(
+    () =>
+      lots.filter(
+        (l) =>
+          !l.ctseller_item_id &&
+          Boolean((l.sku || "").trim()) &&
+          Boolean((l.auction_title || "").trim())
+      ).length,
+    [lots]
+  );
   const dashboardStats = useMemo(() => {
     const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
     const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
@@ -2394,6 +2425,32 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, [token, dataReloadNonce]);
+
+  useEffect(() => {
+    if (!token) {
+      setCtSellerRemoteSales([]);
+      return;
+    }
+    let cancelled = false;
+    void apiFetch("/integrations/ctseller/sales", token)
+      .then((rows) => {
+        if (cancelled) return;
+        setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setCtSellerRemoteSales([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, dataReloadNonce]);
+
+  useEffect(() => {
+    const mapped = selectedSale?.ctseller_sale_id;
+    if (typeof mapped === "number" && Number.isFinite(mapped) && mapped > 0) {
+      setCtSellerPickId(String(mapped));
+    }
+  }, [selectedSale?.id, selectedSale?.ctseller_sale_id]);
 
   useEffect(() => {
     const bumpSse = () => {
@@ -4594,6 +4651,111 @@ export default function DashboardPage() {
     }
   }
 
+  async function bulkPostSaleToCtSeller() {
+    if (!token || !selectedSaleId) return;
+    const pick = Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "");
+    if (!Number.isFinite(pick) || pick <= 0) {
+      setCtSellerBulkErr("Pick a CT Seller auction for this sale first.");
+      return;
+    }
+    if (ctSellerUnpostedEligible < 1) {
+      setCtSellerBulkErr("No unposted lots with SKU and title in this sale.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Post ${ctSellerUnpostedEligible} unposted lot${ctSellerUnpostedEligible === 1 ? "" : "s"} to CT Seller?\n\nLots are sent in batches of 10. Already-posted lots are skipped.`
+      )
+    ) {
+      return;
+    }
+    setCtSellerBulkBusy(true);
+    setCtSellerBulkErr("");
+    setCtSellerBulkMsg("Starting bulk post…");
+    let posted = 0;
+    let failed = 0;
+    let skipped = 0;
+    const failSamples: string[] = [];
+    try {
+      for (let batch = 0; batch < 20; batch++) {
+        setCtSellerBulkMsg(
+          `Posting… ${posted} done` +
+            (failed ? `, ${failed} failed` : "") +
+            (skipped ? `, ${skipped} skipped` : "") +
+            ` (batch ${batch + 1})`
+        );
+        const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
+          method: "POST",
+          body: JSON.stringify({
+            ctseller_sale_id: pick,
+            save_sale_mapping: true,
+            only_unposted: true,
+            force: false,
+            limit: 10
+          })
+        })) as {
+          posted: number;
+          failed: number;
+          skipped: number;
+          results: Array<{
+            lot_id: string;
+            ok: boolean;
+            skipped?: boolean;
+            error?: string | null;
+            ctseller_item_id?: number | null;
+            sku?: string | null;
+          }>;
+        };
+        posted += res.posted || 0;
+        failed += res.failed || 0;
+        skipped += res.skipped || 0;
+        for (const row of res.results || []) {
+          if (row.ok && row.ctseller_item_id) {
+            setLots((prev) =>
+              prev.map((l) =>
+                l.id === row.lot_id
+                  ? {
+                      ...l,
+                      ctseller_item_id: row.ctseller_item_id,
+                      ctseller_posted_at: new Date().toISOString()
+                    }
+                  : l
+              )
+            );
+          } else if (!row.ok && !row.skipped && row.error && failSamples.length < 3) {
+            failSamples.push(`${row.sku || row.lot_id}: ${row.error}`);
+          }
+        }
+        setSales((prev) =>
+          prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s))
+        );
+        if ((res.posted || 0) + (res.failed || 0) === 0) break;
+      }
+      setCtSellerBulkMsg(
+        `Bulk post finished: ${posted} posted` +
+          (failed ? `, ${failed} failed` : "") +
+          (skipped ? `, ${skipped} skipped` : "") +
+          "."
+      );
+      if (failSamples.length) {
+        setCtSellerBulkErr(failSamples.join(" · "));
+      }
+      setDataReloadNonce((n) => n + 1);
+    } catch (e) {
+      setCtSellerBulkErr(e instanceof Error ? e.message : "Bulk post failed");
+      if (posted || failed || skipped) {
+        setCtSellerBulkMsg(
+          `Stopped early after ${posted} posted` +
+            (failed ? `, ${failed} failed` : "") +
+            (skipped ? `, ${skipped} skipped` : "") +
+            "."
+        );
+      }
+    } finally {
+      setCtSellerBulkBusy(false);
+    }
+  }
+
   async function purgeCurrentSaleCatalog() {
     if (!selectedSaleId) {
       setError("Select a sale first.");
@@ -5762,6 +5924,69 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+        <div
+          className="ct-row ct-row--gap-lg"
+          style={{ flexWrap: "wrap", alignItems: "flex-end", marginTop: "0.75rem", gap: "0.65rem" }}
+        >
+          <div style={{ minWidth: 200, flex: "1 1 220px" }}>
+            <label className="ct-label" htmlFor="dash-ctseller-sale">
+              CT Seller auction
+            </label>
+            <select
+              id="dash-ctseller-sale"
+              className="ct-input"
+              value={ctSellerPickId}
+              onChange={(e) => {
+                setCtSellerPickId(e.target.value);
+                setCtSellerBulkErr("");
+                setCtSellerBulkMsg("");
+              }}
+              disabled={ctSellerBulkBusy || !selectedSaleId}
+            >
+              <option value="">Select auction…</option>
+              {ctSellerRemoteSales.map((s) => (
+                <option key={s.id} value={String(s.id)}>
+                  {s.title}
+                  {s.status ? ` (${s.status})` : ""} · #{s.id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="ct-btn ct-btn--primary"
+            onClick={() => void bulkPostSaleToCtSeller()}
+            disabled={
+              ctSellerBulkBusy ||
+              busyProcessing ||
+              !selectedSaleId ||
+              selectedSaleClosed ||
+              !ctSellerPickId ||
+              ctSellerUnpostedEligible < 1
+            }
+            title={
+              !ctSellerRemoteSales.length
+                ? "Connect CT Seller on Account first"
+                : ctSellerUnpostedEligible < 1
+                  ? "No unposted lots with SKU + title"
+                  : `Post ${ctSellerUnpostedEligible} unposted lot(s)`
+            }
+          >
+            {ctSellerBulkBusy
+              ? "Posting to CT Seller…"
+              : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
+          </button>
+        </div>
+        {ctSellerBulkMsg ? (
+          <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
+            {ctSellerBulkMsg}
+          </div>
+        ) : null}
+        {ctSellerBulkErr ? (
+          <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
+            {ctSellerBulkErr}
+          </div>
+        ) : null}
       </header>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
         {lots.map((lot) => (

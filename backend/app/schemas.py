@@ -210,6 +210,35 @@ class LotPostToCTSellerOut(BaseModel):
     ctseller_posted_at: datetime
 
 
+class SalePostToCTSellerIn(BaseModel):
+    """Bulk-post lots in a catalog sale to one CT Seller auction."""
+
+    lot_ids: list[str] | None = None
+    only_unposted: bool = True
+    ctseller_sale_id: int | None = None
+    save_sale_mapping: bool = True
+    force: bool = False
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class SalePostToCTSellerLotResult(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    ok: bool
+    skipped: bool = False
+    error: str | None = None
+    ctseller_item_id: int | None = None
+    photos_uploaded: int | None = None
+
+
+class SalePostToCTSellerOut(BaseModel):
+    ctseller_sale_id: int
+    posted: int
+    failed: int
+    skipped: int
+    results: list[SalePostToCTSellerLotResult]
+
+
 class CreateJobRequest(BaseModel):
     input_folder: str
     sale_id: str

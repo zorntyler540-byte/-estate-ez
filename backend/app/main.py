@@ -59,6 +59,9 @@ from app.schemas import (
     RegisterRequest,
     SaleCreate,
     SaleOut,
+    SalePostToCTSellerIn,
+    SalePostToCTSellerLotResult,
+    SalePostToCTSellerOut,
     SaleUpdate,
     SuggestionIn,
     SuggestionSavedOut,
@@ -944,6 +947,81 @@ def ctseller_list_sales(
     return [CTSellerRemoteSaleOut(id=r.id, title=r.title, status=r.status) for r in rows]
 
 
+def _post_one_lot_to_ctseller(
+    *,
+    db: Session,
+    lot: Lot,
+    client: CTSellerClient,
+    remote_sale_id: int,
+    location_id: object,
+    item_receipt_method: object,
+    force: bool = False,
+) -> LotPostToCTSellerOut:
+    """Create one CT Seller item + photos for a catalog lot. Raises HTTPException or CTSellerError."""
+    if lot.ctseller_item_id and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already posted to CT Seller as item {lot.ctseller_item_id}. Pass force=true to post again.",
+        )
+    sku = (lot.sku or "").strip()
+    if not sku:
+        raise HTTPException(status_code=400, detail="Lot needs a SKU before posting to CT Seller")
+    if not (lot.auction_title or "").strip():
+        raise HTTPException(status_code=400, detail="Lot needs an auction title before posting")
+
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot.id, Photo.account_id == lot.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
+        .all()
+    )
+    photo_paths: list[tuple[Photo, Path]] = []
+    for ph in photos:
+        path = resolve_catalog_storage_path(ph.storage_path)
+        if path is not None and path.is_file():
+            photo_paths.append((ph, path))
+
+    item = build_item_payload(
+        sale_id=int(remote_sale_id),
+        location_id=location_id,
+        sku=sku,
+        title=lot.auction_title or sku,
+        description=lot.professional_description or "",
+        category=(lot.ct_category or "").strip() or "Household Goods Other",
+        condition=(lot.condition_text or "").strip() or "Good",
+        starting_price=lot.starting_price,
+        item_receipt_method=item_receipt_method,  # type: ignore[arg-type]
+    )
+    item_id = client.create_item(item)
+    uploaded = 0
+    for idx, (ph, path) in enumerate(photo_paths):
+        raw = path.read_bytes()
+        name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
+        client.add_item_image(
+            item_id=item_id,
+            image_bytes=raw,
+            name=name[:80],
+            display_order=idx + 1,
+            is_display_image=(idx == 0),
+        )
+        uploaded += 1
+
+    now = datetime.now(timezone.utc)
+    lot.ctseller_item_id = int(item_id)
+    lot.ctseller_posted_at = now
+    db.add(lot)
+    db.commit()
+    db.refresh(lot)
+
+    return LotPostToCTSellerOut(
+        lot_id=lot.id,
+        ctseller_item_id=int(item_id),
+        ctseller_sale_id=int(remote_sale_id),
+        photos_uploaded=uploaded,
+        ctseller_posted_at=now,
+    )
+
+
 @app.post("/lots/{lot_id}/post-to-ctseller", response_model=LotPostToCTSellerOut)
 def post_lot_to_ctseller(
     lot_id: str,
@@ -961,16 +1039,6 @@ def post_lot_to_ctseller(
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
-    if lot.ctseller_item_id and not body.force:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Already posted to CT Seller as item {lot.ctseller_item_id}. Pass force=true to post again.",
-        )
-    sku = (lot.sku or "").strip()
-    if not sku:
-        raise HTTPException(status_code=400, detail="Lot needs a SKU before posting to CT Seller")
-    if not (lot.auction_title or "").strip():
-        raise HTTPException(status_code=400, detail="Lot needs an auction title before posting")
 
     sale = _sale_for_user(lot.sale_id, current, db)
     remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
@@ -984,47 +1052,18 @@ def post_lot_to_ctseller(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    photos = (
-        db.query(Photo)
-        .filter(Photo.lot_id == lot.id, Photo.account_id == current.account_id)
-        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
-        .all()
-    )
-    photo_paths: list[tuple[Photo, Path]] = []
-    for ph in photos:
-        path = resolve_catalog_storage_path(ph.storage_path)
-        if path is not None and path.is_file():
-            photo_paths.append((ph, path))
-
     try:
         client = _ctseller_client_for_account(account, db)
         detail = client.sale_detail(int(remote_sale_id))
-        location_id = detail.get("locationid")
-        irm = detail.get("saleitemreceiptmethod")
-        item = build_item_payload(
-            sale_id=int(remote_sale_id),
-            location_id=location_id,
-            sku=sku,
-            title=lot.auction_title or sku,
-            description=lot.professional_description or "",
-            category=(lot.ct_category or "").strip() or "Household Goods Other",
-            condition=(lot.condition_text or "").strip() or "Good",
-            starting_price=lot.starting_price,
-            item_receipt_method=irm,
+        out = _post_one_lot_to_ctseller(
+            db=db,
+            lot=lot,
+            client=client,
+            remote_sale_id=int(remote_sale_id),
+            location_id=detail.get("locationid"),
+            item_receipt_method=detail.get("saleitemreceiptmethod"),
+            force=body.force,
         )
-        item_id = client.create_item(item)
-        uploaded = 0
-        for idx, (ph, path) in enumerate(photo_paths):
-            raw = path.read_bytes()
-            name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
-            client.add_item_image(
-                item_id=item_id,
-                image_bytes=raw,
-                name=name[:80],
-                display_order=idx + 1,
-                is_display_image=(idx == 0),
-            )
-            uploaded += 1
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
@@ -1033,20 +1072,143 @@ def post_lot_to_ctseller(
     if body.save_sale_mapping and sale.ctseller_sale_id != int(remote_sale_id):
         sale.ctseller_sale_id = int(remote_sale_id)
         db.add(sale)
+        db.commit()
 
-    now = datetime.now(timezone.utc)
-    lot.ctseller_item_id = int(item_id)
-    lot.ctseller_posted_at = now
-    db.add(lot)
-    db.commit()
-    db.refresh(lot)
+    return out
 
-    return LotPostToCTSellerOut(
-        lot_id=lot.id,
-        ctseller_item_id=int(item_id),
+
+@app.post("/sales/{sale_id}/post-to-ctseller", response_model=SalePostToCTSellerOut)
+def post_sale_lots_to_ctseller(
+    sale_id: str,
+    payload: SalePostToCTSellerIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SalePostToCTSellerOut:
+    """
+    Bulk-post catalog lots in this sale to CT Seller (sequential).
+
+    Default: lots that have SKU + title and are not yet posted (``only_unposted``).
+    Up to ``limit`` lots per request (max 100). Already-posted lots are skipped unless ``force``.
+    """
+    body = payload or SalePostToCTSellerIn()
+    sale = _sale_for_user(sale_id, current, db)
+    remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
+    if remote_sale_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Pick a CT Seller auction (ctseller_sale_id) or map it on this sale first",
+        )
+
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+    if body.lot_ids:
+        wanted = {x.strip() for x in body.lot_ids if (x or "").strip()}
+        q = q.filter(Lot.id.in_(wanted))
+    elif body.only_unposted and not body.force:
+        q = q.filter(Lot.ctseller_item_id.is_(None))
+    lots = q.order_by(Lot.created_at.asc()).all()
+    if body.lot_ids:
+        by_id = {r.id: r for r in lots}
+        lots = [by_id[i] for i in body.lot_ids if i in by_id]
+
+    try:
+        client = _ctseller_client_for_account(account, db)
+        detail = client.sale_detail(int(remote_sale_id))
+        location_id = detail.get("locationid")
+        irm = detail.get("saleitemreceiptmethod")
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if body.save_sale_mapping and sale.ctseller_sale_id != int(remote_sale_id):
+        sale.ctseller_sale_id = int(remote_sale_id)
+        db.add(sale)
+        db.commit()
+
+    results: list[SalePostToCTSellerLotResult] = []
+    posted = failed = skipped = 0
+    processed = 0
+
+    for lot in lots:
+        if processed >= body.limit:
+            break
+        sku = (lot.sku or "").strip() or None
+        already = bool(lot.ctseller_item_id)
+        if already and not body.force:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error=f"Already posted as item {lot.ctseller_item_id}",
+                    ctseller_item_id=lot.ctseller_item_id,
+                )
+            )
+            skipped += 1
+            continue
+        if not sku or not (lot.auction_title or "").strip():
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Missing SKU or auction title",
+                )
+            )
+            skipped += 1
+            continue
+
+        processed += 1
+        try:
+            out = _post_one_lot_to_ctseller(
+                db=db,
+                lot=lot,
+                client=client,
+                remote_sale_id=int(remote_sale_id),
+                location_id=location_id,
+                item_receipt_method=irm,
+                force=body.force,
+            )
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=True,
+                    ctseller_item_id=out.ctseller_item_id,
+                    photos_uploaded=out.photos_uploaded,
+                )
+            )
+            posted += 1
+        except HTTPException as exc:
+            detail_msg = exc.detail
+            msg = detail_msg if isinstance(detail_msg, str) else str(detail_msg)
+            results.append(
+                SalePostToCTSellerLotResult(lot_id=lot.id, sku=sku, ok=False, error=msg)
+            )
+            failed += 1
+        except CTSellerError as exc:
+            results.append(
+                SalePostToCTSellerLotResult(lot_id=lot.id, sku=sku, ok=False, error=str(exc))
+            )
+            failed += 1
+        except OSError as exc:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id, sku=sku, ok=False, error=f"Photo read failed: {exc}"
+                )
+            )
+            failed += 1
+
+    return SalePostToCTSellerOut(
         ctseller_sale_id=int(remote_sale_id),
-        photos_uploaded=uploaded,
-        ctseller_posted_at=now,
+        posted=posted,
+        failed=failed,
+        skipped=skipped,
+        results=results,
     )
 
 
