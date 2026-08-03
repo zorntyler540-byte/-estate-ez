@@ -477,8 +477,9 @@ export default function AccountPage() {
           Photo cloud storage (R2)
         </h2>
         <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
-          Copy catalog photos that are still on the API server into Cloudflare R2 so they survive redeploys. Safe to
-          run more than once.
+          Catalog photos live in Cloudflare R2. Migrate once if older files are still only on the API disk. Apply R2
+          CORS so the photo viewer can load full-size images from R2 (uses the same origins as API{" "}
+          <code>CORS_ORIGINS</code>).
         </p>
         {r2MigrateMsg ? <div className="ct-banner ct-banner--success">{r2MigrateMsg}</div> : null}
         {r2MigrateErr ? <div className="ct-banner ct-banner--error">{r2MigrateErr}</div> : null}
@@ -505,6 +506,30 @@ export default function AccountPage() {
           }}
         >
           Test R2 connection
+        </button>
+        <button
+          type="button"
+          className="ct-btn"
+          style={{ marginLeft: "0.5rem" }}
+          disabled={r2MigrateBusy || !token || !r2Configured}
+          onClick={() => {
+            void (async () => {
+              setR2MigrateErr("");
+              setR2MigrateMsg("Applying R2 CORS…");
+              try {
+                const row = (await apiFetch("/integrations/r2/cors", token, { method: "POST" })) as {
+                  origins?: string[];
+                };
+                const list = (row.origins || []).join(", ") || "(none)";
+                setR2MigrateMsg(`R2 CORS applied for: ${list}`);
+              } catch (e) {
+                setR2MigrateErr(e instanceof Error ? e.message : "R2 CORS failed");
+                setR2MigrateMsg("");
+              }
+            })();
+          }}
+        >
+          Apply R2 CORS
         </button>
         <button
           type="button"

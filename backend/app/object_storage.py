@@ -83,6 +83,16 @@ def put_file(key: str, path: str, *, content_type: str | None = None) -> None:
         _client().put_object(Bucket=_bucket(), Key=key, Body=f, ContentType=ct)
 
 
+def presigned_get_url(key: str, *, expires_seconds: int = 3600) -> str:
+    """Time-limited HTTPS URL so browsers can GET the object without proxying through Railway."""
+    expires = max(60, min(int(expires_seconds), 24 * 3600))
+    return _client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": _bucket(), "Key": key},
+        ExpiresIn=expires,
+    )
+
+
 def get_bytes(key: str) -> bytes:
     resp = _client().get_object(Bucket=_bucket(), Key=key)
     body = resp["Body"].read()
@@ -129,6 +139,56 @@ def ping() -> str:
     put_bytes(key, b"ok", content_type="text/plain")
     delete_object(key)
     return "ok"
+
+
+def put_bucket_cors(origins: list[str]) -> list[str]:
+    """
+    Allow browsers on ``origins`` to GET/HEAD objects (needed for fetch() of signed URLs).
+    ``<img src>`` works without CORS; crop/rotate uses fetch and needs this.
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in origins:
+        o = (raw or "").strip().rstrip("/")
+        if not o or "*" in o or o in seen:
+            continue
+        seen.add(o)
+        cleaned.append(o)
+    if not cleaned:
+        raise ValueError("No AllowedOrigins to apply")
+    _client().put_bucket_cors(
+        Bucket=_bucket(),
+        CORSConfiguration={
+            "CORSRules": [
+                {
+                    "AllowedHeaders": ["*"],
+                    "AllowedMethods": ["GET", "HEAD"],
+                    "AllowedOrigins": cleaned,
+                    "ExposeHeaders": ["ETag", "Content-Length", "Content-Type"],
+                    "MaxAgeSeconds": 3600,
+                }
+            ]
+        },
+    )
+    return cleaned
+
+
+def get_bucket_cors() -> list[dict[str, Any]]:
+    """Return current CORS rules (empty list if none)."""
+    try:
+        resp = _client().get_bucket_cors(Bucket=_bucket())
+    except Exception as exc:  # noqa: BLE001
+        resp = getattr(exc, "response", None)
+        code = None
+        status = None
+        if isinstance(resp, dict):
+            code = resp.get("Error", {}).get("Code")
+            status = resp.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code in ("NoSuchCORSConfiguration", "NoSuchCORSConfig") or status == 404:
+            return []
+        raise
+    rules = resp.get("CORSRules") or []
+    return list(rules) if isinstance(rules, list) else []
 
 
 def reset_client_cache() -> None:

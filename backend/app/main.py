@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, nullslast, or_, select, update
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
@@ -47,6 +47,8 @@ from app.schemas import (
     CTSellerStatusOut,
     CatalogR2MigrateIn,
     CatalogR2MigrateOut,
+    CatalogR2CorsOut,
+    CatalogMediaUrlOut,
     DeleteLotPhotosIn,
     HealthResponse,
     JobOut,
@@ -120,6 +122,7 @@ from app.catalog_storage import (
     migrate_local_photos_to_r2,
     persist_catalog_photo,
     resolve_catalog_storage_path,
+    signed_catalog_url,
     upload_root,
 )
 from app.object_storage import r2_configured as catalog_r2_configured
@@ -719,6 +722,53 @@ def r2_ping(current: User = Depends(get_current_user)) -> dict[str, str]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"R2 ping failed: {exc}") from exc
     return {"status": "ok"}
+
+
+@app.get("/integrations/r2/cors", response_model=CatalogR2CorsOut)
+def r2_cors_get(current: User = Depends(get_current_user)) -> CatalogR2CorsOut:
+    """Show current R2 bucket CORS rules (empty if none)."""
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured on this API")
+    try:
+        from app.object_storage import get_bucket_cors
+
+        rules = get_bucket_cors()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not read R2 CORS: {exc}") from exc
+    origins: list[str] = []
+    for rule in rules:
+        for o in rule.get("AllowedOrigins") or []:
+            if o and o not in origins:
+                origins.append(str(o))
+    return CatalogR2CorsOut(origins=origins, rules=rules)
+
+
+@app.post("/integrations/r2/cors", response_model=CatalogR2CorsOut)
+def r2_cors_apply(current: User = Depends(get_current_user)) -> CatalogR2CorsOut:
+    """
+    Set R2 bucket CORS from ``CORS_ORIGINS`` (+ local Next.js defaults) so the web app
+    can ``fetch()`` signed photo URLs for the viewer/crop tools.
+    """
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured on this API")
+    role = (current.role or "").strip().lower()
+    if role != "owner" and not is_master_admin_email(current.email):
+        raise HTTPException(status_code=403, detail="Owner required")
+    origins = cors_allow_origins()
+    try:
+        from app.object_storage import get_bucket_cors, put_bucket_cors
+
+        applied = put_bucket_cors(origins)
+        rules = get_bucket_cors()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Could not set R2 CORS: {exc}. "
+                "The API token may need bucket Admin / Edit CORS permission on Cloudflare."
+            ),
+        ) from exc
+    return CatalogR2CorsOut(origins=applied, rules=rules)
 
 
 @app.get("/admin/analytics", response_model=AdminUsageSummaryOut)
@@ -1366,6 +1416,41 @@ def list_lots(
     ]
 
 
+@app.get("/lots/{lot_id}/media-url", response_model=CatalogMediaUrlOut)
+def lot_media_url(
+    lot_id: str,
+    max_px: int = Query(220, description="Long edge for cached JPEG thumb (required for lot cover)."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogMediaUrlOut:
+    """Presigned R2 URL for the lot's first photo thumbnail (dashboard covers)."""
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured")
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    if not photos:
+        raise HTTPException(status_code=404, detail="No image linked to this lot")
+    expires = 3600
+    px = min(800, max(64, int(max_px)))
+    last_err: Exception | None = None
+    for ph in photos:
+        try:
+            url = signed_catalog_url(ph.storage_path, max_px=px, expires_seconds=expires)
+            return CatalogMediaUrlOut(url=url, expires_in=expires, kind="thumb")
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    detail = str(last_err) if last_err else "Image file missing"
+    raise HTTPException(status_code=404, detail=detail)
+
+
 @app.get("/lots/{lot_id}/thumbnail")
 def lot_thumbnail(
     lot_id: str,
@@ -1392,7 +1477,17 @@ def lot_thumbnail(
         )
         if not photos:
             raise HTTPException(status_code=404, detail="No image linked to this lot")
+        storage_paths = [p.storage_path for p in photos]
         paths = [resolve_catalog_storage_path(p.storage_path) for p in photos]
+
+    if catalog_r2_configured():
+        for sp in storage_paths:
+            try:
+                url = signed_catalog_url(sp, max_px=max_px, expires_seconds=3600)
+                return RedirectResponse(url=url, status_code=302)
+            except Exception:
+                continue
+
     try:
         body = thumbnail_jpeg_bytes_first_available(paths, max_px)
     except FileNotFoundError:
@@ -1897,6 +1992,52 @@ def merge_lot_into_target(
     return _lot_out_for_id(db, current.account_id, target.id)
 
 
+@app.get("/lots/{lot_id}/photos/{photo_id}/media-url", response_model=CatalogMediaUrlOut)
+def lot_photo_media_url(
+    lot_id: str,
+    photo_id: str,
+    max_px: int | None = Query(
+        None,
+        description="When set, return a signed URL for a cached JPEG thumbnail at this long edge.",
+    ),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogMediaUrlOut:
+    """
+    Presigned R2 URL for the photo (or a cached thumb). Browsers load from R2 — no Railway image egress.
+    Falls back to 400 when R2 is not configured (use /thumbnail or /download instead).
+    """
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured")
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    ph = (
+        db.query(Photo)
+        .filter(
+            Photo.id == photo_id,
+            Photo.lot_id == lot_id,
+            Photo.account_id == current.account_id,
+        )
+        .first()
+    )
+    if not ph:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    expires = 3600
+    try:
+        px = None if max_px is None else min(2048, max(64, int(max_px)))
+        url = signed_catalog_url(ph.storage_path, max_px=px, expires_seconds=expires)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "Photo file missing") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not sign media URL: {exc}") from exc
+    return CatalogMediaUrlOut(
+        url=url,
+        expires_in=expires,
+        kind="thumb" if max_px is not None else "original",
+    )
+
+
 @app.get("/lots/{lot_id}/photos/{photo_id}/thumbnail")
 def lot_photo_thumbnail(
     lot_id: str,
@@ -1923,7 +2064,16 @@ def lot_photo_thumbnail(
         )
         if not ph:
             raise HTTPException(status_code=404, detail="Photo not found")
+        storage_path = ph.storage_path
         src = resolve_catalog_storage_path(ph.storage_path)
+
+    if catalog_r2_configured():
+        try:
+            url = signed_catalog_url(storage_path, max_px=max_px, expires_seconds=3600)
+            return RedirectResponse(url=url, status_code=302)
+        except Exception:
+            pass  # fall through to local bytes
+
     if not src.is_file():
         raise HTTPException(status_code=404, detail="Image file missing on disk")
     try:

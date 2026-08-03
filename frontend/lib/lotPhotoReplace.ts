@@ -1,6 +1,26 @@
 import { API_BASE, apiUploadFiles, parseApiErrorMessage } from "./api";
 
 export async function fetchLotPhotoBlob(lotId: string, photoId: string, token: string): Promise<Blob> {
+  // Prefer signed R2 URL when CORS allows reading the object from the web origin.
+  try {
+    const mediaRes = await fetch(
+      `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
+      }
+    );
+    if (mediaRes.ok) {
+      const data = (await mediaRes.json()) as { url?: string };
+      if (data?.url) {
+        const r2 = await fetch(data.url, { cache: "no-store" });
+        if (r2.ok) return r2.blob();
+      }
+    }
+  } catch {
+    // Fall through to API proxy (works without R2 CORS).
+  }
+
   const res = await fetch(
     `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/download`,
     {

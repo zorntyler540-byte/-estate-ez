@@ -18,8 +18,11 @@ type Props = {
   cacheBust?: number;
 };
 
+type MediaUrlOut = { url: string; expires_in?: number; kind?: string };
+
 /**
- * Loads ``/lots/{lotId}/photos/{photoId}/thumbnail`` with Bearer auth (blob URL).
+ * Prefer a signed R2 URL (browser loads from Cloudflare — no Railway image egress).
+ * Fall back to authenticated ``/thumbnail`` blob when R2 is unavailable.
  */
 function LotPhotoThumbInner({
   lotId,
@@ -53,10 +56,30 @@ function LotPhotoThumbInner({
     void (async () => {
       setFailed(false);
       setSrc(null);
+      if (urlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
       try {
-        const vq = `&v=${encodeURIComponent(String(cacheBust))}`;
+        const mediaRes = await fetch(
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+            signal: ac.signal
+          }
+        );
+        if (mediaRes.ok) {
+          const data = (await mediaRes.json()) as MediaUrlOut;
+          if (!cancelled && data?.url) {
+            urlRef.current = null;
+            setSrc(data.url);
+            return;
+          }
+        }
+
         const res = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}${vq}`,
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
           {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
@@ -69,7 +92,7 @@ function LotPhotoThumbInner({
         }
         const blob = await res.blob();
         if (cancelled) return;
-        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        if (urlRef.current?.startsWith("blob:")) URL.revokeObjectURL(urlRef.current);
         const u = URL.createObjectURL(blob);
         urlRef.current = u;
         setSrc(u);
@@ -81,7 +104,7 @@ function LotPhotoThumbInner({
     return () => {
       cancelled = true;
       ac.abort();
-      if (urlRef.current) {
+      if (urlRef.current?.startsWith("blob:")) {
         URL.revokeObjectURL(urlRef.current);
         urlRef.current = null;
       }

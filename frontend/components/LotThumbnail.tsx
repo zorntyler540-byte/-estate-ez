@@ -12,6 +12,8 @@ type Props = {
   maxPx?: number;
 };
 
+type MediaUrlOut = { url: string; expires_in?: number; kind?: string };
+
 /** Caps parallel thumbnail GETs so the API is not hit with dozens of Pillow decodes at once. */
 let thumbSlots = 0;
 const THUMB_MAX_PARALLEL = 5;
@@ -37,8 +39,7 @@ function releaseThumbSlot(): void {
 }
 
 /**
- * Loads `/lots/{id}/thumbnail` with Bearer auth (blob URL) — required because
- * the API is typically on another origin than the Next app.
+ * Prefer signed R2 cover URL; fall back to authenticated ``/thumbnail`` blob.
  */
 export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 220 }: Props) {
   const [src, setSrc] = useState<string | null>(null);
@@ -81,12 +82,33 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
     void (async () => {
       setFailed(false);
       setSrc(null);
+      if (urlRef.current?.startsWith("blob:")) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
       await acquireThumbSlot();
       if (cancelled) {
         releaseThumbSlot();
         return;
       }
       try {
+        const mediaRes = await fetch(
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/media-url?max_px=${maxPx}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+            signal: ac.signal
+          }
+        );
+        if (mediaRes.ok) {
+          const data = (await mediaRes.json()) as MediaUrlOut;
+          if (!cancelled && data?.url) {
+            urlRef.current = null;
+            setSrc(data.url);
+            return;
+          }
+        }
+
         const res = await fetch(`${API_BASE}/lots/${lotId}/thumbnail?max_px=${maxPx}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
@@ -98,7 +120,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
         }
         const blob = await res.blob();
         if (cancelled) return;
-        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        if (urlRef.current?.startsWith("blob:")) URL.revokeObjectURL(urlRef.current);
         const u = URL.createObjectURL(blob);
         urlRef.current = u;
         setSrc(u);
@@ -115,7 +137,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
     return () => {
       cancelled = true;
       ac.abort();
-      if (urlRef.current) {
+      if (urlRef.current?.startsWith("blob:")) {
         URL.revokeObjectURL(urlRef.current);
         urlRef.current = null;
       }

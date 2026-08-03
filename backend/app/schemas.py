@@ -263,6 +263,17 @@ class CatalogR2MigrateOut(BaseModel):
     done: bool = False
 
 
+class CatalogMediaUrlOut(BaseModel):
+    url: str
+    expires_in: int = 3600
+    kind: str = "original"  # original | thumb
+
+
+class CatalogR2CorsOut(BaseModel):
+    origins: list[str]
+    rules: list[dict] = []
+
+
 class CreateJobRequest(BaseModel):
     input_folder: str
     sale_id: str

@@ -115,11 +115,15 @@ When configured, new catalog photos are uploaded to R2 under the same keys as be
 
 **Migrate existing photos (once):** after R2 vars are live, call while files still exist on the API disk:
 
-`POST /integrations/r2/migrate-catalog` with body `{ "limit": 500 }` (auth as account owner). Re-run until `uploaded` is 0. Check the R2 bucket for `catalog/…` objects.
+`POST /integrations/r2/migrate-catalog` with body `{ "limit": 500 }` (auth as account owner). Re-run until `uploaded` is 0. Check the R2 bucket for `catalog/…` objects. Or use **Account → Migrate photos to R2** in the web UI.
 
 `GET /health` reports `catalog_r2_configured: true` when the vars are present.
 
-Keep the R2 bucket **private**. Do not enable the public development URL.
+**Signed URLs (lower Railway egress):** the web app requests a short-lived URL (`GET /lots/{id}/media-url` or `…/photos/{photoId}/media-url`), then the browser loads the JPEG from R2. Cached thumbs are stored as `*.thumb.{px}.jpg` beside the original. Keep the bucket **private** — do not enable the public development URL.
+
+**R2 CORS (for photo viewer/edit):** `<img src="signed-url">` works without CORS; `fetch(signed-url)` for crop/rotate needs it. After deploy, open **Account → Apply R2 CORS** (uses the API’s `CORS_ORIGINS` plus local Next.js defaults). Or set the same policy manually in Cloudflare → R2 → bucket → **Settings → CORS**.
+
+If Apply fails with a permission error, recreate the R2 API token with **Admin Read & Write** (or Edit CORS) on the bucket, update Railway secrets, and retry.
 
 ### Local disk / volume (fallback)
 

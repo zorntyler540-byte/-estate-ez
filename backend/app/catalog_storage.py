@@ -86,6 +86,57 @@ def _object_key_from_storage_path(storage_path: str) -> str | None:
     return raw if "/" in raw else None
 
 
+def thumb_object_key(storage_path: str | None, max_px: int) -> str | None:
+    """Derived R2 key for a cached JPEG thumbnail of a catalog photo."""
+    key = _object_key_from_storage_path(storage_path or "")
+    if not key:
+        return None
+    px = max(64, min(int(max_px), 2048))
+    if "." in key.rsplit("/", 1)[-1]:
+        base, _ext = key.rsplit(".", 1)
+        return f"{base}.thumb.{px}.jpg"
+    return f"{key}.thumb.{px}.jpg"
+
+
+def signed_catalog_url(
+    storage_path: str | None,
+    *,
+    max_px: int | None = None,
+    expires_seconds: int = 3600,
+) -> str:
+    """
+    Presigned HTTPS URL for the original object, or a cached thumbnail object.
+
+    Thumbnail bytes are generated once and stored beside the original in R2 so later
+    grid loads skip Railway egress.
+    """
+    if not object_storage.r2_configured():
+        raise RuntimeError("R2 is not configured")
+    key = _object_key_from_storage_path(storage_path or "")
+    if not key:
+        raise FileNotFoundError("No storage key for photo")
+
+    if max_px is None:
+        return object_storage.presigned_get_url(key, expires_seconds=expires_seconds)
+
+    tkey = thumb_object_key(storage_path, max_px)
+    if not tkey:
+        raise FileNotFoundError("No thumb key for photo")
+    try:
+        exists = object_storage.object_exists(tkey)
+    except Exception:
+        exists = False
+    if not exists:
+        from app.services.thumbnail_image import thumbnail_jpeg_bytes
+
+        src = resolve_catalog_storage_path(storage_path)
+        if not src.is_file():
+            raise FileNotFoundError("Catalog image missing locally and thumb not in R2")
+        body = thumbnail_jpeg_bytes(src, max(64, min(int(max_px), 2048)))
+        object_storage.put_bytes(tkey, body, content_type="image/jpeg")
+    return object_storage.presigned_get_url(tkey, expires_seconds=expires_seconds)
+
+
 def resolve_catalog_storage_path(storage_path: str | None) -> Path:
     """
     Resolve a ``Photo.storage_path`` to a readable local file.
