@@ -707,6 +707,20 @@ def migrate_catalog_to_r2(
     )
 
 
+@app.get("/integrations/r2/ping")
+def r2_ping(current: User = Depends(get_current_user)) -> dict[str, str]:
+    """Verify R2 credentials can write to the configured bucket."""
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured on this API")
+    try:
+        from app.object_storage import ping
+
+        ping()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"R2 ping failed: {exc}") from exc
+    return {"status": "ok"}
+
+
 @app.get("/admin/analytics", response_model=AdminUsageSummaryOut)
 def admin_analytics(
     since_days: int = Query(30, ge=1, le=365),

@@ -191,10 +191,15 @@ def migrate_local_photos_to_r2(
             continue
         local = _local_catalog_file(storage_path)
         if local is None:
-            if skip_if_remote and object_storage.object_exists(key):
-                skipped_remote += 1
-            else:
-                skipped_missing += 1
+            try:
+                if skip_if_remote and object_storage.object_exists(key):
+                    skipped_remote += 1
+                else:
+                    skipped_missing += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                if len(errors) < 20:
+                    errors.append(f"{photo_id}: {exc}")
             continue
         try:
             if skip_if_remote and object_storage.object_exists(key):
@@ -229,7 +234,10 @@ def catalog_photo_file_on_disk(storage_path: str | None) -> bool:
         return True
     key = _object_key_from_storage_path(str(storage_path))
     if key and object_storage.r2_configured():
-        return object_storage.object_exists(key)
+        try:
+            return object_storage.object_exists(key)
+        except Exception:  # noqa: BLE001
+            return False
     return False
 
 

@@ -43,13 +43,27 @@ def _client() -> Any:
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("boto3 is required for R2 storage — pip install boto3") from exc
 
+    # R2 needs path-style addressing. Newer boto3 default checksums break many S3-compatible APIs.
+    cfg_kwargs: dict[str, Any] = {
+        "signature_version": "s3v4",
+        "s3": {"addressing_style": "path"},
+    }
+    try:
+        cfg = Config(
+            **cfg_kwargs,
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
+    except TypeError:
+        cfg = Config(**cfg_kwargs)
+
     return boto3.client(
         "s3",
         endpoint_url=_normalize_endpoint(settings.r2_endpoint),
-        aws_access_key_id=settings.r2_access_key_id.strip(),
-        aws_secret_access_key=settings.r2_secret_access_key.strip(),
+        aws_access_key_id=(settings.r2_access_key_id or "").strip(),
+        aws_secret_access_key=(settings.r2_secret_access_key or "").strip(),
         region_name="auto",
-        config=Config(signature_version="s3v4"),
+        config=cfg,
     )
 
 
@@ -64,12 +78,9 @@ def put_bytes(key: str, data: bytes, *, content_type: str | None = None) -> None
 
 def put_file(key: str, path: str, *, content_type: str | None = None) -> None:
     ct = content_type or mimetypes.guess_type(key)[0] or "application/octet-stream"
-    _client().upload_file(
-        path,
-        _bucket(),
-        key,
-        ExtraArgs={"ContentType": ct},
-    )
+    # put_object is more reliable with R2 than multipart upload_file for typical catalog JPEGs.
+    with open(path, "rb") as f:
+        _client().put_object(Bucket=_bucket(), Key=key, Body=f, ContentType=ct)
 
 
 def get_bytes(key: str) -> bytes:
@@ -87,13 +98,22 @@ def object_exists(key: str) -> bool:
         _client().head_object(Bucket=_bucket(), Key=key)
         return True
     except Exception as exc:  # noqa: BLE001 — botocore ClientError and others
-        code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
-        # 404 / NotFound / NoSuchKey
+        resp = getattr(exc, "response", None)
+        code = None
+        status = None
+        if isinstance(resp, dict):
+            code = resp.get("Error", {}).get("Code")
+            status = resp.get("ResponseMetadata", {}).get("HTTPStatusCode")
         msg = str(exc).lower()
-        if code in ("404", "NoSuchKey", "NotFound") or "not found" in msg or "404" in msg:
+        if (
+            code in ("404", "NoSuchKey", "NotFound", "404 Not Found")
+            or status == 404
+            or "not found" in msg
+            or "nosuchkey" in msg
+        ):
             return False
-        logger.warning("R2 head_object failed for %s: %s", key, exc)
-        return False
+        # Auth / config errors should not look like "missing"
+        raise
 
 
 def delete_object(key: str) -> None:
@@ -101,6 +121,14 @@ def delete_object(key: str) -> None:
         _client().delete_object(Bucket=_bucket(), Key=key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("R2 delete_object failed for %s: %s", key, exc)
+
+
+def ping() -> str:
+    """Write and delete a tiny probe object. Returns 'ok' or raises with detail."""
+    key = "_health/r2-ping.txt"
+    put_bytes(key, b"ok", content_type="text/plain")
+    delete_object(key)
+    return "ok"
 
 
 def reset_client_cache() -> None:

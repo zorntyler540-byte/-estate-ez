@@ -147,12 +147,19 @@ export default function AccountPage() {
         failed += row.failed || 0;
         skippedRemote += row.skipped_already_in_r2 || 0;
         skippedMissing += row.skipped_missing_local || 0;
+        if (row.errors?.length) {
+          setR2MigrateErr(row.errors.slice(0, 3).join(" · "));
+        }
         const total = row.total_photos || 0;
         const next = row.next_offset;
         setR2MigrateMsg(
           `Migrating… ${Math.min(next ?? total, total)} / ${total} scanned · ${uploaded} uploaded` +
             (failed ? ` · ${failed} failed` : "")
         );
+        if (row.failed && row.uploaded === 0 && (row.errors?.length || 0) > 0) {
+          // Stop early on total-failure batches so we can fix credentials.
+          throw new Error(row.errors![0] || "All uploads in this batch failed");
+        }
         if (row.done || next == null) break;
         offset = next;
       }
@@ -478,6 +485,27 @@ export default function AccountPage() {
         <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
           R2 status: {r2Configured ? "configured" : "not detected on API /health yet"}
         </p>
+        <button
+          type="button"
+          className="ct-btn"
+          style={{ marginLeft: "0.5rem" }}
+          disabled={r2MigrateBusy || !token || !r2Configured}
+          onClick={() => {
+            void (async () => {
+              setR2MigrateErr("");
+              setR2MigrateMsg("Testing R2 connection…");
+              try {
+                await apiFetch("/integrations/r2/ping", token);
+                setR2MigrateMsg("R2 ping OK — credentials can write to the bucket.");
+              } catch (e) {
+                setR2MigrateErr(e instanceof Error ? e.message : "R2 ping failed");
+                setR2MigrateMsg("");
+              }
+            })();
+          }}
+        >
+          Test R2 connection
+        </button>
         <button
           type="button"
           className="ct-btn ct-btn--primary"
