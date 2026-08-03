@@ -14,6 +14,7 @@ import requests
 from PIL import Image, ImageOps
 
 from app.config import settings
+from app.services.ctseller_categories import CT_SELLER_CATEGORY_DEFAULT, canonicalize_ct_category
 
 logger = logging.getLogger(__name__)
 
@@ -377,10 +378,7 @@ def build_item_payload(
         irm = {"pickup": True, "delivery": False, "shipping": False}
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
-    cat = (category or "").strip() or "Household Goods Other"
-    # SPA stores "Group#*#Leaf" then strips to leaf before POST
-    if "#*#" in cat:
-        cat = cat.split("#*#", 1)[1].strip() or cat
+    cat = canonicalize_ct_category(category)
 
     return {
         "saleid": int(sale_id),
@@ -388,7 +386,7 @@ def build_item_payload(
         "SKU": (sku or "").strip()[:20],
         "title": (title or "").strip()[:500] or (sku or "Lot"),
         "description": (description or "").strip(),
-        "category": cat,
+        "category": cat or CT_SELLER_CATEGORY_DEFAULT,
         "condition": (condition or "").strip() or "Good",
         "itemstatus": "Pending",
         "startingprice": price,

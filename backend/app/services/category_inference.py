@@ -4,9 +4,10 @@ import re
 from typing import Iterable
 
 from app.core.lotting import LotOutput
+from app.services.ctseller_categories import canonicalize_ct_category
 
 # Order matters for ties: more specific CT Seller categories first; Household Goods Other last.
-# Names must match values CT Seller accepts (see extension CTSELLER_ALLOWED_CATEGORIES).
+# Names must match seller.ctbids.com /category/list (see ctseller_categories.py).
 _RULES: list[tuple[str, tuple[str, ...]]] = [
     ("Handbags & Wallets", ("handbag", "purse", "wallet", "crossbody", "tote", "satchel", "clutch")),
     ("Shoes", ("shoe", "heel", "loafer", "sneaker", "boot", "sandals", "rockport", "cole haan")),
@@ -17,7 +18,7 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
     ("Rings", ("ring", "band ring", "engagement ring")),
     ("Jewelry Other", ("jewelry", "brooch", "necklace", "pendant", "tie clip", "cufflink")),
     ("Costume Jewelry", ("rhinestone", "costume jewelry", "clip-on")),
-    ("Luxury & Designer Items", ("louis vuitton", "gucci", "prada", "michael kors", "coach", "designer")),
+    ("Luxury and Designer Items", ("louis vuitton", "gucci", "prada", "michael kors", "coach", "designer")),
     (
         "Books",
         (
@@ -245,13 +246,13 @@ def infer_ct_category(lot: LotOutput) -> tuple[str | None, str | None]:
     if best_category == "Household Goods Other" and len(scored) > 1:
         for category, score in scored[1:]:
             if category in _SPECIFIC_OVER_HOUSEHOLD and score >= 5:
-                return category, None
+                return canonicalize_ct_category(category), None
     # Books beat decorative/antique catch-alls even when those also match.
     if best_category in _WEAK_CATCHALL_CATEGORIES:
         for category, score in scored:
             if category == "Books" and score >= 4:
-                return "Books", None
-    return best_category, None
+                return canonicalize_ct_category("Books"), None
+    return canonicalize_ct_category(best_category), None
 
 
 def prefer_keyword_category_over_stored(

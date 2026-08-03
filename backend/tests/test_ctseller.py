@@ -27,7 +27,23 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["saleid"] == 42
     assert item["locationid"] == 7
     assert item["SKU"] == "034"
-    assert item["category"] == "Lamps"
+    # Leaf "Lamps" is not a /category/list name; fall back to group "Lighting".
+    assert item["category"] == "Lighting"
     assert item["startingprice"] == 5.0
     assert item["itemstatus"] == "Pending"
     assert item["itemreceiptmethod"]["pickup"] is True
+
+
+def test_build_item_payload_canonicalizes_luxury_alias() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="A1",
+        title="Bag",
+        description="Designer bag",
+        category="Luxury & Designer Items",
+        condition="Good",
+        starting_price=5.0,
+        item_receipt_method=None,
+    )
+    assert item["category"] == "Luxury and Designer Items"
