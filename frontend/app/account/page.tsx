@@ -63,6 +63,13 @@ export default function AccountPage() {
   const [selfPasswordBusy, setSelfPasswordBusy] = useState(false);
   const [selfPasswordMsg, setSelfPasswordMsg] = useState("");
   const [selfPasswordErr, setSelfPasswordErr] = useState("");
+  const [ctSellerConnected, setCtSellerConnected] = useState(false);
+  const [ctSellerUsername, setCtSellerUsername] = useState("");
+  const [ctSellerUserInput, setCtSellerUserInput] = useState("");
+  const [ctSellerPassword, setCtSellerPassword] = useState("");
+  const [ctSellerBusy, setCtSellerBusy] = useState(false);
+  const [ctSellerMsg, setCtSellerMsg] = useState("");
+  const [ctSellerErr, setCtSellerErr] = useState("");
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -84,7 +91,60 @@ export default function AccountPage() {
         setError(msg);
       })
       .finally(() => setLoading(false));
+    void apiFetch("/integrations/ctseller", t)
+      .then((data) => {
+        const row = data as { connected?: boolean; username?: string | null };
+        setCtSellerConnected(Boolean(row.connected));
+        setCtSellerUsername((row.username || "").trim());
+        if (row.username) setCtSellerUserInput(String(row.username));
+      })
+      .catch(() => {
+        /* optional until backend redeploys */
+      });
   }, [router]);
+
+  async function connectCtSeller() {
+    if (!token || !ctSellerUserInput.trim() || !ctSellerPassword) return;
+    setCtSellerBusy(true);
+    setCtSellerErr("");
+    setCtSellerMsg("");
+    try {
+      const res = (await apiFetch("/integrations/ctseller/credentials", token, {
+        method: "PUT",
+        body: JSON.stringify({
+          username: ctSellerUserInput.trim(),
+          password: ctSellerPassword
+        })
+      })) as { connected?: boolean; username?: string | null };
+      setCtSellerConnected(Boolean(res.connected));
+      setCtSellerUsername((res.username || ctSellerUserInput).trim());
+      setCtSellerPassword("");
+      setCtSellerMsg("Connected to CT Seller. You can post lots from the lot detail page.");
+    } catch (e) {
+      setCtSellerErr(e instanceof Error ? e.message : "Could not connect");
+    } finally {
+      setCtSellerBusy(false);
+    }
+  }
+
+  async function disconnectCtSeller() {
+    if (!token) return;
+    if (!window.confirm("Remove stored CT Seller credentials from this account?")) return;
+    setCtSellerBusy(true);
+    setCtSellerErr("");
+    setCtSellerMsg("");
+    try {
+      await apiFetch("/integrations/ctseller/credentials", token, { method: "DELETE" });
+      setCtSellerConnected(false);
+      setCtSellerUsername("");
+      setCtSellerPassword("");
+      setCtSellerMsg("CT Seller disconnected.");
+    } catch (e) {
+      setCtSellerErr(e instanceof Error ? e.message : "Could not disconnect");
+    } finally {
+      setCtSellerBusy(false);
+    }
+  }
 
   function logout() {
     localStorage.removeItem("token");
@@ -333,6 +393,79 @@ export default function AccountPage() {
             {selfPasswordBusy ? "Updating…" : "Update password"}
           </button>
         </div>
+      </section>
+
+      <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+        <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+          CT Seller
+        </h2>
+        <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
+          Connect seller.ctbids.com so the site can create lots for you (skip the Chrome extension). Credentials are
+          stored encrypted on your account. Owners only.
+        </p>
+        {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
+        {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
+        {ctSellerConnected ? (
+          <p style={{ marginTop: 0 }}>
+            Connected as <strong>{ctSellerUsername || "seller user"}</strong>
+          </p>
+        ) : (
+          <p className="ct-muted" style={{ marginTop: 0 }}>
+            Not connected.
+          </p>
+        )}
+        {me?.role?.toLowerCase() === "owner" ? (
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+            <input
+              className="ct-input"
+              style={{ maxWidth: 260, width: "100%" }}
+              type="text"
+              placeholder="CT Seller email / username"
+              value={ctSellerUserInput}
+              onChange={(e) => {
+                setCtSellerUserInput(e.target.value);
+                setCtSellerErr("");
+                setCtSellerMsg("");
+              }}
+              autoComplete="username"
+            />
+            <input
+              className="ct-input"
+              style={{ maxWidth: 240, width: "100%" }}
+              type="password"
+              placeholder={ctSellerConnected ? "Password (to reconnect)" : "CT Seller password"}
+              value={ctSellerPassword}
+              onChange={(e) => {
+                setCtSellerPassword(e.target.value);
+                setCtSellerErr("");
+                setCtSellerMsg("");
+              }}
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              disabled={ctSellerBusy || !ctSellerUserInput.trim() || !ctSellerPassword}
+              onClick={() => void connectCtSeller()}
+            >
+              {ctSellerBusy ? "Connecting…" : ctSellerConnected ? "Reconnect" : "Connect"}
+            </button>
+            {ctSellerConnected ? (
+              <button
+                type="button"
+                className="ct-btn"
+                disabled={ctSellerBusy}
+                onClick={() => void disconnectCtSeller()}
+              >
+                Disconnect
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="ct-muted" style={{ marginBottom: 0 }}>
+            Ask an account owner to connect CT Seller.
+          </p>
+        )}
       </section>
 
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>

@@ -995,6 +995,7 @@ type Sale = {
   name: string;
   closed_at: string | null;
   created_at: string;
+  ctseller_sale_id?: number | null;
 };
 
 type AdminAccount = {

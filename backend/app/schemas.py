@@ -121,6 +121,7 @@ class SaleOut(BaseModel):
     user_id: str
     name: str
     closed_at: datetime | None = None
+    ctseller_sale_id: int | None = None
     created_at: datetime
 
 
@@ -131,6 +132,8 @@ class SaleCreate(BaseModel):
 class SaleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_closed: bool | None = None
+    ctseller_sale_id: int | None = None
+    clear_ctseller_sale_id: bool = False
 
 
 class LotOut(BaseModel):
@@ -159,6 +162,8 @@ class LotOut(BaseModel):
     sku_text_mismatch: bool = False
     ai_regenerating: bool = False
     ai_regenerate_error: str | None = None
+    ctseller_item_id: int | None = None
+    ctseller_posted_at: datetime | None = None
 
 
 class LotUpdate(BaseModel):
@@ -171,6 +176,38 @@ class LotUpdate(BaseModel):
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
+
+
+class CTSellerCredentialsIn(BaseModel):
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class CTSellerStatusOut(BaseModel):
+    connected: bool
+    username: str | None = None
+
+
+class CTSellerRemoteSaleOut(BaseModel):
+    id: int
+    title: str
+    status: str | None = None
+
+
+class LotPostToCTSellerIn(BaseModel):
+    """Optional override; otherwise uses the sale's saved ctseller_sale_id."""
+
+    ctseller_sale_id: int | None = None
+    save_sale_mapping: bool = True
+    force: bool = False
+
+
+class LotPostToCTSellerOut(BaseModel):
+    lot_id: str
+    ctseller_item_id: int
+    ctseller_sale_id: int
+    photos_uploaded: int
+    ctseller_posted_at: datetime
 
 
 class CreateJobRequest(BaseModel):

@@ -42,12 +42,17 @@ from app import appraisal_tasks, export_tasks, job_tasks, regeneration_tasks
 from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
 from app.schemas import (
     CreateJobRequest,
+    CTSellerCredentialsIn,
+    CTSellerRemoteSaleOut,
+    CTSellerStatusOut,
     DeleteLotPhotosIn,
     HealthResponse,
     JobOut,
     LoginRequest,
     MergeLotsIn,
     LotOut,
+    LotPostToCTSellerIn,
+    LotPostToCTSellerOut,
     LotUpdate,
     PasswordChangeIn,
     PasswordResetIn,
@@ -76,6 +81,13 @@ from app.schemas import (
     SplitPhotosToNewLotOut,
     TransferPhotosIn,
     TransferPhotosOut,
+)
+from app.services.ctseller import (
+    CTSellerClient,
+    CTSellerError,
+    build_item_payload,
+    seal_secret,
+    unseal_secret,
 )
 from app.services import job_events
 from app.services.serialization import (
@@ -110,6 +122,60 @@ from app.catalog_limits import (
 )
 
 app = FastAPI(title=settings.app_name)
+
+
+def _sale_out(row: Sale) -> SaleOut:
+    return SaleOut(
+        id=row.id,
+        account_id=row.account_id,
+        user_id=row.user_id,
+        name=row.name,
+        closed_at=row.closed_at,
+        ctseller_sale_id=getattr(row, "ctseller_sale_id", None),
+        created_at=row.created_at,
+    )
+
+
+def _ctseller_client_for_account(account: Account, db: Session) -> CTSellerClient:
+    """Return an authenticated CT Seller client, refreshing or re-logging in as needed."""
+    access = unseal_secret(getattr(account, "ctseller_access_token_enc", None))
+    refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
+    username = (getattr(account, "ctseller_username", None) or "").strip()
+    password = unseal_secret(getattr(account, "ctseller_password_enc", None))
+    if not username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect your CT Seller account on Account → CT Seller first",
+        )
+    client = CTSellerClient(access_token=access or None)
+    if access:
+        try:
+            client.list_open_sales()
+            return client
+        except CTSellerError:
+            pass
+    if refresh:
+        try:
+            new_access = client.refresh(refresh)
+            account.ctseller_access_token_enc = seal_secret(new_access)
+            db.add(account)
+            db.commit()
+            return client
+        except CTSellerError:
+            pass
+    try:
+        tokens = client.login(username, password)
+    except CTSellerError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc) or "CT Seller login failed — update credentials on Account",
+        ) from exc
+    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
+    if tokens.refresh_token:
+        account.ctseller_refresh_token_enc = seal_secret(tokens.refresh_token)
+    db.add(account)
+    db.commit()
+    return client
 
 
 def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
@@ -731,17 +797,7 @@ def list_sales(current: User = Depends(get_current_user), db: Session = Depends(
         .order_by(Sale.created_at.asc())
         .all()
     )
-    return [
-        SaleOut(
-            id=r.id,
-            account_id=r.account_id,
-            user_id=r.user_id,
-            name=r.name,
-            closed_at=r.closed_at,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return [_sale_out(r) for r in rows]
 
 
 @app.get("/sales/{sale_id}/photo-health", response_model=SalePhotoHealthOut)
@@ -769,14 +825,7 @@ def create_sale(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return SaleOut(
-        id=row.id,
-        account_id=row.account_id,
-        user_id=row.user_id,
-        name=row.name,
-        closed_at=row.closed_at,
-        created_at=row.created_at,
-    )
+    return _sale_out(row)
 
 
 @app.patch("/sales/{sale_id}", response_model=SaleOut)
@@ -792,16 +841,13 @@ def update_sale(
     if payload.is_closed is not None:
         _require_owner(current)
         row.closed_at = datetime.now(timezone.utc) if payload.is_closed else None
+    if payload.clear_ctseller_sale_id:
+        row.ctseller_sale_id = None
+    elif payload.ctseller_sale_id is not None:
+        row.ctseller_sale_id = int(payload.ctseller_sale_id)
     db.commit()
     db.refresh(row)
-    return SaleOut(
-        id=row.id,
-        account_id=row.account_id,
-        user_id=row.user_id,
-        name=row.name,
-        closed_at=row.closed_at,
-        created_at=row.created_at,
-    )
+    return _sale_out(row)
 
 
 @app.delete("/sales/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -822,6 +868,186 @@ def delete_sale(
     db.delete(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/integrations/ctseller", response_model=CTSellerStatusOut)
+def ctseller_status(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerStatusOut:
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    username = (getattr(account, "ctseller_username", None) or "").strip() or None
+    has_pw = bool(unseal_secret(getattr(account, "ctseller_password_enc", None)))
+    return CTSellerStatusOut(connected=bool(username and has_pw), username=username)
+
+
+@app.put("/integrations/ctseller/credentials", response_model=CTSellerStatusOut)
+def ctseller_connect(
+    payload: CTSellerCredentialsIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerStatusOut:
+    """Store CT Seller login (encrypted) after verifying credentials."""
+    _require_owner(current)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    client = CTSellerClient()
+    try:
+        tokens = client.login(payload.username.strip(), payload.password)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "CT Seller login failed") from exc
+    account.ctseller_username = payload.username.strip()
+    account.ctseller_password_enc = seal_secret(payload.password)
+    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
+    account.ctseller_refresh_token_enc = (
+        seal_secret(tokens.refresh_token) if tokens.refresh_token else None
+    )
+    db.add(account)
+    db.commit()
+    return CTSellerStatusOut(connected=True, username=account.ctseller_username)
+
+
+@app.delete("/integrations/ctseller/credentials", response_model=CTSellerStatusOut)
+def ctseller_disconnect(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerStatusOut:
+    _require_owner(current)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    account.ctseller_username = None
+    account.ctseller_password_enc = None
+    account.ctseller_access_token_enc = None
+    account.ctseller_refresh_token_enc = None
+    db.add(account)
+    db.commit()
+    return CTSellerStatusOut(connected=False, username=None)
+
+
+@app.get("/integrations/ctseller/sales", response_model=list[CTSellerRemoteSaleOut])
+def ctseller_list_sales(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CTSellerRemoteSaleOut]:
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        client = _ctseller_client_for_account(account, db)
+        rows = client.list_open_sales()
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [CTSellerRemoteSaleOut(id=r.id, title=r.title, status=r.status) for r in rows]
+
+
+@app.post("/lots/{lot_id}/post-to-ctseller", response_model=LotPostToCTSellerOut)
+def post_lot_to_ctseller(
+    lot_id: str,
+    payload: LotPostToCTSellerIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotPostToCTSellerOut:
+    """
+    Create the lot as an item on seller.ctbids.com (title, description, category, photos).
+
+    Uses unofficial CT Seller APIs — same endpoints the Seller SPA uses. Requires CT Seller
+    credentials on the account and a mapped CT Seller sale id.
+    """
+    body = payload or LotPostToCTSellerIn()
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    if lot.ctseller_item_id and not body.force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already posted to CT Seller as item {lot.ctseller_item_id}. Pass force=true to post again.",
+        )
+    sku = (lot.sku or "").strip()
+    if not sku:
+        raise HTTPException(status_code=400, detail="Lot needs a SKU before posting to CT Seller")
+    if not (lot.auction_title or "").strip():
+        raise HTTPException(status_code=400, detail="Lot needs an auction title before posting")
+
+    sale = _sale_for_user(lot.sale_id, current, db)
+    remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
+    if remote_sale_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Map this sale to a CT Seller auction (pick a sale when posting, or set ctseller_sale_id on the sale)",
+        )
+
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot.id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
+        .all()
+    )
+    photo_paths: list[tuple[Photo, Path]] = []
+    for ph in photos:
+        path = resolve_catalog_storage_path(ph.storage_path)
+        if path is not None and path.is_file():
+            photo_paths.append((ph, path))
+
+    try:
+        client = _ctseller_client_for_account(account, db)
+        detail = client.sale_detail(int(remote_sale_id))
+        location_id = detail.get("locationid")
+        irm = detail.get("saleitemreceiptmethod")
+        item = build_item_payload(
+            sale_id=int(remote_sale_id),
+            location_id=location_id,
+            sku=sku,
+            title=lot.auction_title or sku,
+            description=lot.professional_description or "",
+            category=(lot.ct_category or "").strip() or "Household Goods Other",
+            condition=(lot.condition_text or "").strip() or "Good",
+            starting_price=lot.starting_price,
+            item_receipt_method=irm,
+        )
+        item_id = client.create_item(item)
+        uploaded = 0
+        for idx, (ph, path) in enumerate(photo_paths):
+            raw = path.read_bytes()
+            name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
+            client.add_item_image(
+                item_id=item_id,
+                image_bytes=raw,
+                name=name[:80],
+                display_order=idx + 1,
+                is_display_image=(idx == 0),
+            )
+            uploaded += 1
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read lot photos: {exc}") from exc
+
+    if body.save_sale_mapping and sale.ctseller_sale_id != int(remote_sale_id):
+        sale.ctseller_sale_id = int(remote_sale_id)
+        db.add(sale)
+
+    now = datetime.now(timezone.utc)
+    lot.ctseller_item_id = int(item_id)
+    lot.ctseller_posted_at = now
+    db.add(lot)
+    db.commit()
+    db.refresh(lot)
+
+    return LotPostToCTSellerOut(
+        lot_id=lot.id,
+        ctseller_item_id=int(item_id),
+        ctseller_sale_id=int(remote_sale_id),
+        photos_uploaded=uploaded,
+        ctseller_posted_at=now,
+    )
 
 
 @app.get("/lots", response_model=list[LotOut])

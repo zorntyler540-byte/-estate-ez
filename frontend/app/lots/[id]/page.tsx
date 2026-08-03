@@ -41,6 +41,14 @@ type Lot = {
   sku_text_mismatch: boolean;
   ai_regenerating?: boolean;
   ai_regenerate_error?: string | null;
+  ctseller_item_id?: number | null;
+  ctseller_posted_at?: string | null;
+};
+
+type CTSellerRemoteSale = {
+  id: number;
+  title: string;
+  status?: string | null;
 };
 
 type SaleLotOption = {
@@ -131,6 +139,12 @@ export default function LotDetailPage() {
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
+  const [mappedCtSellerSaleId, setMappedCtSellerSaleId] = useState<number | null>(null);
+  const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
+  const [ctSellerPickId, setCtSellerPickId] = useState("");
+  const [ctSellerPostBusy, setCtSellerPostBusy] = useState(false);
+  const [ctSellerMsg, setCtSellerMsg] = useState("");
+  const [ctSellerErr, setCtSellerErr] = useState("");
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
   const [transferTargetId, setTransferTargetId] = useState("");
   const [mergeSourceId, setMergeSourceId] = useState("");
@@ -298,23 +312,57 @@ export default function LotDetailPage() {
   useEffect(() => {
     if (!token || !lot?.sale_id) {
       setSaleName("");
+      setMappedCtSellerSaleId(null);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const rows = (await apiFetch("/sales", token)) as { id: string; name?: string }[];
+        const rows = (await apiFetch("/sales", token)) as {
+          id: string;
+          name?: string;
+          ctseller_sale_id?: number | null;
+        }[];
         if (cancelled || !Array.isArray(rows)) return;
         const hit = rows.find((s) => s.id === lot.sale_id);
         setSaleName((hit?.name || "").trim());
+        const mapped =
+          typeof hit?.ctseller_sale_id === "number" && Number.isFinite(hit.ctseller_sale_id)
+            ? hit.ctseller_sale_id
+            : null;
+        setMappedCtSellerSaleId(mapped);
+        if (mapped != null) setCtSellerPickId(String(mapped));
       } catch {
-        if (!cancelled) setSaleName("");
+        if (!cancelled) {
+          setSaleName("");
+          setMappedCtSellerSaleId(null);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [token, lot?.sale_id]);
+
+  useEffect(() => {
+    if (!token) {
+      setCtSellerRemoteSales([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = (await apiFetch("/integrations/ctseller/sales", token)) as CTSellerRemoteSale[];
+        if (cancelled) return;
+        setCtSellerRemoteSales(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setCtSellerRemoteSales([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     setSelectedPhotoIds(new Set());
@@ -502,6 +550,55 @@ export default function LotDetailPage() {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function postToCtSeller(force = false) {
+    if (!lot) return;
+    const pick = Number(ctSellerPickId || mappedCtSellerSaleId || "");
+    if (!Number.isFinite(pick) || pick <= 0) {
+      setCtSellerErr("Pick a CT Seller auction for this catalog sale first.");
+      return;
+    }
+    if (listingDirty) {
+      setCtSellerErr("Save listing changes before posting to CT Seller.");
+      return;
+    }
+    setCtSellerPostBusy(true);
+    setCtSellerErr("");
+    setCtSellerMsg("");
+    try {
+      const res = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/post-to-ctseller`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          ctseller_sale_id: pick,
+          save_sale_mapping: true,
+          force
+        })
+      })) as {
+        ctseller_item_id: number;
+        photos_uploaded: number;
+        ctseller_sale_id: number;
+      };
+      setMappedCtSellerSaleId(res.ctseller_sale_id);
+      setCtSellerPickId(String(res.ctseller_sale_id));
+      setLot((prev) =>
+        prev
+          ? {
+              ...prev,
+              ctseller_item_id: res.ctseller_item_id,
+              ctseller_posted_at: new Date().toISOString()
+            }
+          : prev
+      );
+      setCtSellerMsg(
+        `Posted to CT Seller as item #${res.ctseller_item_id}` +
+          (res.photos_uploaded ? ` (${res.photos_uploaded} photo${res.photos_uploaded === 1 ? "" : "s"})` : "")
+      );
+    } catch (e) {
+      setCtSellerErr(e instanceof Error ? e.message : "Post to CT Seller failed");
+    } finally {
+      setCtSellerPostBusy(false);
     }
   }
 
@@ -1031,11 +1128,102 @@ export default function LotDetailPage() {
                   "Regenerate with AI"
                 )}
               </button>
+              <button
+                type="button"
+                className="ct-btn"
+                onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
+                disabled={
+                  ctSellerPostBusy ||
+                  saving ||
+                  listingDirty ||
+                  showAiRegenProgress ||
+                  !(lot.sku || "").trim() ||
+                  !(lot.auction_title || "").trim()
+                }
+                aria-busy={ctSellerPostBusy}
+                title={
+                  listingDirty
+                    ? "Save listing first"
+                    : lot.ctseller_item_id
+                      ? "Already posted — click to post again"
+                      : "Create this lot on seller.ctbids.com"
+                }
+              >
+                {ctSellerPostBusy
+                  ? "Posting…"
+                  : lot.ctseller_item_id
+                    ? "Re-post to CT Seller"
+                    : "Post to CT Seller"}
+              </button>
             </div>
           </div>
         </header>
 
         {showLotAlerts ? <div className="ct-lot-detail-alerts">{lotWarnings}</div> : null}
+
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">CT Seller</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            Post this lot straight to seller.ctbids.com (no browser extension). Connect your Seller login on{" "}
+            <Link href="/account">Account</Link>, pick the matching CTBids auction, then post.
+          </p>
+          {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
+          {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
+          {lot.ctseller_item_id ? (
+            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+              Last posted as CT Seller item <strong>#{lot.ctseller_item_id}</strong>
+              {lot.ctseller_posted_at
+                ? ` · ${new Date(lot.ctseller_posted_at).toLocaleString()}`
+                : ""}
+            </p>
+          ) : null}
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ minWidth: 220, flex: "1 1 240px" }}>
+              <label className="ct-label" htmlFor="ctseller-sale-pick">
+                CT Seller auction
+              </label>
+              <select
+                id="ctseller-sale-pick"
+                className="ct-input"
+                value={ctSellerPickId}
+                onChange={(e) => setCtSellerPickId(e.target.value)}
+                disabled={ctSellerPostBusy}
+              >
+                <option value="">Select auction…</option>
+                {ctSellerRemoteSales.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.title}
+                    {s.status ? ` (${s.status})` : ""} · #{s.id}
+                  </option>
+                ))}
+              </select>
+              {!ctSellerRemoteSales.length ? (
+                <p className="ct-field-hint">
+                  No auctions loaded — connect CT Seller on Account, or refresh after signing in there.
+                </p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
+              disabled={
+                ctSellerPostBusy ||
+                saving ||
+                listingDirty ||
+                !(lot.sku || "").trim() ||
+                !(lot.auction_title || "").trim() ||
+                !ctSellerPickId
+              }
+            >
+              {ctSellerPostBusy
+                ? "Posting…"
+                : lot.ctseller_item_id
+                  ? "Re-post lot"
+                  : "Post lot"}
+            </button>
+          </div>
+        </section>
 
         <section className="ct-dash-panel">
           <h2 className="ct-dash-panel__title">

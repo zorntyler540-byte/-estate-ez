@@ -26,6 +26,8 @@ class Sale(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Numeric sale id on seller.ctbids.com (maps this catalog sale → CT Seller auction).
+    ctseller_sale_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -35,6 +37,10 @@ class Account(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan_code: Mapped[str] = mapped_column(String(40), default="beta_free", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    ctseller_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ctseller_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ctseller_access_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ctseller_refresh_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
@@ -78,6 +84,8 @@ class Lot(Base):
     photo_count: Mapped[int] = mapped_column(Integer, default=0)
     ai_regenerate_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ai_regenerate_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ctseller_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ctseller_posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

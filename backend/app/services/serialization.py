@@ -174,5 +174,7 @@ def lot_to_schema(
         many_photos_review=many_photos_review,
         sku_duplicate_in_sale=bool(getattr(row, "sku_duplicate_in_sale", False)),
         sku_text_mismatch=bool(getattr(row, "sku_text_mismatch", False)),
+        ctseller_item_id=getattr(row, "ctseller_item_id", None),
+        ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
     )
 
