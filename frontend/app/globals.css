@@ -1805,21 +1805,25 @@ select.ct-input option {
 .ct-app-sidebar__brand-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  align-items: center;
+  text-align: center;
+  line-height: 1.15;
+  gap: 0.15rem;
 }
 
 .ct-app-sidebar__eyebrow {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--ct-text-subtle);
+  color: var(--ct-text-muted);
 }
 
 .ct-app-sidebar__title {
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 1.55rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--ct-primary);
 }
 
 .ct-app-sidebar__nav {
