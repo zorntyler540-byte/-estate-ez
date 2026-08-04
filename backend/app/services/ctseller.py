@@ -170,7 +170,7 @@ class CTSellerClient:
             # Match SaleList \"active\" tab: endtime > now (Pending + Started).
             {"field": "endtime", "value": now, "op": ">", "join": "AND"},
         ]
-        fields = ["id", "title", "status", "starttime", "endtime"]
+        fields = ["id", "title", "status", "starttime", "endtime", "tax", "buyerspremium"]
         out: list[CTSellerSaleRow] = []
         seen: set[int] = set()
         next_key: str | None = None
@@ -230,6 +230,9 @@ class CTSellerClient:
                 "saleitemreceiptmethod",
                 "endtime",
                 "timezonename",
+                # SPA copies these onto each new item's Settings tab (setBuyerTax).
+                "tax",
+                "buyerspremium",
             ]
         }
         data = self._post_json(f"/sale/detail/{int(sale_id)}", payload)
@@ -393,6 +396,9 @@ def build_item_payload(
     item_receipt_method: dict[str, bool] | str | None,
     area: str | None = None,
     allowed_areas: list[str] | None = None,
+    tax: float | str | None = None,
+    buyers_premium: float | str | None = None,
+    material: str | None = None,
 ) -> dict[str, Any]:
     """Build the item/add ``data`` object from catalog fields."""
     irm: dict[str, bool]
@@ -421,9 +427,23 @@ def build_item_payload(
 
     area_out = (area or "").strip() or infer_ct_area(cat, allowed_areas)
 
+    def _pct(raw: float | str | None) -> str:
+        if raw is None or raw == "":
+            return ""
+        try:
+            return f"{float(raw):.3f}"
+        except (TypeError, ValueError):
+            return ""
+
+    tax_out = _pct(tax)
+    bp_out = _pct(buyers_premium)
+    # SPA requires tax % when the item is taxable; copy sale-level tax when present.
+    is_taxable = bool(tax_out)
+    ships = bool(irm.get("shipping"))
+
     # Keep this lean: extra null fields are ok, but ``id: null`` and ``itemtypeid`` are required
     # or CT Seller returns "Not found : Update key or data missing".
-    return {
+    out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
         "locationid": location_id,
@@ -436,12 +456,28 @@ def build_item_payload(
         "itemstatus": "Pending",
         "itemtypeid": 2,  # Auction (same as SPA-created lots)
         "startingprice": price,
-        "istaxable": True,
-        "isshippable": False,
+        "istaxable": is_taxable,
+        "isshippable": ships,
         "isfeatured": False,
         "ispublic": True,
         "itemreceiptmethod": irm_out,
         "closingorder": 999,
         "tag": "",
         "quantity": "",
+        "tax": tax_out,
+        "buyerspremium": bp_out,
+        "reserveprice": "",
+        "buynowprice": "",
+        "width": "",
+        "height": "",
+        "length": "",
+        "weight": "",
+        "shippingfee": "",
+        "handlingfee": "",
+        "goal": "",
+        "valuation": "",
+        "fragilityscore": None,
+        "material": (material or "").strip() or None,
+        "specialtyshippeditems": "",
     }
+    return out

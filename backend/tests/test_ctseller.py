@@ -66,3 +66,45 @@ def test_build_item_payload_canonicalizes_luxury_alias() -> None:
         item_receipt_method=None,
     )
     assert item["category"] == "Luxury and Designer Items"
+
+
+def test_build_item_payload_copies_sale_tax_and_premium() -> None:
+    """SPA Settings tab copies sale tax / buyerspremium onto new items."""
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="T1",
+        title="Test",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method={"pickup": True, "delivery": False, "shipping": True},
+        tax=8.875,
+        buyers_premium=15,
+        material="Plastic",
+    )
+    assert item["tax"] == "8.875"
+    assert item["buyerspremium"] == "15.000"
+    assert item["istaxable"] is True
+    assert item["isshippable"] is True
+    assert item["material"] == "Plastic"
+    assert item["width"] == ""
+    assert item["fragilityscore"] is None
+
+
+def test_build_item_payload_blank_tax_when_sale_has_none() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="T2",
+        title="Test",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+    )
+    assert item["tax"] == ""
+    assert item["buyerspremium"] == ""
+    assert item["istaxable"] is False

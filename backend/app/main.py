@@ -1143,6 +1143,8 @@ def _post_one_lot_to_ctseller(
     item_receipt_method: object,
     force: bool = False,
     allowed_areas: list[str] | None = None,
+    tax: object = None,
+    buyers_premium: object = None,
 ) -> LotPostToCTSellerOut:
     """Create one CT Seller item + photos for a catalog lot. Raises HTTPException or CTSellerError."""
     if lot.ctseller_item_id and not force:
@@ -1175,6 +1177,18 @@ def _post_one_lot_to_ctseller(
         except CTSellerError:
             areas = None
 
+    material: str | None = None
+    try:
+        specs = json.loads(lot.specification_lines_json or "[]")
+        if isinstance(specs, list):
+            for line in specs:
+                s = str(line or "").strip()
+                if s.lower().startswith("material:"):
+                    material = s.split(":", 1)[-1].strip() or None
+                    break
+    except (TypeError, ValueError, json.JSONDecodeError):
+        material = None
+
     item = build_item_payload(
         sale_id=int(remote_sale_id),
         location_id=location_id,
@@ -1186,6 +1200,9 @@ def _post_one_lot_to_ctseller(
         starting_price=lot.starting_price,
         item_receipt_method=item_receipt_method,  # type: ignore[arg-type]
         allowed_areas=areas,
+        tax=tax if tax is not None else None,
+        buyers_premium=buyers_premium if buyers_premium is not None else None,
+        material=material,
     )
     item_id = client.create_item(item)
     uploaded = 0
@@ -1258,6 +1275,8 @@ def post_lot_to_ctseller(
             location_id=detail.get("locationid"),
             item_receipt_method=detail.get("saleitemreceiptmethod"),
             force=body.force,
+            tax=detail.get("tax"),
+            buyers_premium=detail.get("buyerspremium"),
         )
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1372,6 +1391,8 @@ def post_sale_lots_to_ctseller(
                 item_receipt_method=irm,
                 force=body.force,
                 allowed_areas=allowed_areas,
+                tax=detail.get("tax"),
+                buyers_premium=detail.get("buyerspremium"),
             )
             results.append(
                 SalePostToCTSellerLotResult(

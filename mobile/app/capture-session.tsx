@@ -240,7 +240,7 @@ export default function CaptureSessionScreen() {
     }
   }
 
-  async function finish() {
+  function confirmFinish() {
     if (!draftId) {
       router.back();
       return;
@@ -249,11 +249,25 @@ export default function CaptureSessionScreen() {
       Alert.alert("No photos", "Snap at least one photo before finishing this lot.");
       return;
     }
+    const skuLabel = manualSku.trim() ? `SKU ${manualSku.trim().toUpperCase()}` : "no manual SKU";
+    const saleLabel = selectedSaleName ? `"${selectedSaleName}"` : "this sale";
+    Alert.alert(
+      "Send lot to pipeline?",
+      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} · ${skuLabel}\n\nThis uploads to ${saleLabel} and starts AI processing. You can’t undo from here.`,
+      [
+        { text: "Keep editing", style: "cancel" },
+        { text: "Send", style: "default", onPress: () => void finishLot() }
+      ]
+    );
+  }
+
+  async function finishLot() {
+    if (!draftId || !thumbs.length) return;
     await updateDraftManualSku(draftId, manualSku);
     await setDraftStatus(draftId, "queued", null);
     void syncNow();
     Alert.alert(
-      "Lot saved",
+      "Lot queued",
       `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}.\n\nThey'll upload automatically when you're online. Review the listing on the web dashboard after processing.`,
       [{ text: "OK", onPress: () => router.back() }]
     );
@@ -374,7 +388,7 @@ export default function CaptureSessionScreen() {
           <Pressable
             style={[styles.primary, !thumbs.length && styles.disabled]}
             disabled={!thumbs.length}
-            onPress={() => void finish()}
+            onPress={confirmFinish}
           >
             <Text style={styles.primaryText}>Finish lot</Text>
           </Pressable>
