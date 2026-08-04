@@ -45,8 +45,8 @@ export default function LoginScreen() {
         <BrandLogo size={140} />
       </View>
       <Text style={styles.kicker}>Estate-EZ</Text>
-      <Text style={styles.title}>Field capture</Text>
-      <Text style={styles.sub}>Sign in with the same account as the web dashboard.</Text>
+      <Text style={styles.title}>Sign in</Text>
+      <Text style={styles.sub}>Manage lots, photos, and AI-assisted cataloging.</Text>
       <Text style={styles.api} numberOfLines={2}>
         API: {API_BASE}
       </Text>
@@ -91,14 +91,14 @@ const styles = StyleSheet.create({
   root: { flex: 1, padding: 24, justifyContent: "center", gap: 12, backgroundColor: theme.bg },
   brand: { alignItems: "center", marginBottom: 8 },
   kicker: {
-    fontSize: 13,
-    fontWeight: "600",
+    fontSize: 32,
+    fontWeight: "800",
     color: theme.primary,
-    textTransform: "uppercase",
-    letterSpacing: 0.08 * 13
+    letterSpacing: -0.5,
+    textAlign: "center"
   },
-  title: { fontSize: 28, fontWeight: "700", color: theme.text },
-  sub: { fontSize: 15, color: theme.textMuted, marginBottom: 8 },
+  title: { fontSize: 17, fontWeight: "600", color: theme.text, textAlign: "center" },
+  sub: { fontSize: 14, color: theme.textMuted, marginBottom: 8, textAlign: "center" },
   api: { fontSize: 11, color: theme.textSubtle, marginBottom: 12 },
   input: {
     borderWidth: 1,

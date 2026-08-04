@@ -60,7 +60,7 @@ export default function HomePage() {
   return (
     <main className="ct-auth-screen">
       <div className="ct-auth-card ct-card ct-card--padded ct-card--interactive ct-stack">
-        <div style={{ textAlign: "center" }}>
+        <div className="ct-auth-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             className="ct-auth-logo"
@@ -69,10 +69,8 @@ export default function HomePage() {
             width={200}
             height={200}
           />
-          <div className="ct-hero-brand">Estate-EZ</div>
-          <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
-            Sign in
-          </h1>
+          <h1 className="ct-auth-product">Estate-EZ</h1>
+          <p className="ct-auth-action">Sign in</p>
           <p className="ct-subtitle" style={{ marginBottom: 0 }}>
             Manage lots, photos, and AI-assisted cataloging.
           </p>

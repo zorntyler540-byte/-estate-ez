@@ -2012,6 +2012,26 @@ select.ct-input option {
   background: #000;
 }
 
+.ct-auth-brand {
+  text-align: center;
+}
+
+.ct-auth-product {
+  margin: 0 0 0.35rem;
+  font-size: clamp(1.85rem, 4.5vw, 2.35rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--ct-primary);
+  line-height: 1.1;
+}
+
+.ct-auth-action {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ct-text);
+}
+
 .ct-app-topbar__menu {
   display: none;
   flex-shrink: 0;
