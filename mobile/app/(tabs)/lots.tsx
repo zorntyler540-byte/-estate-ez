@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { listLots, lotThumbnailSource } from "@/lib/api";
+import { listLots, listSaleLotCoverUrls, lotThumbnailSource } from "@/lib/api";
 import type { Lot } from "@/lib/types";
 
 function lotSubtitle(lot: Lot): string {
@@ -27,6 +27,7 @@ function lotSubtitle(lot: Lot): string {
 export default function LotsScreen() {
   const { token, selectedSaleId, selectedSaleName } = useAuth();
   const [lots, setLots] = useState<Lot[]>([]);
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -36,6 +37,7 @@ export default function LotsScreen() {
     async (mode: "full" | "pull" = "full") => {
       if (!token || !selectedSaleId) {
         setLots([]);
+        setCoverUrls({});
         setLoading(false);
         setRefreshing(false);
         return;
@@ -44,8 +46,16 @@ export default function LotsScreen() {
       else setRefreshing(true);
       setError("");
       try {
-        const rows = await listLots(token, selectedSaleId, { sort: "sku_asc", limit: 500 });
+        // List + cover URLs in parallel so the grid isn't blocked on image signing alone.
+        const [rows, covers] = await Promise.all([
+          listLots(token, selectedSaleId, { sort: "sku_asc", limit: 500 }),
+          listSaleLotCoverUrls(token, selectedSaleId, 160).catch(() => ({
+            expires_in: 0,
+            urls: {} as Record<string, string>
+          }))
+        ]);
         setLots(rows);
+        setCoverUrls(covers.urls ?? {});
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load lots");
       } finally {
@@ -113,6 +123,10 @@ export default function LotsScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
+          initialNumToRender={10}
+          maxToRenderPerBatch={6}
+          windowSize={5}
+          removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#2dd4bf" />
           }
@@ -122,45 +136,55 @@ export default function LotsScreen() {
             </Text>
           }
           contentContainerStyle={filtered.length ? undefined : styles.emptyPad}
-          renderItem={({ item }) => (
-            <Pressable style={styles.row} onPress={() => router.push(`/lot/${item.id}`)}>
-              <View style={styles.thumbWrap}>
-                {item.has_thumbnail && token ? (
-                  <Image
-                    source={lotThumbnailSource(item.id, token)}
-                    style={styles.thumb}
-                    contentFit="cover"
-                    transition={150}
-                  />
-                ) : (
-                  <View style={styles.thumbEmpty}>
-                    <Text style={styles.thumbEmptyText}>No{"\n"}photo</Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle} numberOfLines={2}>
-                  {item.auction_title?.trim() || "Untitled lot"}
-                </Text>
-                <Text style={styles.rowMeta} numberOfLines={1}>
-                  {lotSubtitle(item)}
-                </Text>
-                <View style={styles.badges}>
-                  {item.ctseller_item_id != null ? (
-                    <Text style={[styles.badge, styles.badgePosted]}>Posted</Text>
+          renderItem={({ item }) => {
+            const signed = coverUrls[item.id];
+            const source = signed
+              ? { uri: signed }
+              : item.has_thumbnail && token
+                ? lotThumbnailSource(item.id, token, 160)
+                : null;
+            return (
+              <Pressable style={styles.row} onPress={() => router.push(`/lot/${item.id}`)}>
+                <View style={styles.thumbWrap}>
+                  {source ? (
+                    <Image
+                      source={source}
+                      style={styles.thumb}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                      recyclingKey={item.id}
+                      transition={80}
+                    />
                   ) : (
-                    <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
+                    <View style={styles.thumbEmpty}>
+                      <Text style={styles.thumbEmptyText}>No{"\n"}photo</Text>
+                    </View>
                   )}
-                  {item.is_completed ? (
-                    <Text style={[styles.badge, styles.badgeDone]}>Complete</Text>
-                  ) : null}
-                  {item.sku_needs_review || item.sku_duplicate_in_sale || item.sku_text_mismatch ? (
-                    <Text style={[styles.badge, styles.badgeWarn]}>SKU review</Text>
-                  ) : null}
                 </View>
-              </View>
-            </Pressable>
-          )}
+                <View style={styles.rowBody}>
+                  <Text style={styles.rowTitle} numberOfLines={2}>
+                    {item.auction_title?.trim() || "Untitled lot"}
+                  </Text>
+                  <Text style={styles.rowMeta} numberOfLines={1}>
+                    {lotSubtitle(item)}
+                  </Text>
+                  <View style={styles.badges}>
+                    {item.ctseller_item_id != null ? (
+                      <Text style={[styles.badge, styles.badgePosted]}>Posted</Text>
+                    ) : (
+                      <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
+                    )}
+                    {item.is_completed ? (
+                      <Text style={[styles.badge, styles.badgeDone]}>Complete</Text>
+                    ) : null}
+                    {item.sku_needs_review || item.sku_duplicate_in_sale || item.sku_text_mismatch ? (
+                      <Text style={[styles.badge, styles.badgeWarn]}>SKU review</Text>
+                    ) : null}
+                  </View>
+                </View>
+              </Pressable>
+            );
+          }}
         />
       )}
     </View>

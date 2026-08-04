@@ -103,12 +103,16 @@ def signed_catalog_url(
     *,
     max_px: int | None = None,
     expires_seconds: int = 3600,
+    generate_if_missing: bool = True,
 ) -> str:
     """
     Presigned HTTPS URL for the original object, or a cached thumbnail object.
 
     Thumbnail bytes are generated once and stored beside the original in R2 so later
     grid loads skip Railway egress.
+
+    When ``generate_if_missing`` is False and no cached thumb exists, returns a signed
+    URL for the original (fast for mobile grids — avoids Pillow work on the request path).
     """
     if not object_storage.r2_configured():
         raise RuntimeError("R2 is not configured")
@@ -126,14 +130,18 @@ def signed_catalog_url(
         exists = object_storage.object_exists(tkey)
     except Exception:
         exists = False
-    if not exists:
-        from app.services.thumbnail_image import thumbnail_jpeg_bytes
+    if exists:
+        return object_storage.presigned_get_url(tkey, expires_seconds=expires_seconds)
+    if not generate_if_missing:
+        return object_storage.presigned_get_url(key, expires_seconds=expires_seconds)
 
-        src = resolve_catalog_storage_path(storage_path)
-        if not src.is_file():
-            raise FileNotFoundError("Catalog image missing locally and thumb not in R2")
-        body = thumbnail_jpeg_bytes(src, max(64, min(int(max_px), 2048)))
-        object_storage.put_bytes(tkey, body, content_type="image/jpeg")
+    from app.services.thumbnail_image import thumbnail_jpeg_bytes
+
+    src = resolve_catalog_storage_path(storage_path)
+    if not src.is_file():
+        raise FileNotFoundError("Catalog image missing locally and thumb not in R2")
+    body = thumbnail_jpeg_bytes(src, max(64, min(int(max_px), 2048)))
+    object_storage.put_bytes(tkey, body, content_type="image/jpeg")
     return object_storage.presigned_get_url(tkey, expires_seconds=expires_seconds)
 
 

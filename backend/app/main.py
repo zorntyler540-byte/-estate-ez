@@ -985,7 +985,13 @@ def sale_lot_cover_urls(
     urls: dict[str, str] = {}
     for lid, storage_path in first_path.items():
         try:
-            urls[lid] = signed_catalog_url(storage_path, max_px=px, expires_seconds=expires)
+            # Do not generate missing thumbs here — that blocked the mobile grid for minutes.
+            urls[lid] = signed_catalog_url(
+                storage_path,
+                max_px=px,
+                expires_seconds=expires,
+                generate_if_missing=False,
+            )
         except Exception:  # noqa: BLE001
             continue
     return SaleLotCoverUrlsOut(expires_in=expires, urls=urls)
