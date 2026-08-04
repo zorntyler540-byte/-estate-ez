@@ -11,7 +11,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Capture estate lot photos for catalog upload.",
-        "NSPhotoLibraryUsageDescription": "Optional access to save or pick reference photos."
+        "NSPhotoLibraryUsageDescription": "Optional access to save or pick reference photos.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.caringtransitions.capture"
     },
@@ -23,7 +24,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "permissions": [
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ],
       "package": "com.caringtransitions.capture",
       "predictiveBackGestureEnabled": false
@@ -56,7 +58,11 @@
       "typedRoutes": true
     },
     "extra": {
-      "router": {}
-    }
+      "router": {},
+      "eas": {
+        "projectId": "dfb4d2a5-1b94-449c-bc28-43466a46803d"
+      }
+    },
+    "owner": "vtz1900"
   }
 }
