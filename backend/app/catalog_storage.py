@@ -123,6 +123,11 @@ def signed_catalog_url(
     if max_px is None:
         return object_storage.presigned_get_url(key, expires_seconds=expires_seconds)
 
+    # Fast path for mobile grids: skip R2 HEAD + Pillow; sign the original.
+    # expo-image downscales for the 72px row thumb.
+    if not generate_if_missing:
+        return object_storage.presigned_get_url(key, expires_seconds=expires_seconds)
+
     tkey = thumb_object_key(storage_path, max_px)
     if not tkey:
         raise FileNotFoundError("No thumb key for photo")
@@ -132,8 +137,6 @@ def signed_catalog_url(
         exists = False
     if exists:
         return object_storage.presigned_get_url(tkey, expires_seconds=expires_seconds)
-    if not generate_if_missing:
-        return object_storage.presigned_get_url(key, expires_seconds=expires_seconds)
 
     from app.services.thumbnail_image import thumbnail_jpeg_bytes
 

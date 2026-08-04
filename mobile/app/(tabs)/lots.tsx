@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { listLots, listSaleLotCoverUrls, lotThumbnailSource } from "@/lib/api";
+import { listLots, listSaleLotCoverUrls } from "@/lib/api";
 import type { Lot } from "@/lib/types";
 
 function lotSubtitle(lot: Lot): string {
@@ -46,19 +46,16 @@ export default function LotsScreen() {
       else setRefreshing(true);
       setError("");
       try {
-        // List + cover URLs in parallel so the grid isn't blocked on image signing alone.
-        const [rows, covers] = await Promise.all([
-          listLots(token, selectedSaleId, { sort: "sku_asc", limit: 500 }),
-          listSaleLotCoverUrls(token, selectedSaleId, 160).catch(() => ({
-            expires_in: 0,
-            urls: {} as Record<string, string>
-          }))
-        ]);
+        // Show the list immediately — do not wait on cover signing.
+        const rows = await listLots(token, selectedSaleId, { sort: "sku_asc", limit: 500 });
         setLots(rows);
-        setCoverUrls(covers.urls ?? {});
+        setLoading(false);
+        setRefreshing(false);
+        void listSaleLotCoverUrls(token, selectedSaleId, 160)
+          .then((covers) => setCoverUrls(covers.urls ?? {}))
+          .catch(() => setCoverUrls({}));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load lots");
-      } finally {
         setLoading(false);
         setRefreshing(false);
       }
@@ -137,18 +134,14 @@ export default function LotsScreen() {
           }
           contentContainerStyle={filtered.length ? undefined : styles.emptyPad}
           renderItem={({ item }) => {
+            // Only R2 signed covers — do not fall back to /thumbnail (that path stalls the grid).
             const signed = coverUrls[item.id];
-            const source = signed
-              ? { uri: signed }
-              : item.has_thumbnail && token
-                ? lotThumbnailSource(item.id, token, 160)
-                : null;
             return (
               <Pressable style={styles.row} onPress={() => router.push(`/lot/${item.id}`)}>
                 <View style={styles.thumbWrap}>
-                  {source ? (
+                  {signed ? (
                     <Image
-                      source={source}
+                      source={{ uri: signed }}
                       style={styles.thumb}
                       contentFit="cover"
                       cachePolicy="memory-disk"
@@ -157,7 +150,9 @@ export default function LotsScreen() {
                     />
                   ) : (
                     <View style={styles.thumbEmpty}>
-                      <Text style={styles.thumbEmptyText}>No{"\n"}photo</Text>
+                      <Text style={styles.thumbEmptyText}>
+                        {item.has_thumbnail ? "…" : "No\nphoto"}
+                      </Text>
                     </View>
                   )}
                 </View>
