@@ -187,7 +187,9 @@ class InventoryTableEntry(BaseModel):
         validation_alias=AliasChoices("ct_category", "CtCategory", "category"),
         description=(
             "Exact CT Seller top-level category for posting this lot. Prefer a specific category "
-            "(e.g. Kitchen & Home, Glassware, Books, Women's) over 'Household Goods Other' when clear. "
+            "(e.g. Electronics, Kitchen & Home, Glassware, Books, Women's) over 'Household Goods Other' "
+            "when clear. Computer peripherals, gaming mice/keyboards, TVs, tablets, and phones are "
+            "Electronics (or Computers, Laptops / Video Games when that fits better). "
             "Must be one of the allowed CT Seller category names from the system prompt."
         ),
     )
@@ -485,8 +487,9 @@ def _ct_category_prompt_line() -> str:
     names = ", ".join(ct_categories_for_ai())
     return (
         f"- ct_category: Exact CT Seller category for this lot. Must be one of: {names}. "
-        "Prefer specific categories (Kitchen & Home, Glassware, Books, Women's, etc.) over "
-        "Household Goods Other when the photos support it.\n"
+        "Prefer specific categories (Electronics, Kitchen & Home, Glassware, Books, Women's, etc.) over "
+        "Household Goods Other when the photos support it. Gaming mice, keyboards, headsets, TVs, and "
+        "similar consumer tech → Electronics (not Household Goods Other).\n"
     )
 
 

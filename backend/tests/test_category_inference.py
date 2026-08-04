@@ -148,6 +148,34 @@ class TestCategoryInference(unittest.TestCase):
         category, _sub = resolve_lot_ct_category(lot)
         self.assertEqual(category, "Books")
 
+    def test_gaming_mouse_is_electronics(self) -> None:
+        lot = LotOutput(
+            sku="8000",
+            auction_title="Razer Naga MMO Gaming Mouse with 12-Button Thumb Grid",
+            professional_description=(
+                "Ready to dominate the game? This Razer Naga MMO Gaming Mouse is engineered "
+                "for precision and control, featuring its signature 12-button mechanical thumb grid."
+            ),
+            brands=["Razer"],
+            condition="fair",
+        )
+        category, _sub = infer_ct_category(lot)
+        self.assertEqual(category, "Electronics")
+
+    def test_resolve_overrides_household_other_for_gaming_mouse(self) -> None:
+        from app.services.category_inference import resolve_lot_ct_category
+
+        lot = LotOutput(
+            sku="8000",
+            auction_title="Razer Naga MMO Gaming Mouse with 12-Button Thumb Grid",
+            professional_description="Razer Naga MMO gaming mouse with 12-button thumb grid.",
+            brands=["Razer"],
+            condition="fair",
+            ct_category="Household Goods Other",
+        )
+        category, _sub = resolve_lot_ct_category(lot)
+        self.assertEqual(category, "Electronics")
+
     def test_inventory_schema_includes_ct_category_enum(self) -> None:
         from app.core.gemini import inventory_table_entry_gemini_schema
         from app.services.ctseller_categories import ct_categories_for_ai

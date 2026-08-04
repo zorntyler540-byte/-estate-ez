@@ -67,7 +67,83 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
         ),
     ),
     ("Paintings", ("painting", "canvas", "acrylic", "oil on", "watercolor", "batik", "signed art")),
-    ("Photography", ("camera", "photography", "lens", "nikon", "canon")),
+    (
+        "Electronics",
+        (
+            "gaming mouse",
+            "computer mouse",
+            "wireless mouse",
+            "optical mouse",
+            "mouse",
+            "keyboard",
+            "mechanical keyboard",
+            "headset",
+            "headphones",
+            "earbuds",
+            "airpods",
+            "monitor",
+            "television",
+            "smart tv",
+            "flat screen",
+            "tablet",
+            "ipad",
+            "iphone",
+            "smartphone",
+            "cellphone",
+            "cell phone",
+            "charger",
+            "power bank",
+            "usb hub",
+            "bluetooth",
+            "router",
+            "modem",
+            "printer",
+            "webcam",
+            "microphone",
+            "razer",
+            "logitech",
+            "corsair",
+            "steelseries",
+            "electronics",
+            "gaming headset",
+            "controller",
+            "gamepad",
+            "external hard drive",
+            "flash drive",
+            "thumb drive",
+            "ssd",
+            "mmo",
+            "rgb",
+        ),
+    ),
+    (
+        "Computers, Laptops",
+        (
+            "laptop",
+            "notebook computer",
+            "macbook",
+            "chromebook",
+            "desktop computer",
+            "desktop pc",
+            "computer tower",
+            "all-in-one pc",
+            "imac",
+        ),
+    ),
+    (
+        "Video Games",
+        (
+            "video game",
+            "playstation",
+            "xbox",
+            "nintendo switch",
+            "game cartridge",
+            "steam deck",
+            "nintendo",
+        ),
+    ),
+    ("Cameras & Photo Equipment", ("camera", "photography", "lens", "nikon", "canon", "dslr", "mirrorless")),
+    ("Photography", ("photo equipment", "camera bag", "tripod")),
     ("Clocks", ("clock", "timepiece", "mantel clock", "wall clock")),
     ("Coins", ("coin", "coins", "peso", "mint", "bullion", "numismatic")),
     (
@@ -195,6 +271,12 @@ _SPECIFIC_OVER_HOUSEHOLD = frozenset(
         "Art Other",
         "Paintings",
         "Figures & Figurines",
+        "Electronics",
+        "Electronics Other",
+        "Computers, Laptops",
+        "Video Games",
+        "Cameras & Photo Equipment",
+        "Photography",
     }
 )
 
@@ -268,6 +350,8 @@ def prefer_keyword_category_over_stored(
     if stored_norm in _WEAK_CATCHALL_CATEGORIES and inferred not in _WEAK_CATCHALL_CATEGORIES:
         return inferred, sub
     if inferred == "Books" and stored_norm != "Books":
+        return inferred, sub
+    if inferred == "Electronics" and stored_norm in _WEAK_CATCHALL_CATEGORIES:
         return inferred, sub
     return stored_norm, None
 
