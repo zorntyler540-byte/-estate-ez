@@ -1789,6 +1789,8 @@ export default function DashboardPage() {
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
   /** Lots checked for selective CT Seller post (empty = post all unposted). */
   const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
+  const [pullingCtSellerSales, setPullingCtSellerSales] = useState(false);
+  const [pullCtSellerSalesMsg, setPullCtSellerSalesMsg] = useState("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
   /** Full-screen preview index for staged upload thumbnails, or null. */
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null);
@@ -4550,6 +4552,77 @@ export default function DashboardPage() {
     }
   }
 
+  async function pullCtSellerSalesIntoCatalog() {
+    if (!token) return;
+    setPullingCtSellerSales(true);
+    setPullCtSellerSalesMsg("");
+    setError("");
+    try {
+      let remote = ctSellerRemoteSales;
+      try {
+        const rows = (await apiFetch("/integrations/ctseller/sales", token)) as CTSellerRemoteSale[];
+        remote = Array.isArray(rows) ? rows : [];
+        setCtSellerRemoteSales(remote);
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Could not load CT Seller auctions — connect CT Seller on Account first."
+        );
+        return;
+      }
+      if (!remote.length) {
+        setPullCtSellerSalesMsg("No open or upcoming CT Seller auctions found.");
+        return;
+      }
+      const mapped = new Set(
+        sales
+          .map((s) => s.ctseller_sale_id)
+          .filter((id): id is number => typeof id === "number" && Number.isFinite(id) && id > 0)
+      );
+      const missing = remote.filter((r) => !mapped.has(r.id));
+      if (!missing.length) {
+        setPullCtSellerSalesMsg("All up to date — every open CT Seller auction is already in Change sale.");
+        return;
+      }
+      const createdRows: Sale[] = [];
+      for (const auction of missing) {
+        const title = (auction.title || "").trim() || `CT Seller #${auction.id}`;
+        try {
+          const created = (await apiFetch("/sales", token, {
+            method: "POST",
+            body: JSON.stringify({ name: title.slice(0, 255), ctseller_sale_id: auction.id })
+          })) as Sale;
+          createdRows.push(created);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Create failed";
+          // Race or already mapped: skip and continue.
+          if (!/409|already mapped/i.test(msg)) {
+            setError(msg);
+            break;
+          }
+        }
+      }
+      if (createdRows.length) {
+        setSales((prev) => {
+          const seen = new Set(prev.map((s) => s.id));
+          const next = [...prev];
+          for (const row of createdRows) {
+            if (!seen.has(row.id)) next.push(row);
+          }
+          return next;
+        });
+      }
+      setPullCtSellerSalesMsg(
+        createdRows.length
+          ? `Added ${createdRows.length} sale${createdRows.length === 1 ? "" : "s"} from CT Seller.`
+          : "All up to date — every open CT Seller auction is already in Change sale."
+      );
+    } finally {
+      setPullingCtSellerSales(false);
+    }
+  }
+
   async function endSelectedSale() {
     if (!token || !selectedSaleId || selectedSaleClosed) return;
     const target = selectedSale?.name || "this sale";
@@ -5333,15 +5406,29 @@ export default function DashboardPage() {
             <button
               type="button"
               className="ct-btn"
+              disabled={pullingCtSellerSales || creatingSale || !token}
+              title="Create catalog sales for open/upcoming CT Seller auctions (skips ones already linked)"
+              onClick={() => void pullCtSellerSalesIntoCatalog()}
+            >
+              {pullingCtSellerSales ? "Pulling…" : "Pull CT Seller sales"}
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
               disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
               onClick={() => void endSelectedSale()}
             >
               {closingSale ? "Closing…" : "End sale"}
             </button>
           </div>
-          {!sales.length ? (
+          {pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
-              Add a sale to start cataloging lots and photos.
+              {pullCtSellerSalesMsg}
+            </p>
+          ) : null}
+          {!sales.length && !pullCtSellerSalesMsg ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
+              Add a sale to start cataloging lots and photos, or pull open auctions from CT Seller.
             </p>
           ) : null}
         </section>

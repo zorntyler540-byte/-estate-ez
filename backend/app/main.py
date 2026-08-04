@@ -1001,7 +1001,27 @@ def sale_lot_cover_urls(
 def create_sale(
     payload: SaleCreate, current: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> SaleOut:
-    row = Sale(account_id=current.account_id, user_id=current.id, name=payload.name.strip())
+    remote_id: int | None = None
+    if payload.ctseller_sale_id is not None:
+        remote_id = int(payload.ctseller_sale_id)
+        if remote_id <= 0:
+            raise HTTPException(status_code=400, detail="ctseller_sale_id must be a positive integer")
+        existing = (
+            db.query(Sale)
+            .filter(Sale.account_id == current.account_id, Sale.ctseller_sale_id == remote_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"CT Seller auction #{remote_id} is already mapped to sale \"{existing.name}\"",
+            )
+    row = Sale(
+        account_id=current.account_id,
+        user_id=current.id,
+        name=payload.name.strip(),
+        ctseller_sale_id=remote_id,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)

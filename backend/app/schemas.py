@@ -128,6 +128,7 @@ class SaleOut(BaseModel):
 
 class SaleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    ctseller_sale_id: int | None = None
 
 
 class SaleUpdate(BaseModel):
