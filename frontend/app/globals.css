@@ -1,18 +1,18 @@
-/* Design tokens — dark shell, teal accent */
+/* Design tokens — deep black shell, Zortron neon-orange accent */
 :root {
-  --ct-bg: #0c0f12;
-  --ct-bg-elevated: #141a21;
-  --ct-surface: #161d26;
-  --ct-text: #f4f4f5;
-  --ct-text-muted: #a1a1aa;
-  --ct-text-subtle: #71717a;
-  --ct-text-faint: #52525b;
-  --ct-border: #27272f;
-  --ct-border-strong: #3f3f4a;
-  --ct-primary: #2dd4bf;
-  --ct-primary-hover: #5eead4;
-  --ct-primary-muted: rgba(45, 212, 191, 0.15);
-  --ct-on-primary: #042f2e;
+  --ct-bg: #070708;
+  --ct-bg-elevated: #0e0e10;
+  --ct-surface: #141416;
+  --ct-text: #f5f5f4;
+  --ct-text-muted: #a8a29e;
+  --ct-text-subtle: #78716c;
+  --ct-text-faint: #57534e;
+  --ct-border: #27272a;
+  --ct-border-strong: #3f3f46;
+  --ct-primary: #ff4d1a;
+  --ct-primary-hover: #ff7347;
+  --ct-primary-muted: rgba(255, 77, 26, 0.14);
+  --ct-on-primary: #140500;
   --ct-warning-bg: rgba(251, 191, 36, 0.12);
   --ct-warning-border: rgba(245, 158, 11, 0.45);
   --ct-warning-text: #fde68a;
@@ -24,13 +24,14 @@
   --ct-table-hover: rgba(255, 255, 255, 0.04);
   --ct-pending-queued-bg: rgba(251, 191, 36, 0.08);
   --ct-pending-done-bg: rgba(74, 222, 128, 0.1);
-  --ct-thumb-placeholder: #27272f;
+  --ct-thumb-placeholder: #27272a;
   --ct-thumb-loading: #3f3f46;
   --ct-radius: 12px;
   --ct-radius-sm: 8px;
-  --ct-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
-  --ct-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --ct-focus: 0 0 0 3px rgba(45, 212, 191, 0.35);
+  --ct-shadow: 0 4px 28px rgba(0, 0, 0, 0.55);
+  --ct-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --ct-focus: 0 0 0 3px rgba(255, 77, 26, 0.35);
+  --ct-glow: 0 0 24px rgba(255, 77, 26, 0.22);
   --ct-max: 1120px;
   --ct-max-narrow: 440px;
 }
@@ -51,8 +52,8 @@ body.ct-body {
   min-height: 100vh;
   color: var(--ct-text);
   background:
-    radial-gradient(100% 70% at 50% -15%, rgba(45, 212, 191, 0.12) 0%, transparent 50%),
-    radial-gradient(80% 50% at 100% 0%, rgba(59, 130, 246, 0.06) 0%, transparent 45%),
+    radial-gradient(90% 55% at 12% -8%, rgba(255, 77, 26, 0.16) 0%, transparent 52%),
+    radial-gradient(70% 45% at 100% 0%, rgba(255, 45, 0, 0.07) 0%, transparent 48%),
     var(--ct-bg);
   line-height: 1.55;
   font-size: 16px;
@@ -213,11 +214,13 @@ a.ct-btn:hover {
   background: var(--ct-primary);
   border-color: var(--ct-primary);
   color: var(--ct-on-primary);
+  box-shadow: 0 0 16px rgba(255, 77, 26, 0.18);
 }
 
 .ct-btn--primary:hover:not(:disabled) {
   background: var(--ct-primary-hover);
   border-color: var(--ct-primary-hover);
+  box-shadow: 0 0 22px rgba(255, 77, 26, 0.28);
 }
 
 .ct-btn--ghost {
@@ -1297,17 +1300,17 @@ a.ct-btn:hover {
   gap: 1rem 1.25rem;
   padding: 1.15rem 1.25rem 1.2rem;
   border-radius: var(--ct-radius);
-  border: 1px solid rgba(45, 212, 191, 0.2);
+  border: 1px solid rgba(255, 77, 26, 0.2);
   background:
     linear-gradient(
       128deg,
-      rgba(45, 212, 191, 0.16) 0%,
-      rgba(45, 212, 191, 0.05) 38%,
-      rgba(12, 15, 18, 0.15) 100%
+      rgba(255, 77, 26, 0.16) 0%,
+      rgba(255, 77, 26, 0.05) 38%,
+      rgba(7, 7, 8, 0.2) 100%
     ),
     var(--ct-surface);
   box-shadow:
-    inset 0 1px 0 rgba(45, 212, 191, 0.1),
+    inset 0 1px 0 rgba(255, 77, 26, 0.1),
     0 2px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -1921,7 +1924,7 @@ select.ct-input option {
   min-width: 2.75rem;
   min-height: 2.75rem;
   padding: 0 0.55rem;
-  border: 1px solid rgba(45, 212, 191, 0.45);
+  border: 1px solid rgba(255, 77, 26, 0.45);
   border-radius: var(--ct-radius-sm);
   background: var(--ct-primary-muted);
   color: var(--ct-primary);
@@ -2095,13 +2098,13 @@ select.ct-input option {
 }
 
 .ct-app-mobile-bar__btn--primary {
-  border-color: rgba(45, 212, 191, 0.45);
+  border-color: rgba(255, 77, 26, 0.45);
   background: var(--ct-primary-muted);
   color: var(--ct-primary);
 }
 
 .ct-app-mobile-bar__btn--primary:hover:not(:disabled) {
-  background: rgba(45, 212, 191, 0.22);
+  background: rgba(255, 77, 26, 0.22);
   color: var(--ct-primary-hover);
 }
 
@@ -2178,17 +2181,17 @@ select.ct-input option {
   gap: 1rem;
   padding: 1.15rem 1.25rem 1.2rem;
   border-radius: var(--ct-radius);
-  border: 1px solid rgba(45, 212, 191, 0.2);
+  border: 1px solid rgba(255, 77, 26, 0.2);
   background:
     linear-gradient(
       128deg,
-      rgba(45, 212, 191, 0.16) 0%,
-      rgba(45, 212, 191, 0.05) 38%,
-      rgba(12, 15, 18, 0.15) 100%
+      rgba(255, 77, 26, 0.16) 0%,
+      rgba(255, 77, 26, 0.05) 38%,
+      rgba(7, 7, 8, 0.2) 100%
     ),
     var(--ct-surface);
   box-shadow:
-    inset 0 1px 0 rgba(45, 212, 191, 0.1),
+    inset 0 1px 0 rgba(255, 77, 26, 0.1),
     0 2px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -2202,7 +2205,7 @@ select.ct-input option {
 
 .ct-dashboard-hero-band .ct-stat-card {
   background: rgba(12, 15, 18, 0.38);
-  border-color: rgba(45, 212, 191, 0.14);
+  border-color: rgba(255, 77, 26, 0.14);
 }
 
 .ct-dash-stats-row {
@@ -2222,7 +2225,7 @@ select.ct-input option {
 .ct-dash-panel__title {
   margin: 0 0 0.85rem;
   padding-left: 0.7rem;
-  border-left: 3px solid rgba(45, 212, 191, 0.72);
+  border-left: 3px solid rgba(255, 77, 26, 0.72);
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.015em;
@@ -2283,7 +2286,7 @@ select.ct-input option {
   top: 0;
   z-index: 3;
   background: rgba(12, 15, 18, 0.92);
-  border-bottom: 1px solid rgba(45, 212, 191, 0.14);
+  border-bottom: 1px solid rgba(255, 77, 26, 0.14);
   box-shadow: 0 1px 0 var(--ct-border);
 }
 
@@ -2292,7 +2295,7 @@ select.ct-input option {
 }
 
 .ct-table--lots tbody tr:hover {
-  background: rgba(45, 212, 191, 0.04);
+  background: rgba(255, 77, 26, 0.04);
 }
 
 .ct-table--lots {
@@ -2319,7 +2322,7 @@ select.ct-input option {
 .ct-table--lots .ct-lots-table__select input[type="checkbox"] {
   width: 1.05rem;
   height: 1.05rem;
-  accent-color: var(--ct-accent, #0d9488);
+  accent-color: var(--ct-accent, #e63600);
   cursor: pointer;
 }
 
@@ -2434,7 +2437,7 @@ select.ct-input option {
 .ct-lot-sku-badge--ok {
   color: var(--ct-primary);
   background: var(--ct-primary-muted);
-  border: 1px solid rgba(45, 212, 191, 0.32);
+  border: 1px solid rgba(255, 77, 26, 0.32);
 }
 
 .ct-lot-sku-badge--review {
@@ -2479,7 +2482,7 @@ select.ct-input option {
   justify-content: center;
   padding: 0.32rem 0.58rem;
   border-radius: var(--ct-radius-sm);
-  border: 1px solid rgba(45, 212, 191, 0.35);
+  border: 1px solid rgba(255, 77, 26, 0.35);
   background: var(--ct-primary-muted);
   color: var(--ct-primary);
   font-size: 0.82rem;
@@ -2489,7 +2492,7 @@ select.ct-input option {
 }
 
 .ct-lots-table__details-btn:hover {
-  background: rgba(45, 212, 191, 0.22);
+  background: rgba(255, 77, 26, 0.22);
   color: var(--ct-primary-hover);
   text-decoration: none;
 }
@@ -2508,7 +2511,7 @@ select.ct-input option {
 .ct-lot-mobile-card__select input[type="checkbox"] {
   width: 1.1rem;
   height: 1.1rem;
-  accent-color: var(--ct-accent, #0d9488);
+  accent-color: var(--ct-accent, #e63600);
   cursor: pointer;
 }
 
@@ -2901,9 +2904,9 @@ select.ct-input option {
 }
 
 .ct-upload-option--featured {
-  border-color: rgba(45, 212, 191, 0.28);
+  border-color: rgba(255, 77, 26, 0.28);
   background:
-    linear-gradient(135deg, rgba(45, 212, 191, 0.07) 0%, transparent 55%),
+    linear-gradient(135deg, rgba(255, 77, 26, 0.07) 0%, transparent 55%),
     var(--ct-bg-elevated);
 }
 
