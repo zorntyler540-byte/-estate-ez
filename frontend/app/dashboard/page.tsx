@@ -1136,6 +1136,14 @@ function formatLotPrice(price: number | null): string {
   }).format(price);
 }
 
+function lotEligibleForCtSellerPost(lot: Lot): boolean {
+  return (
+    !lot.ctseller_item_id &&
+    Boolean((lot.sku || "").trim()) &&
+    Boolean((lot.auction_title || "").trim())
+  );
+}
+
 function lotSkuBadgeClass(lot: Lot): string {
   if (lot.sku_needs_review || !lot.sku) return "ct-lot-sku-badge ct-lot-sku-badge--review";
   return "ct-lot-sku-badge ct-lot-sku-badge--ok";
@@ -1779,6 +1787,8 @@ export default function DashboardPage() {
   const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
   const [ctSellerBulkMsg, setCtSellerBulkMsg] = useState("");
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
+  /** Lots checked for selective CT Seller post (empty = post all unposted). */
+  const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
   /** Full-screen preview index for staged upload thumbnails, or null. */
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null);
@@ -1859,15 +1869,22 @@ export default function DashboardPage() {
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
   const ctSellerUnpostedEligible = useMemo(
-    () =>
-      lots.filter(
-        (l) =>
-          !l.ctseller_item_id &&
-          Boolean((l.sku || "").trim()) &&
-          Boolean((l.auction_title || "").trim())
-      ).length,
+    () => lots.filter((l) => lotEligibleForCtSellerPost(l)).length,
     [lots]
   );
+  const ctSellerEligibleIds = useMemo(
+    () => lots.filter((l) => lotEligibleForCtSellerPost(l)).map((l) => l.id),
+    [lots]
+  );
+  const ctSellerSelectedCount = useMemo(() => {
+    let n = 0;
+    for (const id of ctSellerPostSelected) {
+      if (ctSellerEligibleIds.includes(id)) n += 1;
+    }
+    return n;
+  }, [ctSellerPostSelected, ctSellerEligibleIds]);
+  const ctSellerAllEligibleSelected =
+    ctSellerEligibleIds.length > 0 && ctSellerSelectedCount === ctSellerEligibleIds.length;
   const dashboardStats = useMemo(() => {
     const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
     const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
@@ -2453,6 +2470,24 @@ export default function DashboardPage() {
       setCtSellerPickId(String(mapped));
     }
   }, [selectedSale?.id, selectedSale?.ctseller_sale_id]);
+
+  useEffect(() => {
+    setCtSellerPostSelected(new Set());
+  }, [selectedSaleId]);
+
+  useEffect(() => {
+    setCtSellerPostSelected((prev) => {
+      if (!prev.size) return prev;
+      const allowed = new Set(ctSellerEligibleIds);
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (allowed.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [ctSellerEligibleIds]);
 
   useEffect(() => {
     const bumpSse = () => {
@@ -4653,6 +4688,19 @@ export default function DashboardPage() {
     }
   }
 
+  function toggleCtSellerPostSelect(lotId: string, checked: boolean) {
+    setCtSellerPostSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(lotId);
+      else next.delete(lotId);
+      return next;
+    });
+  }
+
+  function toggleCtSellerSelectAllEligible(checked: boolean) {
+    setCtSellerPostSelected(checked ? new Set(ctSellerEligibleIds) : new Set());
+  }
+
   async function bulkPostSaleToCtSeller() {
     if (!token || !selectedSaleId) return;
     const pick = Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "");
@@ -4660,78 +4708,158 @@ export default function DashboardPage() {
       setCtSellerBulkErr("Pick a CT Seller auction for this sale first.");
       return;
     }
-    if (ctSellerUnpostedEligible < 1) {
-      setCtSellerBulkErr("No unposted lots with SKU and title in this sale.");
+    const selectedIds = ctSellerEligibleIds.filter((id) => ctSellerPostSelected.has(id));
+    const useSelection = selectedIds.length > 0;
+    const targetCount = useSelection ? selectedIds.length : ctSellerUnpostedEligible;
+    if (targetCount < 1) {
+      setCtSellerBulkErr(
+        useSelection
+          ? "Selected lots are not eligible (need SKU + title, not already posted)."
+          : "No unposted lots with SKU and title in this sale."
+      );
       return;
     }
     if (
       !window.confirm(
-        `Post ${ctSellerUnpostedEligible} unposted lot${ctSellerUnpostedEligible === 1 ? "" : "s"} to CT Seller?\n\nLots are sent in batches of 10. Already-posted lots are skipped.`
+        useSelection
+          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?`
+          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nLots are sent in batches of 10. Already-posted lots are skipped.\n\nTip: check rows to post only some of them.`
       )
     ) {
       return;
     }
     setCtSellerBulkBusy(true);
     setCtSellerBulkErr("");
-    setCtSellerBulkMsg("Starting bulk post…");
+    setCtSellerBulkMsg(useSelection ? `Starting post of ${targetCount} selected…` : "Starting bulk post…");
     let posted = 0;
     let failed = 0;
     let skipped = 0;
     const failSamples: string[] = [];
+    const postedIds = new Set<string>();
     try {
-      for (let batch = 0; batch < 20; batch++) {
-        setCtSellerBulkMsg(
-          `Posting… ${posted} done` +
-            (failed ? `, ${failed} failed` : "") +
-            (skipped ? `, ${skipped} skipped` : "") +
-            ` (batch ${batch + 1})`
-        );
-        const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
-          method: "POST",
-          body: JSON.stringify({
-            ctseller_sale_id: pick,
-            save_sale_mapping: true,
-            only_unposted: true,
-            force: false,
-            limit: 10
-          })
-        })) as {
-          posted: number;
-          failed: number;
-          skipped: number;
-          results: Array<{
-            lot_id: string;
-            ok: boolean;
-            skipped?: boolean;
-            error?: string | null;
-            ctseller_item_id?: number | null;
-            sku?: string | null;
-          }>;
-        };
-        posted += res.posted || 0;
-        failed += res.failed || 0;
-        skipped += res.skipped || 0;
-        for (const row of res.results || []) {
-          if (row.ok && row.ctseller_item_id) {
-            setLots((prev) =>
-              prev.map((l) =>
-                l.id === row.lot_id
-                  ? {
-                      ...l,
-                      ctseller_item_id: row.ctseller_item_id,
-                      ctseller_posted_at: new Date().toISOString()
-                    }
-                  : l
-              )
-            );
-          } else if (!row.ok && !row.skipped && row.error && failSamples.length < 3) {
-            failSamples.push(`${row.sku || row.lot_id}: ${row.error}`);
+      if (useSelection) {
+        const chunkSize = 10;
+        for (let i = 0; i < selectedIds.length; i += chunkSize) {
+          const chunk = selectedIds.slice(i, i + chunkSize);
+          const batch = Math.floor(i / chunkSize) + 1;
+          setCtSellerBulkMsg(
+            `Posting selected… ${posted} done` +
+              (failed ? `, ${failed} failed` : "") +
+              (skipped ? `, ${skipped} skipped` : "") +
+              ` (batch ${batch})`
+          );
+          const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
+            method: "POST",
+            body: JSON.stringify({
+              ctseller_sale_id: pick,
+              save_sale_mapping: true,
+              only_unposted: true,
+              force: false,
+              lot_ids: chunk,
+              limit: chunk.length
+            })
+          })) as {
+            posted: number;
+            failed: number;
+            skipped: number;
+            results: Array<{
+              lot_id: string;
+              ok: boolean;
+              skipped?: boolean;
+              error?: string | null;
+              ctseller_item_id?: number | null;
+              sku?: string | null;
+            }>;
+          };
+          posted += res.posted || 0;
+          failed += res.failed || 0;
+          skipped += res.skipped || 0;
+          for (const row of res.results || []) {
+            if (row.ok && row.ctseller_item_id) {
+              postedIds.add(row.lot_id);
+              setLots((prev) =>
+                prev.map((l) =>
+                  l.id === row.lot_id
+                    ? {
+                        ...l,
+                        ctseller_item_id: row.ctseller_item_id,
+                        ctseller_posted_at: new Date().toISOString()
+                      }
+                    : l
+                )
+              );
+            } else if (!row.ok && !row.skipped && row.error && failSamples.length < 3) {
+              failSamples.push(`${row.sku || row.lot_id}: ${row.error}`);
+            }
           }
+          setSales((prev) =>
+            prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s))
+          );
         }
-        setSales((prev) =>
-          prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s))
-        );
-        if ((res.posted || 0) + (res.failed || 0) === 0) break;
+      } else {
+        for (let batch = 0; batch < 20; batch++) {
+          setCtSellerBulkMsg(
+            `Posting… ${posted} done` +
+              (failed ? `, ${failed} failed` : "") +
+              (skipped ? `, ${skipped} skipped` : "") +
+              ` (batch ${batch + 1})`
+          );
+          const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
+            method: "POST",
+            body: JSON.stringify({
+              ctseller_sale_id: pick,
+              save_sale_mapping: true,
+              only_unposted: true,
+              force: false,
+              limit: 10
+            })
+          })) as {
+            posted: number;
+            failed: number;
+            skipped: number;
+            results: Array<{
+              lot_id: string;
+              ok: boolean;
+              skipped?: boolean;
+              error?: string | null;
+              ctseller_item_id?: number | null;
+              sku?: string | null;
+            }>;
+          };
+          posted += res.posted || 0;
+          failed += res.failed || 0;
+          skipped += res.skipped || 0;
+          for (const row of res.results || []) {
+            if (row.ok && row.ctseller_item_id) {
+              postedIds.add(row.lot_id);
+              setLots((prev) =>
+                prev.map((l) =>
+                  l.id === row.lot_id
+                    ? {
+                        ...l,
+                        ctseller_item_id: row.ctseller_item_id,
+                        ctseller_posted_at: new Date().toISOString()
+                      }
+                    : l
+                )
+              );
+            } else if (!row.ok && !row.skipped && row.error && failSamples.length < 3) {
+              failSamples.push(`${row.sku || row.lot_id}: ${row.error}`);
+            }
+          }
+          setSales((prev) =>
+            prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s))
+          );
+          if ((res.posted || 0) + (res.failed || 0) === 0) break;
+        }
+      }
+      if (postedIds.size) {
+        setCtSellerPostSelected((prev) => {
+          if (!prev.size) return prev;
+          const next = new Set(prev);
+          for (const id of postedIds) next.delete(id);
+          return next;
+        });
       }
       setCtSellerBulkMsg(
         `Bulk post finished: ${posted} posted` +
@@ -5878,7 +6006,8 @@ export default function DashboardPage() {
           {lots.filter((l) => !l.is_completed).length} not done
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
-          Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot.
+          Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
+          post a subset to CT Seller, or leave none checked to post all unposted.
         </p>
         <div className="ct-dash-lots__toolbar">
           <div className="ct-dash-lots__toolbar-filters">
@@ -5965,20 +6094,44 @@ export default function DashboardPage() {
               !selectedSaleId ||
               selectedSaleClosed ||
               !ctSellerPickId ||
-              ctSellerUnpostedEligible < 1
+              (ctSellerSelectedCount < 1 && ctSellerUnpostedEligible < 1)
             }
             title={
               !ctSellerRemoteSales.length
                 ? "Connect CT Seller on Account first"
-                : ctSellerUnpostedEligible < 1
-                  ? "No unposted lots with SKU + title"
-                  : `Post ${ctSellerUnpostedEligible} unposted lot(s)`
+                : ctSellerSelectedCount > 0
+                  ? `Post ${ctSellerSelectedCount} selected lot(s)`
+                  : ctSellerUnpostedEligible < 1
+                    ? "No unposted lots with SKU + title"
+                    : `Post all ${ctSellerUnpostedEligible} unposted lot(s) — or check rows to post a subset`
             }
           >
             {ctSellerBulkBusy
               ? "Posting to CT Seller…"
-              : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
+              : ctSellerSelectedCount > 0
+                ? `Post selected to CT Seller (${ctSellerSelectedCount})`
+                : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
           </button>
+          {ctSellerEligibleIds.length > 0 ? (
+            <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={ctSellerBulkBusy || ctSellerAllEligibleSelected}
+                onClick={() => toggleCtSellerSelectAllEligible(true)}
+              >
+                Select all unposted
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                disabled={ctSellerBulkBusy || ctSellerSelectedCount < 1}
+                onClick={() => toggleCtSellerSelectAllEligible(false)}
+              >
+                Clear selection
+              </button>
+            </div>
+          ) : null}
         </div>
         {ctSellerBulkMsg ? (
           <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
@@ -6005,6 +6158,26 @@ export default function DashboardPage() {
             }`}
           >
             <div className="ct-lot-mobile-card__main">
+              <div className="ct-lot-mobile-card__select">
+                <input
+                  type="checkbox"
+                  checked={ctSellerPostSelected.has(lot.id)}
+                  disabled={!lotEligibleForCtSellerPost(lot) || ctSellerBulkBusy}
+                  onChange={(e) => toggleCtSellerPostSelect(lot.id, e.target.checked)}
+                  aria-label={
+                    lot.ctseller_item_id
+                      ? `Already posted to CT Seller (${lot.sku || "lot"})`
+                      : `Select ${lot.sku || "lot"} for CT Seller post`
+                  }
+                  title={
+                    lot.ctseller_item_id
+                      ? "Already posted"
+                      : lotEligibleForCtSellerPost(lot)
+                        ? "Select to post to CT Seller"
+                        : "Needs SKU and title before posting"
+                  }
+                />
+              </div>
               <div className="ct-lot-mobile-card__thumb">
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </div>
@@ -6069,6 +6242,22 @@ export default function DashboardPage() {
         <table className="ct-table ct-table--lots">
         <thead>
           <tr>
+            <th scope="col" className="ct-lots-table__select">
+              <input
+                type="checkbox"
+                checked={ctSellerAllEligibleSelected}
+                disabled={ctSellerEligibleIds.length < 1 || ctSellerBulkBusy}
+                ref={(el) => {
+                  if (el) {
+                    el.indeterminate =
+                      ctSellerSelectedCount > 0 && !ctSellerAllEligibleSelected;
+                  }
+                }}
+                onChange={(e) => toggleCtSellerSelectAllEligible(e.target.checked)}
+                aria-label="Select all unposted lots for CT Seller"
+                title="Select all unposted lots"
+              />
+            </th>
             <th scope="col">Photo</th>
             <th scope="col">SKU</th>
             <th scope="col">Title / Description</th>
@@ -6093,6 +6282,26 @@ export default function DashboardPage() {
                   : undefined
               }
             >
+              <td className="ct-lots-table__select">
+                <input
+                  type="checkbox"
+                  checked={ctSellerPostSelected.has(lot.id)}
+                  disabled={!lotEligibleForCtSellerPost(lot) || ctSellerBulkBusy}
+                  onChange={(e) => toggleCtSellerPostSelect(lot.id, e.target.checked)}
+                  aria-label={
+                    lot.ctseller_item_id
+                      ? `Already posted to CT Seller (${lot.sku || "lot"})`
+                      : `Select ${lot.sku || "lot"} for CT Seller post`
+                  }
+                  title={
+                    lot.ctseller_item_id
+                      ? "Already posted"
+                      : lotEligibleForCtSellerPost(lot)
+                        ? "Select to post to CT Seller"
+                        : "Needs SKU and title before posting"
+                  }
+                />
+              </td>
               <td className="ct-table__photo">
                 <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
               </td>

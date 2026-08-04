@@ -2258,7 +2258,7 @@ select.ct-input option {
 
 .ct-table--lots {
   table-layout: fixed;
-  min-width: 980px;
+  min-width: 1020px;
 }
 
 .ct-table--lots th,
@@ -2267,48 +2267,69 @@ select.ct-input option {
   font-size: 0.86rem;
 }
 
-.ct-table--lots th:nth-child(1),
-.ct-table--lots td:nth-child(1) {
-  width: 4.25rem;
+.ct-table--lots th.ct-lots-table__select,
+.ct-table--lots td.ct-lots-table__select {
+  width: 2.75rem;
+  padding-left: 0.45rem;
+  padding-right: 0.35rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.ct-table--lots .ct-lots-table__select input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--ct-accent, #0d9488);
+  cursor: pointer;
+}
+
+.ct-table--lots .ct-lots-table__select input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .ct-table--lots th:nth-child(2),
 .ct-table--lots td:nth-child(2) {
-  width: 5.25rem;
+  width: 4.25rem;
 }
 
 .ct-table--lots th:nth-child(3),
 .ct-table--lots td:nth-child(3) {
-  width: 26rem;
+  width: 5.25rem;
 }
 
 .ct-table--lots th:nth-child(4),
 .ct-table--lots td:nth-child(4) {
-  width: 4.5rem;
+  width: 26rem;
 }
 
 .ct-table--lots th:nth-child(5),
 .ct-table--lots td:nth-child(5) {
-  width: 6.5rem;
+  width: 4.5rem;
 }
 
 .ct-table--lots th:nth-child(6),
 .ct-table--lots td:nth-child(6) {
-  width: 6.75rem;
+  width: 6.5rem;
 }
 
 .ct-table--lots th:nth-child(7),
 .ct-table--lots td:nth-child(7) {
-  width: 4.25rem;
+  width: 6.75rem;
 }
 
 .ct-table--lots th:nth-child(8),
 .ct-table--lots td:nth-child(8) {
-  width: 4.5rem;
+  width: 4.25rem;
 }
 
 .ct-table--lots th:nth-child(9),
 .ct-table--lots td:nth-child(9) {
+  width: 4.5rem;
+}
+
+.ct-table--lots th:nth-child(10),
+.ct-table--lots td:nth-child(10) {
   width: 4.75rem;
 }
 
@@ -2436,6 +2457,23 @@ select.ct-input option {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
+}
+
+.ct-lot-mobile-card__select {
+  flex-shrink: 0;
+  padding-top: 0.35rem;
+}
+
+.ct-lot-mobile-card__select input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--ct-accent, #0d9488);
+  cursor: pointer;
+}
+
+.ct-lot-mobile-card__select input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .ct-lot-mobile-card__thumb {
