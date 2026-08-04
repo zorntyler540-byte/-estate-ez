@@ -12,6 +12,42 @@ export type Sale = {
   created_at: string;
 };
 
+/** Catalog lot from ``GET /lots`` / ``GET /lots/{id}``. */
+export type Lot = {
+  id: string;
+  account_id: string;
+  user_id: string;
+  sale_id: string;
+  sku: string | null;
+  auction_title: string;
+  professional_description: string;
+  specification_lines: string[];
+  brands: string[];
+  labels_and_tags: string[];
+  ct_category: string | null;
+  ct_subcategory: string | null;
+  is_completed: boolean;
+  completed_at: string | null;
+  starting_price: number | null;
+  condition_text: string;
+  photo_count: number;
+  has_thumbnail: boolean;
+  created_at: string;
+  sku_needs_review: boolean;
+  sku_duplicate_in_sale: boolean;
+  sku_text_mismatch: boolean;
+  ctseller_item_id: number | null;
+  ctseller_posted_at: string | null;
+};
+
+export type LotPhoto = {
+  id: string;
+  lot_id: string;
+  original_name: string;
+  created_at: string;
+  sort_order: number;
+};
+
 export type Job = {
   id: string;
   account_id: string;

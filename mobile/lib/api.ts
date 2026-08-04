@@ -1,5 +1,10 @@
 import { API_BASE } from "./config";
-import type { Job, Sale, TokenResponse } from "./types";
+import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
+
+export type SaleLotCoverUrls = {
+  expires_in: number;
+  urls: Record<string, string>;
+};
 
 export function parseApiError(raw: string, fallback = "Request failed"): string {
   const t = raw.trim();
@@ -53,6 +58,57 @@ export async function login(email: string, password: string): Promise<TokenRespo
 
 export async function listSales(token: string): Promise<Sale[]> {
   return apiFetch<Sale[]>("/sales", token);
+}
+
+export async function listLots(
+  token: string,
+  saleId: string,
+  opts?: { sort?: "created_desc" | "created_asc" | "sku_asc"; limit?: number }
+): Promise<Lot[]> {
+  const params = new URLSearchParams({ sale_id: saleId });
+  if (opts?.sort) params.set("sort", opts.sort);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  return apiFetch<Lot[]>(`/lots?${params}`, token);
+}
+
+export async function getLot(token: string, lotId: string): Promise<Lot> {
+  return apiFetch<Lot>(`/lots/${lotId}`, token);
+}
+
+export async function listLotPhotos(token: string, lotId: string): Promise<LotPhoto[]> {
+  return apiFetch<LotPhoto[]>(`/lots/${lotId}/photos`, token);
+}
+
+/** Batch presigned R2 cover URLs for a sale (one request for the whole grid). */
+export async function listSaleLotCoverUrls(
+  token: string,
+  saleId: string,
+  maxPx = 160
+): Promise<SaleLotCoverUrls> {
+  return apiFetch<SaleLotCoverUrls>(
+    `/sales/${encodeURIComponent(saleId)}/lot-cover-urls?max_px=${maxPx}`,
+    token
+  );
+}
+
+/** Authenticated thumbnail URL for ``expo-image`` (Bearer header required). */
+export function lotThumbnailSource(lotId: string, token: string, maxPx = 220) {
+  return {
+    uri: `${API_BASE}/lots/${lotId}/thumbnail?max_px=${maxPx}`,
+    headers: { Authorization: `Bearer ${token}` }
+  };
+}
+
+export function lotPhotoThumbnailSource(
+  lotId: string,
+  photoId: string,
+  token: string,
+  maxPx = 220
+) {
+  return {
+    uri: `${API_BASE}/lots/${lotId}/photos/${photoId}/thumbnail?max_px=${maxPx}`,
+    headers: { Authorization: `Bearer ${token}` }
+  };
 }
 
 export type UploadLotJobOptions = {

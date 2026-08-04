@@ -35,12 +35,20 @@ eas build --platform ios --profile preview
 3. `eas device:create` — register your iPhone (opens a URL/QR; follow prompts). New Apple accounts can take **24–72 hours** before a new UDID is usable.
 4. `eas build --platform ios --profile preview` — sign in with **Apple ID** when asked so EAS can create certificates/profiles. When the build finishes, open the install URL on the registered iPhone.
 
-**TestFlight** (optional next step after the preview works):
+**TestFlight** (team updates — preferred once smoke test works):
 
 ```powershell
+cd C:\Users\User\Documents\CaringTransitions_AI\mobile
 eas build --platform ios --profile production
+```
+
+When that finishes (accept App Store credentials / let EAS manage them):
+
+```powershell
 eas submit --platform ios --latest
 ```
+
+Sign in with your **Apple Developer** Apple ID when prompted. After Apple processes the build (~10–15 min), open [App Store Connect](https://appstoreconnect.apple.com) → your app → **TestFlight**, add Internal Testers (or invite by email). Employees install the **TestFlight** app and accept the invite — no Developer Mode, no per-device rebuilds.
 
 ## Setup (Windows)
 

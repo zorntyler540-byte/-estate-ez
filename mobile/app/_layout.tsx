@@ -51,6 +51,7 @@ function RootNav() {
           name="capture-session"
           options={{ title: "Capture lot", presentation: "fullScreenModal" }}
         />
+        <Stack.Screen name="lot/[id]" options={{ title: "Lot" }} />
       </Stack>
     </ThemeProvider>
   );

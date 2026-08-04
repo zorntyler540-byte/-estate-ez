@@ -47,7 +47,9 @@ export default function SaleScreen() {
 
   return (
     <View style={styles.root}>
-      <Text style={styles.lead}>Open sales from your account. Capture uploads go to the selected sale.</Text>
+      <Text style={styles.lead}>
+        Open sales from your account. Capture uploads and the Lots tab use the selected sale.
+      </Text>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {loading ? (
         <ActivityIndicator style={{ marginTop: 24 }} />

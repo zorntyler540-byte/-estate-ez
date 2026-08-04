@@ -23,7 +23,8 @@ import {
   createLotDraft,
   deletePhotoFromDraft,
   listDraftPhotos,
-  setDraftStatus
+  setDraftStatus,
+  updateDraftManualSku
 } from "@/lib/queue/db";
 
 /** Pinch spread doubling ≈ this much extra zoom (0–1 native zoom range). */
@@ -232,6 +233,13 @@ export default function CaptureSessionScreen() {
     void removePhoto(previewUri, true);
   }
 
+  function onSkuChange(text: string) {
+    setManualSku(text);
+    if (draftId) {
+      void updateDraftManualSku(draftId, text);
+    }
+  }
+
   async function finish() {
     if (!draftId) {
       router.back();
@@ -241,6 +249,7 @@ export default function CaptureSessionScreen() {
       Alert.alert("No photos", "Snap at least one photo before finishing this lot.");
       return;
     }
+    await updateDraftManualSku(draftId, manualSku);
     await setDraftStatus(draftId, "queued", null);
     void syncNow();
     Alert.alert(
@@ -349,8 +358,9 @@ export default function CaptureSessionScreen() {
           placeholderTextColor="#64748b"
           style={styles.input}
           value={manualSku}
-          onChangeText={setManualSku}
-          editable={!draftId}
+          onChangeText={onSkuChange}
+          autoCapitalize="characters"
+          autoCorrect={false}
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
 

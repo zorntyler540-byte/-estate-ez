@@ -130,6 +130,15 @@ export async function setDraftStatus(
   );
 }
 
+export async function updateDraftManualSku(draftId: string, manualSku: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET manual_sku = ?, updated_at = ? WHERE id = ?", [
+    manualSku.trim() || null,
+    Date.now(),
+    draftId
+  ]);
+}
+
 /** Fill missing ``sale_name`` on local drafts from the server sale list. */
 export async function backfillDraftSaleNames(nameById: Map<string, string>): Promise<void> {
   if (!nameById.size) return;

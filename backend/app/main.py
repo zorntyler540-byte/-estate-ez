@@ -49,6 +49,7 @@ from app.schemas import (
     CatalogR2MigrateOut,
     CatalogR2CorsOut,
     CatalogMediaUrlOut,
+    SaleLotCoverUrlsOut,
     DeleteLotPhotosIn,
     HealthResponse,
     JobOut,
@@ -939,6 +940,55 @@ def sale_photo_health(
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
     return SalePhotoHealthOut(lots=sale_lots_with_missing_photo_files(db, current.account_id, sale_id))
+
+
+@app.get("/sales/{sale_id}/lot-cover-urls", response_model=SaleLotCoverUrlsOut)
+def sale_lot_cover_urls(
+    sale_id: str,
+    max_px: int = Query(160, ge=64, le=800, description="Long edge for cached JPEG thumb."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleLotCoverUrlsOut:
+    """
+    One round-trip of presigned R2 cover URLs for every lot in the sale.
+
+    Used by the mobile Lots grid so the phone loads images from Cloudflare instead of
+    N authenticated ``/lots/{id}/thumbnail`` hits through Railway.
+    """
+    if not catalog_r2_configured():
+        raise HTTPException(status_code=400, detail="R2 is not configured")
+    _sale_for_user(sale_id, current, db)
+    lot_ids = [
+        r[0]
+        for r in db.query(Lot.id)
+        .filter(Lot.sale_id == sale_id, Lot.account_id == current.account_id)
+        .all()
+    ]
+    if not lot_ids:
+        return SaleLotCoverUrlsOut(expires_in=3600, urls={})
+
+    photos = (
+        db.query(Photo)
+        .filter(Photo.account_id == current.account_id, Photo.lot_id.in_(lot_ids))
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    first_path: dict[str, str] = {}
+    for ph in photos:
+        lid = ph.lot_id
+        if not lid or lid in first_path:
+            continue
+        first_path[lid] = ph.storage_path
+
+    expires = 3600
+    px = int(max_px)
+    urls: dict[str, str] = {}
+    for lid, storage_path in first_path.items():
+        try:
+            urls[lid] = signed_catalog_url(storage_path, max_px=px, expires_seconds=expires)
+        except Exception:  # noqa: BLE001
+            continue
+    return SaleLotCoverUrlsOut(expires_in=expires, urls=urls)
 
 
 @app.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)

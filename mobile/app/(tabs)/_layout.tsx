@@ -23,6 +23,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="lots"
+        options={{
+          title: "Lots",
+          tabBarIcon: ({ color }) => <Ionicons name="list" size={26} color={color} />
+        }}
+      />
+      <Tabs.Screen
         name="queue"
         options={{
           title: "Queue",

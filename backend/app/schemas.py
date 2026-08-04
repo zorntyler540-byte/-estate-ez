@@ -269,6 +269,13 @@ class CatalogMediaUrlOut(BaseModel):
     kind: str = "original"  # original | thumb
 
 
+class SaleLotCoverUrlsOut(BaseModel):
+    """Presigned R2 cover thumbs for every lot in a sale (mobile/dashboard grids)."""
+
+    expires_in: int = 3600
+    urls: dict[str, str]  # lot_id -> https URL
+
+
 class CatalogR2CorsOut(BaseModel):
     origins: list[str]
     rules: list[dict] = []
