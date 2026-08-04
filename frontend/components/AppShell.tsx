@@ -56,7 +56,7 @@ function BrandMark() {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         className="ct-app-sidebar__logo"
-        src="/zortron-logo.png"
+        src="/zortron-logo.jpg"
         alt="Zortron Tech Solutions"
         width={180}
         height={180}

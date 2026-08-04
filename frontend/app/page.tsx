@@ -64,7 +64,7 @@ export default function HomePage() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             className="ct-auth-logo"
-            src="/zortron-logo.png"
+            src="/zortron-logo.jpg"
             alt="Zortron Tech Solutions"
             width={160}
             height={160}
