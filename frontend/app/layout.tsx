@@ -9,10 +9,10 @@ const sans = Source_Sans_3({
 
 export const metadata: Metadata = {
   title: {
-    default: "Caring Transitions — Estate inventory",
-    template: "%s · Caring Transitions"
+    default: "Estate-EZ",
+    template: "%s · Estate-EZ"
   },
-  description: "Sign in to manage estate sale lots, photos, and AI-assisted cataloging."
+  description: "Estate-EZ — manage estate sale lots, photos, and AI-assisted cataloging."
 };
 
 export const viewport: Viewport = {

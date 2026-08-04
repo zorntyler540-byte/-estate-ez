@@ -62,8 +62,8 @@ function BrandMark() {
         height={220}
       />
       <span className="ct-app-sidebar__brand-text">
-        <span className="ct-app-sidebar__eyebrow">Estate</span>
-        <span className="ct-app-sidebar__title">Inventory</span>
+        <span className="ct-app-sidebar__eyebrow">Zortron</span>
+        <span className="ct-app-sidebar__title">Estate-EZ</span>
       </span>
     </Link>
   );

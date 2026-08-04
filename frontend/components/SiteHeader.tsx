@@ -19,9 +19,9 @@ export function SiteHeader({ actions }: SiteHeaderProps) {
     <header className="ct-site-header">
       <div className="ct-site-header__row">
         <div className="ct-site-header__start">
-          <Link href="/dashboard" className="ct-site-header__brand" aria-label="Caring Transitions — go to dashboard">
-            <span className="ct-site-header__eyebrow">Caring Transitions</span>
-            <span className="ct-site-header__tagline">Estate inventory</span>
+          <Link href="/dashboard" className="ct-site-header__brand" aria-label="Estate-EZ — go to dashboard">
+            <span className="ct-site-header__eyebrow">Estate-EZ</span>
+            <span className="ct-site-header__tagline">Estate sale catalog</span>
           </Link>
           <nav className="ct-site-header__nav" aria-label="Main">
             <Link

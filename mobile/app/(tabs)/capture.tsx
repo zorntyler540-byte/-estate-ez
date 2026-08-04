@@ -2,6 +2,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { countPendingDrafts } from "@/lib/queue/db";
@@ -27,6 +28,10 @@ export default function CaptureScreen() {
 
   return (
     <View style={styles.root}>
+      <View style={styles.brand}>
+        <BrandLogo size={96} />
+      </View>
+
       <Text style={styles.lead}>
         Native camera capture with offline storage. Queued lots upload automatically when you're online.
       </Text>
@@ -58,6 +63,7 @@ export default function CaptureScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, padding: 20, gap: 16, backgroundColor: "#020617" },
+  brand: { alignItems: "center", marginBottom: 4 },
   lead: { fontSize: 15, lineHeight: 22, color: "#cbd5e1" },
   warn: { color: "#fcd34d", fontSize: 14 },
   meta: { color: "#94a3b8", fontSize: 14 },

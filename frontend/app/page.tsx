@@ -69,12 +69,12 @@ export default function HomePage() {
             width={200}
             height={200}
           />
-          <div className="ct-hero-brand">Caring Transitions</div>
+          <div className="ct-hero-brand">Estate-EZ</div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
-            Estate inventory
+            Sign in
           </h1>
           <p className="ct-subtitle" style={{ marginBottom: 0 }}>
-            Sign in to manage lots, photos, and AI-assisted cataloging.
+            Manage lots, photos, and AI-assisted cataloging.
           </p>
         </div>
         <div className="ct-seg" role="tablist" aria-label="Sign in or register">

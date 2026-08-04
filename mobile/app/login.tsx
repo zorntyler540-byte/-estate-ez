@@ -11,6 +11,7 @@ import {
   View
 } from "react-native";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/context/AuthContext";
 import { API_BASE } from "@/lib/config";
 
@@ -39,7 +40,10 @@ export default function LoginScreen() {
       style={styles.root}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <Text style={styles.kicker}>Caring Transitions</Text>
+      <View style={styles.brand}>
+        <BrandLogo size={140} />
+      </View>
+      <Text style={styles.kicker}>Estate-EZ</Text>
       <Text style={styles.title}>Field capture</Text>
       <Text style={styles.sub}>Sign in with the same account as the web dashboard.</Text>
       <Text style={styles.api} numberOfLines={2}>
@@ -78,6 +82,7 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, padding: 24, justifyContent: "center", gap: 12 },
+  brand: { alignItems: "center", marginBottom: 8 },
   kicker: { fontSize: 13, fontWeight: "600", color: "#2dd4bf", textTransform: "uppercase" },
   title: { fontSize: 28, fontWeight: "700", color: "#f8fafc" },
   sub: { fontSize: 15, color: "#94a3b8", marginBottom: 8 },
