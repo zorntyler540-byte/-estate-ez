@@ -3334,6 +3334,7 @@ class LotOutput:
     sku_needs_review: bool = False
     brand_needs_review: bool = False
     lot_boundary_blank_page: bool = False
+    ct_category: str | None = None
 
     def _finalize_listing_quality(self) -> None:
         """Label-first brands, apparel spec cleanup, and single-paragraph prose after merge."""
@@ -3478,6 +3479,10 @@ class LotOutput:
                 or ""
             )
         )
+        raw_ct = payload.get("ct_category")
+        if raw_ct is None:
+            raw_ct = payload.get("CtCategory")
+        ct_category = str(raw_ct).strip() if raw_ct is not None and str(raw_ct).strip() else None
         lot = cls(
             sku=sku_normalized or None,
             auction_title=title,
@@ -3489,6 +3494,7 @@ class LotOutput:
             starting_price=price,
             sku_needs_review=payload_suggests_sku_review(payload),
             lot_boundary_blank_page=False,
+            ct_category=ct_category,
         )
         lot._finalize_listing_quality()
         if payload_suggests_sku_review(payload):

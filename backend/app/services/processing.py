@@ -25,7 +25,7 @@ from app.core.lotting import (
     tape_sku_same_marking,
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
-from app.services.category_inference import infer_ct_category
+from app.services.category_inference import resolve_lot_ct_category
 from app.services.pipeline_integration import (
     is_weak_pipeline_lot,
     run_single_lot_pipeline,
@@ -427,7 +427,7 @@ def _emit_job_debug(job: ProcessingJob, message: str) -> None:
 
 
 def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_id: str) -> Lot:
-    ct_category, ct_subcategory = infer_ct_category(lot)
+    ct_category, ct_subcategory = resolve_lot_ct_category(lot)
     row = Lot(
         account_id=account_id,
         user_id=user_id,
@@ -999,7 +999,7 @@ def run_lot_ai_regenerate_and_save(
     )
     current.photo_count = linked
 
-    ct_cat, ct_sub = infer_ct_category(current)
+    ct_cat, ct_sub = resolve_lot_ct_category(current)
     row.auction_title = current.auction_title
     row.professional_description = current.professional_description
     row.specification_lines_json = json.dumps(current.specification_lines, ensure_ascii=True)

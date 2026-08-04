@@ -108,6 +108,56 @@ class TestCategoryInference(unittest.TestCase):
         self.assertEqual(category, "Books")
         self.assertNotEqual(category, "Decorative Collectibles")
 
+    def test_curated_ai_categories_subset_of_live(self) -> None:
+        from app.services.ctseller_categories import (
+            CT_SELLER_CATEGORIES,
+            CT_SELLER_CATEGORIES_FOR_AI,
+            ct_categories_for_ai,
+        )
+
+        self.assertTrue(CT_SELLER_CATEGORIES_FOR_AI)
+        self.assertTrue(CT_SELLER_CATEGORIES_FOR_AI <= CT_SELLER_CATEGORIES)
+        self.assertEqual(ct_categories_for_ai(), sorted(CT_SELLER_CATEGORIES_FOR_AI))
+
+    def test_resolve_keeps_specific_ai_category(self) -> None:
+        from app.services.category_inference import resolve_lot_ct_category
+
+        lot = LotOutput(
+            sku="1",
+            auction_title="Ceramic Mixing Bowls",
+            professional_description="A set of mixing bowls for everyday baking.",
+            condition="good",
+            ct_category="Kitchen & Home",
+        )
+        category, _sub = resolve_lot_ct_category(lot)
+        self.assertEqual(category, "Kitchen & Home")
+
+    def test_resolve_overrides_weak_ai_with_books_keywords(self) -> None:
+        from app.services.category_inference import resolve_lot_ct_category
+
+        lot = LotOutput(
+            sku="Z3130",
+            auction_title='1943 Johnny Gruelle "Raggedy Ann and Betsy Bonnet String" Hardcover Book',
+            professional_description=(
+                "A delightful piece of childhood history—this is the 1943 hardcover edition "
+                'of "Raggedy Ann and Betsy Bonnet String" by Johnny Gruelle.'
+            ),
+            condition="good",
+            ct_category="Decorative Collectibles",
+        )
+        category, _sub = resolve_lot_ct_category(lot)
+        self.assertEqual(category, "Books")
+
+    def test_inventory_schema_includes_ct_category_enum(self) -> None:
+        from app.core.gemini import inventory_table_entry_gemini_schema
+        from app.services.ctseller_categories import ct_categories_for_ai
+
+        schema = inventory_table_entry_gemini_schema()
+        props = schema.get("properties") or {}
+        cat = props.get("ct_category") or {}
+        self.assertIn("enum", cat)
+        self.assertEqual(cat["enum"], ct_categories_for_ai())
+
 
 if __name__ == "__main__":
     unittest.main()

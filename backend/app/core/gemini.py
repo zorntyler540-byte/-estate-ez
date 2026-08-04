@@ -14,6 +14,7 @@ import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import settings
+from app.services.ctseller_categories import ct_categories_for_ai
 from app.core.lotting import (
     MERGED_PRO_DESCRIPTION_MAX_CHARS,
     PROFESSIONAL_DESCRIPTION_MAX_WORDS,
@@ -180,6 +181,15 @@ class InventoryTableEntry(BaseModel):
         default=False,
         validation_alias=AliasChoices("lot_boundary_blank_page", "lotBoundaryBlankPage"),
         description="Deprecated: server ignores blank-divider detection; always leave false.",
+    )
+    ct_category: str = Field(
+        default="",
+        validation_alias=AliasChoices("ct_category", "CtCategory", "category"),
+        description=(
+            "Exact CT Seller top-level category for posting this lot. Prefer a specific category "
+            "(e.g. Kitchen & Home, Glassware, Books, Women's) over 'Household Goods Other' when clear. "
+            "Must be one of the allowed CT Seller category names from the system prompt."
+        ),
     )
 
 
@@ -465,8 +475,19 @@ SYSTEM_INSTRUCTION = (
     "Never use sewn tags, size tags, product box ITEM/ASST numbers, or stamped numbers on the item body as SKU. "
     "Letter-prefix estate codes (MS530, SR006) on purple/lavender/blue/green/yellow tape are valid SKUs.\n"
     "Condition must use exactly one of: NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
+    "Also set **ct_category** to the best CT Seller top-level category for posting this lot "
+    "(prefer specific names over Household Goods Other when clear). "
     "Output must match JSON schema only."
 )
+
+
+def _ct_category_prompt_line() -> str:
+    names = ", ".join(ct_categories_for_ai())
+    return (
+        f"- ct_category: Exact CT Seller category for this lot. Must be one of: {names}. "
+        "Prefer specific categories (Kitchen & Home, Glassware, Books, Women's, etc.) over "
+        "Household Goods Other when the photos support it.\n"
+    )
 
 
 def _user_prompt(*, manifest_tag: str) -> str:
@@ -484,7 +505,8 @@ def _user_prompt(*, manifest_tag: str) -> str:
         "Only call out **Lusterware**, **Faux Bois**, or strong **Art Deco** styling when clearly visible; "
         "otherwise use neutral accurate terms — do not guess a decorative finish label.\n"
         + "RULES:\n"
-        "- item_name: One-line auction title — **brand first** when a sewn-in or product label is legible (apparel, shoes, "
+        + _ct_category_prompt_line()
+        + "- item_name: One-line auction title — **brand first** when a sewn-in or product label is legible (apparel, shoes, "
         "handbags). **Hook-first:** put distinctive material/handle/finish **before** the object name — "
         "e.g. 'Deer Hoof Handled Hunting Knives' not 'Hunting Knives with Deer Hoof Handles'. "
         "For **multiple brass/metal objects on one surface**, list object categories (stand, censer, bell, ewer…) — "
@@ -684,7 +706,21 @@ def inventory_table_entry_to_lot_payload(row: InventoryTableEntry) -> dict[str, 
         "StartingPrice": row.starting_price_usd,
         "SkuConfidence": row.sku_read_confidence,
         "lot_boundary_blank_page": row.lot_boundary_blank_page,
+        "ct_category": (row.ct_category or "").strip(),
     }
+
+
+def inventory_table_entry_gemini_schema() -> dict[str, Any]:
+    """Gemini JSON schema for InventoryTableEntry with ct_category enum allow-list."""
+    from pipeline.gemini_schema import pydantic_model_to_gemini_schema
+
+    schema = pydantic_model_to_gemini_schema(InventoryTableEntry)
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if isinstance(props, dict):
+        cat = props.get("ct_category")
+        if isinstance(cat, dict):
+            cat["enum"] = ct_categories_for_ai()
+    return schema
 
 
 _genai_client: Any = None
@@ -710,8 +746,6 @@ def _analyze_photo_sdk_from_bytes(
     if not client: return None
     from google.genai import types as genai_types
 
-    from pipeline.gemini_schema import pydantic_model_to_gemini_schema
-    
     focus_note = (
         "\nA second image follows: high-contrast crop of colored estate lot tape. Read SKU from this crop."
         if focus_jpeg
@@ -726,7 +760,7 @@ def _analyze_photo_sdk_from_bytes(
 
     config = genai_types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=pydantic_model_to_gemini_schema(InventoryTableEntry),
+        response_schema=inventory_table_entry_gemini_schema(),
         system_instruction=SYSTEM_INSTRUCTION,
     )
 
@@ -772,7 +806,14 @@ def _analyze_photo_rest_from_bytes(
     if focus_jpeg:
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(focus_jpeg).decode("utf-8")}})
     
-    payload = {"contents": [{"parts": parts}], "generationConfig": {"response_mime_type": "application/json"}}
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "responseSchema": inventory_table_entry_gemini_schema(),
+        },
+        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+    }
     text = _generate_content(payload)
     if not text: return None
     try:

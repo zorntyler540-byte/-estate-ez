@@ -270,3 +270,17 @@ def prefer_keyword_category_over_stored(
     if inferred == "Books" and stored_norm != "Books":
         return inferred, sub
     return stored_norm, None
+
+
+def resolve_lot_ct_category(lot: LotOutput) -> tuple[str | None, str | None]:
+    """
+    Merge Gemini ``ct_category`` (when present) with keyword inference.
+
+    Keywords still override weak AI catch-alls (and prefer Books when clear).
+    """
+    raw = (getattr(lot, "ct_category", None) or "").strip()
+    stored = canonicalize_ct_category(raw) if raw else None
+    final, sub = prefer_keyword_category_over_stored(stored, lot)
+    if final:
+        return canonicalize_ct_category(final), sub
+    return infer_ct_category(lot)

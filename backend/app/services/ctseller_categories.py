@@ -399,3 +399,78 @@ def infer_ct_area(category: str | None, allowed_areas: list[str] | None = None) 
 
     return pick("Living Room", "Kitchen & Dining", "Bedroom") or allowed[0]
 
+
+# Curated estate subset for Gemini / appraiser (must ⊆ CT_SELLER_CATEGORIES).
+_CT_SELLER_CATEGORIES_FOR_AI_CORE: frozenset[str] = frozenset(
+    {
+        "Accessories",
+        "Antiques Other",
+        "Art",
+        "Art Other",
+        "Bedroom Goods",
+        "Books",
+        "Bracelets",
+        "Cameras & Photo Equipment",
+        "China Sets",
+        "Clocks",
+        "Coins",
+        "Comics",
+        "Computers, Laptops",
+        "Costume Jewelry",
+        "Crafts & Hobbies",
+        "Crystal",
+        "Decor",
+        "Decorative Collectibles",
+        "Dining Room",
+        "Dolls",
+        "DVDs",
+        "Earrings",
+        "Electronics",
+        "Electronics Other",
+        "Figures & Figurines",
+        "Fine Jewelry",
+        "Furniture",
+        "Furniture Other",
+        "Games & Toys",
+        "Glassware",
+        "Handbags & Wallets",
+        "Household Goods Other",
+        "Jewelry Other",
+        "Kitchen & Home",
+        "Lighting",
+        "Linens",
+        "Luggage",
+        "Luxury and Designer Items",
+        "Magazines & Newspapers",
+        "Men's",
+        "Mobile Devices",
+        "Music Other",
+        "Necklaces",
+        "Office",
+        "Paintings",
+        "Patio & Deck",
+        "Photography",
+        "Prints",
+        "Records & CDs",
+        "Rings",
+        "Sculpture",
+        "Shoes",
+        "Sterling Silver",
+        "Tools - Other",
+        "Toys Other",
+        "Video Games",
+        "Vintage Books",
+        "Watches",
+        "Women's",
+    }
+)
+
+CT_SELLER_CATEGORIES_FOR_AI: frozenset[str] = frozenset(
+    name for name in _CT_SELLER_CATEGORIES_FOR_AI_CORE if name in CT_SELLER_CATEGORIES
+)
+
+
+def ct_categories_for_ai() -> list[str]:
+    """Sorted CT Seller category names Gemini/appraiser may choose from."""
+    return sorted(CT_SELLER_CATEGORIES_FOR_AI)
+

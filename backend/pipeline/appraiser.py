@@ -7,7 +7,7 @@ from typing import Any
 
 from google.genai import types
 
-from app.services.category_inference import ct_category_names
+from app.services.ctseller_categories import ct_categories_for_ai
 from pipeline.gemini_schema import pydantic_model_to_gemini_schema
 from pipeline.pipeline import (
     GEMINI_PRO_MODEL,
@@ -95,7 +95,7 @@ def run_appraisal_structure(
 ) -> tuple[AppraisalCheckResult, int, int]:
     """Step 2: Pro structured JSON (no search — avoids schema + tools 400)."""
     client = _get_client()
-    categories = ", ".join(ct_category_names())
+    categories = ", ".join(ct_categories_for_ai())
     note_block = f"\n\nScene note:\n{scene_note.strip()}\n" if scene_note.strip() else ""
     parts: list[Any] = [
         "Convert the research memo and photos into structured appraisal JSON.\n"
