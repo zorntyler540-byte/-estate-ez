@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Box, ClipboardList, LayoutDashboard, Menu, Monitor, Settings, X } from "lucide-react";
+import { ClipboardList, LayoutDashboard, Menu, Monitor, Settings, X } from "lucide-react";
 
 type AppShellProps = {
   children: ReactNode;
@@ -53,9 +53,14 @@ function isNavActive(pathname: string, href: string, match: (p: string) => boole
 function BrandMark() {
   return (
     <Link href="/dashboard" className="ct-app-sidebar__brand">
-      <span className="ct-app-sidebar__logo" aria-hidden>
-        <Box size={22} strokeWidth={1.75} />
-      </span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        className="ct-app-sidebar__logo"
+        src="/zortron-logo.png"
+        alt="Zortron Tech Solutions"
+        width={180}
+        height={180}
+      />
       <span className="ct-app-sidebar__brand-text">
         <span className="ct-app-sidebar__eyebrow">Estate</span>
         <span className="ct-app-sidebar__title">Inventory</span>

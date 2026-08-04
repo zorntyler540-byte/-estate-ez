@@ -60,7 +60,15 @@ export default function HomePage() {
   return (
     <main className="ct-auth-screen">
       <div className="ct-auth-card ct-card ct-card--padded ct-card--interactive ct-stack">
-        <div>
+        <div style={{ textAlign: "center" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            className="ct-auth-logo"
+            src="/zortron-logo.png"
+            alt="Zortron Tech Solutions"
+            width={160}
+            height={160}
+          />
           <div className="ct-hero-brand">Caring Transitions</div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
             Estate inventory

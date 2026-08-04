@@ -1772,9 +1772,10 @@ select.ct-input option {
 
 .ct-app-sidebar__brand {
   display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  padding: 0.35rem 0.55rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+  padding: 0.25rem 0.35rem 0.45rem;
   color: var(--ct-text);
   text-decoration: none;
   border-radius: var(--ct-radius-sm);
@@ -1787,14 +1788,13 @@ select.ct-input option {
 }
 
 .ct-app-sidebar__logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
   border-radius: 10px;
-  background: var(--ct-primary-muted);
-  color: var(--ct-primary);
+  background: #000;
 }
 
 .ct-app-sidebar__brand-text {
@@ -1964,10 +1964,45 @@ select.ct-input option {
 
 .ct-app-topbar__mobile-brand .ct-app-sidebar__brand {
   padding: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
 }
 
 .ct-app-topbar__mobile-brand .ct-app-sidebar__brand:hover {
   background: transparent;
+}
+
+.ct-app-topbar__mobile-brand .ct-app-sidebar__logo {
+  width: 40px;
+  height: 40px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+}
+
+.ct-app-nav-drawer__head .ct-app-sidebar__brand {
+  flex: 1;
+  min-width: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0;
+}
+
+.ct-app-nav-drawer__head .ct-app-sidebar__logo {
+  width: 48px;
+  height: 48px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+}
+
+.ct-auth-logo {
+  display: block;
+  width: 160px;
+  height: auto;
+  margin: 0 auto 0.85rem;
+  border-radius: 12px;
+  background: #000;
 }
 
 .ct-app-topbar__menu {
