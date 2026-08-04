@@ -1,17 +1,31 @@
 import { AuthProvider } from "@/context/AuthContext";
 import { SalesProvider } from "@/context/SalesContext";
 import { SyncProvider } from "@/context/SyncContext";
-import { useColorScheme } from "@/components/useColorScheme";
-import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
+import { theme } from "@/constants/theme";
+import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
+import { StatusBar } from "expo-status-bar";
 
 export { ErrorBoundary } from "expo-router";
 
 SplashScreen.preventAutoHideAsync();
+
+const EstateTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: theme.primary,
+    background: theme.bg,
+    card: theme.bgElevated,
+    text: theme.text,
+    border: theme.border,
+    notification: theme.primary
+  }
+};
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -40,10 +54,17 @@ export default function RootLayout() {
 }
 
 function RootNav() {
-  const colorScheme = useColorScheme();
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Stack>
+    <ThemeProvider value={EstateTheme}>
+      <StatusBar style="light" />
+      <Stack
+        screenOptions={{
+          headerStyle: { backgroundColor: theme.bgElevated },
+          headerTintColor: theme.text,
+          contentStyle: { backgroundColor: theme.bg },
+          headerShadowVisible: false
+        }}
+      >
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ title: "Sign in", headerLargeTitle: true }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

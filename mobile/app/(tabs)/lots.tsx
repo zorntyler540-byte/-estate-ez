@@ -104,7 +104,7 @@ export default function LotsScreen() {
       <TextInput
         style={styles.search}
         placeholder="Search SKU or title"
-        placeholderTextColor="#64748b"
+        placeholderTextColor="#78716c"
         value={query}
         onChangeText={setQuery}
         autoCapitalize="none"
@@ -115,7 +115,7 @@ export default function LotsScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       {loading && !lots.length ? (
-        <ActivityIndicator style={{ marginTop: 24 }} color="#2dd4bf" />
+        <ActivityIndicator style={{ marginTop: 24 }} color="#ff4d1a" />
       ) : (
         <FlatList
           data={filtered}
@@ -125,7 +125,7 @@ export default function LotsScreen() {
           windowSize={5}
           removeClippedSubviews
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#2dd4bf" />
+            <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#ff4d1a" />
           }
           ListEmptyComponent={
             <Text style={styles.empty}>
@@ -187,25 +187,25 @@ export default function LotsScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, backgroundColor: "#020617" },
-  saleName: { color: "#f8fafc", fontSize: 18, fontWeight: "700", marginBottom: 4 },
-  lead: { color: "#94a3b8", fontSize: 14, marginBottom: 12 },
+  root: { flex: 1, padding: 16, backgroundColor: "#070708" },
+  saleName: { color: "#f5f5f4", fontSize: 18, fontWeight: "700", marginBottom: 4 },
+  lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
   search: {
     borderWidth: 1,
-    borderColor: "#334155",
+    borderColor: "#3f3f46",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "#f8fafc",
+    color: "#f5f5f4",
     marginBottom: 10,
-    backgroundColor: "#0f172a"
+    backgroundColor: "#0e0e10"
   },
   error: { color: "#fca5a5", marginBottom: 8 },
-  empty: { color: "#64748b", textAlign: "center" },
+  empty: { color: "#78716c", textAlign: "center" },
   emptyPad: { flexGrow: 1, justifyContent: "center", paddingVertical: 48 },
   primary: {
     marginTop: 16,
-    backgroundColor: "#0d9488",
+    backgroundColor: "#ff4d1a",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
@@ -216,18 +216,18 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 10,
     borderRadius: 10,
-    backgroundColor: "#0f172a",
+    backgroundColor: "#0e0e10",
     borderWidth: 1,
-    borderColor: "#1e293b",
+    borderColor: "#141416",
     marginBottom: 8
   },
-  thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: "#1e293b" },
+  thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: "#141416" },
   thumb: { width: "100%", height: "100%" },
   thumbEmpty: { flex: 1, alignItems: "center", justifyContent: "center" },
-  thumbEmptyText: { color: "#64748b", fontSize: 11, textAlign: "center", fontWeight: "600" },
+  thumbEmptyText: { color: "#78716c", fontSize: 11, textAlign: "center", fontWeight: "600" },
   rowBody: { flex: 1, gap: 4, justifyContent: "center" },
-  rowTitle: { color: "#f8fafc", fontSize: 15, fontWeight: "600" },
-  rowMeta: { color: "#94a3b8", fontSize: 12 },
+  rowTitle: { color: "#f5f5f4", fontSize: 15, fontWeight: "600" },
+  rowMeta: { color: "#a8a29e", fontSize: 12 },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 },
   badge: {
     fontSize: 11,
@@ -237,8 +237,8 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 999
   },
-  badgePosted: { color: "#042f2e", backgroundColor: "#5eead4" },
-  badgeDraft: { color: "#e2e8f0", backgroundColor: "#334155" },
+  badgePosted: { color: "#140500", backgroundColor: "#ff4d1a" },
+  badgeDraft: { color: "#e7e5e4", backgroundColor: "#3f3f46" },
   badgeDone: { color: "#ecfdf5", backgroundColor: "#047857" },
   badgeWarn: { color: "#451a03", backgroundColor: "#fbbf24" }
 });

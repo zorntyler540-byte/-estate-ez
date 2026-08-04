@@ -205,35 +205,35 @@ export default function QueueScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, gap: 12, backgroundColor: "#020617" },
-  status: { color: "#94a3b8", fontSize: 14 },
-  hint: { color: "#64748b", fontSize: 13 },
-  message: { color: "#cbd5e1", fontSize: 14 },
+  root: { flex: 1, padding: 16, gap: 12, backgroundColor: "#070708" },
+  status: { color: "#a8a29e", fontSize: 14 },
+  hint: { color: "#78716c", fontSize: 13 },
+  message: { color: "#d6d3d1", fontSize: 14 },
   primary: {
-    backgroundColor: "#0d9488",
+    backgroundColor: "#ff4d1a",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
   },
   primaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
   disabled: { opacity: 0.6 },
-  empty: { color: "#64748b", marginTop: 24, textAlign: "center", lineHeight: 22 },
+  empty: { color: "#78716c", marginTop: 24, textAlign: "center", lineHeight: 22 },
   card: {
-    backgroundColor: "#0f172a",
+    backgroundColor: "#0e0e10",
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#1e293b",
+    borderColor: "#141416",
     gap: 10
   },
   cardTop: { flexDirection: "row", gap: 12 },
-  hero: { width: 88, height: 88, borderRadius: 10, backgroundColor: "#1e293b" },
+  hero: { width: 88, height: 88, borderRadius: 10, backgroundColor: "#141416" },
   heroEmpty: { alignItems: "center", justifyContent: "center" },
-  heroEmptyText: { color: "#64748b", fontSize: 12, textAlign: "center" },
+  heroEmptyText: { color: "#78716c", fontSize: 12, textAlign: "center" },
   cardBody: { flex: 1, gap: 3 },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  cardTitle: { color: "#f8fafc", fontWeight: "700", fontSize: 16, flex: 1 },
+  cardTitle: { color: "#f5f5f4", fontWeight: "700", fontSize: 16, flex: 1 },
   deleteBtn: {
     paddingVertical: 4,
     paddingHorizontal: 10,
@@ -243,21 +243,21 @@ const styles = StyleSheet.create({
     backgroundColor: "#450a0a"
   },
   deleteBtnText: { color: "#fecaca", fontSize: 12, fontWeight: "600" },
-  cardStatus: { color: "#2dd4bf", fontSize: 14, fontWeight: "600" },
-  cardSale: { color: "#94a3b8", fontSize: 13, fontWeight: "600" },
+  cardStatus: { color: "#ff4d1a", fontSize: 14, fontWeight: "600" },
+  cardSale: { color: "#a8a29e", fontSize: 13, fontWeight: "600" },
   cardSaleOther: { color: "#fcd34d" },
-  cardHint: { color: "#94a3b8", fontSize: 13, lineHeight: 18 },
-  cardMeta: { color: "#64748b", fontSize: 12, marginTop: 2 },
+  cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },
+  cardMeta: { color: "#78716c", fontSize: 12, marginTop: 2 },
   moreRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  moreThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: "#1e293b" },
-  moreCount: { color: "#64748b", fontSize: 12 },
+  moreThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: "#141416" },
+  moreCount: { color: "#78716c", fontSize: 12 },
   error: { color: "#fca5a5", fontSize: 12 },
   secondary: {
     alignSelf: "flex-start",
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#1e293b"
+    backgroundColor: "#141416"
   },
-  secondaryText: { color: "#e2e8f0", fontSize: 13, fontWeight: "600" }
+  secondaryText: { color: "#e7e5e4", fontSize: 13, fontWeight: "600" }
 });

@@ -57,7 +57,7 @@ export default function LotDetailScreen() {
       <Stack.Screen options={{ title: lot?.sku?.trim() || "Lot" }} />
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
         {loading ? (
-          <ActivityIndicator style={{ marginTop: 32 }} color="#2dd4bf" />
+          <ActivityIndicator style={{ marginTop: 32 }} color="#ff4d1a" />
         ) : error ? (
           <Text style={styles.error}>{error}</Text>
         ) : lot ? (
@@ -127,7 +127,7 @@ export default function LotDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#020617" },
+  root: { flex: 1, backgroundColor: "#070708" },
   content: { padding: 16, paddingBottom: 40, gap: 10 },
   error: { color: "#fca5a5", marginTop: 24 },
   heroWrap: {
@@ -135,13 +135,13 @@ const styles = StyleSheet.create({
     aspectRatio: 4 / 3,
     borderRadius: 12,
     overflow: "hidden",
-    backgroundColor: "#1e293b",
+    backgroundColor: "#141416",
     marginBottom: 4
   },
   hero: { width: "100%", height: "100%" },
   heroEmpty: { alignItems: "center", justifyContent: "center" },
-  heroEmptyText: { color: "#64748b", fontWeight: "600" },
-  title: { color: "#f8fafc", fontSize: 20, fontWeight: "700" },
+  heroEmptyText: { color: "#78716c", fontWeight: "600" },
+  title: { color: "#f5f5f4", fontSize: 20, fontWeight: "700" },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   badge: {
     fontSize: 12,
@@ -151,14 +151,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: "hidden"
   },
-  badgePosted: { color: "#042f2e", backgroundColor: "#5eead4" },
-  badgeDraft: { color: "#e2e8f0", backgroundColor: "#334155" },
+  badgePosted: { color: "#140500", backgroundColor: "#ff4d1a" },
+  badgeDraft: { color: "#e7e5e4", backgroundColor: "#3f3f46" },
   badgeDone: { color: "#ecfdf5", backgroundColor: "#047857" },
   field: { gap: 4, marginTop: 4 },
-  fieldLabel: { color: "#64748b", fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
-  fieldValue: { color: "#e2e8f0", fontSize: 15, lineHeight: 22 },
-  section: { color: "#f8fafc", fontSize: 16, fontWeight: "700", marginTop: 12 },
+  fieldLabel: { color: "#78716c", fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
+  fieldValue: { color: "#e7e5e4", fontSize: 15, lineHeight: 22 },
+  section: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", marginTop: 12 },
   photoRow: { gap: 8, paddingVertical: 4 },
-  photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: "#1e293b" },
-  muted: { color: "#64748b" }
+  photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: "#141416" },
+  muted: { color: "#78716c" }
 });

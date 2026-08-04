@@ -434,7 +434,7 @@ export default function CaptureSessionScreen() {
 
         <TextInput
           placeholder="Manual SKU (optional)"
-          placeholderTextColor="#64748b"
+          placeholderTextColor="#78716c"
           style={[styles.input, landscape && styles.inputLandscape]}
           value={manualSku}
           onChangeText={onSkuChange}
@@ -488,13 +488,13 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "rgba(15, 23, 42, 0.75)",
+    backgroundColor: "rgba(14, 14, 16, 0.75)",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(148, 163, 184, 0.35)"
+    borderColor: "rgba(168, 162, 158, 0.35)"
   },
-  closeFabText: { color: "#f8fafc", fontSize: 16, fontWeight: "700", lineHeight: 18 },
+  closeFabText: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", lineHeight: 18 },
   cameraControls: {
     position: "absolute",
     left: 12,
@@ -514,7 +514,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    backgroundColor: "rgba(14, 14, 16, 0.72)",
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 5
@@ -527,20 +527,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "transparent"
   },
-  zoomBtnActive: { backgroundColor: "#0d9488" },
-  zoomBtnText: { color: "#e2e8f0", fontSize: 13, fontWeight: "700" },
+  zoomBtnActive: { backgroundColor: "#ff4d1a" },
+  zoomBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   zoomBtnTextActive: { color: "#fff" },
-  zoomReadout: { color: "#94a3b8", fontSize: 12, fontWeight: "600", paddingHorizontal: 4 },
+  zoomReadout: { color: "#a8a29e", fontSize: 12, fontWeight: "600", paddingHorizontal: 4 },
   torchBtn: {
-    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    backgroundColor: "rgba(14, 14, 16, 0.72)",
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "rgba(148, 163, 184, 0.35)"
+    borderColor: "rgba(168, 162, 158, 0.35)"
   },
   torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
-  torchBtnText: { color: "#e2e8f0", fontSize: 13, fontWeight: "700" },
+  torchBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   torchBtnTextActive: { color: "#1c1917" },
   cameraHint: {
     position: "absolute",
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     textAlign: "center",
-    color: "rgba(226, 232, 240, 0.75)",
+    color: "rgba(245, 245, 244, 0.75)",
     fontSize: 11,
     fontWeight: "600"
   },
@@ -568,9 +568,9 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     flexShrink: 0,
     maxHeight: "38%",
-    backgroundColor: "#0f172a",
+    backgroundColor: "#0e0e10",
     borderTopWidth: 1,
-    borderTopColor: "#1e293b"
+    borderTopColor: "#141416"
   },
   panelLandscape: {
     flexGrow: 0,
@@ -581,7 +581,7 @@ const styles = StyleSheet.create({
     maxHeight: "100%",
     borderTopWidth: 0,
     borderLeftWidth: 1,
-    borderLeftColor: "#1e293b",
+    borderLeftColor: "#141416",
     alignSelf: "stretch"
   },
   panelContent: {
@@ -603,25 +603,25 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1e293b"
+    borderBottomColor: "#141416"
   },
   sessionMetaLandscape: {
     marginBottom: 0,
     paddingBottom: 4
   },
-  sessionMetaLabel: { color: "#f8fafc", fontSize: 13, fontWeight: "600" },
+  sessionMetaLabel: { color: "#f5f5f4", fontSize: 13, fontWeight: "600" },
   sessionMetaLabelLandscape: { fontSize: 13 },
-  sessionMetaSale: { color: "#5eead4", fontSize: 12, fontWeight: "600" },
-  sectionTitle: { color: "#f8fafc", fontSize: 14, fontWeight: "700" },
-  sectionHint: { color: "#94a3b8", fontSize: 12, marginTop: -4 },
-  sectionHintLandscape: { color: "#94a3b8", fontSize: 11, fontWeight: "600" },
+  sessionMetaSale: { color: "#ff7347", fontSize: 12, fontWeight: "600" },
+  sectionTitle: { color: "#f5f5f4", fontSize: 14, fontWeight: "700" },
+  sectionHint: { color: "#a8a29e", fontSize: 12, marginTop: -4 },
+  sectionHintLandscape: { color: "#a8a29e", fontSize: 11, fontWeight: "600" },
   input: {
     borderWidth: 1,
-    borderColor: "#334155",
+    borderColor: "#3f3f46",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    color: "#f8fafc"
+    color: "#f5f5f4"
   },
   inputLandscape: {
     paddingVertical: 8,
@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
   actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
   snap: {
     flex: 1,
-    backgroundColor: "#334155",
+    backgroundColor: "#3f3f46",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -649,7 +649,7 @@ const styles = StyleSheet.create({
   },
   primary: {
     flex: 1,
-    backgroundColor: "#0d9488",
+    backgroundColor: "#ff4d1a",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -662,10 +662,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12
   },
   secondary: { paddingVertical: 12, paddingHorizontal: 10 },
-  secondaryText: { color: "#94a3b8" },
+  secondaryText: { color: "#a8a29e" },
   primaryText: { color: "#fff", fontWeight: "600" },
   disabled: { opacity: 0.45 },
   error: { color: "#fca5a5", fontSize: 13 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 16 },
-  text: { color: "#cbd5e1", textAlign: "center" }
+  text: { color: "#d6d3d1", textAlign: "center" }
 });

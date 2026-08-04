@@ -78,19 +78,19 @@ export default function SaleScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, backgroundColor: "#020617" },
-  lead: { color: "#94a3b8", fontSize: 14, marginBottom: 12 },
+  root: { flex: 1, padding: 16, backgroundColor: "#070708" },
+  lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
   error: { color: "#fca5a5", marginBottom: 8 },
-  empty: { color: "#64748b", textAlign: "center", marginTop: 32 },
+  empty: { color: "#78716c", textAlign: "center", marginTop: 32 },
   row: {
     padding: 14,
     borderRadius: 10,
-    backgroundColor: "#0f172a",
+    backgroundColor: "#0e0e10",
     borderWidth: 1,
-    borderColor: "#1e293b",
+    borderColor: "#141416",
     marginBottom: 8
   },
-  rowActive: { borderColor: "#2dd4bf" },
-  rowTitle: { color: "#f8fafc", fontSize: 16, fontWeight: "600" },
-  rowMeta: { color: "#64748b", fontSize: 12, marginTop: 4 }
+  rowActive: { borderColor: "#ff4d1a" },
+  rowTitle: { color: "#f5f5f4", fontSize: 16, fontWeight: "600" },
+  rowMeta: { color: "#78716c", fontSize: 12, marginTop: 4 }
 });

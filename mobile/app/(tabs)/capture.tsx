@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { BrandLogo } from "@/components/BrandLogo";
+import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { countPendingDrafts } from "@/lib/queue/db";
@@ -62,21 +63,21 @@ export default function CaptureScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 20, gap: 16, backgroundColor: "#020617" },
+  root: { flex: 1, padding: 20, gap: 16, backgroundColor: theme.bg },
   brand: { alignItems: "center", marginBottom: 4 },
-  lead: { fontSize: 15, lineHeight: 22, color: "#cbd5e1" },
-  warn: { color: "#fcd34d", fontSize: 14 },
-  meta: { color: "#94a3b8", fontSize: 14 },
-  saleBanner: { color: "#cbd5e1", fontSize: 15, lineHeight: 22 },
-  saleName: { color: "#2dd4bf", fontWeight: "700" },
+  lead: { fontSize: 15, lineHeight: 22, color: theme.textMuted },
+  warn: { color: theme.warning, fontSize: 14 },
+  meta: { color: theme.textMuted, fontSize: 14 },
+  saleBanner: { color: theme.textMuted, fontSize: 15, lineHeight: 22 },
+  saleName: { color: theme.primary, fontWeight: "700" },
   primary: {
-    backgroundColor: "#0d9488",
+    backgroundColor: theme.primary,
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: "center",
     marginTop: 8
   },
-  primaryText: { color: "#fff", fontSize: 17, fontWeight: "600" },
+  primaryText: { color: theme.onPrimary, fontSize: 17, fontWeight: "700" },
   link: { marginTop: 24, alignSelf: "flex-start" },
-  linkText: { color: "#64748b", fontSize: 14 }
+  linkText: { color: theme.textSubtle, fontSize: 14 }
 });

@@ -100,19 +100,19 @@ const styles = StyleSheet.create({
   row: { gap: 10, paddingVertical: 8, paddingTop: 10, paddingRight: 6 },
   emptyBox: {
     borderWidth: 1,
-    borderColor: "#334155",
+    borderColor: "#3f3f46",
     borderStyle: "dashed",
     borderRadius: 10,
     paddingVertical: 18,
     alignItems: "center"
   },
-  emptyText: { color: "#64748b", fontSize: 14 },
+  emptyText: { color: "#78716c", fontSize: 14 },
   thumbWrap: {
     borderRadius: 10,
     overflow: "visible",
-    backgroundColor: "#1e293b",
+    backgroundColor: "#141416",
     borderWidth: 2,
-    borderColor: "#334155"
+    borderColor: "#3f3f46"
   },
   thumbPress: { flex: 1, borderRadius: 8, overflow: "hidden" },
   thumbImage: { width: "100%", height: "100%" },
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "#b91c1c",
     borderWidth: 2,
-    borderColor: "#0f172a",
+    borderColor: "#0e0e10",
     alignItems: "center",
     justifyContent: "center"
   },
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 6,
     left: 6,
-    backgroundColor: "rgba(15, 23, 42, 0.85)",
+    backgroundColor: "rgba(14, 14, 16, 0.85)",
     borderRadius: 999,
     minWidth: 22,
     height: 22,
@@ -142,16 +142,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 6
   },
-  badgeText: { color: "#f8fafc", fontSize: 12, fontWeight: "700" },
+  badgeText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(2, 6, 23, 0.92)",
+    backgroundColor: "rgba(7, 7, 8, 0.92)",
     justifyContent: "center",
     padding: 16
   },
   modalCard: { gap: 12 },
-  modalTitle: { color: "#e2e8f0", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  modalImage: { width: "100%", height: "72%", borderRadius: 12, backgroundColor: "#0f172a" },
+  modalTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
+  modalImage: { width: "100%", height: "72%", borderRadius: 12, backgroundColor: "#0e0e10" },
   modalActions: { flexDirection: "row", justifyContent: "center", gap: 12 },
   modalDelete: {
     backgroundColor: "#7f1d1d",
@@ -161,10 +161,10 @@ const styles = StyleSheet.create({
   },
   modalDeleteText: { color: "#fecaca", fontWeight: "600", fontSize: 16 },
   modalClose: {
-    backgroundColor: "#334155",
+    backgroundColor: "#3f3f46",
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 28
   },
-  modalCloseText: { color: "#f8fafc", fontWeight: "600", fontSize: 16 }
+  modalCloseText: { color: "#f5f5f4", fontWeight: "600", fontSize: 16 }
 });

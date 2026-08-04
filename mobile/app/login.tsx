@@ -12,6 +12,7 @@ import {
 } from "react-native";
 
 import { BrandLogo } from "@/components/BrandLogo";
+import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { API_BASE } from "@/lib/config";
 
@@ -55,6 +56,7 @@ export default function LoginScreen() {
         autoComplete="email"
         keyboardType="email-address"
         placeholder="Email"
+        placeholderTextColor={theme.textSubtle}
         style={styles.input}
         value={email}
         onChangeText={setEmail}
@@ -62,6 +64,7 @@ export default function LoginScreen() {
       <TextInput
         secureTextEntry
         placeholder="Password"
+        placeholderTextColor={theme.textSubtle}
         style={styles.input}
         value={password}
         onChangeText={setPassword}
@@ -74,37 +77,47 @@ export default function LoginScreen() {
         disabled={busy || !email.trim() || !password}
         onPress={() => void onSubmit()}
       >
-        {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign in</Text>}
+        {busy ? (
+          <ActivityIndicator color={theme.onPrimary} />
+        ) : (
+          <Text style={styles.buttonText}>Sign in</Text>
+        )}
       </Pressable>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 24, justifyContent: "center", gap: 12 },
+  root: { flex: 1, padding: 24, justifyContent: "center", gap: 12, backgroundColor: theme.bg },
   brand: { alignItems: "center", marginBottom: 8 },
-  kicker: { fontSize: 13, fontWeight: "600", color: "#2dd4bf", textTransform: "uppercase" },
-  title: { fontSize: 28, fontWeight: "700", color: "#f8fafc" },
-  sub: { fontSize: 15, color: "#94a3b8", marginBottom: 8 },
-  api: { fontSize: 11, color: "#64748b", marginBottom: 12 },
+  kicker: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: theme.primary,
+    textTransform: "uppercase",
+    letterSpacing: 0.08 * 13
+  },
+  title: { fontSize: 28, fontWeight: "700", color: theme.text },
+  sub: { fontSize: 15, color: theme.textMuted, marginBottom: 8 },
+  api: { fontSize: 11, color: theme.textSubtle, marginBottom: 12 },
   input: {
     borderWidth: 1,
-    borderColor: "#334155",
+    borderColor: theme.borderStrong,
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    color: "#f8fafc",
-    backgroundColor: "#0f172a"
+    color: theme.text,
+    backgroundColor: theme.bgElevated
   },
   button: {
     marginTop: 8,
-    backgroundColor: "#0d9488",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
   },
   buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  error: { color: "#fca5a5", fontSize: 14 }
+  buttonText: { color: theme.onPrimary, fontSize: 16, fontWeight: "700" },
+  error: { color: theme.error, fontSize: 14 }
 });
