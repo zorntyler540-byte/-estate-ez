@@ -2459,9 +2459,9 @@ select.ct-input option {
 }
 
 .ct-lot-sku-badge--ok {
-  color: var(--ct-primary);
-  background: var(--ct-primary-muted);
-  border: 1px solid rgba(255, 77, 26, 0.32);
+  color: var(--ct-success);
+  background: var(--ct-pending-done-bg);
+  border: 1px solid rgba(74, 222, 128, 0.35);
 }
 
 .ct-lot-sku-badge--review {
