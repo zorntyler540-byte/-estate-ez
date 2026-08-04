@@ -18,6 +18,30 @@ class TestTapeSkuSources(unittest.TestCase):
         self.assertEqual(tape_marking_canonical("MS 530"), "MS530")
         self.assertEqual(tape_marking_canonical("ms530"), "MS530")
 
+    def test_tape_marking_canonical_tz_prefix(self) -> None:
+        self.assertEqual(tape_marking_canonical("tz8000"), "TZ8000")
+        self.assertEqual(tape_marking_canonical("TZ 8000"), "TZ8000")
+
+    def test_manual_sku_preserves_letter_prefix(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.processing import _apply_single_lot_manual_sku
+
+        lot = LotOutput(sku="9999", auction_title="x", professional_description="y")
+        job = SimpleNamespace(single_lot_mode=True, single_lot_manual_sku="tz8000")
+        _apply_single_lot_manual_sku(job, lot)
+        self.assertEqual(lot.sku, "TZ8000")
+
+    def test_manual_sku_digits_only_still_works(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.processing import _apply_single_lot_manual_sku
+
+        lot = LotOutput(sku=None, auction_title="x", professional_description="y")
+        job = SimpleNamespace(single_lot_mode=True, single_lot_manual_sku="8000")
+        _apply_single_lot_manual_sku(job, lot)
+        self.assertEqual(lot.sku, "8000")
+
     def test_triage_tape_marking_prefers_lot_tape_field(self) -> None:
         row = {"lot_tape_marking": "MS 530", "brand_text": "ERTL"}
         self.assertEqual(_triage_tape_marking(row), "MS530")

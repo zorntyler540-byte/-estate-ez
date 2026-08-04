@@ -276,7 +276,7 @@ def _strip_maker_stamp_misread_as_tape_sku(lot: LotOutput, raw_payload: dict | N
 
 
 def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> None:
-    """When the job was created with optional tape/SKU digits, force that SKU on the merged lot."""
+    """When the job was created with optional tape/SKU text, force that SKU on the merged lot."""
     if not lot or not bool(getattr(job, "single_lot_mode", False)):
         return
     raw = getattr(job, "single_lot_manual_sku", None)
@@ -285,13 +285,14 @@ def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> N
     s = str(raw).strip()
     if not s:
         return
-    normalized = normalize_tape_sku_input(s) or sku_digits(s) or None
+    # Preserve letter-prefix codes (TZ8000, MS530); fall back to digits-only tape convention.
+    normalized = tape_marking_canonical(s) or normalize_tape_sku_input(s) or sku_digits(s) or None
     if not normalized:
         return
     digits = sku_digits(normalized)
     if len(digits) < 2 or len(digits) > 12:
         return
-    lot.sku = digits
+    lot.sku = normalized
     lot.sku_needs_review = False
 
 
