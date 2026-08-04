@@ -29,12 +29,28 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["SKU"] == "034"
     assert item["id"] is None
     assert item["itemtypeid"] == 2
+    assert item["area"] == "Living Room"  # Lighting → living-space default
     # Leaf "Lamps" is not a /category/list name; fall back to group "Lighting".
     assert item["category"] == "Lighting"
     assert item["startingprice"] == 5.0
     assert item["itemstatus"] == "Pending"
     assert isinstance(item["itemreceiptmethod"], str)
     assert "pickup" in item["itemreceiptmethod"]
+
+
+def test_build_item_payload_kitchen_area() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="K1",
+        title="Mugs",
+        description="Set",
+        category="Kitchen & Home",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+    )
+    assert item["area"] == "Kitchen & Dining"
 
 
 def test_build_item_payload_canonicalizes_luxury_alias() -> None:

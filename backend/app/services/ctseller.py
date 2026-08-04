@@ -14,7 +14,11 @@ import requests
 from PIL import Image, ImageOps
 
 from app.config import settings
-from app.services.ctseller_categories import CT_SELLER_CATEGORY_DEFAULT, canonicalize_ct_category
+from app.services.ctseller_categories import (
+    CT_SELLER_CATEGORY_DEFAULT,
+    canonicalize_ct_category,
+    infer_ct_area,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +241,34 @@ class CTSellerClient:
             return data
         raise CTSellerError(f"CT Seller sale {sale_id} not found")
 
+    def list_areas(self) -> list[str]:
+        """Location Area dropdown values (GET /category/area/list)."""
+        resp = self.session.get(f"{SELLER_API}/category/area/list", timeout=self.timeout)
+        if resp.status_code >= 400:
+            raise CTSellerError(
+                _message_from_response(resp) or "Could not load CT Seller areas",
+                status_code=resp.status_code,
+            )
+        try:
+            body = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise CTSellerError("CT Seller areas response was not JSON") from exc
+        data = body.get("data") if isinstance(body, dict) else None
+        rows: Any = data
+        if isinstance(data, dict):
+            rows = data.get("data")
+        if not isinstance(rows, list):
+            return []
+        out: list[str] = []
+        for row in rows:
+            if isinstance(row, str) and row.strip():
+                out.append(row.strip())
+            elif isinstance(row, dict):
+                name = str(row.get("area") or row.get("name") or row.get("title") or "").strip()
+                if name:
+                    out.append(name)
+        return out
+
     def create_item(self, item: dict[str, Any]) -> int:
         body = self._post_raw("/item/add", {"data": item})
         data = body.get("data")
@@ -359,6 +391,8 @@ def build_item_payload(
     condition: str,
     starting_price: float | None,
     item_receipt_method: dict[str, bool] | str | None,
+    area: str | None = None,
+    allowed_areas: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the item/add ``data`` object from catalog fields."""
     irm: dict[str, bool]
@@ -385,6 +419,8 @@ def build_item_payload(
     else:
         irm_out = json.dumps(irm, separators=(",", ":"))
 
+    area_out = (area or "").strip() or infer_ct_area(cat, allowed_areas)
+
     # Keep this lean: extra null fields are ok, but ``id: null`` and ``itemtypeid`` are required
     # or CT Seller returns "Not found : Update key or data missing".
     return {
@@ -395,6 +431,7 @@ def build_item_payload(
         "title": (title or "").strip()[:500] or (sku or "Lot"),
         "description": (description or "").strip(),
         "category": cat or CT_SELLER_CATEGORY_DEFAULT,
+        "area": area_out,
         "condition": (condition or "").strip() or "Good",
         "itemstatus": "Pending",
         "itemtypeid": 2,  # Auction (same as SPA-created lots)

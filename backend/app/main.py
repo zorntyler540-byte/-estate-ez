@@ -1086,6 +1086,7 @@ def _post_one_lot_to_ctseller(
     location_id: object,
     item_receipt_method: object,
     force: bool = False,
+    allowed_areas: list[str] | None = None,
 ) -> LotPostToCTSellerOut:
     """Create one CT Seller item + photos for a catalog lot. Raises HTTPException or CTSellerError."""
     if lot.ctseller_item_id and not force:
@@ -1111,6 +1112,13 @@ def _post_one_lot_to_ctseller(
         if path is not None and path.is_file():
             photo_paths.append((ph, path))
 
+    areas = allowed_areas
+    if areas is None:
+        try:
+            areas = client.list_areas()
+        except CTSellerError:
+            areas = None
+
     item = build_item_payload(
         sale_id=int(remote_sale_id),
         location_id=location_id,
@@ -1121,6 +1129,7 @@ def _post_one_lot_to_ctseller(
         condition=(lot.condition_text or "").strip() or "Good",
         starting_price=lot.starting_price,
         item_receipt_method=item_receipt_method,  # type: ignore[arg-type]
+        allowed_areas=areas,
     )
     item_id = client.create_item(item)
     uploaded = 0
@@ -1249,6 +1258,10 @@ def post_sale_lots_to_ctseller(
         detail = client.sale_detail(int(remote_sale_id))
         location_id = detail.get("locationid")
         irm = detail.get("saleitemreceiptmethod")
+        try:
+            allowed_areas = client.list_areas()
+        except CTSellerError:
+            allowed_areas = None
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1302,6 +1315,7 @@ def post_sale_lots_to_ctseller(
                 location_id=location_id,
                 item_receipt_method=irm,
                 force=body.force,
+                allowed_areas=allowed_areas,
             )
             results.append(
                 SalePostToCTSellerLotResult(

@@ -1197,12 +1197,53 @@ async function fillDescriptionViaQuillModal(plain, html, warnings) {
 
 function inferAreaFromCategory(category) {
   const c = normalizeText(category);
-  if (!c) return "";
-  if (c.includes("women") || c.includes("men") || c.includes("shoes") || c.includes("handbags")) return "Closet";
-  if (c.includes("kitchen") || c.includes("household") || c.includes("bedroom")) return "Housewares";
-  if (c.includes("paintings") || c.includes("art")) return "Wall Decor";
-  if (c.includes("jewelry") || c.includes("earrings") || c.includes("bracelets") || c.includes("rings")) return "Jewelry";
-  return "";
+  if (!c) return "Living Room";
+  if (
+    c.includes("kitchen") ||
+    c.includes("dining") ||
+    c.includes("glassware") ||
+    c.includes("crystal") ||
+    c.includes("china") ||
+    c.includes("silver") ||
+    c.includes("sterling")
+  ) {
+    return "Kitchen & Dining";
+  }
+  if (
+    c.includes("women") ||
+    c.includes("men") ||
+    c.includes("shoes") ||
+    c.includes("handbags") ||
+    c.includes("clothing") ||
+    c.includes("jewelry") ||
+    c.includes("earrings") ||
+    c.includes("bracelets") ||
+    c.includes("rings") ||
+    c.includes("luggage") ||
+    c.includes("bedroom")
+  ) {
+    return "Bedroom";
+  }
+  if (c.includes("toy") || c.includes("doll") || c.includes("game") || c.includes("children") || c.includes("baby")) {
+    return "Kids Playroom";
+  }
+  if (c.includes("tool") || c.includes("garage")) return "Garage";
+  if (c.includes("patio") || c.includes("lawn") || c.includes("grill") || c.includes("outdoor")) return "Patio & Lawn";
+  if (c.includes("music") || c.includes("record") || c.includes("dvd") || c.includes("video game") || c.includes("tv")) {
+    return "Entertainment Cave";
+  }
+  if (
+    c.includes("book") ||
+    c.includes("magazine") ||
+    c.includes("office") ||
+    c.includes("electronics") ||
+    c.includes("computer") ||
+    c.includes("camera") ||
+    c.includes("mobile")
+  ) {
+    return "Office";
+  }
+  return "Living Room";
 }
 
 function mapAreaCandidates(area, inferredCategory, title) {
@@ -1213,41 +1254,20 @@ function mapAreaCandidates(area, inferredCategory, title) {
     if (!out.some((x) => normalizeText(x) === normalizeText(t))) out.push(t);
   };
 
-  const a = normalizeText(area);
-  if (a.includes("houseware")) {
-    push("Housewares");
-    push("House Wares");
-    push("Home");
-    push("Furniture");
-  } else if (a.includes("wall decor")) {
-    push("Wall Decor");
-    push("Home Decor");
-    push("Decor");
-  } else if (a.includes("closet")) {
-    push("Closet");
-    push("Clothing");
-    push("Fashion");
-  } else if (a.includes("jewelry")) {
-    push("Jewelry");
-  } else {
-    push(area);
-  }
+  push(area);
+  push(inferAreaFromCategory(inferredCategory));
 
   const cat = normalizeText(inferredCategory);
-  if (cat.includes("household") || cat.includes("furniture") || cat.includes("bedroom")) {
-    push("Housewares");
-    push("Furniture");
-    push("Home");
+  if (cat.includes("kitchen") || cat.includes("dining") || cat.includes("glass")) push("Kitchen & Dining");
+  if (cat.includes("art") || cat.includes("paint") || cat.includes("decor") || cat.includes("household")) {
+    push("Living Room");
   }
-  if (cat.includes("art") || cat.includes("painting")) {
-    push("Wall Decor");
-    push("Decor");
+  if (cat.includes("women") || cat.includes("men") || cat.includes("shoe") || cat.includes("handbag")) {
+    push("Bedroom");
   }
-
-  if (/\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe|bombay)\b/i.test(title || "")) {
-    push("Furniture");
-    push("Housewares");
-    push("Home");
+  if (/\b(chest|dresser|cabinet|nightstand|bookshelf|bookcase|hutch|console|table|desk|armoire|wardrobe)\b/i.test(title || "")) {
+    push("Living Room");
+    push("Bedroom");
   }
   return out;
 }

@@ -247,3 +247,155 @@ def canonicalize_ct_category(raw: str | None) -> str:
                 return name
     return CT_SELLER_CATEGORY_DEFAULT
 
+
+# Location “Area” rooms from GET /category/area/list (may vary by franchise).
+_DEFAULT_AREAS: tuple[str, ...] = (
+    "Barn",
+    "Bedroom",
+    "Entertainment Cave",
+    "Garage",
+    "Kids Playroom",
+    "Kitchen & Dining",
+    "Laundry Storage",
+    "Living Room",
+    "Office",
+    "Patio & Lawn",
+)
+
+
+def infer_ct_area(category: str | None, allowed_areas: list[str] | None = None) -> str:
+    """
+    Pick a CT Seller Area for a category (SPA auto-fills Area when Category is chosen).
+
+    Clamped to ``allowed_areas`` from ``/category/area/list`` when provided.
+    """
+    allowed = [a.strip() for a in (allowed_areas or list(_DEFAULT_AREAS)) if (a or "").strip()]
+    if not allowed:
+        allowed = list(_DEFAULT_AREAS)
+    allowed_norm = {_norm_cat(a): a for a in allowed}
+
+    def pick(*candidates: str) -> str | None:
+        for c in candidates:
+            hit = allowed_norm.get(_norm_cat(c))
+            if hit:
+                return hit
+        return None
+
+    cat = _norm_cat(category or "")
+    if any(
+        x in cat
+        for x in (
+            "kitchen",
+            "dining",
+            "glassware",
+            "crystal",
+            "china",
+            "silver",
+            "sterling",
+            "bar ware",
+            "breweriana",
+        )
+    ):
+        hit = pick("Kitchen & Dining", "Living Room")
+        if hit:
+            return hit
+    if any(
+        x in cat
+        for x in (
+            "women",
+            "men",
+            "shoe",
+            "handbag",
+            "wallet",
+            "clothing",
+            "jewelry",
+            "earring",
+            "bracelet",
+            "ring",
+            "necklace",
+            "watch",
+            "accessory",
+            "luggage",
+            "bedroom goods",
+            "linen",
+        )
+    ):
+        hit = pick("Bedroom", "Living Room")
+        if hit:
+            return hit
+    if any(x in cat for x in ("toy", "doll", "game", "children", "baby", "kids")):
+        hit = pick("Kids Playroom", "Bedroom", "Living Room")
+        if hit:
+            return hit
+    if any(x in cat for x in ("tool", "garage", "power tool", "ladder", "building material")):
+        hit = pick("Garage", "Barn", "Patio & Lawn")
+        if hit:
+            return hit
+    if any(x in cat for x in ("patio", "lawn", "grill", "outdoor", "garden", "camping", "fishing", "hunting")):
+        hit = pick("Patio & Lawn", "Garage", "Barn")
+        if hit:
+            return hit
+    if any(x in cat for x in ("farm", "tractor", "barn")):
+        hit = pick("Barn", "Garage", "Patio & Lawn")
+        if hit:
+            return hit
+    if any(
+        x in cat
+        for x in (
+            "music",
+            "record",
+            "dvd",
+            "cd",
+            "video game",
+            "tv",
+            "audio",
+            "stereo",
+            "instrument",
+            "piano",
+        )
+    ):
+        hit = pick("Entertainment Cave", "Living Room", "Office")
+        if hit:
+            return hit
+    if any(
+        x in cat
+        for x in (
+            "electronics",
+            "computer",
+            "laptop",
+            "mobile",
+            "camera",
+            "photo",
+            "office",
+            "book",
+            "magazine",
+            "comic",
+        )
+    ):
+        hit = pick("Office", "Living Room", "Entertainment Cave")
+        if hit:
+            return hit
+    if any(
+        x in cat
+        for x in (
+            "art",
+            "paint",
+            "print",
+            "decor",
+            "figurine",
+            "antique",
+            "sculpture",
+            "clock",
+            "mirror",
+            "lighting",
+            "furniture",
+            "household",
+            "collectible",
+        )
+    ):
+        hit = pick("Living Room", "Kitchen & Dining", "Bedroom")
+        if hit:
+            return hit
+
+    return pick("Living Room", "Kitchen & Dining", "Bedroom") or allowed[0]
+
