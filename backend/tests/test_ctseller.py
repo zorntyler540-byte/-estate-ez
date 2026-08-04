@@ -27,11 +27,14 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["saleid"] == 42
     assert item["locationid"] == 7
     assert item["SKU"] == "034"
+    assert item["id"] is None
+    assert item["itemtypeid"] == 2
     # Leaf "Lamps" is not a /category/list name; fall back to group "Lighting".
     assert item["category"] == "Lighting"
     assert item["startingprice"] == 5.0
     assert item["itemstatus"] == "Pending"
-    assert item["itemreceiptmethod"]["pickup"] is True
+    assert isinstance(item["itemreceiptmethod"], str)
+    assert "pickup" in item["itemreceiptmethod"]
 
 
 def test_build_item_payload_canonicalizes_luxury_alias() -> None:

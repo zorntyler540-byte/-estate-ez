@@ -4,9 +4,47 @@ Field capture app: **native camera**, **offline lot storage**, and **upload queu
 
 The web dashboard (`../frontend`) remains the catalog review and admin UI.
 
+## Quick test on your iPhone (two paths)
+
+### A. Expo Go (same day, no Apple build)
+
+```powershell
+cd mobile
+copy .env.example .env   # if needed
+# .env already points at Railway API in this repo
+npm install
+npx expo start
+```
+
+Install **Expo Go** from the App Store, scan the QR code.
+
+### B. Real app install (Apple Developer — recommended for camera field test)
+
+Uses EAS Build + ad hoc install (or TestFlight). From `mobile/`:
+
+```powershell
+npm install -g eas-cli
+eas login
+eas build:configure
+eas device:create
+eas build --platform ios --profile preview
+```
+
+1. `eas login` — Expo account (free).
+2. `eas build:configure` — links this project on expo.dev (creates `projectId` in `app.json`).
+3. `eas device:create` — register your iPhone (opens a URL/QR; follow prompts). New Apple accounts can take **24–72 hours** before a new UDID is usable.
+4. `eas build --platform ios --profile preview` — sign in with **Apple ID** when asked so EAS can create certificates/profiles. When the build finishes, open the install URL on the registered iPhone.
+
+**TestFlight** (optional next step after the preview works):
+
+```powershell
+eas build --platform ios --profile production
+eas submit --platform ios --latest
+```
+
 ## Setup (Windows)
 
-**SDK 54** — matches the **App Store Expo Go** app (no Apple Developer account needed). When you’re ready for newer SDKs / `eas go`, upgrade with `npx expo install expo@^55.0.0 --fix`.
+**SDK 54** — matches the **App Store Expo Go** app. When you’re ready for newer SDKs / `eas go`, upgrade with `npx expo install expo@^55.0.0 --fix`.
 
 ```powershell
 cd mobile
@@ -25,6 +63,8 @@ Scan the QR code with **Expo Go** on your iPhone, or press `a` for Android emula
 | Railway production | `https://your-api.up.railway.app` |
 | Local backend on PC | `http://YOUR_LAN_IP:8000` (not `localhost` from a phone) |
 | Android emulator | `http://10.0.2.2:8000` |
+
+EAS profiles bake `EXPO_PUBLIC_API_BASE` into the binary (see `eas.json`). Local Expo Go uses `mobile/.env`.
 
 ## App flow (MVP scaffold)
 
@@ -45,17 +85,6 @@ mobile/
   lib/queue/db.ts      SQLite lot drafts + photo paths
   lib/queue/sync.ts    Upload + run job when online
 ```
-
-## EAS builds (no Mac required for iOS)
-
-When ready for TestFlight:
-
-1. `npm install -g eas-cli`
-2. `eas login`
-3. Apple Developer account ($99/yr)
-4. `eas build --platform ios --profile preview`
-
-See [Expo EAS Build](https://docs.expo.dev/build/introduction/).
 
 ## Next steps (not in scaffold)
 

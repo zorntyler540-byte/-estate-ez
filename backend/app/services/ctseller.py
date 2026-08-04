@@ -379,8 +379,16 @@ def build_item_payload(
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
+    # CT Seller stores receipt method as a JSON string on items (see /item/detail).
+    if isinstance(item_receipt_method, str) and item_receipt_method.strip().startswith("{"):
+        irm_out = item_receipt_method.strip()
+    else:
+        irm_out = json.dumps(irm, separators=(",", ":"))
 
+    # Keep this lean: extra null fields are ok, but ``id: null`` and ``itemtypeid`` are required
+    # or CT Seller returns "Not found : Update key or data missing".
     return {
+        "id": None,
         "saleid": int(sale_id),
         "locationid": location_id,
         "SKU": (sku or "").strip()[:20],
@@ -389,28 +397,14 @@ def build_item_payload(
         "category": cat or CT_SELLER_CATEGORY_DEFAULT,
         "condition": (condition or "").strip() or "Good",
         "itemstatus": "Pending",
+        "itemtypeid": 2,  # Auction (same as SPA-created lots)
         "startingprice": price,
-        "reserveprice": None,
-        "buynowprice": None,
-        "buyerspremium": None,
-        "tax": None,
         "istaxable": True,
         "isshippable": False,
         "isfeatured": False,
         "ispublic": True,
-        "itemreceiptmethod": irm,
+        "itemreceiptmethod": irm_out,
+        "closingorder": 999,
         "tag": "",
         "quantity": "",
-        "area": None,
-        "material": None,
-        "fragilityscore": None,
-        "closingorder": 999,
-        "width": None,
-        "height": None,
-        "length": None,
-        "weight": None,
-        "shippingfee": None,
-        "handlingfee": None,
-        "goal": None,
-        "valuation": None,
     }

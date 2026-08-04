@@ -36,7 +36,10 @@ backend/data/
 data/
 
 # Estate / catalog images (sensitive + large — do not commit)
-Images/
+# Use an anchored path so Expo app icons under mobile/assets/images are not ignored.
+/Images/
+backend/data/uploads/
+!mobile/assets/images/
 
 # Keys and certs
 *.pem
