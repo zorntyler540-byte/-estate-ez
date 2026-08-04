@@ -7,12 +7,15 @@ import {
   Alert,
   PanResponder,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type GestureResponderEvent
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
@@ -43,6 +46,9 @@ function clamp01(n: number): number {
 export default function CaptureSessionScreen() {
   const { selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const landscape = windowWidth > windowHeight;
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [draftId, setDraftId] = useState<string | null>(null);
@@ -293,8 +299,24 @@ export default function CaptureSessionScreen() {
   }
 
   return (
-    <View style={styles.root}>
-      <View style={[styles.cameraWrap, thumbs.length > 0 && styles.cameraWrapCompact]}>
+    <View
+      style={[
+        styles.root,
+        landscape && styles.rootLandscape,
+        {
+          paddingTop: landscape ? insets.top : 0,
+          paddingBottom: landscape ? insets.bottom : 0,
+          paddingLeft: landscape ? insets.left : 0,
+          paddingRight: landscape ? insets.right : 0
+        }
+      ]}
+    >
+      <View
+        style={[
+          styles.cameraWrap,
+          landscape ? styles.cameraWrapLandscape : thumbs.length > 0 && styles.cameraWrapCompact
+        ]}
+      >
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -312,15 +334,7 @@ export default function CaptureSessionScreen() {
             style={[styles.focusRing, { left: focusPoint.x - 36, top: focusPoint.y - 36 }]}
           />
         ) : null}
-        <View style={styles.cameraOverlay} pointerEvents="none">
-          <Text style={styles.cameraLabel}>
-            {thumbs.length ? `Lot in progress · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}` : "Aim and tap Snap"}
-          </Text>
-          {selectedSaleName ? (
-            <Text style={styles.cameraSale}>Sale: {selectedSaleName}</Text>
-          ) : null}
-        </View>
-        <View style={styles.cameraControls}>
+        <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
           <View style={styles.zoomRow}>
             {ZOOM_PRESETS.map((preset) => {
               const active =
@@ -351,18 +365,42 @@ export default function CaptureSessionScreen() {
             </Text>
           </Pressable>
         </View>
-        <Text style={styles.cameraHint} pointerEvents="none">
+        <Text
+          style={[styles.cameraHint, landscape && styles.cameraHintLandscape]}
+          pointerEvents="none"
+        >
           Pinch to zoom · tap to refocus
         </Text>
       </View>
 
-      <View style={styles.panel}>
+      <ScrollView
+        style={[styles.panel, landscape && styles.panelLandscape]}
+        contentContainerStyle={[
+          styles.panelContent,
+          landscape && styles.panelContentLandscape
+        ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.sessionMeta}>
+          <Text style={styles.sessionMetaLabel}>
+            {thumbs.length
+              ? `Lot in progress · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+              : "Aim and tap Snap"}
+          </Text>
+          {selectedSaleName ? (
+            <Text style={styles.sessionMetaSale} numberOfLines={1}>
+              {selectedSaleName}
+            </Text>
+          ) : null}
+        </View>
+
         <Text style={styles.sectionTitle}>Photos for this lot</Text>
         <Text style={styles.sectionHint}>Tap a photo to review. Tap × on a thumb to remove it.</Text>
 
         <DraftPhotoStrip
           uris={thumbs}
-          size="lg"
+          size={landscape ? "md" : "lg"}
           onPressPhoto={openPreview}
           onDeletePhoto={deleteFromStrip}
         />
@@ -378,11 +416,15 @@ export default function CaptureSessionScreen() {
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <View style={styles.actions}>
+        <View style={[styles.actions, landscape && styles.actionsLandscape]}>
           <Pressable style={styles.secondary} onPress={() => router.back()}>
             <Text style={styles.secondaryText}>Cancel</Text>
           </Pressable>
-          <Pressable style={[styles.snap, (busy || !cameraReady) && styles.disabled]} disabled={busy || !cameraReady} onPress={() => void snap()}>
+          <Pressable
+            style={[styles.snap, (busy || !cameraReady) && styles.disabled]}
+            disabled={busy || !cameraReady}
+            onPress={() => void snap()}
+          >
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
           </Pressable>
           <Pressable
@@ -393,7 +435,7 @@ export default function CaptureSessionScreen() {
             <Text style={styles.primaryText}>Finish lot</Text>
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
 
       <PhotoPreviewModal
         uri={previewUri}
@@ -408,20 +450,10 @@ export default function CaptureSessionScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
+  rootLandscape: { flexDirection: "row" },
   cameraWrap: { flex: 1, minHeight: 280, position: "relative" },
   cameraWrapCompact: { flex: 0.48, minHeight: 220 },
-  cameraOverlay: {
-    position: "absolute",
-    top: 12,
-    left: 12,
-    right: 12,
-    backgroundColor: "rgba(15, 23, 42, 0.72)",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  cameraLabel: { color: "#f8fafc", fontSize: 14, fontWeight: "600", textAlign: "center" },
-  cameraSale: { color: "#5eead4", fontSize: 12, fontWeight: "600", textAlign: "center", marginTop: 2 },
+  cameraWrapLandscape: { flex: 1, minHeight: 0, minWidth: 0 },
   cameraControls: {
     position: "absolute",
     left: 12,
@@ -431,6 +463,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8
+  },
+  cameraControlsLandscape: {
+    bottom: 16,
+    left: 16,
+    right: 16
   },
   zoomRow: {
     flexDirection: "row",
@@ -474,6 +511,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600"
   },
+  cameraHintLandscape: {
+    bottom: 4,
+    opacity: 0.85
+  },
   focusRing: {
     position: "absolute",
     width: 72,
@@ -488,12 +529,37 @@ const styles = StyleSheet.create({
   },
   panel: {
     flex: 1,
-    padding: 14,
-    gap: 10,
     backgroundColor: "#0f172a",
     borderTopWidth: 1,
     borderTopColor: "#1e293b"
   },
+  panelLandscape: {
+    flex: 0,
+    width: 300,
+    maxWidth: "42%",
+    borderTopWidth: 0,
+    borderLeftWidth: 1,
+    borderLeftColor: "#1e293b"
+  },
+  panelContent: {
+    padding: 14,
+    gap: 10,
+    flexGrow: 1
+  },
+  panelContentLandscape: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    gap: 8
+  },
+  sessionMeta: {
+    gap: 2,
+    paddingBottom: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#1e293b",
+    marginBottom: 2
+  },
+  sessionMetaLabel: { color: "#f8fafc", fontSize: 14, fontWeight: "600" },
+  sessionMetaSale: { color: "#5eead4", fontSize: 12, fontWeight: "600" },
   sectionTitle: { color: "#f8fafc", fontSize: 16, fontWeight: "700" },
   sectionHint: { color: "#94a3b8", fontSize: 13, marginTop: -4 },
   input: {
@@ -505,6 +571,7 @@ const styles = StyleSheet.create({
     color: "#f8fafc"
   },
   actions: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 4 },
+  actionsLandscape: { flexWrap: "wrap" },
   snap: {
     flex: 1,
     backgroundColor: "#334155",
@@ -512,14 +579,16 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
     minHeight: 48,
-    justifyContent: "center"
+    justifyContent: "center",
+    minWidth: 72
   },
   primary: {
     flex: 1,
     backgroundColor: "#0d9488",
     borderRadius: 10,
     paddingVertical: 14,
-    alignItems: "center"
+    alignItems: "center",
+    minWidth: 72
   },
   secondary: { paddingVertical: 14, paddingHorizontal: 12 },
   secondaryText: { color: "#94a3b8" },
