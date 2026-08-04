@@ -26,6 +26,7 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import resolve_lot_ct_category
+from app.services.ctseller_conditions import canonicalize_ct_condition
 from app.services.pipeline_integration import (
     is_weak_pipeline_lot,
     run_single_lot_pipeline,
@@ -444,7 +445,7 @@ def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_i
         is_completed=False,
         completed_at=None,
         starting_price=lot.starting_price,
-        condition_text=lot.condition,
+        condition_text=canonicalize_ct_condition(lot.condition),
         photo_count=lot.photo_count,
         sku_needs_review=bool(lot.sku_needs_review),
     )

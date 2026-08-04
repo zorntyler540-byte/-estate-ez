@@ -43,6 +43,7 @@ from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, Processin
 from app.schemas import (
     CreateJobRequest,
     CTSellerCredentialsIn,
+    CTSellerConditionOut,
     CTSellerRemoteSaleOut,
     CTSellerStatusOut,
     CatalogR2MigrateIn,
@@ -1050,6 +1051,33 @@ def update_sale(
     return _sale_out(row)
 
 
+@app.post("/sales/{sale_id}/fill-blank-conditions")
+def fill_blank_lot_conditions(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """Set empty lot condition_text to CT Seller default GOOD for this sale."""
+    from app.services.ctseller_conditions import CT_SELLER_CONDITION_DEFAULT
+
+    sale = _sale_for_user(sale_id, current, db)
+    rows = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .all()
+    )
+    updated = 0
+    for lot in rows:
+        if (lot.condition_text or "").strip():
+            continue
+        lot.condition_text = CT_SELLER_CONDITION_DEFAULT
+        db.add(lot)
+        updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated, "total": len(rows)}
+
+
 @app.delete("/sales/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_sale(
     sale_id: str,
@@ -1126,6 +1154,17 @@ def ctseller_disconnect(
     db.add(account)
     db.commit()
     return CTSellerStatusOut(connected=False, username=None)
+
+
+@app.get("/integrations/ctseller/conditions", response_model=list[CTSellerConditionOut])
+def ctseller_list_conditions(
+    current: User = Depends(get_current_user),
+) -> list[CTSellerConditionOut]:
+    """CT Seller Item Condition dropdown values (public static catalog)."""
+    from app.services.ctseller_conditions import ct_condition_rows
+
+    _ = current  # auth required
+    return [CTSellerConditionOut(**row) for row in ct_condition_rows()]
 
 
 @app.get("/integrations/ctseller/sales", response_model=list[CTSellerRemoteSaleOut])
@@ -1216,7 +1255,7 @@ def _post_one_lot_to_ctseller(
         title=lot.auction_title or sku,
         description=lot.professional_description or "",
         category=(lot.ct_category or "").strip() or "Household Goods Other",
-        condition=(lot.condition_text or "").strip() or "Good",
+        condition=(lot.condition_text or "").strip() or "GOOD",
         starting_price=lot.starting_price,
         item_receipt_method=item_receipt_method,  # type: ignore[arg-type]
         allowed_areas=areas,
@@ -2364,7 +2403,10 @@ def update_lot(
     if patch.starting_price is not None:
         row.starting_price = patch.starting_price
     if patch.condition_text is not None:
-        row.condition_text = patch.condition_text
+        from app.services.ctseller_conditions import canonicalize_ct_condition
+
+        raw = (patch.condition_text or "").strip()
+        row.condition_text = canonicalize_ct_condition(raw) if raw else ""
     if patch.is_completed is not None:
         row.is_completed = bool(patch.is_completed)
         row.completed_at = datetime.now(timezone.utc) if row.is_completed else None

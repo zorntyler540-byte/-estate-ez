@@ -573,34 +573,9 @@ def _user_prompt(*, manifest_tag: str) -> str:
 
 
 def _normalize_condition_label(raw: str) -> str:
-    text = (raw or "").strip()
-    if not text:
-        return "GOOD"
-    norm = re.sub(r"\s+", " ", text).strip().lower()
+    from app.services.ctseller_conditions import canonicalize_ct_condition
 
-    if norm == "new":
-        return "NEW"
-    if norm in {"like new", "likenew"}:
-        return "LIKE NEW"
-    if norm in {"very good", "verygood"}:
-        return "VERY GOOD"
-    if norm == "good":
-        return "GOOD"
-    if norm == "fair":
-        return "FAIR"
-
-    if "new with tag" in norm or "new w/" in norm:
-        return "NEW"
-    if "like new" in norm or "unused" in norm:
-        return "LIKE NEW"
-    if "very good" in norm or "minor" in norm or "light scuff" in norm or "light scratch" in norm:
-        return "VERY GOOD"
-    if "fair" in norm or "heavy wear" in norm or "heavy scratch" in norm:
-        return "FAIR"
-    if "good" in norm or "moderate" in norm:
-        return "GOOD"
-
-    return "GOOD"
+    return canonicalize_ct_condition(raw)
 
 
 _BRASS_NARRATIVE_RE = re.compile(

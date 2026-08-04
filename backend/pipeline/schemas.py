@@ -138,6 +138,15 @@ class FullyAuditedManifest(BaseModel):
             "Must be one of the allowed CT Seller category names from the prompt allow-list."
         ),
     )
+    condition_notes: str = Field(
+        default="GOOD",
+        description=(
+            "Exact CT Seller item condition tier for this lot. Must be exactly one of: "
+            "NEW, LIKE NEW, VERY GOOD, GOOD, FAIR. "
+            "NEW = tags/packaging intact unused; LIKE NEW = unused without tags; "
+            "VERY GOOD = minor wear; GOOD = moderate wear; FAIR = heavy wear."
+        ),
+    )
     listing_was_corrected_by_pro: bool = False
     listing_correction_details: str | None = None
     total_items_processed: int = 0

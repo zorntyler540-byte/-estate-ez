@@ -19,6 +19,7 @@ from app.services.ctseller_categories import (
     canonicalize_ct_category,
     infer_ct_area,
 )
+from app.services.ctseller_conditions import canonicalize_ct_condition
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +453,7 @@ def build_item_payload(
         "description": (description or "").strip(),
         "category": cat or CT_SELLER_CATEGORY_DEFAULT,
         "area": area_out,
-        "condition": (condition or "").strip() or "Good",
+        "condition": canonicalize_ct_condition(condition),
         "itemstatus": "Pending",
         "itemtypeid": 2,  # Auction (same as SPA-created lots)
         "startingprice": price,

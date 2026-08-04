@@ -79,12 +79,21 @@ const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
 
 const STANDARD_CONDITIONS = ["NEW", "LIKE NEW", "VERY GOOD", "GOOD", "FAIR"] as const;
 
-function conditionSelectOptions(current: string): string[] {
+type CTSellerCondition = { condition: string; description?: string };
+
+function conditionSelectOptions(
+  current: string,
+  catalog: CTSellerCondition[] = []
+): CTSellerCondition[] {
+  const base =
+    catalog.length > 0
+      ? catalog
+      : STANDARD_CONDITIONS.map((condition) => ({ condition, description: "" }));
   const trimmed = current.trim();
-  if (trimmed && !STANDARD_CONDITIONS.includes(trimmed as (typeof STANDARD_CONDITIONS)[number])) {
-    return [trimmed, ...STANDARD_CONDITIONS];
+  if (trimmed && !base.some((row) => row.condition === trimmed)) {
+    return [{ condition: trimmed, description: "" }, ...base];
   }
-  return [...STANDARD_CONDITIONS];
+  return base;
 }
 
 function parseFastApiErrorMessage(raw: string): string {
@@ -143,6 +152,7 @@ export default function LotDetailPage() {
   const [saleName, setSaleName] = useState("");
   const [mappedCtSellerSaleId, setMappedCtSellerSaleId] = useState<number | null>(null);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
+  const [ctSellerConditions, setCtSellerConditions] = useState<CTSellerCondition[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
   const [ctSellerPostBusy, setCtSellerPostBusy] = useState(false);
   const [ctSellerMsg, setCtSellerMsg] = useState("");
@@ -359,6 +369,26 @@ export default function LotDetailPage() {
         setCtSellerRemoteSales(Array.isArray(rows) ? rows : []);
       } catch {
         if (!cancelled) setCtSellerRemoteSales([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      setCtSellerConditions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = (await apiFetch("/integrations/ctseller/conditions", token)) as CTSellerCondition[];
+        if (cancelled) return;
+        setCtSellerConditions(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setCtSellerConditions([]);
       }
     })();
     return () => {
@@ -1931,11 +1961,12 @@ export default function LotDetailPage() {
                     className="ct-input"
                     value={lot.condition_text}
                     onChange={(e) => updateListingFields({ condition_text: e.target.value })}
+                    title="CT Seller item condition tiers"
                   >
                     <option value="">Select condition…</option>
-                    {conditionSelectOptions(lot.condition_text).map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
+                    {conditionSelectOptions(lot.condition_text, ctSellerConditions).map((opt) => (
+                      <option key={opt.condition} value={opt.condition} title={opt.description || undefined}>
+                        {opt.condition}
                       </option>
                     ))}
                   </select>

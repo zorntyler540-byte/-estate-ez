@@ -4623,6 +4623,45 @@ export default function DashboardPage() {
     }
   }
 
+  async function fillBlankLotConditions() {
+    if (!token || !selectedSaleId) return;
+    const blank = lots.filter((l) => !(l.condition_text || "").trim()).length;
+    if (blank < 1) {
+      setError("");
+      setPullCtSellerSalesMsg("All lots already have a condition.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Set condition to GOOD for ${blank} lot${blank === 1 ? "" : "s"} with no condition?\n\nUses the CT Seller default (NEW / LIKE NEW / VERY GOOD / GOOD / FAIR).`
+      )
+    ) {
+      return;
+    }
+    setPullingCtSellerSales(true);
+    setError("");
+    try {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/fill-blank-conditions`, token, {
+        method: "POST"
+      })) as { updated?: number };
+      const n = res.updated || 0;
+      if (n > 0) {
+        setLots((prev) =>
+          prev.map((l) => (!(l.condition_text || "").trim() ? { ...l, condition_text: "GOOD" } : l))
+        );
+      }
+      setPullCtSellerSalesMsg(
+        n > 0
+          ? `Set GOOD on ${n} lot${n === 1 ? "" : "s"} with blank condition.`
+          : "All lots already have a condition."
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not fill blank conditions");
+    } finally {
+      setPullingCtSellerSales(false);
+    }
+  }
+
   async function endSelectedSale() {
     if (!token || !selectedSaleId || selectedSaleClosed) return;
     const target = selectedSale?.name || "this sale";
@@ -5411,6 +5450,20 @@ export default function DashboardPage() {
               onClick={() => void pullCtSellerSalesIntoCatalog()}
             >
               {pullingCtSellerSales ? "Pulling…" : "Pull CT Seller sales"}
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={
+                pullingCtSellerSales ||
+                !token ||
+                !selectedSaleId ||
+                lots.every((l) => Boolean((l.condition_text || "").trim()))
+              }
+              title="Set CT Seller condition GOOD on lots that have no condition yet"
+              onClick={() => void fillBlankLotConditions()}
+            >
+              Fill blank conditions
             </button>
             <button
               type="button"

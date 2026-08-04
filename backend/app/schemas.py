@@ -198,6 +198,11 @@ class CTSellerRemoteSaleOut(BaseModel):
     endtime: str | None = None
 
 
+class CTSellerConditionOut(BaseModel):
+    condition: str
+    description: str = ""
+
+
 class LotPostToCTSellerIn(BaseModel):
     """Optional override; otherwise uses the sale's saved ctseller_sale_id."""
 

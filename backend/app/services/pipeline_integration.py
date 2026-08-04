@@ -136,7 +136,7 @@ def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, An
         specification_lines=specs,
         brands=brands,
         labels_and_tags=labels,
-        condition="",
+        condition="GOOD",
         starting_price=None,
         photo_count=0,
         sku_needs_review=False,
@@ -447,6 +447,12 @@ def _apply_pro_manifest_to_lot(
 
         lot.ct_category = canonicalize_ct_category(pro_cat)
 
+    from app.services.ctseller_conditions import canonicalize_ct_condition
+
+    pro_condition = (getattr(manifest, "condition_notes", None) or "").strip()
+    if pro_condition or not (lot.condition or "").strip():
+        lot.condition = canonicalize_ct_condition(pro_condition or lot.condition)
+
     if manifest.verified_inventory:
         item_lines: list[str] = []
         for row in manifest.verified_inventory:
@@ -674,6 +680,7 @@ def run_single_lot_pipeline(
                 "specification_lines": list(lot.specification_lines),
                 "brands": list(lot.brands),
                 "ct_category": lot.ct_category or "",
+                "condition_notes": lot.condition or "",
             }
         if emit:
             emit({"type": "batch_phase", "phase": "pipeline_pro_author", "total_photos": len(entries)})

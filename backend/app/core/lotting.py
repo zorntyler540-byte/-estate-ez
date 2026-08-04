@@ -3434,6 +3434,9 @@ class LotOutput:
         self.professional_description = _trim_prose_at_limit(
             self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
         )
+        from app.services.ctseller_conditions import canonicalize_ct_condition
+
+        self.condition = canonicalize_ct_condition(self.condition)
 
     @classmethod
     def from_model(cls, payload: dict[str, Any]) -> "LotOutput":
@@ -3471,6 +3474,9 @@ class LotOutput:
         brands = normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands"))
         labels = normalize_listing_lines(payload.get("LabelsAndTags") or payload.get("labels_and_tags"))
         condition = str(payload.get("Condition") or payload.get("condition_notes") or "").strip()
+        from app.services.ctseller_conditions import canonicalize_ct_condition
+
+        condition = canonicalize_ct_condition(condition)
         prof = sanitize_description_unknowns(
             str(
                 payload.get("ProfessionalDescription")
@@ -3552,6 +3558,14 @@ class LotOutput:
                 brands=self.brands,
             )
             self.auction_title = _sanitize_gendered_title(merged, detail_payload)
+
+        detail_condition = str(
+            detail_payload.get("Condition") or detail_payload.get("condition_notes") or ""
+        ).strip()
+        if detail_condition:
+            from app.services.ctseller_conditions import canonicalize_ct_condition
+
+            self.condition = canonicalize_ct_condition(detail_condition)
 
         self.photo_count += 1
         self.professional_description = _synthesize_numismatic_multi_cent_prose(
