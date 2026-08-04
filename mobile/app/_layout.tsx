@@ -49,7 +49,7 @@ function RootNav() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="capture-session"
-          options={{ title: "Capture lot", presentation: "fullScreenModal" }}
+          options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }}
         />
         <Stack.Screen name="lot/[id]" options={{ title: "Lot" }} />
       </Stack>

@@ -303,18 +303,24 @@ export default function CaptureSessionScreen() {
       style={[
         styles.root,
         landscape && styles.rootLandscape,
-        {
-          paddingTop: landscape ? insets.top : 0,
-          paddingBottom: landscape ? insets.bottom : 0,
-          paddingLeft: landscape ? insets.left : 0,
-          paddingRight: landscape ? insets.right : 0
-        }
+        landscape
+          ? {
+              // Notch sits on the sides in landscape — don't pad the top (that black strip).
+              paddingLeft: Math.max(insets.left, 0),
+              paddingRight: 0,
+              paddingTop: 0,
+              paddingBottom: 0
+            }
+          : {
+              paddingTop: insets.top,
+              paddingBottom: 0
+            }
       ]}
     >
       <View
         style={[
           styles.cameraWrap,
-          landscape ? styles.cameraWrapLandscape : thumbs.length > 0 && styles.cameraWrapCompact
+          landscape && styles.cameraWrapLandscape
         ]}
       >
         <CameraView
@@ -334,6 +340,17 @@ export default function CaptureSessionScreen() {
             style={[styles.focusRing, { left: focusPoint.x - 36, top: focusPoint.y - 36 }]}
           />
         ) : null}
+        <Pressable
+          style={[
+            styles.closeFab,
+            { top: landscape ? 10 : Math.max(10, 4), left: landscape ? 10 : 12 }
+          ]}
+          onPress={() => router.back()}
+          hitSlop={10}
+          accessibilityLabel="Close capture"
+        >
+          <Text style={styles.closeFabText}>✕</Text>
+        </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
           <View style={styles.zoomRow}>
             {ZOOM_PRESETS.map((preset) => {
@@ -365,28 +382,32 @@ export default function CaptureSessionScreen() {
             </Text>
           </Pressable>
         </View>
-        <Text
-          style={[styles.cameraHint, landscape && styles.cameraHintLandscape]}
-          pointerEvents="none"
-        >
-          Pinch to zoom · tap to refocus
-        </Text>
+        {!landscape ? (
+          <Text style={styles.cameraHint} pointerEvents="none">
+            Pinch to zoom · tap to refocus
+          </Text>
+        ) : null}
       </View>
 
       <ScrollView
-        style={[styles.panel, landscape && styles.panelLandscape]}
+        style={[
+          styles.panel,
+          landscape && styles.panelLandscape,
+          landscape && { paddingRight: Math.max(insets.right, 8) }
+        ]}
         contentContainerStyle={[
           styles.panelContent,
-          landscape && styles.panelContentLandscape
+          landscape && styles.panelContentLandscape,
+          !landscape && { paddingBottom: Math.max(insets.bottom, 14) }
         ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.sessionMeta}>
-          <Text style={styles.sessionMetaLabel}>
+        <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
+          <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
             {thumbs.length
-              ? `Lot in progress · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-              : "Aim and tap Snap"}
+              ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+              : "Aim · tap Snap"}
           </Text>
           {selectedSaleName ? (
             <Text style={styles.sessionMetaSale} numberOfLines={1}>
@@ -395,12 +416,18 @@ export default function CaptureSessionScreen() {
           ) : null}
         </View>
 
-        <Text style={styles.sectionTitle}>Photos for this lot</Text>
-        <Text style={styles.sectionHint}>Tap a photo to review. Tap × on a thumb to remove it.</Text>
+        {!landscape ? (
+          <>
+            <Text style={styles.sectionTitle}>Photos</Text>
+            <Text style={styles.sectionHint}>Tap to review · × to remove</Text>
+          </>
+        ) : (
+          <Text style={styles.sectionHintLandscape}>Photos</Text>
+        )}
 
         <DraftPhotoStrip
           uris={thumbs}
-          size={landscape ? "md" : "lg"}
+          size="md"
           onPressPhoto={openPreview}
           onDeletePhoto={deleteFromStrip}
         />
@@ -408,7 +435,7 @@ export default function CaptureSessionScreen() {
         <TextInput
           placeholder="Manual SKU (optional)"
           placeholderTextColor="#64748b"
-          style={styles.input}
+          style={[styles.input, landscape && styles.inputLandscape]}
           value={manualSku}
           onChangeText={onSkuChange}
           autoCapitalize="characters"
@@ -417,22 +444,24 @@ export default function CaptureSessionScreen() {
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={[styles.actions, landscape && styles.actionsLandscape]}>
-          <Pressable style={styles.secondary} onPress={() => router.back()}>
-            <Text style={styles.secondaryText}>Cancel</Text>
-          </Pressable>
+          {!landscape ? (
+            <Pressable style={styles.secondary} onPress={() => router.back()}>
+              <Text style={styles.secondaryText}>Cancel</Text>
+            </Pressable>
+          ) : null}
           <Pressable
-            style={[styles.snap, (busy || !cameraReady) && styles.disabled]}
+            style={[styles.snap, landscape && styles.snapLandscape, (busy || !cameraReady) && styles.disabled]}
             disabled={busy || !cameraReady}
             onPress={() => void snap()}
           >
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
           </Pressable>
           <Pressable
-            style={[styles.primary, !thumbs.length && styles.disabled]}
+            style={[styles.primary, landscape && styles.primaryLandscape, !thumbs.length && styles.disabled]}
             disabled={!thumbs.length}
             onPress={confirmFinish}
           >
-            <Text style={styles.primaryText}>Finish lot</Text>
+            <Text style={styles.primaryText}>{landscape ? "Finish" : "Finish lot"}</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -450,24 +479,36 @@ export default function CaptureSessionScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
-  rootLandscape: { flexDirection: "row" },
-  cameraWrap: { flex: 1, minHeight: 280, position: "relative" },
-  cameraWrapCompact: { flex: 0.48, minHeight: 220 },
+  rootLandscape: { flexDirection: "row", alignItems: "stretch" },
+  cameraWrap: { flex: 1, minHeight: 320, position: "relative" },
   cameraWrapLandscape: { flex: 1, minHeight: 0, minWidth: 0 },
+  closeFab: {
+    position: "absolute",
+    zIndex: 5,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(15, 23, 42, 0.75)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.35)"
+  },
+  closeFabText: { color: "#f8fafc", fontSize: 16, fontWeight: "700", lineHeight: 18 },
   cameraControls: {
     position: "absolute",
     left: 12,
     right: 12,
-    bottom: 34,
+    bottom: 28,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8
   },
   cameraControlsLandscape: {
-    bottom: 16,
-    left: 16,
-    right: 16
+    bottom: 12,
+    left: 12,
+    right: 12
   },
   zoomRow: {
     flexDirection: "row",
@@ -503,17 +544,13 @@ const styles = StyleSheet.create({
   torchBtnTextActive: { color: "#1c1917" },
   cameraHint: {
     position: "absolute",
-    bottom: 10,
+    bottom: 8,
     left: 0,
     right: 0,
     textAlign: "center",
     color: "rgba(226, 232, 240, 0.75)",
     fontSize: 11,
     fontWeight: "600"
-  },
-  cameraHintLandscape: {
-    bottom: 4,
-    opacity: 0.85
   },
   focusRing: {
     position: "absolute",
@@ -528,69 +565,103 @@ const styles = StyleSheet.create({
     zIndex: 3
   },
   panel: {
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 0,
+    maxHeight: "38%",
     backgroundColor: "#0f172a",
     borderTopWidth: 1,
     borderTopColor: "#1e293b"
   },
   panelLandscape: {
-    flex: 0,
-    width: 300,
-    maxWidth: "42%",
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: 220,
+    width: 220,
+    maxWidth: 220,
+    maxHeight: "100%",
     borderTopWidth: 0,
     borderLeftWidth: 1,
-    borderLeftColor: "#1e293b"
+    borderLeftColor: "#1e293b",
+    alignSelf: "stretch"
   },
   panelContent: {
-    padding: 14,
-    gap: 10,
-    flexGrow: 1
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
+    gap: 8
   },
   panelContentLandscape: {
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    gap: 8
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingLeft: 10,
+    paddingRight: 6,
+    gap: 6,
+    flexGrow: 1,
+    justifyContent: "flex-start"
   },
   sessionMeta: {
     gap: 2,
-    paddingBottom: 2,
+    paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#1e293b",
-    marginBottom: 2
+    borderBottomColor: "#1e293b"
   },
-  sessionMetaLabel: { color: "#f8fafc", fontSize: 14, fontWeight: "600" },
+  sessionMetaLandscape: {
+    marginBottom: 0,
+    paddingBottom: 4
+  },
+  sessionMetaLabel: { color: "#f8fafc", fontSize: 13, fontWeight: "600" },
+  sessionMetaLabelLandscape: { fontSize: 13 },
   sessionMetaSale: { color: "#5eead4", fontSize: 12, fontWeight: "600" },
-  sectionTitle: { color: "#f8fafc", fontSize: 16, fontWeight: "700" },
-  sectionHint: { color: "#94a3b8", fontSize: 13, marginTop: -4 },
+  sectionTitle: { color: "#f8fafc", fontSize: 14, fontWeight: "700" },
+  sectionHint: { color: "#94a3b8", fontSize: 12, marginTop: -4 },
+  sectionHintLandscape: { color: "#94a3b8", fontSize: 11, fontWeight: "600" },
   input: {
     borderWidth: 1,
     borderColor: "#334155",
     borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 9,
     color: "#f8fafc"
   },
-  actions: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 4 },
-  actionsLandscape: { flexWrap: "wrap" },
+  inputLandscape: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    fontSize: 14
+  },
+  actions: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 2 },
+  actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
   snap: {
     flex: 1,
     backgroundColor: "#334155",
     borderRadius: 10,
-    paddingVertical: 14,
+    paddingVertical: 12,
     alignItems: "center",
-    minHeight: 48,
+    minHeight: 44,
     justifyContent: "center",
     minWidth: 72
+  },
+  snapLandscape: {
+    flex: 0,
+    width: "100%",
+    minWidth: 0,
+    paddingVertical: 12,
+    minHeight: 44
   },
   primary: {
     flex: 1,
     backgroundColor: "#0d9488",
     borderRadius: 10,
-    paddingVertical: 14,
+    paddingVertical: 12,
     alignItems: "center",
     minWidth: 72
   },
-  secondary: { paddingVertical: 14, paddingHorizontal: 12 },
+  primaryLandscape: {
+    flex: 0,
+    width: "100%",
+    minWidth: 0,
+    paddingVertical: 12
+  },
+  secondary: { paddingVertical: 12, paddingHorizontal: 10 },
   secondaryText: { color: "#94a3b8" },
   primaryText: { color: "#fff", fontWeight: "600" },
   disabled: { opacity: 0.45 },
