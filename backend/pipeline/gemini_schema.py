@@ -18,6 +18,20 @@ def pydantic_model_to_gemini_schema(model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
+def fully_audited_manifest_gemini_schema() -> dict[str, Any]:
+    """Pro manifest schema with CT Seller ``ct_category`` enum allow-list."""
+    from app.services.ctseller_categories import ct_categories_for_ai
+    from pipeline.schemas import FullyAuditedManifest
+
+    schema = pydantic_model_to_gemini_schema(FullyAuditedManifest)
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if isinstance(props, dict):
+        cat = props.get("ct_category")
+        if isinstance(cat, dict):
+            cat["enum"] = ct_categories_for_ai()
+    return schema
+
+
 def _strip_unsupported_gemini_schema_keys(obj: Any) -> None:
     if isinstance(obj, dict):
         obj.pop("additionalProperties", None)

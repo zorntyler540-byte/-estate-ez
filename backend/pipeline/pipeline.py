@@ -16,7 +16,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
-from pipeline.gemini_schema import pydantic_model_to_gemini_schema
+from pipeline.gemini_schema import fully_audited_manifest_gemini_schema, pydantic_model_to_gemini_schema
 from pipeline.schemas import (
     BrandAuditResult,
     FullyAuditedManifest,
@@ -593,7 +593,10 @@ def _brand_audit_from_flash_draft(flash_draft: InventoryLotDraft) -> BrandAuditR
 BRAND_AUDIT_SYSTEM = (
     "You are a senior estate inventory specialist writing CTBids auction listings. "
     "Use the photos and triage OCR transcripts to produce accurate shopper-facing title, description, brands, "
-    "and specification lines. Fix category errors (apparel vs tableware vs firearms). "
+    "specification lines, and **ct_category** (CT Seller posting category). "
+    "Fix category errors (apparel vs tableware vs firearms vs electronics). "
+    "Prefer specific CT categories over Household Goods Other — e.g. gaming mice/keyboards/headsets, TVs, tablets, "
+    "and phones are Electronics. "
     "When rewriting final_professional_description, sound like a **warm CTBids specialist selling the piece** — "
     "not a stiff catalog ('This is a set of…', 'Each … features…'). **Shape:** one short **flair** opening clause, "
     "then **immediately restate the title hook** (material/handle/finish + object) in natural words — same hook as "
@@ -609,6 +612,12 @@ BRAND_AUDIT_SYSTEM = (
     "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess. "
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
+
+
+def _ct_category_allowlist_text() -> str:
+    from app.services.ctseller_categories import ct_categories_for_ai
+
+    return ", ".join(ct_categories_for_ai())
 
 
 def aggregate_triage_ocr(triage_results: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -795,6 +804,10 @@ def run_brand_audit_pro(
             "17. **Device screens are not the merchandise:** when the item is a phone, tablet, monitor, or TV whose "
             "screen shows a photo, gallery, or app, write the listing for the **device itself** — never for the "
             "on-screen picture content.\n"
+            "18. Set **ct_category** to the best CT Seller category for this lot "
+            f"(must be one of: {_ct_category_allowlist_text()}). "
+            "Prefer Electronics for computer peripherals and consumer tech; never default to Household Goods Other "
+            "when a clearer category fits.\n"
         )
     else:
         task_block = (
@@ -809,6 +822,9 @@ def run_brand_audit_pro(
             "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
             "8. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
             "9. **Ruler / measuring tape:** Put **Dimensions:** in final_specification_lines when visible.\n"
+            "10. Set **ct_category** to the best CT Seller category "
+            f"(must be one of: {_ct_category_allowlist_text()}). "
+            "Fix Household Goods Other when Electronics, Kitchen & Home, Books, etc. fit better.\n"
         )
 
     parts: list[Any] = [
@@ -832,7 +848,7 @@ def run_brand_audit_pro(
 
     config_kwargs: dict[str, Any] = {
         "response_mime_type": "application/json",
-        "response_schema": pydantic_model_to_gemini_schema(FullyAuditedManifest),
+        "response_schema": fully_audited_manifest_gemini_schema(),
         "system_instruction": BRAND_AUDIT_SYSTEM,
         "temperature": 0.1,
     }

@@ -129,6 +129,15 @@ class FullyAuditedManifest(BaseModel):
             "Only these labels: Brand, Condition note, Size / tags, Dimensions, Measurement, Weight."
         ),
     )
+    ct_category: str = Field(
+        default="",
+        description=(
+            "Exact CT Seller top-level category for posting this lot. Prefer a specific category "
+            "(Electronics, Kitchen & Home, Glassware, Books, Women's, etc.) over Household Goods Other. "
+            "Gaming mice/keyboards/headsets, TVs, tablets, and phones → Electronics. "
+            "Must be one of the allowed CT Seller category names from the prompt allow-list."
+        ),
+    )
     listing_was_corrected_by_pro: bool = False
     listing_correction_details: str | None = None
     total_items_processed: int = 0

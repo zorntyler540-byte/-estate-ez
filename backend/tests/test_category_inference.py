@@ -176,6 +176,38 @@ class TestCategoryInference(unittest.TestCase):
         category, _sub = resolve_lot_ct_category(lot)
         self.assertEqual(category, "Electronics")
 
+    def test_pro_manifest_schema_includes_ct_category_enum(self) -> None:
+        from pipeline.gemini_schema import fully_audited_manifest_gemini_schema
+        from app.services.ctseller_categories import ct_categories_for_ai
+
+        schema = fully_audited_manifest_gemini_schema()
+        props = schema.get("properties") or {}
+        cat = props.get("ct_category") or {}
+        self.assertIn("enum", cat)
+        self.assertEqual(cat["enum"], ct_categories_for_ai())
+        self.assertIn("Electronics", cat["enum"])
+
+    def test_apply_pro_manifest_sets_ct_category(self) -> None:
+        from app.core.lotting import LotOutput
+        from app.services.pipeline_integration import _apply_pro_manifest_to_lot
+        from pipeline.schemas import FullyAuditedManifest
+
+        lot = LotOutput(
+            sku="8000",
+            auction_title="Old title",
+            professional_description="Old desc",
+            ct_category="Household Goods Other",
+        )
+        manifest = FullyAuditedManifest(
+            final_auction_title="Razer Naga MMO Gaming Mouse",
+            final_professional_description="A Razer gaming mouse with thumb grid.",
+            ct_category="Electronics",
+            total_items_processed=1,
+        )
+        _apply_pro_manifest_to_lot(lot, manifest.model_dump_json())
+        self.assertEqual(lot.ct_category, "Electronics")
+        self.assertIn("Razer", lot.auction_title)
+
     def test_inventory_schema_includes_ct_category_enum(self) -> None:
         from app.core.gemini import inventory_table_entry_gemini_schema
         from app.services.ctseller_categories import ct_categories_for_ai

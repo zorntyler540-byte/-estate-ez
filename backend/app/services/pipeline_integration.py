@@ -441,6 +441,12 @@ def _apply_pro_manifest_to_lot(
     if desc:
         lot.professional_description = desc
 
+    pro_cat = (getattr(manifest, "ct_category", None) or "").strip()
+    if pro_cat:
+        from app.services.ctseller_categories import canonicalize_ct_category
+
+        lot.ct_category = canonicalize_ct_category(pro_cat)
+
     if manifest.verified_inventory:
         item_lines: list[str] = []
         for row in manifest.verified_inventory:
@@ -667,6 +673,7 @@ def run_single_lot_pipeline(
                 "professional_description": lot.professional_description,
                 "specification_lines": list(lot.specification_lines),
                 "brands": list(lot.brands),
+                "ct_category": lot.ct_category or "",
             }
         if emit:
             emit({"type": "batch_phase", "phase": "pipeline_pro_author", "total_photos": len(entries)})
