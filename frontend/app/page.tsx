@@ -66,8 +66,8 @@ export default function HomePage() {
             className="ct-auth-logo"
             src="/zortron-logo.jpg"
             alt="Zortron Tech Solutions"
-            width={160}
-            height={160}
+            width={200}
+            height={200}
           />
           <div className="ct-hero-brand">Caring Transitions</div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>

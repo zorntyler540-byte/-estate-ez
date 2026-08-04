@@ -58,8 +58,8 @@ function BrandMark() {
         className="ct-app-sidebar__logo"
         src="/zortron-logo.jpg"
         alt="Zortron Tech Solutions"
-        width={180}
-        height={180}
+        width={220}
+        height={220}
       />
       <span className="ct-app-sidebar__brand-text">
         <span className="ct-app-sidebar__eyebrow">Estate</span>
