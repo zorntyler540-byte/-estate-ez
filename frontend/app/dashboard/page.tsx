@@ -1052,6 +1052,7 @@ type Lot = {
   sku_text_mismatch: boolean;
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
+  listing_channel?: string | null;
 };
 
 type CTSellerRemoteSale = {
@@ -1116,7 +1117,11 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     ctseller_posted_at:
       typeof (row as { ctseller_posted_at?: unknown }).ctseller_posted_at === "string"
         ? (row as { ctseller_posted_at: string }).ctseller_posted_at
-        : null
+        : null,
+    listing_channel:
+      typeof (row as { listing_channel?: unknown }).listing_channel === "string"
+        ? (row as { listing_channel: string }).listing_channel
+        : "ctseller"
   };
 }
 
@@ -1138,6 +1143,7 @@ function formatLotPrice(price: number | null): string {
 
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
   return (
+    (lot.listing_channel || "ctseller") !== "facebook" &&
     !lot.ctseller_item_id &&
     Boolean((lot.sku || "").trim()) &&
     Boolean((lot.auction_title || "").trim())
@@ -2349,7 +2355,7 @@ export default function DashboardPage() {
         : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilter)}`;
     void withNetworkRetry(() =>
       Promise.all([
-        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}${skuQ}`, t),
+        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}&listing_channel=ctseller${skuQ}`, t),
         apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
       ])
     )
@@ -2522,7 +2528,7 @@ export default function DashboardPage() {
         .catch(() => {
           /* ignore */
         });
-      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token)
+      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}&listing_channel=ctseller${fq}`, token)
         .then((d) => setLots(d as Lot[]))
         .catch(() => {
           /* ignore */
@@ -2774,7 +2780,7 @@ export default function DashboardPage() {
         inventorySkuFlagFilterRef.current === ""
           ? ""
           : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilterRef.current)}`;
-      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}${fq}`, token)
+      void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}&listing_channel=ctseller${fq}`, token)
         .then((lotsData) => setLots(lotsData as Lot[]))
         .catch(() => {
           /* ignore */

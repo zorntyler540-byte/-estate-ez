@@ -38,6 +38,7 @@ export type Lot = {
   sku_text_mismatch: boolean;
   ctseller_item_id: number | null;
   ctseller_posted_at: string | null;
+  listing_channel?: string | null;
 };
 
 export type LotPhoto = {
@@ -64,12 +65,15 @@ export type Job = {
 
 export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "failed";
 
+export type ListingChannel = "ctseller" | "facebook";
+
 export type LotDraft = {
   id: string;
   sale_id: string;
   /** Sale name at capture time, so the queue can show where each lot will upload. */
   sale_name: string | null;
   manual_sku: string | null;
+  listing_channel: ListingChannel;
   status: LotDraftStatus;
   error_message: string | null;
   created_at: number;

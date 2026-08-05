@@ -63,11 +63,16 @@ export async function listSales(token: string): Promise<Sale[]> {
 export async function listLots(
   token: string,
   saleId: string,
-  opts?: { sort?: "created_desc" | "created_asc" | "sku_asc"; limit?: number }
+  opts?: {
+    sort?: "created_desc" | "created_asc" | "sku_asc";
+    limit?: number;
+    listingChannel?: "ctseller" | "facebook";
+  }
 ): Promise<Lot[]> {
   const params = new URLSearchParams({ sale_id: saleId });
   if (opts?.sort) params.set("sort", opts.sort);
   if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.listingChannel) params.set("listing_channel", opts.listingChannel);
   return apiFetch<Lot[]>(`/lots?${params}`, token);
 }
 
@@ -115,6 +120,7 @@ export type UploadLotJobOptions = {
   saleId: string;
   token: string;
   manualSku?: string;
+  listingChannel?: "ctseller" | "facebook";
   photoUris: { uri: string; name: string }[];
 };
 
@@ -124,6 +130,7 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
   form.append("sale_id", opts.saleId);
   form.append("inherit_sku_from_subfolder", "false");
   form.append("single_lot_mode", "true");
+  form.append("listing_channel", opts.listingChannel === "facebook" ? "facebook" : "ctseller");
   if (opts.manualSku?.trim()) {
     form.append("single_lot_manual_sku", opts.manualSku.trim());
   }

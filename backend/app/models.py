@@ -86,6 +86,10 @@ class Lot(Base):
     ai_regenerate_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ctseller_posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ctseller (CT Bids) vs facebook (Marketplace) — never mix Facebook into CT Seller posts.
+    listing_channel: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ctseller", server_default="ctseller"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -105,6 +109,8 @@ class Photo(Base):
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(600), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Triage role from pipeline: hero|item_front|angle_only|tape|unusable (nullable for legacy rows).
+    photo_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lot: Mapped["Lot"] = relationship(back_populates="photos")
@@ -123,6 +129,9 @@ class ProcessingJob(Base):
     inherit_sku_from_subfolder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_manual_sku: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    listing_channel: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ctseller", server_default="ctseller"
+    )
     analyzed_photos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     failed_photos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     est_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

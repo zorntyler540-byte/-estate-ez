@@ -60,6 +60,7 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
         created_at=photo.created_at,
         sort_order=int(photo.sort_order or 0),
         file_on_disk=catalog_photo_file_on_disk(photo.storage_path),
+        photo_role=(str(photo.photo_role).strip() or None) if getattr(photo, "photo_role", None) else None,
     )
 
 
@@ -176,5 +177,6 @@ def lot_to_schema(
         sku_text_mismatch=bool(getattr(row, "sku_text_mismatch", False)),
         ctseller_item_id=getattr(row, "ctseller_item_id", None),
         ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
+        listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
     )
 
