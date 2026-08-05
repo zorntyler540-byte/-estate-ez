@@ -1350,7 +1350,10 @@ export default function LotDetailPage() {
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle
                   one photo (for organize actions below).
                 </li>
-                <li>Grid thumbnails are previews only — tap-to-zoom uses full resolution.</li>
+                <li>
+                  Grid images are high-res previews (not tiny dashboard thumbs). Click a photo for the full
+                  original (crop/rotate).
+                </li>
               </ul>
             </div>
           </details>
@@ -1376,8 +1379,8 @@ export default function LotDetailPage() {
             className="ct-lot-photo-grid"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: "0.75rem"
+              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+              gap: "0.85rem"
             }}
           >
             {catalogPhotos.map((p, index) => (
@@ -1554,8 +1557,9 @@ export default function LotDetailPage() {
                       photoId={p.id}
                       token={token}
                       label={p.original_name}
-                      maxPx={960}
-                      minHeight={120}
+                      maxPx={1600}
+                      maxHeight={420}
+                      minHeight={200}
                       fileOnDisk={p.file_on_disk !== false}
                       cacheBust={thumbCacheBust[p.id] ?? 0}
                     />
