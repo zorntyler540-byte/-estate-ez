@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ClipboardList, LayoutDashboard, Menu, Monitor, Settings, X } from "lucide-react";
+import { ClipboardList, LayoutDashboard, Menu, Monitor, Settings, Store, X } from "lucide-react";
 
 type AppShellProps = {
   children: ReactNode;
@@ -22,6 +22,13 @@ const NAV = [
     shortLabel: "Dashboard",
     icon: LayoutDashboard,
     match: (p: string) => p.startsWith("/dashboard")
+  },
+  {
+    href: "/facebook",
+    label: "Facebook",
+    shortLabel: "Facebook",
+    icon: Store,
+    match: (p: string) => p.startsWith("/facebook")
   },
   {
     href: "/appraiser",
