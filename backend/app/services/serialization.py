@@ -60,6 +60,7 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
         created_at=photo.created_at,
         sort_order=int(photo.sort_order or 0),
         file_on_disk=catalog_photo_file_on_disk(photo.storage_path),
+        photo_role=(str(photo.photo_role).strip() or None) if getattr(photo, "photo_role", None) else None,
     )
 
 

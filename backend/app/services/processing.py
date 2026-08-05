@@ -33,6 +33,7 @@ from app.services.pipeline_integration import (
     triage_ordered_photo_batch,
     triage_tape_marking_from_row,
 )
+from app.services.photo_roles import normalize_catalog_photo_role, photo_roles_by_path
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import (
@@ -138,7 +139,9 @@ def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
     _emit_job(job, {"type": "status", "status": "completed"})
 
 
-def _add_catalog_photo(db: Session, job: ProcessingJob, photo_path: Path) -> Photo:
+def _add_catalog_photo(
+    db: Session, job: ProcessingJob, photo_path: Path, *, photo_role: str | None = None
+) -> Photo:
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
     photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
     row = Photo(
@@ -148,6 +151,7 @@ def _add_catalog_photo(db: Session, job: ProcessingJob, photo_path: Path) -> Pho
         lot_id=None,
         original_name=photo_path.name,
         storage_path=storage_path,
+        photo_role=normalize_catalog_photo_role(photo_role),
     )
     db.add(row)
     db.flush()
@@ -600,6 +604,11 @@ def _process_job_batch_pipeline(
         catalog_paths = _order_paths_hero_first(
             seg_paths, _hero_filename_from_pipeline(pipeline_result)
         )
+        role_by_path = photo_roles_by_path(
+            catalog_paths,
+            list((pipeline_result or {}).get("triage") or seg_triage or []),
+            entries=seg_entries,
+        )
         pending_photo_ids: list[str] = []
         for i, photo_path in enumerate(catalog_paths):
             _emit_job(
@@ -611,7 +620,9 @@ def _process_job_batch_pipeline(
                     "file_name": photo_path.name,
                 },
             )
-            row = _add_catalog_photo(db, job, photo_path)
+            row = _add_catalog_photo(
+                db, job, photo_path, photo_role=role_by_path.get(photo_path)
+            )
             pending_photo_ids.append(row.id)
             db.commit()
 
@@ -704,6 +715,9 @@ def _process_job_single_lot_pipeline(
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
     catalog_paths = _order_paths_hero_first(photos, _hero_filename_from_pipeline(pipeline_result))
+    role_by_path = photo_roles_by_path(
+        catalog_paths, list((pipeline_result or {}).get("triage") or [])
+    )
     for i, photo_path in enumerate(catalog_paths):
         if _cancel_signaled(db, job.id, cancel_event):
             job.status = JobStatus.failed
@@ -721,7 +735,9 @@ def _process_job_single_lot_pipeline(
                 "file_name": photo_path.name,
             },
         )
-        row = _add_catalog_photo(db, job, photo_path)
+        row = _add_catalog_photo(
+            db, job, photo_path, photo_role=role_by_path.get(photo_path)
+        )
         pending_photo_ids.append(row.id)
         db.commit()
         if i == 0 or (i + 1) % 5 == 0 or i + 1 == total_photos:

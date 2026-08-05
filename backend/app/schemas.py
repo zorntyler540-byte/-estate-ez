@@ -317,6 +317,8 @@ class LotPhotoOut(BaseModel):
     sort_order: int = 0
     """False when ``Photo.storage_path`` is missing or not a readable file on the API host."""
     file_on_disk: bool = True
+    """Pipeline triage role when known (e.g. ``tape`` for estate SKU-tape frames)."""
+    photo_role: str | None = None
 
 
 class LotPhotoHealthRow(BaseModel):

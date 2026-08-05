@@ -117,6 +117,7 @@ from app.services.suggestion_email import (
     smtp_configured,
 )
 from app.services.photo_order import renormalize_photo_sort_orders
+from app.services.photo_roles import filter_photos_excluding_sku_tape
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import (
@@ -1223,11 +1224,24 @@ def _post_one_lot_to_ctseller(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
         .all()
     )
+    listing_photos = filter_photos_excluding_sku_tape(photos)
+    if photos and not listing_photos:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only SKU tape photos on this lot — add a product photo before posting to CT Seller"
+            ),
+        )
     photo_paths: list[tuple[Photo, Path]] = []
-    for ph in photos:
+    for ph in listing_photos:
         path = resolve_catalog_storage_path(ph.storage_path)
         if path is not None and path.is_file():
             photo_paths.append((ph, path))
+    if listing_photos and not photo_paths:
+        raise HTTPException(
+            status_code=400,
+            detail="Lot photos are missing on disk — cannot post to CT Seller",
+        )
 
     areas = allowed_areas
     if areas is None:
