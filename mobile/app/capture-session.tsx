@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions, type FocusMode } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -44,6 +44,9 @@ function clamp01(n: number): number {
 }
 
 export default function CaptureSessionScreen() {
+  const params = useLocalSearchParams<{ channel?: string }>();
+  const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
+  const isFacebook = listingChannel === "facebook";
   const { selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -137,7 +140,7 @@ export default function CaptureSessionScreen() {
       setError("Select a sale first.");
       return null;
     }
-    const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku);
+    const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku, listingChannel);
     setDraftId(id);
     return id;
   }
@@ -255,11 +258,19 @@ export default function CaptureSessionScreen() {
       Alert.alert("No photos", "Snap at least one photo before finishing this lot.");
       return;
     }
-    const skuLabel = manualSku.trim() ? `SKU ${manualSku.trim().toUpperCase()}` : "no manual SKU";
+    const skuLabel = isFacebook
+      ? manualSku.trim()
+        ? `note “${manualSku.trim()}”`
+        : "no price note"
+      : manualSku.trim()
+        ? `SKU ${manualSku.trim().toUpperCase()}`
+        : "no manual SKU";
     const saleLabel = selectedSaleName ? `"${selectedSaleName}"` : "this sale";
     Alert.alert(
-      "Send lot to pipeline?",
-      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} · ${skuLabel}\n\nThis uploads to ${saleLabel} and starts AI processing. You can’t undo from here.`,
+      isFacebook ? "Send Facebook item to pipeline?" : "Send lot to pipeline?",
+      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} · ${skuLabel}\n\nThis uploads to ${saleLabel} as ${
+        isFacebook ? "Facebook Marketplace" : "CT Bids"
+      } inventory and starts AI processing.`,
       [
         { text: "Keep editing", style: "cancel" },
         { text: "Send", style: "default", onPress: () => void finishLot() }
@@ -405,9 +416,13 @@ export default function CaptureSessionScreen() {
       >
         <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
-            {thumbs.length
-              ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-              : "Aim · tap Snap"}
+            {isFacebook
+              ? thumbs.length
+                ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                : "Facebook furniture · Snap photos"
+              : thumbs.length
+                ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                : "Aim · tap Snap"}
           </Text>
           {selectedSaleName ? (
             <Text style={styles.sessionMetaSale} numberOfLines={1}>
@@ -433,13 +448,13 @@ export default function CaptureSessionScreen() {
         />
 
         <TextInput
-          placeholder="Manual SKU (optional)"
+          placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
           placeholderTextColor="#78716c"
           style={[styles.input, landscape && styles.inputLandscape]}
           value={manualSku}
-          onChangeText={onSkuChange}
-          autoCapitalize="characters"
+          autoCapitalize={isFacebook ? "sentences" : "characters"}
           autoCorrect={false}
+          onChangeText={onSkuChange}
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
 

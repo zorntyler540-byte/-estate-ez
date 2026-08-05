@@ -177,5 +177,6 @@ def lot_to_schema(
         sku_text_mismatch=bool(getattr(row, "sku_text_mismatch", False)),
         ctseller_item_id=getattr(row, "ctseller_item_id", None),
         ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
+        listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
     )
 

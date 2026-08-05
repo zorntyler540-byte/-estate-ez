@@ -29,6 +29,7 @@ export async function syncPendingLots(token: string): Promise<{ uploaded: number
         saleId: draft.sale_id,
         token,
         manualSku: draft.manual_sku ?? undefined,
+        listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
         photoUris: photos.map((p, i) => ({
           uri: p.file_uri,
           name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`

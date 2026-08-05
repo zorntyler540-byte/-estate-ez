@@ -34,6 +34,7 @@ from app.services.pipeline_integration import (
     triage_tape_marking_from_row,
 )
 from app.services.photo_roles import normalize_catalog_photo_role, photo_roles_by_path
+from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.catalog_storage import (
@@ -330,11 +331,15 @@ def _finalize_open_lot(
     current_lot: LotOutput | None,
     pending_photo_ids: list[str],
     sale_id: str,
+    *,
+    listing_channel: str = "ctseller",
 ) -> tuple[LotOutput | None, list[str], Lot | None]:
     """Persist current lot and attach pending photos; return cleared state and persisted row if any."""
     if current_lot is None:
         return None, pending_photo_ids, None
-    persisted = _save_lot(db, account_id, user_id, current_lot, sale_id)
+    persisted = _save_lot(
+        db, account_id, user_id, current_lot, sale_id, listing_channel=listing_channel
+    )
     db.flush()
     _assign_photos_to_lot(db, persisted.id, pending_photo_ids)
     pending_photo_ids.clear()
@@ -432,7 +437,15 @@ def _emit_job_debug(job: ProcessingJob, message: str) -> None:
     _emit_job(job, {"type": "job_log", "message": message})
 
 
-def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_id: str) -> Lot:
+def _save_lot(
+    db: Session,
+    account_id: str,
+    user_id: str,
+    lot: LotOutput,
+    sale_id: str,
+    *,
+    listing_channel: str = "ctseller",
+) -> Lot:
     ct_category, ct_subcategory = resolve_lot_ct_category(lot)
     row = Lot(
         account_id=account_id,
@@ -452,6 +465,7 @@ def _save_lot(db: Session, account_id: str, user_id: str, lot: LotOutput, sale_i
         condition_text=canonicalize_ct_condition(lot.condition),
         photo_count=lot.photo_count,
         sku_needs_review=bool(lot.sku_needs_review),
+        listing_channel=normalize_listing_channel(listing_channel),
     )
     db.add(row)
     db.flush()
@@ -628,7 +642,13 @@ def _process_job_batch_pipeline(
 
         lot.photo_count = len(catalog_paths)
         _, pending_photo_ids, finalized = _finalize_open_lot(
-            db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
+            db,
+            job.account_id,
+            job.user_id,
+            lot,
+            pending_photo_ids,
+            job.sale_id,
+            listing_channel=getattr(job, "listing_channel", "ctseller"),
         )
         db.commit()
         if finalized is not None:
@@ -754,7 +774,13 @@ def _process_job_single_lot_pipeline(
 
     lot.photo_count = len(catalog_paths)
     _, pending_photo_ids, finalized = _finalize_open_lot(
-        db, job.account_id, job.user_id, lot, pending_photo_ids, job.sale_id
+        db,
+        job.account_id,
+        job.user_id,
+        lot,
+        pending_photo_ids,
+        job.sale_id,
+        listing_channel=getattr(job, "listing_channel", "ctseller"),
     )
     db.commit()
     if finalized is not None:

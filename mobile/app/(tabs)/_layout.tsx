@@ -41,6 +41,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="facebook"
+        options={{
+          title: "Facebook",
+          tabBarIcon: ({ color }) => <Ionicons name="storefront-outline" size={26} color={color} />
+        }}
+      />
+      <Tabs.Screen
         name="sale"
         options={{
           title: "Sale",
