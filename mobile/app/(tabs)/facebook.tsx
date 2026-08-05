@@ -1,4 +1,6 @@
 import { Image } from "expo-image";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import {
@@ -16,7 +18,7 @@ import {
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
-import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import { downloadFacebookInventoryPdf, listLots, listSaleLotCoverUrls } from "@/lib/api";
 import type { Lot } from "@/lib/types";
 
 function facebookListingText(lot: Lot): string {
@@ -40,6 +42,16 @@ function facebookListingText(lot: Lot): string {
   return lines.join("\n");
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return globalThis.btoa(binary);
+}
+
 export default function FacebookScreen() {
   const { token, selectedSaleId, selectedSaleName } = useAuth();
   const { getSaleName } = useSales();
@@ -47,6 +59,7 @@ export default function FacebookScreen() {
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(
@@ -107,6 +120,43 @@ export default function FacebookScreen() {
     }
   }
 
+  async function shareInventoryPdf() {
+    if (!token || !selectedSaleId) {
+      Alert.alert("Choose a sale", "Pick a sale on the Sale tab first.");
+      return;
+    }
+    setPdfBusy(true);
+    setError("");
+    try {
+      const bytes = await downloadFacebookInventoryPdf(token, selectedSaleId);
+      const saleSlug =
+        getSaleName(selectedSaleId, selectedSaleName)
+          .replace(/[^a-z0-9]+/gi, "-")
+          .replace(/^-+|-+$/g, "")
+          .toLowerCase() || selectedSaleId;
+      const path = `${FileSystem.cacheDirectory}facebook-inventory-${saleSlug}.pdf`;
+      await FileSystem.writeAsStringAsync(path, arrayBufferToBase64(bytes), {
+        encoding: FileSystem.EncodingType.Base64
+      });
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert("PDF saved", `Inventory PDF written to cache. Sharing is not available on this device.`);
+        return;
+      }
+      await Sharing.shareAsync(path, {
+        mimeType: "application/pdf",
+        dialogTitle: "Facebook inventory PDF",
+        UTI: "com.adobe.pdf"
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not download inventory PDF";
+      setError(msg);
+      Alert.alert("PDF failed", msg);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <View style={styles.root}>
       <Text style={styles.lead}>
@@ -121,6 +171,14 @@ export default function FacebookScreen() {
 
       <Pressable style={styles.primary} onPress={startCapture}>
         <Text style={styles.primaryText}>Add Facebook item</Text>
+      </Pressable>
+
+      <Pressable
+        style={[styles.pdfBtn, (!selectedSaleId || pdfBusy) && styles.pdfBtnDisabled]}
+        onPress={() => void shareInventoryPdf()}
+        disabled={!selectedSaleId || pdfBusy}
+      >
+        <Text style={styles.pdfBtnText}>{pdfBusy ? "Preparing PDF…" : "Download inventory PDF"}</Text>
       </Pressable>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -193,6 +251,16 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   primaryText: { color: theme.onPrimary, fontSize: 16, fontWeight: "700" },
+  pdfBtn: {
+    backgroundColor: theme.surface,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: theme.border
+  },
+  pdfBtnDisabled: { opacity: 0.5 },
+  pdfBtnText: { color: theme.text, fontSize: 15, fontWeight: "600" },
   card: {
     backgroundColor: theme.bgElevated,
     borderRadius: 12,

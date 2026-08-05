@@ -124,6 +124,7 @@ from app.services.listing_channels import (
     is_facebook_listing_channel,
     normalize_listing_channel,
 )
+from app.services.facebook_inventory_pdf import build_facebook_inventory_pdf
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import (
@@ -3026,6 +3027,34 @@ def export_csv(
             ]
         )
     return Response(stream.getvalue(), media_type="text/csv")
+
+
+@app.get("/exports/facebook-inventory.pdf")
+def export_facebook_inventory_pdf(
+    sale_id: str = Query(..., description="Sale whose Facebook Marketplace lots to include."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Downloadable PDF inventory list for Facebook-channel lots in one sale."""
+    sale = _sale_for_user(sale_id, current, db)
+    rows = (
+        db.query(Lot)
+        .filter(
+            Lot.account_id == current.account_id,
+            Lot.sale_id == sale.id,
+            Lot.listing_channel == LISTING_CHANNEL_FACEBOOK,
+        )
+        .order_by(Lot.created_at.asc())
+        .all()
+    )
+    pdf_bytes = build_facebook_inventory_pdf(rows, sale_name=sale.name or "Sale")
+    slug = re.sub(r"[^a-z0-9]+", "-", (sale.name or "sale").lower()).strip("-") or "sale"
+    filename = f"facebook-inventory-{slug}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _sale_zip_export_out(row: SalePhotoZipExport) -> SaleZipExportOut:
