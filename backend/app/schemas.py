@@ -199,6 +199,43 @@ class CTSellerRemoteSaleOut(BaseModel):
     endtime: str | None = None
 
 
+class CTSellerInvoiceOut(BaseModel):
+    """Read-only CT Seller invoice row for post-sale shipping triage."""
+
+    id: int
+    invoice_number: str | None = None
+    sale_title: str | None = None
+    sale_id: int | None = None
+    location_title: str | None = None
+    invoice_amount: float | None = None
+    invoice_status: str | None = None
+    type: str | None = None
+    buyer_id: int | None = None
+    created_date: str | None = None
+
+
+class CTSellerInvoiceDetailOut(BaseModel):
+    id: int
+    invoice_number: str | None = None
+    invoice_amount: float | None = None
+    pending_amount: float | None = None
+    invoice_status: str | None = None
+    type: str | None = None
+    sale_id: int | None = None
+    buyer_id: int | None = None
+    created_date: str | None = None
+    receipt_method: str | None = None
+    wants_shipping: bool | None = None
+    shipping_vendor: str | None = None
+    shipment_status: str | None = None
+    sale_uses_shipping_saint: bool | None = None
+    master_invoice_id: int | None = None
+    child_invoice_count: int = 0
+    pending_fulfillment_count: int = 0
+    shipping_saint_manage_url: str = "https://manage.shippingsaint.com/"
+    raw: dict = Field(default_factory=dict)
+
+
 class CTSellerConditionOut(BaseModel):
     condition: str
     description: str = ""

@@ -96,6 +96,85 @@ class CTSellerSaleRow:
     endtime: str | None = None
 
 
+@dataclass
+class CTSellerInvoiceRow:
+    """Subset of Seller SPA invoice/list columns (post-sale billing)."""
+
+    id: int
+    invoicenumber: str | None = None
+    saletitle: str | None = None
+    saleid: int | None = None
+    locationtitle: str | None = None
+    invoiceamount: float | None = None
+    invoicestatus: str | None = None
+    type: str | None = None
+    buyerid: int | None = None
+    createddate: str | None = None
+    view: int | None = None
+
+
+def _as_optional_int(raw: object) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_optional_float(raw: object) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_invoice_list_row(row: dict[str, Any]) -> CTSellerInvoiceRow | None:
+    """Normalize one invoice/list row from the Seller SPA API."""
+    iid = _as_optional_int(row.get("id"))
+    if iid is None:
+        return None
+    return CTSellerInvoiceRow(
+        id=iid,
+        invoicenumber=str(row.get("invoicenumber") or "").strip() or None,
+        saletitle=str(row.get("saletitle") or "").strip() or None,
+        saleid=_as_optional_int(row.get("saleid")),
+        locationtitle=str(row.get("locationtitle") or "").strip() or None,
+        invoiceamount=_as_optional_float(row.get("invoiceamount")),
+        invoicestatus=str(row.get("invoicestatus") or "").strip() or None,
+        type=str(row.get("type") or "").strip() or None,
+        buyerid=_as_optional_int(row.get("buyerid")),
+        createddate=str(row.get("createddate") or "").strip() or None,
+        view=_as_optional_int(row.get("view")),
+    )
+
+
+def receipt_method_wants_shipping(raw: object | None) -> bool | None:
+    """True/False if IRM JSON is parseable; None if unknown."""
+    if raw is None:
+        return None
+    data: object = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return "ship" in text.lower()
+    if not isinstance(data, dict):
+        return None
+    if "shipping" in data:
+        return bool(data.get("shipping"))
+    # Sometimes API returns selected method as a plain string key list / label.
+    for key, val in data.items():
+        if str(key).lower() == "shipping" and val:
+            return True
+    return False
+
+
 class CTSellerClient:
     def __init__(self, access_token: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.timeout = timeout
@@ -272,6 +351,97 @@ class CTSellerClient:
                 if name:
                     out.append(name)
         return out
+
+    def list_invoices(
+        self,
+        *,
+        sale_id: int | None = None,
+        limit: int = 100,
+    ) -> list[CTSellerInvoiceRow]:
+        """POST /invoice/list — same columns the Seller Invoices screen loads."""
+        filters: list[dict[str, Any]] = []
+        if sale_id is not None:
+            filters.append(
+                {"field": "saleid", "value": int(sale_id), "op": "=", "join": "AND"}
+            )
+        payload: dict[str, Any] = {
+            "filter": filters,
+            "field": [
+                "locationtitle",
+                "saletitle",
+                "createddate",
+                "saleid",
+                "invoiceamount",
+                "type",
+                "invoicestatus",
+                "id",
+                "buyerid",
+                "invoicenumber",
+                "view",
+            ],
+            "sort": [{"field": "id", "direction": "desc"}],
+            "page": {"size": max(1, min(int(limit), 200))},
+        }
+        body = self._post_raw("/invoice/list", payload)
+        data = body.get("data")
+        rows = data if isinstance(data, list) else []
+        out: list[CTSellerInvoiceRow] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parsed = parse_invoice_list_row(row)
+            if parsed is not None:
+                out.append(parsed)
+        return out
+
+    def invoice_detail(self, invoice_id: int) -> dict[str, Any]:
+        """POST /invoice/detail/{id} — full invoice including child/shipping lines when present."""
+        payload = {
+            "field": [
+                "id",
+                "invoicenumber",
+                "invoiceamount",
+                "pendingamount",
+                "invoicestatus",
+                "type",
+                "saleid",
+                "buyerid",
+                "createddate",
+                "invoiceitemreceiptmethod",
+                "masterinvoiceid",
+                "child_invoice",
+                "shippingvendor",
+                "shipmentstatus",
+                "saleshippingsaint",
+                "additionalnotes",
+            ]
+        }
+        data = self._post_json(f"/invoice/detail/{int(invoice_id)}", payload)
+        if isinstance(data, list) and data:
+            row = data[0]
+            if isinstance(row, dict):
+                return row
+        if isinstance(data, dict):
+            return data
+        raise CTSellerError(f"CT Seller invoice {invoice_id} not found")
+
+    def list_fulfillment_pending(self, invoice_id: int) -> list[dict[str, Any]]:
+        """POST /fullfillment/pending/list — items on an invoice still needing ship/fulfillment."""
+        payload = {
+            "filter": [
+                {
+                    "field": "invoiceid",
+                    "value": int(invoice_id),
+                    "op": "=",
+                    "join": "AND",
+                }
+            ]
+        }
+        body = self._post_raw("/fullfillment/pending/list", payload)
+        data = body.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        return []
 
     def create_item(self, item: dict[str, Any]) -> int:
         body = self._post_raw("/item/add", {"data": item})
