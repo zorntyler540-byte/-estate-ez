@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from app.services.photo_roles import (
     filter_photos_excluding_sku_tape,
     is_sku_tape_photo_role,
