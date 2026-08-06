@@ -2769,6 +2769,10 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         db.refresh(job)
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
+    # Dedicated worker mode: leave the row queued; ``app.worker`` claims it shortly.
+    if not job_tasks.catalog_jobs_run_in_process():
+        db.refresh(job)
+        return _job_out(job)
     job_tasks.kick_queue_if_idle(current.account_id)
     started = False
     try:
