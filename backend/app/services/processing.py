@@ -18,6 +18,7 @@ from app.core.gemini import verify_tape_sku
 from app.core.lotting import (
     LotOutput,
     folder_token_as_inherited_sku,
+    normalize_manual_sku_input,
     normalize_tape_sku_input,
     sku_digits,
     tape_marking_canonical,
@@ -291,8 +292,14 @@ def _apply_single_lot_manual_sku(job: ProcessingJob, lot: LotOutput | None) -> N
     s = str(raw).strip()
     if not s:
         return
-    # Preserve letter-prefix codes (TZ8000, MS530); fall back to digits-only tape convention.
-    normalized = tape_marking_canonical(s) or normalize_tape_sku_input(s) or sku_digits(s) or None
+    # Manual entry wins as typed (JH603SK, MS6000RG). Tape helpers are fallback only.
+    normalized = (
+        normalize_manual_sku_input(s)
+        or tape_marking_canonical(s)
+        or normalize_tape_sku_input(s)
+        or sku_digits(s)
+        or None
+    )
     if not normalized:
         return
     digits = sku_digits(normalized)
