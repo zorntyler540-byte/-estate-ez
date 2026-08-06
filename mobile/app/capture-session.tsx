@@ -22,6 +22,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
 import { uploadLotPhotos } from "@/lib/api";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
+import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
 import {
   addPhotoToDraft,
   createLotDraft,
@@ -199,6 +200,12 @@ export default function CaptureSessionScreen() {
 
   async function snap() {
     if (!cameraRef.current || busy || !cameraReady) return;
+    if (thumbs.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+      setError(
+        `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). Remove one before snapping more.`
+      );
+      return;
+    }
     setError("");
     setBusy(true);
     try {

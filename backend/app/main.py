@@ -2007,7 +2007,7 @@ def split_selected_photos_into_new_lot(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                f"Lots are limited to {CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40); "
                 f"cannot move {len(ids)} photos into a new lot in one split."
             ),
         )
@@ -2628,7 +2628,7 @@ async def create_job_from_upload(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                f"Lots are limited to {CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40); "
                 f"this upload has {len(files)} files."
             ),
         )
@@ -2694,7 +2694,7 @@ async def append_files_to_queued_job(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. "
+                    f"Lots are limited to {CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). "
                     f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
                 ),
             )

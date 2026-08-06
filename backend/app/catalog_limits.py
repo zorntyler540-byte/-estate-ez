@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# None = no per-listing photo cap for now. Set to an int (e.g. 40) to re-enforce CTBids-style limits.
-CTBIDS_MAX_PHOTOS_PER_LOT: int | None = None
+# CT Seller hard-caps listings around 40 photos; keep a buffer so tape/extra frames don't fail posting.
+# Set to None to disable the per-listing cap.
+CTBIDS_MAX_PHOTOS_PER_LOT: int | None = 30
 
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 
@@ -23,14 +24,14 @@ def ctbids_lot_photo_delta_error(*, current: int, delta: int) -> str | None:
         return None
     if current > cap:
         return (
-            f"CTBids allows at most {cap} photos per listing; this lot has {current} (already over the limit). "
+            f"Lots are limited to {cap} photos (CT Seller max is 40); this lot has {current} (already over the limit). "
             "Remove photos before adding or moving more."
         )
     if current >= cap:
-        return f"CTBids allows at most {cap} photos per listing; this lot already has {current}."
+        return f"Lots are limited to {cap} photos (CT Seller max is 40); this lot already has {current}."
     if current + delta > cap:
         return (
-            f"CTBids allows at most {cap} photos per listing; this lot has {current} and adding {delta} would exceed the limit."
+            f"Lots are limited to {cap} photos (CT Seller max is 40); this lot has {current} and adding {delta} would exceed the limit."
         )
     return None
 

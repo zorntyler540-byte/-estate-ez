@@ -74,8 +74,8 @@ function rememberDashboardScrollBeforeLotDetails() {
   }
 }
 
-/** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT`` (null = no cap). */
-const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
+/** Keep in sync with ``backend/app/catalog_limits.py`` (CT Seller ~40; we enforce 30). */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = 30;
 
 const STANDARD_CONDITIONS = ["NEW", "LIKE NEW", "VERY GOOD", "GOOD", "FAIR"] as const;
 
@@ -731,14 +731,14 @@ export default function LotDetailPage() {
     const cap = CTBIDS_MAX_PHOTOS_PER_LOT;
     if (cap != null && existing >= cap) {
       setError(
-        `CTBids allows at most ${cap} photos per listing. Remove photos before adding more.`
+        `Lots are limited to ${cap} photos (CT Seller max is 40). Remove photos before adding more.`
       );
       return;
     }
     if (cap != null && existing + n > cap) {
       const room = cap - existing;
       setError(
-        `CTBids allows at most ${cap} photos per listing. This lot has ${existing}; you can add at most ${room} more in one go.`
+        `Lots are limited to ${cap} photos (CT Seller max is 40). This lot has ${existing}; you can add at most ${room} more in one go.`
       );
       return;
     }
