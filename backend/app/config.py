@@ -115,8 +115,8 @@ class Settings(BaseSettings):
     # Comma-separated global admin emails that can manage all accounts across the server.
     master_admin_emails: str = Field(default="", alias="MASTER_ADMIN_EMAILS")
 
-    # JWT lifetime (minutes). Shorter values reduce exposure if a token leaks.
-    access_token_expire_minutes: int = Field(default=1440, ge=15, le=10080, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    # JWT lifetime (minutes). Mobile field sessions stay signed in longer; raise via env if needed (max 90 days).
+    access_token_expire_minutes: int = Field(default=43200, ge=15, le=129600, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
 
     # Recycle pooled DB connections periodically (seconds); helps with stale TLS routers on managed Postgres.
     db_pool_recycle: int = Field(default=280, ge=60, le=3600, alias="DB_POOL_RECYCLE")
