@@ -114,6 +114,47 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
   return out;
 }
 
+export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<Record<string, unknown>>(
+    "SELECT * FROM lot_drafts WHERE id = ?",
+    [draftId]
+  );
+  if (!row) return null;
+  const pc = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+    [draftId]
+  );
+  return rowToDraft(row, Number(pc?.c ?? 0));
+}
+
+/**
+ * Newest unfinished lot for a sale + listing channel.
+ * Capture sessions remount after leaving the app; this is how we resume photos
+ * that were already saved to SQLite / disk.
+ */
+export async function findOpenDraft(
+  saleId: string,
+  listingChannel: ListingChannel = "ctseller"
+): Promise<LotDraft | null> {
+  const db = await getDb();
+  const channel: ListingChannel = listingChannel === "facebook" ? "facebook" : "ctseller";
+  const row = await db.getFirstAsync<Record<string, unknown>>(
+    `SELECT * FROM lot_drafts
+     WHERE sale_id = ? AND listing_channel = ? AND status = 'draft'
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [saleId, channel]
+  );
+  if (!row) return null;
+  const id = String(row.id);
+  const pc = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+    [id]
+  );
+  return rowToDraft(row, Number(pc?.c ?? 0));
+}
+
 export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Record<string, unknown>>(
