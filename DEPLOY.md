@@ -180,7 +180,7 @@ Same as local: edit code → commit → push → the host rebuilds/redeploys. Ru
 - **Turn off open signup** — Set `ALLOW_OPEN_REGISTRATION=false` after your pilot accounts exist.
 - **`TRUSTED_HOSTS`** — Set to your API hostname(s) to reduce Host-header attacks.
 - **Repo hygiene** — `Images/`, `*.db`, and `backend/data/` are gitignored so estate photos and databases do not land on GitHub.
-- **JWT lifetime** — Tune `ACCESS_TOKEN_EXPIRE_MINUTES` if you want shorter-lived sessions.
+- **JWT lifetime** — Default is 30 days (`43200` minutes). Tune `ACCESS_TOKEN_EXPIRE_MINUTES` on Railway if you want shorter or longer sessions (max 90 days).
 
 ---
 
