@@ -128,6 +128,7 @@ export default function LotDetailScreen() {
                   pathname: "/capture-session",
                   params: {
                     appendLotId: lot.id,
+                    appendExistingCount: String(photos.length || lot.photo_count || 0),
                     ...(lot.sku?.trim() ? { appendSku: lot.sku.trim() } : {}),
                     ...(lot.auction_title?.trim()
                       ? { appendTitle: lot.auction_title.trim().slice(0, 80) }
@@ -139,7 +140,7 @@ export default function LotDetailScreen() {
               <Text style={styles.addPhotosBtnText}>Add photos</Text>
             </Pressable>
             <Text style={styles.addPhotosHint}>
-              Opens the camera and uploads new shots onto this same listing.
+              Opens the camera and uploads new shots onto this same listing (max 30 photos per lot).
             </Text>
           </>
         ) : null}

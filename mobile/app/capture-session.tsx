@@ -59,12 +59,17 @@ export default function CaptureSessionScreen() {
     appendLotId?: string;
     appendSku?: string;
     appendTitle?: string;
+    appendExistingCount?: string;
   }>();
   const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
   const appendLotId = paramString(params.appendLotId);
   const appendSku = paramString(params.appendSku);
   const appendTitle = paramString(params.appendTitle);
+  const appendExistingCount = Math.max(
+    0,
+    Number.parseInt(paramString(params.appendExistingCount) || "0", 10) || 0
+  );
   const isAppendMode = Boolean(appendLotId);
   const { token, selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
@@ -200,9 +205,13 @@ export default function CaptureSessionScreen() {
 
   async function snap() {
     if (!cameraRef.current || busy || !cameraReady) return;
-    if (thumbs.length >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+    const used = (isAppendMode ? appendExistingCount : 0) + thumbs.length;
+    if (used >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+      const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - (isAppendMode ? appendExistingCount : 0));
       setError(
-        `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). Remove one before snapping more.`
+        room <= 0
+          ? `This lot already has ${appendExistingCount} photos (limit ${CTBIDS_MAX_PHOTOS_PER_LOT}; CT Seller max is 40).`
+          : `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). You can add ${room} more.`
       );
       return;
     }
