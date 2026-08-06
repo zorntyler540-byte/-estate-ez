@@ -133,8 +133,8 @@ function uploadProgressFromBytes(prefix: string, loaded: number, total: number |
  * Per-listing catalog photo cap (null = none). Keep in sync with ``backend/app/catalog_limits.py``.
  * Re-enable (e.g. 40) when CTBids limits should apply again.
  */
-/** Keep in sync with ``backend/app/catalog_limits.py`` (CT Seller ~40; we enforce 30). */
-const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = 30;
+/** Keep in sync with ``backend/app/catalog_limits.py`` (CT Seller ~40; CT Seller hard cap). */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = 40;
 
 /** UI zoom range: 1 = wide; higher = closer. Uses optical zoom when the device supports it. */
 const LOT_CAMERA_ZOOM_MIN = 1;
@@ -3593,7 +3593,7 @@ export default function DashboardPage() {
         CTBIDS_MAX_PHOTOS_PER_LOT != null &&
         lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
       ) {
-        setError(`Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40).`);
+        setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
         break;
       }
       const stable = await stabilizeCapturedFile(raw, usedLeafNames);
@@ -3719,7 +3719,7 @@ export default function DashboardPage() {
       scheduleScrollStagingUploadBoxIntoView();
       if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
         setError(
-          `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
+          `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) from the camera were not added because the staging area was already full.`
         );
       }
       if (failed > 0) {
@@ -3753,7 +3753,7 @@ export default function DashboardPage() {
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
     ) {
-      setError(`Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40).`);
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
       return;
     }
     suspendInlineLotCameraForNativePicker();
@@ -3791,7 +3791,7 @@ export default function DashboardPage() {
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
     ) {
-      setError(`Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40).`);
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
     }
   }
 
@@ -3800,7 +3800,7 @@ export default function DashboardPage() {
       CTBIDS_MAX_PHOTOS_PER_LOT != null &&
       lotCameraSnapsRef.current.length >= CTBIDS_MAX_PHOTOS_PER_LOT
     ) {
-      setError(`Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40).`);
+      setError(`CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing.`);
       return;
     }
     const v = lotCameraVideoRef.current;
@@ -4096,7 +4096,7 @@ export default function DashboardPage() {
       scheduleScrollStagingUploadBoxIntoView();
       if (droppedFromCap > 0 && CTBIDS_MAX_PHOTOS_PER_LOT != null) {
         setError(
-          `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). ${droppedFromCap} photo(s) were not added.`
+          `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. ${droppedFromCap} photo(s) were not added.`
         );
       }
       if (failed > 0) {
@@ -4256,7 +4256,7 @@ export default function DashboardPage() {
       setUploading(false);
       setUploadProgress("");
       setError(
-        `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). Remove ${total - CTBIDS_MAX_PHOTOS_PER_LOT} photo(s) before uploading.`
+        `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. Remove ${total - CTBIDS_MAX_PHOTOS_PER_LOT} photo(s) before uploading.`
       );
       return;
     }
@@ -5946,7 +5946,7 @@ export default function DashboardPage() {
                   {CTBIDS_MAX_PHOTOS_PER_LOT != null ? (
                     <>
                       {" "}
-                      Lots are limited to <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos (CT Seller max is 40) — extra
+                      CTBids allows at most <strong>{CTBIDS_MAX_PHOTOS_PER_LOT}</strong> photos per listing — extra
                       files are skipped.
                     </>
                   ) : null}

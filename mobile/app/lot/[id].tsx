@@ -140,7 +140,7 @@ export default function LotDetailScreen() {
               <Text style={styles.addPhotosBtnText}>Add photos</Text>
             </Pressable>
             <Text style={styles.addPhotosHint}>
-              Opens the camera and uploads new shots onto this same listing (max 30 photos per lot).
+              Opens the camera and uploads new shots onto this same listing (max 40 photos per lot).
             </Text>
           </>
         ) : null}

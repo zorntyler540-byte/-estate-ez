@@ -210,8 +210,8 @@ export default function CaptureSessionScreen() {
       const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - (isAppendMode ? appendExistingCount : 0));
       setError(
         room <= 0
-          ? `This lot already has ${appendExistingCount} photos (limit ${CTBIDS_MAX_PHOTOS_PER_LOT}; CT Seller max is 40).`
-          : `Lots are limited to ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (CT Seller max is 40). You can add ${room} more.`
+          ? `This lot already has ${appendExistingCount} photos (CTBids limit ${CTBIDS_MAX_PHOTOS_PER_LOT}).`
+          : `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. You can add ${room} more.`
       );
       return;
     }
