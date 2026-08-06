@@ -152,6 +152,37 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
   return JSON.parse(text) as Job;
 }
 
+/** Append photos to an existing catalog lot (same as web lot page “Add photos”). */
+export async function uploadLotPhotos(
+  token: string,
+  lotId: string,
+  photoUris: { uri: string; name: string }[]
+): Promise<LotPhoto[]> {
+  if (!photoUris.length) {
+    throw new Error("No photos to upload");
+  }
+  const form = new FormData();
+  for (const photo of photoUris) {
+    form.append("files", {
+      uri: photo.uri,
+      name: photo.name,
+      type: "image/jpeg"
+    } as unknown as Blob);
+  }
+  const res = await fetch(`${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(parseApiError(text, `Upload failed (${res.status})`));
+  const raw = text ? (JSON.parse(text) as unknown) : null;
+  if (!Array.isArray(raw)) {
+    throw new Error("Upload response was not a photo list");
+  }
+  return raw as LotPhoto[];
+}
+
 export async function runJob(jobId: string, token: string): Promise<Job> {
   return apiFetch<Job>(`/jobs/${jobId}/run`, token, { method: "POST" });
 }

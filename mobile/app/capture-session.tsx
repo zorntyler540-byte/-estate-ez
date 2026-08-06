@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
+import { uploadLotPhotos } from "@/lib/api";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import {
   addPhotoToDraft,
@@ -43,11 +44,28 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
+function paramString(value: string | string[] | undefined): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value) && typeof value[0] === "string" && value[0].trim()) {
+    return value[0].trim();
+  }
+  return null;
+}
+
 export default function CaptureSessionScreen() {
-  const params = useLocalSearchParams<{ channel?: string }>();
+  const params = useLocalSearchParams<{
+    channel?: string;
+    appendLotId?: string;
+    appendSku?: string;
+    appendTitle?: string;
+  }>();
   const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
-  const { selectedSaleId, selectedSaleName } = useAuth();
+  const appendLotId = paramString(params.appendLotId);
+  const appendSku = paramString(params.appendSku);
+  const appendTitle = paramString(params.appendTitle);
+  const isAppendMode = Boolean(appendLotId);
+  const { token, selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -145,6 +163,27 @@ export default function CaptureSessionScreen() {
     return id;
   }
 
+  function appendDir(): string {
+    return `${FileSystem.documentDirectory}lot-append/${appendLotId}/`;
+  }
+
+  async function cleanupAppendFiles(uris: string[]) {
+    for (const uri of uris) {
+      try {
+        await FileSystem.deleteAsync(uri, { idempotent: true });
+      } catch {
+        /* already gone */
+      }
+    }
+    if (appendLotId) {
+      try {
+        await FileSystem.deleteAsync(appendDir(), { idempotent: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   async function handleCameraReady() {
     setCameraReady(true);
     try {
@@ -163,13 +202,21 @@ export default function CaptureSessionScreen() {
     setError("");
     setBusy(true);
     try {
-      const id = await ensureDraft();
-      if (!id) return;
       const photo = await cameraRef.current.takePictureAsync(MAX_DETAIL_CAPTURE_OPTIONS);
       if (!photo?.uri) {
         setError("Camera returned no image.");
         return;
       }
+      if (isAppendMode && appendLotId) {
+        const dir = appendDir();
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+        const dest = `${dir}${Date.now()}.jpg`;
+        await FileSystem.copyAsync({ from: photo.uri, to: dest });
+        setThumbs((prev) => [...prev, dest]);
+        return;
+      }
+      const id = await ensureDraft();
+      if (!id) return;
       const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const dest = `${dir}${Date.now()}.jpg`;
@@ -198,10 +245,31 @@ export default function CaptureSessionScreen() {
   }
 
   async function removePhoto(uri: string, fromPreview: boolean) {
-    if (!draftId) return;
+    if (!isAppendMode && !draftId) return;
 
     async function performDelete() {
       try {
+        if (isAppendMode) {
+          try {
+            await FileSystem.deleteAsync(uri, { idempotent: true });
+          } catch {
+            /* file may already be gone */
+          }
+          setThumbs((prev) => {
+            const uris = prev.filter((u) => u !== uri);
+            if (previewUri === uri) {
+              if (!uris.length) {
+                setPreviewUri(null);
+              } else {
+                const nextIndex = Math.min(previewIndex, uris.length - 1);
+                setPreviewIndex(nextIndex);
+                setPreviewUri(uris[nextIndex] ?? null);
+              }
+            }
+            return uris;
+          });
+          return;
+        }
         await deletePhotoFromDraft(draftId!, uri);
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
@@ -250,6 +318,22 @@ export default function CaptureSessionScreen() {
   }
 
   function confirmFinish() {
+    if (isAppendMode) {
+      if (!thumbs.length) {
+        Alert.alert("No photos", "Snap at least one photo to add to this lot.");
+        return;
+      }
+      const label = appendSku || appendTitle || "this lot";
+      Alert.alert(
+        "Add photos to lot?",
+        `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"} will be uploaded to ${label}. They attach to the existing listing (no new AI job).`,
+        [
+          { text: "Keep editing", style: "cancel" },
+          { text: "Upload", style: "default", onPress: () => void finishAppend() }
+        ]
+      );
+      return;
+    }
     if (!draftId) {
       router.back();
       return;
@@ -276,6 +360,38 @@ export default function CaptureSessionScreen() {
         { text: "Send", style: "default", onPress: () => void finishLot() }
       ]
     );
+  }
+
+  async function finishAppend() {
+    if (!isAppendMode || !appendLotId || !thumbs.length) return;
+    if (!token) {
+      setError("Sign in again to upload photos.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await uploadLotPhotos(
+        token,
+        appendLotId,
+        thumbs.map((uri, i) => ({
+          uri,
+          name: `append-${String(i + 1).padStart(2, "0")}.jpg`
+        }))
+      );
+      const uploaded = thumbs.slice();
+      setThumbs([]);
+      await cleanupAppendFiles(uploaded);
+      Alert.alert(
+        "Photos added",
+        `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added to the listing.`,
+        [{ text: "OK", onPress: () => router.back() }]
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not upload photos");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function finishLot() {
@@ -416,15 +532,23 @@ export default function CaptureSessionScreen() {
       >
         <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
-            {isFacebook
+            {isAppendMode
               ? thumbs.length
-                ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                : "Facebook furniture · Snap photos"
-              : thumbs.length
-                ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                : "Aim · tap Snap"}
+                ? `Add to lot · ${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
+                : "Add photos · tap Snap"
+              : isFacebook
+                ? thumbs.length
+                  ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "Facebook furniture · Snap photos"
+                : thumbs.length
+                  ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "Aim · tap Snap"}
           </Text>
-          {selectedSaleName ? (
+          {isAppendMode && (appendSku || appendTitle) ? (
+            <Text style={styles.sessionMetaSale} numberOfLines={2}>
+              {[appendSku, appendTitle].filter(Boolean).join(" · ")}
+            </Text>
+          ) : selectedSaleName ? (
             <Text style={styles.sessionMetaSale} numberOfLines={1}>
               {selectedSaleName}
             </Text>
@@ -433,11 +557,15 @@ export default function CaptureSessionScreen() {
 
         {!landscape ? (
           <>
-            <Text style={styles.sectionTitle}>Photos</Text>
-            <Text style={styles.sectionHint}>Tap to review · × to remove</Text>
+            <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
+            <Text style={styles.sectionHint}>
+              {isAppendMode
+                ? "These attach to the existing listing · tap to review · × to remove"
+                : "Tap to review · × to remove"}
+            </Text>
           </>
         ) : (
-          <Text style={styles.sectionHintLandscape}>Photos</Text>
+          <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New photos" : "Photos"}</Text>
         )}
 
         <DraftPhotoStrip
@@ -447,20 +575,34 @@ export default function CaptureSessionScreen() {
           onDeletePhoto={deleteFromStrip}
         />
 
-        <TextInput
-          placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
-          placeholderTextColor="#78716c"
-          style={[styles.input, landscape && styles.inputLandscape]}
-          value={manualSku}
-          autoCapitalize={isFacebook ? "sentences" : "characters"}
-          autoCorrect={false}
-          onChangeText={onSkuChange}
-        />
+        {!isAppendMode ? (
+          <TextInput
+            placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
+            placeholderTextColor="#78716c"
+            style={[styles.input, landscape && styles.inputLandscape]}
+            value={manualSku}
+            autoCapitalize={isFacebook ? "sentences" : "characters"}
+            autoCorrect={false}
+            onChangeText={onSkuChange}
+          />
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={[styles.actions, landscape && styles.actionsLandscape]}>
           {!landscape ? (
-            <Pressable style={styles.secondary} onPress={() => router.back()}>
+            <Pressable
+              style={styles.secondary}
+              onPress={() => {
+                if (isAppendMode && thumbs.length) {
+                  void cleanupAppendFiles(thumbs).then(() => {
+                    setThumbs([]);
+                    router.back();
+                  });
+                  return;
+                }
+                router.back();
+              }}
+            >
               <Text style={styles.secondaryText}>Cancel</Text>
             </Pressable>
           ) : null}
@@ -472,11 +614,17 @@ export default function CaptureSessionScreen() {
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
           </Pressable>
           <Pressable
-            style={[styles.primary, landscape && styles.primaryLandscape, !thumbs.length && styles.disabled]}
-            disabled={!thumbs.length}
+            style={[
+              styles.primary,
+              landscape && styles.primaryLandscape,
+              (!thumbs.length || busy) && styles.disabled
+            ]}
+            disabled={!thumbs.length || busy}
             onPress={confirmFinish}
           >
-            <Text style={styles.primaryText}>{landscape ? "Finish" : "Finish lot"}</Text>
+            <Text style={styles.primaryText}>
+              {isAppendMode ? (landscape ? "Upload" : "Upload photos") : landscape ? "Finish" : "Finish lot"}
+            </Text>
           </Pressable>
         </View>
       </ScrollView>

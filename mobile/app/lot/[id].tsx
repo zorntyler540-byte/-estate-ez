@@ -1,8 +1,9 @@
 import { Image } from "expo-image";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -119,6 +120,27 @@ export default function LotDetailScreen() {
                 : null}
               {!photos.length ? <Text style={styles.muted}>No photos linked.</Text> : null}
             </ScrollView>
+
+            <Pressable
+              style={styles.addPhotosBtn}
+              onPress={() =>
+                router.push({
+                  pathname: "/capture-session",
+                  params: {
+                    appendLotId: lot.id,
+                    ...(lot.sku?.trim() ? { appendSku: lot.sku.trim() } : {}),
+                    ...(lot.auction_title?.trim()
+                      ? { appendTitle: lot.auction_title.trim().slice(0, 80) }
+                      : {})
+                  }
+                })
+              }
+            >
+              <Text style={styles.addPhotosBtnText}>Add photos</Text>
+            </Pressable>
+            <Text style={styles.addPhotosHint}>
+              Opens the camera and uploads new shots onto this same listing.
+            </Text>
           </>
         ) : null}
       </ScrollView>
@@ -160,5 +182,14 @@ const styles = StyleSheet.create({
   section: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", marginTop: 12 },
   photoRow: { gap: 8, paddingVertical: 4 },
   photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: "#141416" },
-  muted: { color: "#78716c" }
+  muted: { color: "#78716c" },
+  addPhotosBtn: {
+    marginTop: 12,
+    backgroundColor: "#ff4d1a",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center"
+  },
+  addPhotosBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  addPhotosHint: { color: "#78716c", fontSize: 13, lineHeight: 18 }
 });
