@@ -684,7 +684,7 @@ const styles = StyleSheet.create({
   },
   cameraHint: {
     position: "absolute",
-    bottom: 8,
+    bottom: 96,
     left: 0,
     right: 0,
     textAlign: "center",
