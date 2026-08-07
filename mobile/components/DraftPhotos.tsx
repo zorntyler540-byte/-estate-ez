@@ -86,7 +86,10 @@ export function draftStatusDisplay(status: string): { label: string; hint: strin
     case "queued":
       return { label: "Ready to upload", hint: "Will send when you're online" };
     case "uploading":
-      return { label: "Uploading…", hint: "Sending photos to the server" };
+      return {
+        label: "Uploading…",
+        hint: "Sending photos to the server. If this sticks, Sync now will retry."
+      };
     case "uploaded":
       return { label: "Sent to server", hint: "Open the web dashboard to review the catalog listing" };
     case "failed":

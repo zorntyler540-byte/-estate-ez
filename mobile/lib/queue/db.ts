@@ -204,8 +204,9 @@ export async function countPendingDrafts(): Promise<number> {
 
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
+  // Include "uploading" so Sync Now / foreground sync recover lots stuck after an app kill.
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed', 'uploading')"
   );
   return Number(row?.c ?? 0);
 }

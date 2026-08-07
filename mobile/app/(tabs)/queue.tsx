@@ -75,8 +75,10 @@ export default function QueueScreen() {
   }
 
   function confirmRemoveLot(item: DraftRow) {
-    if (item.status === "uploading" || syncing) {
-      Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
+    // Block deletes during a live sync. Stuck "uploading" (app killed mid-send) is
+    // deletable when idle; Sync now also auto-retries those.
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
       return;
     }
 
