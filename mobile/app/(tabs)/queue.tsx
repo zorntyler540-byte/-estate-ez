@@ -1,4 +1,4 @@
-import { useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Image } from "expo-image";
 import { useCallback, useState } from "react";
 import {
@@ -55,6 +55,16 @@ export default function QueueScreen() {
     await setDraftStatus(id, "queued", null);
     await refresh();
     void syncNow();
+  }
+
+  function continueDraft(item: DraftRow) {
+    router.push({
+      pathname: "/capture-session",
+      params: {
+        draftId: item.id,
+        ...(item.listing_channel === "facebook" ? { channel: "facebook" } : {})
+      }
+    });
   }
 
   async function syncAll() {
@@ -115,7 +125,10 @@ export default function QueueScreen() {
         Network: {online === null ? "…" : online ? "Online" : "Offline"}
         {syncing ? " · Uploading…" : ""}
       </Text>
-      <Text style={styles.hint}>Each row shows your photos. After upload, finish catalog review on the web dashboard.</Text>
+      <Text style={styles.hint}>
+        Each row shows photos saved on this phone. Unfinished lots stay here if you leave the app —
+        tap Continue to keep shooting, or Queue / Sync to upload. Catalog review is on the web dashboard.
+      </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 
       <Pressable style={[styles.primary, syncing && styles.disabled]} disabled={syncing} onPress={() => void syncAll()}>
@@ -185,9 +198,14 @@ export default function QueueScreen() {
 
               {item.error_message ? <Text style={styles.error}>{item.error_message}</Text> : null}
               {item.status === "draft" ? (
-                <Pressable style={styles.secondary} onPress={() => void queueDraft(item.id)}>
-                  <Text style={styles.secondaryText}>Queue for upload</Text>
-                </Pressable>
+                <View style={styles.draftActions}>
+                  <Pressable style={styles.continueBtn} onPress={() => continueDraft(item)}>
+                    <Text style={styles.continueBtnText}>Continue</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondary} onPress={() => void queueDraft(item.id)}>
+                    <Text style={styles.secondaryText}>Queue for upload</Text>
+                  </Pressable>
+                </View>
               ) : null}
             </View>
           );
@@ -252,6 +270,15 @@ const styles = StyleSheet.create({
   moreThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: "#141416" },
   moreCount: { color: "#78716c", fontSize: 12 },
   error: { color: "#fca5a5", fontSize: 12 },
+  draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  continueBtn: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: "#ff4d1a"
+  },
+  continueBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
   secondary: {
     alignSelf: "flex-start",
     paddingVertical: 8,

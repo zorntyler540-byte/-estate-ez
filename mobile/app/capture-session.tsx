@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   PanResponder,
   Pressable,
   ScrollView,
@@ -13,6 +14,7 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type AppStateStatus,
   type GestureResponderEvent
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -32,6 +34,8 @@ import {
   addPhotoToDraft,
   createLotDraft,
   deletePhotoFromDraft,
+  findOpenDraft,
+  getLotDraft,
   listDraftPhotos,
   setDraftStatus,
   updateDraftManualSku
@@ -93,10 +97,19 @@ function AspectMask({
   );
 }
 
+function paramString(value: string | string[] | undefined): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value) && typeof value[0] === "string" && value[0].trim()) {
+    return value[0].trim();
+  }
+  return null;
+}
+
 export default function CaptureSessionScreen() {
-  const params = useLocalSearchParams<{ channel?: string }>();
+  const params = useLocalSearchParams<{ channel?: string; draftId?: string }>();
   const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
+  const resumeDraftId = paramString(params.draftId);
   const { selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -115,6 +128,8 @@ export default function CaptureSessionScreen() {
   const [pictureSize, setPictureSize] = useState<string | undefined>();
   const [aspectId, setAspectId] = useState<CameraAspectId>("full");
   const [cameraLayout, setCameraLayout] = useState({ width: 0, height: 0 });
+  const [sessionReady, setSessionReady] = useState(false);
+  const [resumedNotice, setResumedNotice] = useState("");
 
   // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
   const [zoom, setZoom] = useState(0);
@@ -126,6 +141,8 @@ export default function CaptureSessionScreen() {
   const pinchStartZoomRef = useRef(0);
   const focusRingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftIdRef = useRef<string | null>(null);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const applyZoom = useCallback((next: number) => {
     const clamped = clamp01(next);
@@ -179,6 +196,68 @@ export default function CaptureSessionScreen() {
     })
   ).current;
 
+  const applyDraft = useCallback(async (id: string, sku: string | null, showResume: boolean) => {
+    draftIdRef.current = id;
+    setDraftId(id);
+    setManualSku(sku ?? "");
+    const photos = await listDraftPhotos(id);
+    const uris = photos.map((p) => p.file_uri);
+    setThumbs(uris);
+    if (showResume && uris.length) {
+      setResumedNotice(
+        `Resumed lot · ${uris.length} photo${uris.length === 1 ? "" : "s"} still on this phone`
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSessionReady(false);
+    setResumedNotice("");
+
+    async function hydrate() {
+      try {
+        let draft = resumeDraftId ? await getLotDraft(resumeDraftId) : null;
+        if (draft && draft.status !== "draft") {
+          draft = null;
+        }
+        if (!draft && selectedSaleId) {
+          draft = await findOpenDraft(selectedSaleId, listingChannel);
+        }
+        if (cancelled) return;
+        if (draft) {
+          await applyDraft(draft.id, draft.manual_sku, true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Could not restore saved photos");
+        }
+      } finally {
+        if (!cancelled) setSessionReady(true);
+      }
+    }
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDraft, listingChannel, resumeDraftId, selectedSaleId]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (prev.match(/inactive|background/) && next === "active") {
+        const id = draftIdRef.current;
+        if (!id) return;
+        void listDraftPhotos(id).then((photos) => {
+          setThumbs(photos.map((p) => p.file_uri));
+        });
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     return () => {
       if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
@@ -187,12 +266,19 @@ export default function CaptureSessionScreen() {
   }, []);
 
   async function ensureDraft(): Promise<string | null> {
-    if (draftId) return draftId;
+    if (draftIdRef.current) return draftIdRef.current;
     if (!selectedSaleId) {
       setError("Select a sale first.");
       return null;
     }
+    // Prefer an existing unfinished draft so a remount / race doesn't orphan photos.
+    const existing = await findOpenDraft(selectedSaleId, listingChannel);
+    if (existing) {
+      await applyDraft(existing.id, existing.manual_sku || manualSku, existing.photo_count > 0);
+      return existing.id;
+    }
     const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku, listingChannel);
+    draftIdRef.current = id;
     setDraftId(id);
     return id;
   }
@@ -211,7 +297,7 @@ export default function CaptureSessionScreen() {
   }
 
   async function snap() {
-    if (!cameraRef.current || busy || !cameraReady) return;
+    if (!cameraRef.current || busy || !cameraReady || !sessionReady) return;
     setError("");
     setBusy(true);
     try {
@@ -232,6 +318,7 @@ export default function CaptureSessionScreen() {
       const photos = await listDraftPhotos(id);
       const uris = photos.map((p) => p.file_uri);
       setThumbs(uris);
+      setResumedNotice("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Capture failed");
     } finally {
@@ -509,6 +596,11 @@ export default function CaptureSessionScreen() {
                 ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
                 : "Aim · tap Snap"}
           </Text>
+          {resumedNotice ? (
+            <Text style={styles.sessionMetaResumed} numberOfLines={2}>
+              {resumedNotice}
+            </Text>
+          ) : null}
           {selectedSaleName ? (
             <Text style={styles.sessionMetaSale} numberOfLines={1}>
               {selectedSaleName}
@@ -550,11 +642,19 @@ export default function CaptureSessionScreen() {
             </Pressable>
           ) : null}
           <Pressable
-            style={[styles.snap, landscape && styles.snapLandscape, (busy || !cameraReady) && styles.disabled]}
-            disabled={busy || !cameraReady}
+            style={[
+              styles.snap,
+              landscape && styles.snapLandscape,
+              (busy || !cameraReady || !sessionReady) && styles.disabled
+            ]}
+            disabled={busy || !cameraReady || !sessionReady}
             onPress={() => void snap()}
           >
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
+            {busy || !sessionReady ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryText}>Snap</Text>
+            )}
           </Pressable>
           <Pressable
             style={[styles.primary, landscape && styles.primaryLandscape, !thumbs.length && styles.disabled]}
@@ -751,6 +851,7 @@ const styles = StyleSheet.create({
   },
   sessionMetaLabel: { color: "#f5f5f4", fontSize: 13, fontWeight: "600" },
   sessionMetaLabelLandscape: { fontSize: 13 },
+  sessionMetaResumed: { color: "#86efac", fontSize: 12, fontWeight: "600" },
   sessionMetaSale: { color: "#ff7347", fontSize: 12, fontWeight: "600" },
   sectionTitle: { color: "#f5f5f4", fontSize: 14, fontWeight: "700" },
   sectionHint: { color: "#a8a29e", fontSize: 12, marginTop: -4 },
