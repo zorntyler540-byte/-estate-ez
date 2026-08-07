@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";
@@ -12,6 +12,7 @@ export default function CaptureScreen() {
   const { selectedSaleId, selectedSaleName, signOut } = useAuth();
   const { getSaleName } = useSales();
   const [pending, setPending] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -25,6 +26,32 @@ export default function CaptureScreen() {
       return;
     }
     router.push("/capture-session");
+  }
+
+  function confirmSignOut() {
+    if (signingOut) return;
+    Alert.alert(
+      "Sign out?",
+      "You'll need your email and password to sign back in. Local queued photos on this phone stay until you delete them.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign out",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              setSigningOut(true);
+              try {
+                await signOut();
+                router.replace("/login");
+              } finally {
+                setSigningOut(false);
+              }
+            })();
+          }
+        }
+      ]
+    );
   }
 
   return (
@@ -55,8 +82,12 @@ export default function CaptureScreen() {
         {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / failed)
       </Text>
 
-      <Pressable style={styles.link} onPress={() => void signOut()}>
-        <Text style={styles.linkText}>Sign out</Text>
+      <Pressable
+        style={[styles.signOut, signingOut && styles.signOutDisabled]}
+        disabled={signingOut}
+        onPress={confirmSignOut}
+      >
+        <Text style={styles.signOutText}>{signingOut ? "Signing out…" : "Sign out"}</Text>
       </Pressable>
     </View>
   );
@@ -78,6 +109,16 @@ const styles = StyleSheet.create({
     marginTop: 8
   },
   primaryText: { color: theme.onPrimary, fontSize: 17, fontWeight: "700" },
-  link: { marginTop: 24, alignSelf: "flex-start" },
-  linkText: { color: theme.textSubtle, fontSize: 14 }
+  signOut: {
+    marginTop: 24,
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.bgElevated
+  },
+  signOutDisabled: { opacity: 0.55 },
+  signOutText: { color: theme.text, fontSize: 15, fontWeight: "600" }
 });

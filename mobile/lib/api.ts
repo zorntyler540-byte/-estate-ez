@@ -1,4 +1,5 @@
 import { API_BASE } from "./config";
+import { refreshSessionIfPossible } from "./sessionBridge";
 import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
 
 export type SaleLotCoverUrls = {
@@ -29,10 +30,15 @@ export function parseApiError(raw: string, fallback = "Request failed"): string 
   return t.length > 280 ? `${t.slice(0, 277)}…` : t;
 }
 
+type ApiFetchInit = RequestInit & {
+  /** Internal: already retried after a silent credential refresh. */
+  _authRetried?: boolean;
+};
+
 export async function apiFetch<T>(
   path: string,
   token: string | undefined,
-  init?: RequestInit
+  init?: ApiFetchInit
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!headers.has("Content-Type") && init?.body && typeof init.body === "string") {
@@ -43,6 +49,12 @@ export async function apiFetch<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   const text = await res.text();
   if (!res.ok) {
+    if (res.status === 401 && token && !init?._authRetried && !path.startsWith("/auth/login")) {
+      const refreshed = await refreshSessionIfPossible();
+      if (refreshed && refreshed !== token) {
+        return apiFetch<T>(path, refreshed, { ...init, _authRetried: true });
+      }
+    }
     throw new Error(parseApiError(text, `HTTP ${res.status}`));
   }
   if (!text) return undefined as T;

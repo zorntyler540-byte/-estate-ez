@@ -50,7 +50,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `CORS_ORIGINS` | Your **public web URL** only, e.g. `https://your-web-service.up.railway.app` — **no trailing slash**. Comma-separate if you have several. |
 | `TRUSTED_HOSTS` | Optional but recommended: comma-separated **Host** header values for the API (e.g. `your-api.up.railway.app`). Enables `TrustedHostMiddleware`. |
 | `ALLOW_OPEN_REGISTRATION` | Default `true`. After you create the first real account, set **`false`** and redeploy so strangers cannot register. |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 1440 = 24h). Lower for tighter security (e.g. `480`). |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
 | Optional | Copy other keys from `backend/.env.example` (SMTP, model flags, etc.). |
 
 6. **Generate domain** for the API service → note the HTTPS URL, e.g. `https://caring-api.up.railway.app`.
@@ -180,7 +180,7 @@ Same as local: edit code → commit → push → the host rebuilds/redeploys. Ru
 - **Turn off open signup** — Set `ALLOW_OPEN_REGISTRATION=false` after your pilot accounts exist.
 - **`TRUSTED_HOSTS`** — Set to your API hostname(s) to reduce Host-header attacks.
 - **Repo hygiene** — `Images/`, `*.db`, and `backend/data/` are gitignored so estate photos and databases do not land on GitHub.
-- **JWT lifetime** — Tune `ACCESS_TOKEN_EXPIRE_MINUTES` if you want shorter-lived sessions.
+- **JWT lifetime** — Default is 30 days (`43200` minutes). Tune `ACCESS_TOKEN_EXPIRE_MINUTES` on Railway if you want shorter or longer sessions (max 90 days).
 
 ---
 
