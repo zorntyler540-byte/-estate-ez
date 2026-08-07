@@ -133,7 +133,8 @@ function uploadProgressFromBytes(prefix: string, loaded: number, total: number |
  * Per-listing catalog photo cap (null = none). Keep in sync with ``backend/app/catalog_limits.py``.
  * Re-enable (e.g. 40) when CTBids limits should apply again.
  */
-const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
+/** Keep in sync with ``backend/app/catalog_limits.py`` (CT Seller ~40; CT Seller hard cap). */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = 40;
 
 /** UI zoom range: 1 = wide; higher = closer. Uses optical zoom when the device supports it. */
 const LOT_CAMERA_ZOOM_MIN = 1;

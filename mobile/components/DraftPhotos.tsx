@@ -82,11 +82,17 @@ export function PhotoPreviewModal({ uri, index, total, onClose, onDelete }: Phot
 export function draftStatusDisplay(status: string): { label: string; hint: string } {
   switch (status) {
     case "draft":
-      return { label: "Saved on phone", hint: "Not queued for upload yet" };
+      return {
+        label: "Saved on phone",
+        hint: "Photos are kept if you leave the app — tap Continue to add more, or Queue for upload"
+      };
     case "queued":
       return { label: "Ready to upload", hint: "Will send when you're online" };
     case "uploading":
-      return { label: "Uploading…", hint: "Sending photos to the server" };
+      return {
+        label: "Uploading…",
+        hint: "Sending photos to the server. If this sticks, Sync now will retry."
+      };
     case "uploaded":
       return { label: "Sent to server", hint: "Open the web dashboard to review the catalog listing" };
     case "failed":

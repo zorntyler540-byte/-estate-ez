@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.lotting import LotOutput, strip_product_box_misread_as_tape_sku, tape_marking_canonical
+from app.core.lotting import (
+    LotOutput,
+    normalize_manual_sku_input,
+    strip_product_box_misread_as_tape_sku,
+    tape_marking_canonical,
+)
 from app.services.pipeline_integration import _sku_candidate_filenames, _triage_tape_marking
 from app.services.tape_focus import _is_blue_masking_tape_pixel
 
@@ -22,6 +27,16 @@ class TestTapeSkuSources(unittest.TestCase):
         self.assertEqual(tape_marking_canonical("tz8000"), "TZ8000")
         self.assertEqual(tape_marking_canonical("TZ 8000"), "TZ8000")
 
+    def test_tape_marking_canonical_letter_suffix(self) -> None:
+        self.assertEqual(tape_marking_canonical("JH603SK"), "JH603SK")
+        self.assertEqual(tape_marking_canonical("JH 600SK"), "JH600SK")
+        self.assertEqual(tape_marking_canonical("Ms6000RG"), "MS6000RG")
+
+    def test_normalize_manual_sku_keeps_full_code(self) -> None:
+        self.assertEqual(normalize_manual_sku_input("jh603sk"), "JH603SK")
+        self.assertEqual(normalize_manual_sku_input("JH 600SK"), "JH600SK")
+        self.assertEqual(normalize_manual_sku_input("Ms6000RG"), "MS6000RG")
+
     def test_manual_sku_preserves_letter_prefix(self) -> None:
         from types import SimpleNamespace
 
@@ -31,6 +46,16 @@ class TestTapeSkuSources(unittest.TestCase):
         job = SimpleNamespace(single_lot_mode=True, single_lot_manual_sku="tz8000")
         _apply_single_lot_manual_sku(job, lot)
         self.assertEqual(lot.sku, "TZ8000")
+
+    def test_manual_sku_preserves_letter_suffix(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.processing import _apply_single_lot_manual_sku
+
+        lot = LotOutput(sku="9999", auction_title="x", professional_description="y")
+        job = SimpleNamespace(single_lot_mode=True, single_lot_manual_sku="JH603SK")
+        _apply_single_lot_manual_sku(job, lot)
+        self.assertEqual(lot.sku, "JH603SK")
 
     def test_manual_sku_digits_only_still_works(self) -> None:
         from types import SimpleNamespace

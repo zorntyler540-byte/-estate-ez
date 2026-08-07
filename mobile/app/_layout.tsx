@@ -1,10 +1,10 @@
-import { AuthProvider } from "@/context/AuthContext";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { SalesProvider } from "@/context/SalesContext";
 import { SyncProvider } from "@/context/SyncContext";
 import { theme } from "@/constants/theme";
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
@@ -54,6 +54,23 @@ export default function RootLayout() {
 }
 
 function RootNav() {
+  const { token, ready } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!ready) return;
+    const root = segments[0];
+    const onAuthScreen = root === "login";
+    if (!token && !onAuthScreen) {
+      router.replace("/login");
+      return;
+    }
+    if (token && onAuthScreen) {
+      router.replace("/(tabs)/capture");
+    }
+  }, [token, ready, segments, router]);
+
   return (
     <ThemeProvider value={EstateTheme}>
       <StatusBar style="light" />

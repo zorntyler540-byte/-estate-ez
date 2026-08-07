@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   PanResponder,
   Pressable,
   ScrollView,
@@ -13,6 +14,7 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type AppStateStatus,
   type GestureResponderEvent
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,11 +22,22 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
+import {
+  CAMERA_ASPECT_PRESETS,
+  aspectPresetById,
+  centeredAspectRect,
+  maybeCropToAspect,
+  type CameraAspectId
+} from "@/lib/cameraAspect";
+import { uploadLotPhotos } from "@/lib/api";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
+import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
 import {
   addPhotoToDraft,
   createLotDraft,
   deletePhotoFromDraft,
+  findOpenDraft,
+  getLotDraft,
   listDraftPhotos,
   setDraftStatus,
   updateDraftManualSku
@@ -43,11 +56,78 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
+function AspectMask({
+  layout,
+  ratio
+}: {
+  layout: { width: number; height: number };
+  ratio: number | null;
+}) {
+  const rect = centeredAspectRect(layout.width, layout.height, ratio);
+  if (!ratio || (rect.width >= layout.width && rect.height >= layout.height)) {
+    return null;
+  }
+  const { x, y, width: w, height: h } = rect;
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={[styles.maskBar, { left: 0, top: 0, width: layout.width, height: y }]} />
+      <View
+        style={[
+          styles.maskBar,
+          {
+            left: 0,
+            top: y + h,
+            width: layout.width,
+            height: Math.max(0, layout.height - y - h)
+          }
+        ]}
+      />
+      <View style={[styles.maskBar, { left: 0, top: y, width: x, height: h }]} />
+      <View
+        style={[
+          styles.maskBar,
+          {
+            left: x + w,
+            top: y,
+            width: Math.max(0, layout.width - x - w),
+            height: h
+          }
+        ]}
+      />
+      <View style={[styles.maskFrame, { left: x, top: y, width: w, height: h }]} />
+    </View>
+  );
+}
+
+function paramString(value: string | string[] | undefined): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value) && typeof value[0] === "string" && value[0].trim()) {
+    return value[0].trim();
+  }
+  return null;
+}
+
 export default function CaptureSessionScreen() {
-  const params = useLocalSearchParams<{ channel?: string }>();
+  const params = useLocalSearchParams<{
+    channel?: string;
+    draftId?: string;
+    appendLotId?: string;
+    appendSku?: string;
+    appendTitle?: string;
+    appendExistingCount?: string;
+  }>();
   const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
-  const { selectedSaleId, selectedSaleName } = useAuth();
+  const resumeDraftId = paramString(params.draftId);
+  const appendLotId = paramString(params.appendLotId);
+  const appendSku = paramString(params.appendSku);
+  const appendTitle = paramString(params.appendTitle);
+  const appendExistingCount = Math.max(
+    0,
+    Number.parseInt(paramString(params.appendExistingCount) || "0", 10) || 0
+  );
+  const isAppendMode = Boolean(appendLotId);
+  const { token, selectedSaleId, selectedSaleName } = useAuth();
   const { syncNow } = useSync();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -63,6 +143,10 @@ export default function CaptureSessionScreen() {
   const [previewIndex, setPreviewIndex] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
   const [pictureSize, setPictureSize] = useState<string | undefined>();
+  const [aspectId, setAspectId] = useState<CameraAspectId>("full");
+  const [cameraLayout, setCameraLayout] = useState({ width: 0, height: 0 });
+  const [sessionReady, setSessionReady] = useState(false);
+  const [resumedNotice, setResumedNotice] = useState("");
 
   // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
   const [zoom, setZoom] = useState(0);
@@ -74,6 +158,8 @@ export default function CaptureSessionScreen() {
   const pinchStartZoomRef = useRef(0);
   const focusRingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftIdRef = useRef<string | null>(null);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const applyZoom = useCallback((next: number) => {
     const clamped = clamp01(next);
@@ -127,6 +213,73 @@ export default function CaptureSessionScreen() {
     })
   ).current;
 
+  const applyDraft = useCallback(async (id: string, sku: string | null, showResume: boolean) => {
+    draftIdRef.current = id;
+    setDraftId(id);
+    setManualSku(sku ?? "");
+    const photos = await listDraftPhotos(id);
+    const uris = photos.map((p) => p.file_uri);
+    setThumbs(uris);
+    if (showResume && uris.length) {
+      setResumedNotice(
+        `Resumed lot · ${uris.length} photo${uris.length === 1 ? "" : "s"} still on this phone`
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSessionReady(false);
+    setResumedNotice("");
+
+    async function hydrate() {
+      // Append-to-lot mode starts empty — do not pull an unfinished new-lot draft.
+      if (isAppendMode) {
+        if (!cancelled) setSessionReady(true);
+        return;
+      }
+      try {
+        let draft = resumeDraftId ? await getLotDraft(resumeDraftId) : null;
+        if (draft && draft.status !== "draft") {
+          draft = null;
+        }
+        if (!draft && selectedSaleId) {
+          draft = await findOpenDraft(selectedSaleId, listingChannel);
+        }
+        if (cancelled) return;
+        if (draft) {
+          await applyDraft(draft.id, draft.manual_sku, true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Could not restore saved photos");
+        }
+      } finally {
+        if (!cancelled) setSessionReady(true);
+      }
+    }
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDraft, isAppendMode, listingChannel, resumeDraftId, selectedSaleId]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (prev.match(/inactive|background/) && next === "active") {
+        const id = draftIdRef.current;
+        if (!id) return;
+        void listDraftPhotos(id).then((photos) => {
+          setThumbs(photos.map((p) => p.file_uri));
+        });
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     return () => {
       if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
@@ -135,14 +288,42 @@ export default function CaptureSessionScreen() {
   }, []);
 
   async function ensureDraft(): Promise<string | null> {
-    if (draftId) return draftId;
+    if (draftIdRef.current) return draftIdRef.current;
     if (!selectedSaleId) {
       setError("Select a sale first.");
       return null;
     }
+    // Prefer an existing unfinished draft so a remount / race doesn't orphan photos.
+    const existing = await findOpenDraft(selectedSaleId, listingChannel);
+    if (existing) {
+      await applyDraft(existing.id, existing.manual_sku || manualSku, existing.photo_count > 0);
+      return existing.id;
+    }
     const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku, listingChannel);
+    draftIdRef.current = id;
     setDraftId(id);
     return id;
+  }
+
+  function appendDir(): string {
+    return `${FileSystem.documentDirectory}lot-append/${appendLotId}/`;
+  }
+
+  async function cleanupAppendFiles(uris: string[]) {
+    for (const uri of uris) {
+      try {
+        await FileSystem.deleteAsync(uri, { idempotent: true });
+      } catch {
+        /* already gone */
+      }
+    }
+    if (appendLotId) {
+      try {
+        await FileSystem.deleteAsync(appendDir(), { idempotent: true });
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async function handleCameraReady() {
@@ -159,25 +340,46 @@ export default function CaptureSessionScreen() {
   }
 
   async function snap() {
-    if (!cameraRef.current || busy || !cameraReady) return;
+    if (!cameraRef.current || busy || !cameraReady || !sessionReady) return;
+    const used = (isAppendMode ? appendExistingCount : 0) + thumbs.length;
+    if (used >= CTBIDS_MAX_PHOTOS_PER_LOT) {
+      const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - (isAppendMode ? appendExistingCount : 0));
+      setError(
+        room <= 0
+          ? `This lot already has ${appendExistingCount} photos (CTBids limit ${CTBIDS_MAX_PHOTOS_PER_LOT}).`
+          : `CTBids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. You can add ${room} more.`
+      );
+      return;
+    }
     setError("");
     setBusy(true);
     try {
-      const id = await ensureDraft();
-      if (!id) return;
       const photo = await cameraRef.current.takePictureAsync(MAX_DETAIL_CAPTURE_OPTIONS);
       if (!photo?.uri) {
         setError("Camera returned no image.");
         return;
       }
+      const ratio = aspectPresetById(aspectId).ratio;
+      const croppedUri = await maybeCropToAspect(photo.uri, photo.width, photo.height, ratio);
+      if (isAppendMode && appendLotId) {
+        const dir = appendDir();
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+        const dest = `${dir}${Date.now()}.jpg`;
+        await FileSystem.copyAsync({ from: croppedUri, to: dest });
+        setThumbs((prev) => [...prev, dest]);
+        return;
+      }
+      const id = await ensureDraft();
+      if (!id) return;
       const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const dest = `${dir}${Date.now()}.jpg`;
-      await FileSystem.copyAsync({ from: photo.uri, to: dest });
+      await FileSystem.copyAsync({ from: croppedUri, to: dest });
       await addPhotoToDraft(id, dest);
       const photos = await listDraftPhotos(id);
       const uris = photos.map((p) => p.file_uri);
       setThumbs(uris);
+      setResumedNotice("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Capture failed");
     } finally {
@@ -198,10 +400,31 @@ export default function CaptureSessionScreen() {
   }
 
   async function removePhoto(uri: string, fromPreview: boolean) {
-    if (!draftId) return;
+    if (!isAppendMode && !draftId) return;
 
     async function performDelete() {
       try {
+        if (isAppendMode) {
+          try {
+            await FileSystem.deleteAsync(uri, { idempotent: true });
+          } catch {
+            /* file may already be gone */
+          }
+          setThumbs((prev) => {
+            const uris = prev.filter((u) => u !== uri);
+            if (previewUri === uri) {
+              if (!uris.length) {
+                setPreviewUri(null);
+              } else {
+                const nextIndex = Math.min(previewIndex, uris.length - 1);
+                setPreviewIndex(nextIndex);
+                setPreviewUri(uris[nextIndex] ?? null);
+              }
+            }
+            return uris;
+          });
+          return;
+        }
         await deletePhotoFromDraft(draftId!, uri);
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
@@ -250,6 +473,22 @@ export default function CaptureSessionScreen() {
   }
 
   function confirmFinish() {
+    if (isAppendMode) {
+      if (!thumbs.length) {
+        Alert.alert("No photos", "Snap at least one photo to add to this lot.");
+        return;
+      }
+      const label = appendSku || appendTitle || "this lot";
+      Alert.alert(
+        "Add photos to lot?",
+        `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"} will be uploaded to ${label}. They attach to the existing listing (no new AI job).`,
+        [
+          { text: "Keep editing", style: "cancel" },
+          { text: "Upload", style: "default", onPress: () => void finishAppend() }
+        ]
+      );
+      return;
+    }
     if (!draftId) {
       router.back();
       return;
@@ -276,6 +515,38 @@ export default function CaptureSessionScreen() {
         { text: "Send", style: "default", onPress: () => void finishLot() }
       ]
     );
+  }
+
+  async function finishAppend() {
+    if (!isAppendMode || !appendLotId || !thumbs.length) return;
+    if (!token) {
+      setError("Sign in again to upload photos.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await uploadLotPhotos(
+        token,
+        appendLotId,
+        thumbs.map((uri, i) => ({
+          uri,
+          name: `append-${String(i + 1).padStart(2, "0")}.jpg`
+        }))
+      );
+      const uploaded = thumbs.slice();
+      setThumbs([]);
+      await cleanupAppendFiles(uploaded);
+      Alert.alert(
+        "Photos added",
+        `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added to the listing.`,
+        [{ text: "OK", onPress: () => router.back() }]
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not upload photos");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function finishLot() {
@@ -333,6 +604,10 @@ export default function CaptureSessionScreen() {
           styles.cameraWrap,
           landscape && styles.cameraWrapLandscape
         ]}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setCameraLayout({ width, height });
+        }}
       >
         <CameraView
           ref={cameraRef}
@@ -345,6 +620,12 @@ export default function CaptureSessionScreen() {
           onCameraReady={() => void handleCameraReady()}
         />
         <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
+        {aspectId !== "full" && cameraLayout.width > 0 && cameraLayout.height > 0 ? (
+          <AspectMask
+            layout={cameraLayout}
+            ratio={aspectPresetById(aspectId).ratio}
+          />
+        ) : null}
         {focusPoint ? (
           <View
             pointerEvents="none"
@@ -363,39 +644,60 @@ export default function CaptureSessionScreen() {
           <Text style={styles.closeFabText}>✕</Text>
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
-          <View style={styles.zoomRow}>
-            {ZOOM_PRESETS.map((preset) => {
-              const active =
-                Math.abs(zoom - preset.value) <
-                (preset.value === 0 ? 0.02 : 0.08);
-              return (
-                <Pressable
-                  key={preset.label}
-                  style={[styles.zoomBtn, active && styles.zoomBtnActive]}
-                  onPress={() => applyZoom(preset.value)}
-                >
-                  <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
-                    {preset.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-            {zoom > 0.02 ? (
-              <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
-            ) : null}
+          <View style={styles.controlsCol}>
+            <View style={styles.aspectRow}>
+              {CAMERA_ASPECT_PRESETS.map((preset) => {
+                const active = aspectId === preset.id;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    style={[styles.aspectBtn, active && styles.aspectBtnActive]}
+                    onPress={() => setAspectId(preset.id)}
+                    accessibilityLabel={`Aspect ratio ${preset.label}`}
+                  >
+                    <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                      {preset.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.zoomTorchRow}>
+              <View style={styles.zoomRow}>
+                {ZOOM_PRESETS.map((preset) => {
+                  const active =
+                    Math.abs(zoom - preset.value) <
+                    (preset.value === 0 ? 0.02 : 0.08);
+                  return (
+                    <Pressable
+                      key={preset.label}
+                      style={[styles.zoomBtn, active && styles.zoomBtnActive]}
+                      onPress={() => applyZoom(preset.value)}
+                    >
+                      <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
+                        {preset.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {zoom > 0.02 ? (
+                  <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
+                ) : null}
+              </View>
+              <Pressable
+                style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
+                onPress={() => setTorchOn((v) => !v)}
+              >
+                <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
+                  {torchOn ? "Torch on" : "Torch off"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
-          <Pressable
-            style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
-            onPress={() => setTorchOn((v) => !v)}
-          >
-            <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
-              {torchOn ? "Torch on" : "Torch off"}
-            </Text>
-          </Pressable>
         </View>
         {!landscape ? (
           <Text style={styles.cameraHint} pointerEvents="none">
-            Pinch to zoom · tap to refocus
+            Pinch to zoom · tap to refocus · aspect crops on snap
           </Text>
         ) : null}
       </View>
@@ -416,15 +718,28 @@ export default function CaptureSessionScreen() {
       >
         <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
-            {isFacebook
+            {isAppendMode
               ? thumbs.length
-                ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                : "Facebook furniture · Snap photos"
-              : thumbs.length
-                ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                : "Aim · tap Snap"}
+                ? `Add to lot · ${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
+                : "Add photos · tap Snap"
+              : isFacebook
+                ? thumbs.length
+                  ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "Facebook furniture · Snap photos"
+                : thumbs.length
+                  ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "Aim · tap Snap"}
           </Text>
-          {selectedSaleName ? (
+          {resumedNotice ? (
+            <Text style={styles.sessionMetaResumed} numberOfLines={2}>
+              {resumedNotice}
+            </Text>
+          ) : null}
+          {isAppendMode && (appendSku || appendTitle) ? (
+            <Text style={styles.sessionMetaSale} numberOfLines={2}>
+              {[appendSku, appendTitle].filter(Boolean).join(" · ")}
+            </Text>
+          ) : selectedSaleName ? (
             <Text style={styles.sessionMetaSale} numberOfLines={1}>
               {selectedSaleName}
             </Text>
@@ -433,11 +748,15 @@ export default function CaptureSessionScreen() {
 
         {!landscape ? (
           <>
-            <Text style={styles.sectionTitle}>Photos</Text>
-            <Text style={styles.sectionHint}>Tap to review · × to remove</Text>
+            <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
+            <Text style={styles.sectionHint}>
+              {isAppendMode
+                ? "These attach to the existing listing · tap to review · × to remove"
+                : "Tap to review · × to remove"}
+            </Text>
           </>
         ) : (
-          <Text style={styles.sectionHintLandscape}>Photos</Text>
+          <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New photos" : "Photos"}</Text>
         )}
 
         <DraftPhotoStrip
@@ -447,36 +766,64 @@ export default function CaptureSessionScreen() {
           onDeletePhoto={deleteFromStrip}
         />
 
-        <TextInput
-          placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
-          placeholderTextColor="#78716c"
-          style={[styles.input, landscape && styles.inputLandscape]}
-          value={manualSku}
-          autoCapitalize={isFacebook ? "sentences" : "characters"}
-          autoCorrect={false}
-          onChangeText={onSkuChange}
-        />
+        {!isAppendMode ? (
+          <TextInput
+            placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
+            placeholderTextColor="#78716c"
+            style={[styles.input, landscape && styles.inputLandscape]}
+            value={manualSku}
+            autoCapitalize={isFacebook ? "sentences" : "characters"}
+            autoCorrect={false}
+            onChangeText={onSkuChange}
+          />
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={[styles.actions, landscape && styles.actionsLandscape]}>
           {!landscape ? (
-            <Pressable style={styles.secondary} onPress={() => router.back()}>
+            <Pressable
+              style={styles.secondary}
+              onPress={() => {
+                if (isAppendMode && thumbs.length) {
+                  void cleanupAppendFiles(thumbs).then(() => {
+                    setThumbs([]);
+                    router.back();
+                  });
+                  return;
+                }
+                router.back();
+              }}
+            >
               <Text style={styles.secondaryText}>Cancel</Text>
             </Pressable>
           ) : null}
           <Pressable
-            style={[styles.snap, landscape && styles.snapLandscape, (busy || !cameraReady) && styles.disabled]}
-            disabled={busy || !cameraReady}
+            style={[
+              styles.snap,
+              landscape && styles.snapLandscape,
+              (busy || !cameraReady || !sessionReady) && styles.disabled
+            ]}
+            disabled={busy || !cameraReady || !sessionReady}
             onPress={() => void snap()}
           >
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Snap</Text>}
+            {busy || !sessionReady ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryText}>Snap</Text>
+            )}
           </Pressable>
           <Pressable
-            style={[styles.primary, landscape && styles.primaryLandscape, !thumbs.length && styles.disabled]}
-            disabled={!thumbs.length}
+            style={[
+              styles.primary,
+              landscape && styles.primaryLandscape,
+              (!thumbs.length || busy) && styles.disabled
+            ]}
+            disabled={!thumbs.length || busy}
             onPress={confirmFinish}
           >
-            <Text style={styles.primaryText}>{landscape ? "Finish" : "Finish lot"}</Text>
+            <Text style={styles.primaryText}>
+              {isAppendMode ? (landscape ? "Upload" : "Upload photos") : landscape ? "Finish" : "Finish lot"}
+            </Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -514,7 +861,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 12,
     right: 12,
-    bottom: 28,
+    bottom: 36,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -524,6 +871,37 @@ const styles = StyleSheet.create({
     bottom: 12,
     left: 12,
     right: 12
+  },
+  controlsCol: {
+    flex: 1,
+    gap: 8
+  },
+  aspectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 4
+  },
+  aspectBtn: {
+    flex: 1,
+    minWidth: 44,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    borderRadius: 999,
+    alignItems: "center",
+    backgroundColor: "transparent"
+  },
+  aspectBtnActive: { backgroundColor: "#ff4d1a" },
+  aspectBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
+  aspectBtnTextActive: { color: "#fff" },
+  zoomTorchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
   },
   zoomRow: {
     flexDirection: "row",
@@ -557,9 +935,18 @@ const styles = StyleSheet.create({
   torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
   torchBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   torchBtnTextActive: { color: "#1c1917" },
+  maskBar: {
+    position: "absolute",
+    backgroundColor: "rgba(0,0,0,0.45)"
+  },
+  maskFrame: {
+    position: "absolute",
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.85)"
+  },
   cameraHint: {
     position: "absolute",
-    bottom: 8,
+    bottom: 96,
     left: 0,
     right: 0,
     textAlign: "center",
@@ -626,6 +1013,7 @@ const styles = StyleSheet.create({
   },
   sessionMetaLabel: { color: "#f5f5f4", fontSize: 13, fontWeight: "600" },
   sessionMetaLabelLandscape: { fontSize: 13 },
+  sessionMetaResumed: { color: "#86efac", fontSize: 12, fontWeight: "600" },
   sessionMetaSale: { color: "#ff7347", fontSize: 12, fontWeight: "600" },
   sectionTitle: { color: "#f5f5f4", fontSize: 14, fontWeight: "700" },
   sectionHint: { color: "#a8a29e", fontSize: 12, marginTop: -4 },
