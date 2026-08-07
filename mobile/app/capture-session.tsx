@@ -645,11 +645,6 @@ export default function CaptureSessionScreen() {
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
           <View style={styles.controlsCol}>
-            {!landscape ? (
-              <Text style={styles.cameraHint} pointerEvents="none">
-                Pinch to zoom · tap to refocus
-              </Text>
-            ) : null}
             <View style={styles.aspectRow}>
               {CAMERA_ASPECT_PRESETS.map((preset) => {
                 const active = aspectId === preset.id;
@@ -685,16 +680,14 @@ export default function CaptureSessionScreen() {
                     </Pressable>
                   );
                 })}
-                {zoom > 0.02 ? (
-                  <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
-                ) : null}
               </View>
               <Pressable
                 style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
                 onPress={() => setTorchOn((v) => !v)}
+                accessibilityLabel={torchOn ? "Turn torch off" : "Turn torch on"}
               >
                 <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
-                  {torchOn ? "Torch on" : "Torch off"}
+                  Torch
                 </Text>
               </Pressable>
             </View>
@@ -720,15 +713,15 @@ export default function CaptureSessionScreen() {
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
             {isAppendMode
               ? thumbs.length
-                ? `Add to lot · ${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
-                : "Add photos · tap Snap"
+                ? `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
+                : "Add photos"
               : isFacebook
                 ? thumbs.length
-                  ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                  : "Facebook furniture · Snap photos"
+                  ? `Facebook · ${thumbs.length}`
+                  : "Facebook"
                 : thumbs.length
-                  ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                  : "Aim · tap Snap"}
+                  ? `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "New lot"}
           </Text>
           {resumedNotice ? (
             <Text style={styles.sessionMetaResumed} numberOfLines={2}>
@@ -747,14 +740,7 @@ export default function CaptureSessionScreen() {
         </View>
 
         {!landscape ? (
-          <>
-            <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
-            <Text style={styles.sectionHint}>
-              {isAppendMode
-                ? "These attach to the existing listing · tap to review · × to remove"
-                : "Tap to review · × to remove"}
-            </Text>
-          </>
+          <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
         ) : (
           <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New photos" : "Photos"}</Text>
         )}
@@ -859,37 +845,37 @@ const styles = StyleSheet.create({
   closeFabText: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", lineHeight: 18 },
   cameraControls: {
     position: "absolute",
-    left: 12,
-    right: 12,
-    bottom: 12,
+    left: 10,
+    right: 10,
+    bottom: 10,
     flexDirection: "row",
     alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: 8
+    justifyContent: "space-between"
   },
   cameraControlsLandscape: {
-    bottom: 12,
-    left: 12,
-    right: 12
+    bottom: 10,
+    left: 10,
+    right: 10
   },
   controlsCol: {
     flex: 1,
-    gap: 8
+    gap: 6
   },
   aspectRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    gap: 4,
+    alignSelf: "center",
+    maxWidth: "100%",
+    backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
-    paddingHorizontal: 6,
-    paddingVertical: 4
+    paddingHorizontal: 4,
+    paddingVertical: 3
   },
   aspectBtn: {
-    flex: 1,
-    minWidth: 44,
-    paddingVertical: 7,
-    paddingHorizontal: 6,
+    minWidth: 48,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderRadius: 999,
     alignItems: "center",
     backgroundColor: "transparent"
@@ -906,34 +892,33 @@ const styles = StyleSheet.create({
   zoomRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    gap: 4,
+    backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 5
+    paddingHorizontal: 4,
+    paddingVertical: 3
   },
   zoomBtn: {
     minWidth: 40,
-    paddingVertical: 7,
+    paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 999,
     alignItems: "center",
     backgroundColor: "transparent"
   },
   zoomBtnActive: { backgroundColor: "#ff4d1a" },
-  zoomBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
+  zoomBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
   zoomBtnTextActive: { color: "#fff" },
-  zoomReadout: { color: "#a8a29e", fontSize: 12, fontWeight: "600", paddingHorizontal: 4 },
   torchBtn: {
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
-    paddingVertical: 10,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: "rgba(168, 162, 158, 0.35)"
   },
   torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
-  torchBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
+  torchBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
   torchBtnTextActive: { color: "#1c1917" },
   maskBar: {
     position: "absolute",
@@ -943,15 +928,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     borderWidth: 1.5,
     borderColor: "rgba(255,255,255,0.85)"
-  },
-  cameraHint: {
-    textAlign: "center",
-    color: "rgba(245, 245, 244, 0.8)",
-    fontSize: 11,
-    fontWeight: "600",
-    textShadowColor: "rgba(0,0,0,0.65)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2
   },
   focusRing: {
     position: "absolute",
@@ -968,7 +944,7 @@ const styles = StyleSheet.create({
   panel: {
     flexGrow: 0,
     flexShrink: 0,
-    maxHeight: "38%",
+    maxHeight: "34%",
     backgroundColor: "#0e0e10",
     borderTopWidth: 1,
     borderTopColor: "#141416"
@@ -987,9 +963,9 @@ const styles = StyleSheet.create({
   },
   panelContent: {
     paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 10,
-    gap: 8
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 6
   },
   panelContentLandscape: {
     paddingTop: 10,
