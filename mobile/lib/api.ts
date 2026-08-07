@@ -136,6 +136,35 @@ export type UploadLotJobOptions = {
   photoUris: { uri: string; name: string }[];
 };
 
+/**
+ * Multipart upload with the same 401 → silent re-login retry as ``apiFetch``.
+ * (Raw fetch used to skip refresh, so one phone with an expired JWT could hang Sync.)
+ */
+async function uploadFormData(
+  path: string,
+  token: string,
+  form: FormData,
+  fallbackError: string,
+  alreadyRetried = false
+): Promise<string> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 && token && !alreadyRetried && !path.startsWith("/auth/login")) {
+      const refreshed = await refreshSessionIfPossible();
+      if (refreshed && refreshed !== token) {
+        return uploadFormData(path, refreshed, form, fallbackError, true);
+      }
+    }
+    throw new Error(parseApiError(text, `${fallbackError} (${res.status})`));
+  }
+  return text;
+}
+
 /** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
 export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
   const form = new FormData();
@@ -154,13 +183,7 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
     } as unknown as Blob);
   }
 
-  const res = await fetch(`${API_BASE}/jobs/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${opts.token}` },
-    body: form
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(parseApiError(text, `Upload failed (${res.status})`));
+  const text = await uploadFormData("/jobs/upload", opts.token, form, "Upload failed");
   return JSON.parse(text) as Job;
 }
 
@@ -181,13 +204,12 @@ export async function uploadLotPhotos(
       type: "image/jpeg"
     } as unknown as Blob);
   }
-  const res = await fetch(`${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(parseApiError(text, `Upload failed (${res.status})`));
+  const text = await uploadFormData(
+    `/lots/${encodeURIComponent(lotId)}/photos/upload`,
+    token,
+    form,
+    "Upload failed"
+  );
   const raw = text ? (JSON.parse(text) as unknown) : null;
   if (!Array.isArray(raw)) {
     throw new Error("Upload response was not a photo list");
