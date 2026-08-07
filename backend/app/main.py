@@ -2652,10 +2652,10 @@ async def create_job_from_upload(
     return _job_out(job)
 
 
-def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
-    """Resolve ``job.input_folder`` under this account's upload root, or raise."""
+def _account_upload_folder_for_job_input(account_id: str, input_folder: str) -> Path:
+    """Resolve a job input folder under this account's upload root, or raise."""
     root = (UPLOAD_ROOT / account_id).resolve()
-    folder = Path(job.input_folder).resolve()
+    folder = Path(input_folder).expanduser().resolve()
     try:
         folder.relative_to(root)
     except ValueError as exc:
@@ -2663,6 +2663,11 @@ def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
     if not folder.is_dir():
         raise HTTPException(status_code=400, detail="Job upload folder is missing")
     return folder
+
+
+def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
+    """Resolve ``job.input_folder`` under this account's upload root, or raise."""
+    return _account_upload_folder_for_job_input(account_id, job.input_folder)
 
 
 @app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
@@ -2710,13 +2715,14 @@ def create_job(
 ) -> JobOut:
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
+    input_folder = str(_account_upload_folder_for_job_input(current.account_id, payload.input_folder))
     _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
         sale_id=sale.id,
         status=JobStatus.queued,
-        input_folder=payload.input_folder,
+        input_folder=input_folder,
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
         single_lot_mode=bool(payload.single_lot_mode),
         single_lot_manual_sku=_manual_sku,
