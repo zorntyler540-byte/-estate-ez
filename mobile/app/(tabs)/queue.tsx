@@ -147,7 +147,7 @@ export default function QueueScreen() {
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />}
         ListEmptyComponent={<Text style={styles.empty}>No local lots yet. Capture photos on the Capture tab.</Text>}
         renderItem={({ item }) => {
-          const status = draftStatusDisplay(item.status);
+          const status = draftStatusDisplay(item.status, { online, syncing });
           const hero = item.photoUris[0];
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           return (

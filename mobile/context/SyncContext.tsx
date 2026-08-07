@@ -74,7 +74,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         return { uploaded: 0, failed: 0 };
       }
 
-      const result = await syncPendingLots(token);
+      const result = await syncPendingLots(token, () => {
+        setRefreshKey((k) => k + 1);
+      });
       setLastMessage(formatSyncMessage(result));
       setRefreshKey((k) => k + 1);
       return result;

@@ -6,9 +6,13 @@ import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
+ * ``onProgress`` runs after each status change so Queue can refresh mid-sync.
  * Returns counts for UI feedback.
  */
-export async function syncPendingLots(token: string): Promise<{ uploaded: number; failed: number }> {
+export async function syncPendingLots(
+  token: string,
+  onProgress?: () => void
+): Promise<{ uploaded: number; failed: number }> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
     return { uploaded: 0, failed: 0 };
@@ -24,6 +28,7 @@ export async function syncPendingLots(token: string): Promise<{ uploaded: number
       await setDraftStatus(draft.id, "queued", null);
     }
   }
+  onProgress?.();
 
   const pending = (await listLotDrafts()).filter(
     (d) => d.status === "queued" || d.status === "failed"
@@ -34,11 +39,13 @@ export async function syncPendingLots(token: string): Promise<{ uploaded: number
     if (!photos.length) {
       await setDraftStatus(draft.id, "failed", "No photos in lot");
       failed += 1;
+      onProgress?.();
       continue;
     }
 
     try {
       await setDraftStatus(draft.id, "uploading", null);
+      onProgress?.();
       const job = await uploadSingleLotJob({
         saleId: draft.sale_id,
         token,
@@ -52,10 +59,12 @@ export async function syncPendingLots(token: string): Promise<{ uploaded: number
       await runJob(job.id, token);
       await setDraftStatus(draft.id, "uploaded", null);
       uploaded += 1;
+      onProgress?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Upload failed";
       await setDraftStatus(draft.id, "failed", msg);
       failed += 1;
+      onProgress?.();
     }
   }
 
