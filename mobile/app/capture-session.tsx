@@ -645,6 +645,11 @@ export default function CaptureSessionScreen() {
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
           <View style={styles.controlsCol}>
+            {!landscape ? (
+              <Text style={styles.cameraHint} pointerEvents="none">
+                Pinch to zoom · tap to refocus
+              </Text>
+            ) : null}
             <View style={styles.aspectRow}>
               {CAMERA_ASPECT_PRESETS.map((preset) => {
                 const active = aspectId === preset.id;
@@ -695,11 +700,6 @@ export default function CaptureSessionScreen() {
             </View>
           </View>
         </View>
-        {!landscape ? (
-          <Text style={styles.cameraHint} pointerEvents="none">
-            Pinch to zoom · tap to refocus · aspect crops on snap
-          </Text>
-        ) : null}
       </View>
 
       <ScrollView
@@ -861,9 +861,9 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 12,
     right: 12,
-    bottom: 36,
+    bottom: 12,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-end",
     justifyContent: "space-between",
     gap: 8
   },
@@ -945,14 +945,13 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.85)"
   },
   cameraHint: {
-    position: "absolute",
-    bottom: 96,
-    left: 0,
-    right: 0,
     textAlign: "center",
-    color: "rgba(245, 245, 244, 0.75)",
+    color: "rgba(245, 245, 244, 0.8)",
     fontSize: 11,
-    fontWeight: "600"
+    fontWeight: "600",
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2
   },
   focusRing: {
     position: "absolute",
