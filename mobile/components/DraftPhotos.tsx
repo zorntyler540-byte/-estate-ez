@@ -79,7 +79,10 @@ export function PhotoPreviewModal({ uri, index, total, onClose, onDelete }: Phot
   );
 }
 
-export function draftStatusDisplay(status: string): { label: string; hint: string } {
+export function draftStatusDisplay(
+  status: string,
+  opts?: { online?: boolean | null; syncing?: boolean }
+): { label: string; hint: string } {
   switch (status) {
     case "draft":
       return {
@@ -87,7 +90,13 @@ export function draftStatusDisplay(status: string): { label: string; hint: strin
         hint: "Photos are kept if you leave the app — tap Continue to add more, or Queue for upload"
       };
     case "queued":
-      return { label: "Ready to upload", hint: "Will send when you're online" };
+      if (opts?.syncing) {
+        return { label: "Ready to upload", hint: "In line — Sync is sending lots now" };
+      }
+      if (opts?.online === false) {
+        return { label: "Ready to upload", hint: "Will send when you're back online" };
+      }
+      return { label: "Ready to upload", hint: "Tap Sync now to send" };
     case "uploading":
       return {
         label: "Uploading…",
