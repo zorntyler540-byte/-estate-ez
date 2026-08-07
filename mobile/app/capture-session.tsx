@@ -644,53 +644,31 @@ export default function CaptureSessionScreen() {
           <Text style={styles.closeFabText}>✕</Text>
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
-          <View style={styles.controlsCol}>
-            <View style={styles.aspectRow}>
-              {CAMERA_ASPECT_PRESETS.map((preset) => {
-                const active = aspectId === preset.id;
+          <View style={styles.zoomTorchRow}>
+            <View style={styles.zoomRow}>
+              {ZOOM_PRESETS.map((preset) => {
+                const active =
+                  Math.abs(zoom - preset.value) < (preset.value === 0 ? 0.02 : 0.08);
                 return (
                   <Pressable
-                    key={preset.id}
-                    style={[styles.aspectBtn, active && styles.aspectBtnActive]}
-                    onPress={() => setAspectId(preset.id)}
-                    accessibilityLabel={`Aspect ratio ${preset.label}`}
+                    key={preset.label}
+                    style={[styles.zoomBtn, active && styles.zoomBtnActive]}
+                    onPress={() => applyZoom(preset.value)}
                   >
-                    <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                    <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
                       {preset.label}
                     </Text>
                   </Pressable>
                 );
               })}
             </View>
-            <View style={styles.zoomTorchRow}>
-              <View style={styles.zoomRow}>
-                {ZOOM_PRESETS.map((preset) => {
-                  const active =
-                    Math.abs(zoom - preset.value) <
-                    (preset.value === 0 ? 0.02 : 0.08);
-                  return (
-                    <Pressable
-                      key={preset.label}
-                      style={[styles.zoomBtn, active && styles.zoomBtnActive]}
-                      onPress={() => applyZoom(preset.value)}
-                    >
-                      <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
-                        {preset.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <Pressable
-                style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
-                onPress={() => setTorchOn((v) => !v)}
-                accessibilityLabel={torchOn ? "Turn torch off" : "Turn torch on"}
-              >
-                <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
-                  Torch
-                </Text>
-              </Pressable>
-            </View>
+            <Pressable
+              style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
+              onPress={() => setTorchOn((v) => !v)}
+              accessibilityLabel={torchOn ? "Turn torch off" : "Turn torch on"}
+            >
+              <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>Torch</Text>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -709,6 +687,24 @@ export default function CaptureSessionScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.aspectRow}>
+          {CAMERA_ASPECT_PRESETS.map((preset) => {
+            const active = aspectId === preset.id;
+            return (
+              <Pressable
+                key={preset.id}
+                style={[styles.aspectBtn, active && styles.aspectBtnActive]}
+                onPress={() => setAspectId(preset.id)}
+                accessibilityLabel={`Aspect ratio ${preset.label}`}
+              >
+                <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                  {preset.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
             {isAppendMode
@@ -847,36 +843,30 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 10,
     right: 10,
-    bottom: 10,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between"
+    bottom: 10
   },
   cameraControlsLandscape: {
     bottom: 10,
     left: 10,
     right: 10
   },
-  controlsCol: {
-    flex: 1,
-    gap: 6
-  },
   aspectRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    alignSelf: "center",
-    maxWidth: "100%",
-    backgroundColor: "rgba(14, 14, 16, 0.78)",
-    borderRadius: 999,
+    backgroundColor: "#141416",
+    borderRadius: 10,
     paddingHorizontal: 4,
-    paddingVertical: 3
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#1f1f22"
   },
   aspectBtn: {
-    minWidth: 48,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 8,
     alignItems: "center",
     backgroundColor: "transparent"
   },
@@ -944,7 +934,7 @@ const styles = StyleSheet.create({
   panel: {
     flexGrow: 0,
     flexShrink: 0,
-    maxHeight: "34%",
+    maxHeight: "40%",
     backgroundColor: "#0e0e10",
     borderTopWidth: 1,
     borderTopColor: "#141416"
