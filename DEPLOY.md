@@ -50,7 +50,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `CORS_ORIGINS` | Your **public web URL** only, e.g. `https://your-web-service.up.railway.app` — **no trailing slash**. Comma-separate if you have several. |
 | `TRUSTED_HOSTS` | Optional but recommended: comma-separated **Host** header values for the API (e.g. `your-api.up.railway.app`). Enables `TrustedHostMiddleware`. |
 | `ALLOW_OPEN_REGISTRATION` | Default `true`. After you create the first real account, set **`false`** and redeploy so strangers cannot register. |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 1440 = 24h). Lower for tighter security (e.g. `480`). |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
 | Optional | Copy other keys from `backend/.env.example` (SMTP, model flags, etc.). |
 
 6. **Generate domain** for the API service → note the HTTPS URL, e.g. `https://caring-api.up.railway.app`.
@@ -143,6 +143,20 @@ For a first pilot without R2: avoid redeploying the API unnecessarily, or add a 
 
 **Multiple API replicas:** Without R2 (or a shared volume), uploads can land on instance A while thumbnails hit instance B. Prefer **one replica**, or use R2.
 
+### Background catalog worker (recommended in production)
+
+By default the **API** runs Gemini catalog jobs in background threads inside the same process. Under load that makes the dashboard feel laggy. Prefer a **second Railway service** that only runs the worker:
+
+1. New service → Dockerfile **`infra/docker/Dockerfile.worker`** (no public domain / no `PORT` needed).
+2. Copy the same variables as the API (`DATABASE_URL`, `GOOGLE_API_KEY`, R2_*, `SECRET_KEY`, …).
+3. On the **API** only, set **`RUN_CATALOG_JOBS_IN_PROCESS=false`** and redeploy the API.
+4. Leave that variable unset/true on the worker (the Dockerfile defaults it to true).
+5. Optional: `WORKER_POLL_SECONDS=2`, `CATALOG_JOB_MAX_CONCURRENT=1`.
+
+Local check: `cd backend && RUN_CATALOG_JOBS_IN_PROCESS=true python -m app.worker`
+
+Jobs stay `queued` until the worker claims them (usually within a couple of seconds). Do **not** run migrations on the worker — only the API image runs Alembic.
+
 New uploads use keys **`catalog/{account_id}/{photo_id}.jpg`**. Deleting photos in the app removes the DB row and the R2/local object for that photo.
 
 ---
@@ -180,7 +194,7 @@ Same as local: edit code → commit → push → the host rebuilds/redeploys. Ru
 - **Turn off open signup** — Set `ALLOW_OPEN_REGISTRATION=false` after your pilot accounts exist.
 - **`TRUSTED_HOSTS`** — Set to your API hostname(s) to reduce Host-header attacks.
 - **Repo hygiene** — `Images/`, `*.db`, and `backend/data/` are gitignored so estate photos and databases do not land on GitHub.
-- **JWT lifetime** — Tune `ACCESS_TOKEN_EXPIRE_MINUTES` if you want shorter-lived sessions.
+- **JWT lifetime** — Default is 30 days (`43200` minutes). Tune `ACCESS_TOKEN_EXPIRE_MINUTES` on Railway if you want shorter or longer sessions (max 90 days).
 
 ---
 

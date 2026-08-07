@@ -1,7 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import * as FileSystem from "expo-file-system/legacy";
 
-import type { LotDraft, LotDraftStatus, LotPhotoRow } from "@/lib/types";
+import type { ListingChannel, LotDraft, LotDraftStatus, LotPhotoRow } from "@/lib/types";
 import { newLocalId } from "@/lib/uuid";
 
 const DB_NAME = "ct_capture.db";
@@ -36,6 +36,11 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "sale_name")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN sale_name TEXT");
       }
+      if (!cols.some((c) => c.name === "listing_channel")) {
+        await db.execAsync(
+          "ALTER TABLE lot_drafts ADD COLUMN listing_channel TEXT NOT NULL DEFAULT 'ctseller'"
+        );
+      }
       return db;
     })();
   }
@@ -43,11 +48,14 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft {
+  const channelRaw = row.listing_channel != null ? String(row.listing_channel) : "ctseller";
+  const listing_channel: ListingChannel = channelRaw === "facebook" ? "facebook" : "ctseller";
   return {
     id: String(row.id),
     sale_id: String(row.sale_id),
     sale_name: row.sale_name != null ? String(row.sale_name) : null,
     manual_sku: row.manual_sku != null ? String(row.manual_sku) : null,
+    listing_channel,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
     created_at: Number(row.created_at),
@@ -59,15 +67,17 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
 export async function createLotDraft(
   saleId: string,
   saleName: string | null,
-  manualSku?: string
+  manualSku?: string,
+  listingChannel: ListingChannel = "ctseller"
 ): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
   const now = Date.now();
+  const channel: ListingChannel = listingChannel === "facebook" ? "facebook" : "ctseller";
   await db.runAsync(
-    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, status, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'draft', NULL, ?, ?)`,
-    [id, saleId, saleName?.trim() || null, manualSku?.trim() || null, now, now]
+    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, listing_channel, status, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'draft', NULL, ?, ?)`,
+    [id, saleId, saleName?.trim() || null, manualSku?.trim() || null, channel, now, now]
   );
   return id;
 }
@@ -102,6 +112,47 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
     out.push(rowToDraft(row, Number(pc?.c ?? 0)));
   }
   return out;
+}
+
+export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<Record<string, unknown>>(
+    "SELECT * FROM lot_drafts WHERE id = ?",
+    [draftId]
+  );
+  if (!row) return null;
+  const pc = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+    [draftId]
+  );
+  return rowToDraft(row, Number(pc?.c ?? 0));
+}
+
+/**
+ * Newest unfinished lot for a sale + listing channel.
+ * Capture sessions remount after leaving the app; this is how we resume photos
+ * that were already saved to SQLite / disk.
+ */
+export async function findOpenDraft(
+  saleId: string,
+  listingChannel: ListingChannel = "ctseller"
+): Promise<LotDraft | null> {
+  const db = await getDb();
+  const channel: ListingChannel = listingChannel === "facebook" ? "facebook" : "ctseller";
+  const row = await db.getFirstAsync<Record<string, unknown>>(
+    `SELECT * FROM lot_drafts
+     WHERE sale_id = ? AND listing_channel = ? AND status = 'draft'
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [saleId, channel]
+  );
+  if (!row) return null;
+  const id = String(row.id);
+  const pc = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+    [id]
+  );
+  return rowToDraft(row, Number(pc?.c ?? 0));
 }
 
 export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
@@ -194,8 +245,9 @@ export async function countPendingDrafts(): Promise<number> {
 
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
+  // Include "uploading" so Sync Now / foreground sync recover lots stuck after an app kill.
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed')"
+    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed', 'uploading')"
   );
   return Number(row?.c ?? 0);
 }

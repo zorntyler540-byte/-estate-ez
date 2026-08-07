@@ -12,6 +12,8 @@ type Props = {
   label: string;
   maxPx?: number;
   minHeight?: number;
+  /** Cap displayed image height (CSS px). Lot detail passes a larger value for sharper previews. */
+  maxHeight?: number;
   /** When false, skip fetch — file is not on the API host (orphaned DB row). */
   fileOnDisk?: boolean;
   /** Bust thumbnail cache after replace/crop/rotate. */
@@ -31,6 +33,7 @@ function LotPhotoThumbInner({
   label,
   maxPx = 280,
   minHeight = 120,
+  maxHeight = 220,
   fileOnDisk = true,
   cacheBust = 0
 }: Props) {
@@ -163,9 +166,11 @@ function LotPhotoThumbInner({
           {
             width: "100%",
             height: "auto",
-            maxHeight: 220,
+            maxHeight,
             objectFit: "contain",
             display: "block",
+            // Avoid browser “optimize for speed” softening when upscaling thumbs on retina.
+            imageRendering: "auto",
             WebkitUserDrag: "none"
           } as CSSProperties
         }

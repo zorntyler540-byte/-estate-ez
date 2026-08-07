@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# None = no per-listing photo cap for now. Set to an int (e.g. 40) to re-enforce CTBids-style limits.
-CTBIDS_MAX_PHOTOS_PER_LOT: int | None = None
+# CT Seller hard-caps listings at 40 photos.
+# Set to None to disable the per-listing cap.
+CTBIDS_MAX_PHOTOS_PER_LOT: int | None = 40
 
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 

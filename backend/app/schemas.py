@@ -166,6 +166,7 @@ class LotOut(BaseModel):
     ai_regenerate_error: str | None = None
     ctseller_item_id: int | None = None
     ctseller_posted_at: datetime | None = None
+    listing_channel: str = "ctseller"
 
 
 class LotUpdate(BaseModel):
@@ -293,6 +294,7 @@ class CreateJobRequest(BaseModel):
     inherit_sku_from_subfolder: bool = False
     single_lot_mode: bool = False
     single_lot_manual_sku: str | None = None
+    listing_channel: str = "ctseller"
 
 
 class JobOut(BaseModel):
@@ -307,6 +309,7 @@ class JobOut(BaseModel):
     inherit_sku_from_subfolder: bool = False
     single_lot_mode: bool = False
     single_lot_manual_sku: str | None = None
+    listing_channel: str = "ctseller"
 
 
 class LotPhotoOut(BaseModel):

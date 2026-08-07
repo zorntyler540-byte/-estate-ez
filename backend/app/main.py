@@ -118,6 +118,12 @@ from app.services.suggestion_email import (
 )
 from app.services.photo_order import renormalize_photo_sort_orders
 from app.services.photo_roles import filter_photos_excluding_sku_tape
+from app.services.listing_channels import (
+    LISTING_CHANNEL_CTSELLER,
+    LISTING_CHANNEL_FACEBOOK,
+    is_facebook_listing_channel,
+    normalize_listing_channel,
+)
 from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import (
@@ -274,6 +280,7 @@ def _job_out(job: ProcessingJob) -> JobOut:
         inherit_sku_from_subfolder=bool(job.inherit_sku_from_subfolder),
         single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
         single_lot_manual_sku=job.single_lot_manual_sku,
+        listing_channel=normalize_listing_channel(getattr(job, "listing_channel", None)),
     )
 
 
@@ -1217,6 +1224,11 @@ def _post_one_lot_to_ctseller(
         raise HTTPException(status_code=400, detail="Lot needs a SKU before posting to CT Seller")
     if not (lot.auction_title or "").strip():
         raise HTTPException(status_code=400, detail="Lot needs an auction title before posting")
+    if is_facebook_listing_channel(getattr(lot, "listing_channel", None)):
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is marked for Facebook Marketplace — it cannot be posted to CT Seller",
+        )
 
     photos = (
         db.query(Photo)
@@ -1391,6 +1403,8 @@ def post_sale_lots_to_ctseller(
         raise HTTPException(status_code=404, detail="Account not found")
 
     q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+    # Never bulk-post Facebook Marketplace furniture into CT Bids.
+    q = q.filter(Lot.listing_channel != LISTING_CHANNEL_FACEBOOK)
     if body.lot_ids:
         wanted = {x.strip() for x in body.lot_ids if (x or "").strip()}
         q = q.filter(Lot.id.in_(wanted))
@@ -1510,6 +1524,10 @@ def post_sale_lots_to_ctseller(
 def list_lots(
     response: Response,
     sale_id: str | None = Query(None, description="When set, only lots for this sale."),
+    listing_channel: str | None = Query(
+        None,
+        description="When set to ctseller or facebook, only lots for that listing channel.",
+    ),
     sku_flags: str | None = Query(
         None,
         description="When set to duplicate, text_mismatch, or any, only rows with that SKU sanity flag.",
@@ -1536,6 +1554,15 @@ def list_lots(
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
+
+    if listing_channel is not None and str(listing_channel).strip():
+        raw_ch = str(listing_channel).strip().lower()
+        if raw_ch not in (LISTING_CHANNEL_CTSELLER, LISTING_CHANNEL_FACEBOOK):
+            raise HTTPException(
+                status_code=400,
+                detail="listing_channel must be ctseller or facebook",
+            )
+        q = q.filter(Lot.listing_channel == normalize_listing_channel(raw_ch))
 
     fk = (sku_flags or "").strip().lower()
     if fk:
@@ -2586,12 +2613,15 @@ async def create_job_from_upload(
     inherit_sku_from_subfolder: bool = Form(False),
     single_lot_mode: bool = Form(False),
     single_lot_manual_sku: str = Form(""),
+    listing_channel: str = Form("ctseller"),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     sale = _sale_for_user(sale_id, current, db)
     _require_open_sale(sale)
+    channel = normalize_listing_channel(listing_channel)
     if (
         bool(single_lot_mode)
+        and channel != LISTING_CHANNEL_FACEBOOK
         and CTBIDS_MAX_PHOTOS_PER_LOT is not None
         and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT
     ):
@@ -2614,6 +2644,7 @@ async def create_job_from_upload(
         inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
         single_lot_mode=bool(single_lot_mode),
         single_lot_manual_sku=_manual_sku,
+        listing_channel=channel,
     )
     db.add(job)
     db.commit()
@@ -2689,6 +2720,7 @@ def create_job(
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
         single_lot_mode=bool(payload.single_lot_mode),
         single_lot_manual_sku=_manual_sku,
+        listing_channel=normalize_listing_channel(payload.listing_channel),
     )
     db.add(job)
     db.commit()
@@ -2737,6 +2769,10 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         db.refresh(job)
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
+    # Dedicated worker mode: leave the row queued; ``app.worker`` claims it shortly.
+    if not job_tasks.catalog_jobs_run_in_process():
+        db.refresh(job)
+        return _job_out(job)
     job_tasks.kick_queue_if_idle(current.account_id)
     started = False
     try:

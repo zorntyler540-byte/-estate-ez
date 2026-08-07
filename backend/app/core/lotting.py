@@ -2462,6 +2462,7 @@ def tape_marking_canonical(raw: str | None) -> str | None:
     Supports:
     - Digits-only after ``#`` or plain digit runs (2–6 digits), via ``normalize_tape_sku_input``.
     - Letter prefix + digits on tape (e.g. ``SR006``, ``SA004``, ``SA 003``) → uppercase letters + digits, no space.
+    - Optional letter suffix after the digits (e.g. ``JH603SK``, ``MS6000RG``).
     """
     if raw is None:
         return None
@@ -2471,14 +2472,35 @@ def tape_marking_canonical(raw: str | None) -> str | None:
     compact = re.sub(r"\s+", "", s)
     if "#" in compact:
         tail = compact.rsplit("#", 1)[-1]
-        m = re.search(r"([A-Za-z]{1,4})(\d{2,6})", tail)
+        m = re.search(r"([A-Za-z]{1,4})(\d{2,6})([A-Za-z]{0,4})", tail)
         if m:
-            return f"{m.group(1).upper()}{m.group(2)}"
+            return f"{m.group(1).upper()}{m.group(2)}{m.group(3).upper()}"
         return normalize_tape_sku_input(tail)
-    m = re.match(r"^([A-Za-z]{1,4})(\d{2,6})$", compact)
+    m = re.match(r"^([A-Za-z]{1,4})(\d{2,6})([A-Za-z]{0,4})$", compact)
     if m:
-        return f"{m.group(1).upper()}{m.group(2)}"
+        return f"{m.group(1).upper()}{m.group(2)}{m.group(3).upper()}"
     return normalize_tape_sku_input(s)
+
+
+def normalize_manual_sku_input(raw: str | None) -> str | None:
+    """
+    Preserve a user-typed lot code from mobile/web (do not strip letter prefixes/suffixes).
+
+    Keeps A–Z / 0–9 only, uppercased, after removing spaces and punctuation.
+    Requires 2–12 digits somewhere in the code so empty/garbage entries are rejected.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.lower() in ("null", "none", "n/a", "unknown", "undefined", ""):
+        return None
+    compact = re.sub(r"[^A-Za-z0-9]+", "", s).upper()
+    if not compact:
+        return None
+    digits = re.sub(r"\D", "", compact)
+    if len(digits) < 2 or len(digits) > 12:
+        return None
+    return compact[:40]
 
 
 def tape_sku_opens_new_lot(sku: Any) -> bool:

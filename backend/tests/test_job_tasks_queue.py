@@ -48,26 +48,43 @@ class JobTasksQueueTests(unittest.TestCase):
         job_tasks.kick_queue_if_idle("acct-1")
         mock_try.assert_called_once_with("acct-1")
 
-    @patch.object(job_tasks, "_claim_queued_job", return_value=True)
-    @patch.object(job_tasks, "can_start_job_for_account", return_value=True)
-    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
-    @patch.object(job_tasks.threading, "Thread")
-    def test_start_claims_job_before_thread(
-        self,
-        mock_thread: object,
-        _mock_reconcile: object,
-        _mock_can: object,
-        mock_claim: object,
-    ) -> None:
-        mock_thread.return_value.start = lambda: None
-        ok = job_tasks.start_job_in_background("job-a", "acct-1")
-        self.assertTrue(ok)
-        mock_claim.assert_called_once_with("job-a", "acct-1")
+    def test_start_claims_job_before_thread(self) -> None:
+        with (
+            patch.object(job_tasks, "_clear_stale_registration"),
+            patch.object(job_tasks, "_claim_queued_job", return_value=True) as mock_claim,
+            patch.object(job_tasks, "can_start_job_for_account", return_value=True),
+            patch.object(job_tasks, "reconcile_memory_threads_for_account"),
+            patch.object(job_tasks.threading, "Thread") as mock_thread,
+        ):
+            mock_thread.return_value.start = lambda: None
+            ok = job_tasks.start_job_in_background("job-a", "acct-1")
+            self.assertTrue(ok)
+            mock_claim.assert_called_once_with("job-a", "acct-1")
 
-    @patch.object(job_tasks, "can_start_job_for_account", return_value=False)
-    def test_second_start_returns_false_when_at_capacity(self, _mock_can: object) -> None:
-        ok = job_tasks.start_job_in_background("job-b", "acct-1")
+    def test_second_start_returns_false_when_at_capacity(self) -> None:
+        with (
+            patch.object(job_tasks, "reconcile_memory_threads_for_account"),
+            patch.object(job_tasks, "can_start_job_for_account", return_value=False),
+        ):
+            ok = job_tasks.start_job_in_background("job-b", "acct-1")
+            self.assertFalse(ok)
+
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "_claim_queued_job")
+    def test_start_noop_when_dedicated_worker_mode(
+        self, mock_claim: object, _mock_flag: object
+    ) -> None:
+        ok = job_tasks.start_job_in_background("job-c", "acct-1")
         self.assertFalse(ok)
+        mock_claim.assert_not_called()
+
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "try_start_next_queued_job")
+    def test_kick_noop_when_dedicated_worker_mode(
+        self, mock_try: object, _mock_flag: object
+    ) -> None:
+        job_tasks.kick_queue_if_idle("acct-1")
+        mock_try.assert_not_called()
 
     def test_reconcile_does_not_fail_recent_processing_on_other_replica(self) -> None:
         row = MagicMock()

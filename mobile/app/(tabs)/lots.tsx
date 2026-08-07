@@ -47,7 +47,11 @@ export default function LotsScreen() {
       setError("");
       try {
         // Show the list immediately — do not wait on cover signing.
-        const rows = await listLots(token, selectedSaleId, { sort: "sku_asc", limit: 500 });
+        const rows = await listLots(token, selectedSaleId, {
+          sort: "sku_asc",
+          limit: 500,
+          listingChannel: "ctseller"
+        });
         setLots(rows);
         setLoading(false);
         setRefreshing(false);
