@@ -1035,7 +1035,7 @@ const styles = StyleSheet.create({
   actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
   snap: {
     flex: 1,
-    backgroundColor: "#3f3f46",
+    backgroundColor: "#ff4d1a",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -1052,7 +1052,7 @@ const styles = StyleSheet.create({
   },
   primary: {
     flex: 1,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: "#3f3f46",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
