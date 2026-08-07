@@ -74,8 +74,8 @@ function rememberDashboardScrollBeforeLotDetails() {
   }
 }
 
-/** Keep in sync with ``backend/app/catalog_limits.py`` ``CTBIDS_MAX_PHOTOS_PER_LOT`` (null = no cap). */
-const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = null;
+/** Keep in sync with ``backend/app/catalog_limits.py`` (CT Seller ~40; CT Seller hard cap). */
+const CTBIDS_MAX_PHOTOS_PER_LOT: number | null = 40;
 
 const STANDARD_CONDITIONS = ["NEW", "LIKE NEW", "VERY GOOD", "GOOD", "FAIR"] as const;
 
