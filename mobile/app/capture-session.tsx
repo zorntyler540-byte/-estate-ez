@@ -233,6 +233,11 @@ export default function CaptureSessionScreen() {
     setResumedNotice("");
 
     async function hydrate() {
+      // Append-to-lot mode starts empty — do not pull an unfinished new-lot draft.
+      if (isAppendMode) {
+        if (!cancelled) setSessionReady(true);
+        return;
+      }
       try {
         let draft = resumeDraftId ? await getLotDraft(resumeDraftId) : null;
         if (draft && draft.status !== "draft") {
@@ -258,7 +263,7 @@ export default function CaptureSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [applyDraft, listingChannel, resumeDraftId, selectedSaleId]);
+  }, [applyDraft, isAppendMode, listingChannel, resumeDraftId, selectedSaleId]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
