@@ -3,7 +3,11 @@ import NetInfo from "@react-native-community/netinfo";
 import { runJob, uploadSingleLotJob } from "../api";
 import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 
-/** Upload queued/failed lot drafts when online. Returns counts for UI feedback. */
+/**
+ * Upload queued/failed lot drafts when online.
+ * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
+ * Returns counts for UI feedback.
+ */
 export async function syncPendingLots(token: string): Promise<{ uploaded: number; failed: number }> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
@@ -13,7 +17,17 @@ export async function syncPendingLots(token: string): Promise<{ uploaded: number
   let uploaded = 0;
   let failed = 0;
   const drafts = await listLotDrafts();
-  const pending = drafts.filter((d) => d.status === "queued" || d.status === "failed");
+
+  // App kill / crash mid-upload leaves status as "uploading" forever unless we reset.
+  for (const draft of drafts) {
+    if (draft.status === "uploading") {
+      await setDraftStatus(draft.id, "queued", null);
+    }
+  }
+
+  const pending = (await listLotDrafts()).filter(
+    (d) => d.status === "queued" || d.status === "failed"
+  );
 
   for (const draft of pending) {
     const photos = await listDraftPhotos(draft.id);
