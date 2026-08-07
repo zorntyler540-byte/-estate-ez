@@ -138,26 +138,27 @@ export type UploadLotJobOptions = {
 
 /**
  * Multipart upload with the same 401 → silent re-login retry as ``apiFetch``.
- * (Raw fetch used to skip refresh, so one phone with an expired JWT could hang Sync.)
+ * Rebuilds FormData on retry (RN may not reuse a consumed body).
+ * (Raw fetch used to skip refresh, so one phone with an expired JWT could fail Sync.)
  */
 async function uploadFormData(
   path: string,
   token: string,
-  form: FormData,
+  buildForm: () => FormData,
   fallbackError: string,
   alreadyRetried = false
 ): Promise<string> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
-    body: form
+    body: buildForm()
   });
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401 && token && !alreadyRetried && !path.startsWith("/auth/login")) {
       const refreshed = await refreshSessionIfPossible();
       if (refreshed && refreshed !== token) {
-        return uploadFormData(path, refreshed, form, fallbackError, true);
+        return uploadFormData(path, refreshed, buildForm, fallbackError, true);
       }
     }
     throw new Error(parseApiError(text, `${fallbackError} (${res.status})`));
@@ -165,25 +166,32 @@ async function uploadFormData(
   return text;
 }
 
-/** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
-export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
-  const form = new FormData();
-  form.append("sale_id", opts.saleId);
-  form.append("inherit_sku_from_subfolder", "false");
-  form.append("single_lot_mode", "true");
-  form.append("listing_channel", opts.listingChannel === "facebook" ? "facebook" : "ctseller");
-  if (opts.manualSku?.trim()) {
-    form.append("single_lot_manual_sku", opts.manualSku.trim());
-  }
-  for (const photo of opts.photoUris) {
+function appendJpegFiles(form: FormData, photoUris: { uri: string; name: string }[]) {
+  for (const photo of photoUris) {
     form.append("files", {
       uri: photo.uri,
       name: photo.name,
       type: "image/jpeg"
     } as unknown as Blob);
   }
+}
 
-  const text = await uploadFormData("/jobs/upload", opts.token, form, "Upload failed");
+/** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
+export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
+  const buildForm = () => {
+    const form = new FormData();
+    form.append("sale_id", opts.saleId);
+    form.append("inherit_sku_from_subfolder", "false");
+    form.append("single_lot_mode", "true");
+    form.append("listing_channel", opts.listingChannel === "facebook" ? "facebook" : "ctseller");
+    if (opts.manualSku?.trim()) {
+      form.append("single_lot_manual_sku", opts.manualSku.trim());
+    }
+    appendJpegFiles(form, opts.photoUris);
+    return form;
+  };
+
+  const text = await uploadFormData("/jobs/upload", opts.token, buildForm, "Upload failed");
   return JSON.parse(text) as Job;
 }
 
@@ -196,18 +204,15 @@ export async function uploadLotPhotos(
   if (!photoUris.length) {
     throw new Error("No photos to upload");
   }
-  const form = new FormData();
-  for (const photo of photoUris) {
-    form.append("files", {
-      uri: photo.uri,
-      name: photo.name,
-      type: "image/jpeg"
-    } as unknown as Blob);
-  }
+  const buildForm = () => {
+    const form = new FormData();
+    appendJpegFiles(form, photoUris);
+    return form;
+  };
   const text = await uploadFormData(
     `/lots/${encodeURIComponent(lotId)}/photos/upload`,
     token,
-    form,
+    buildForm,
     "Upload failed"
   );
   const raw = text ? (JSON.parse(text) as unknown) : null;
