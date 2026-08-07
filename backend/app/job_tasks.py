@@ -206,11 +206,24 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
         try_start_next_queued_job(account_id)
 
 
+def catalog_jobs_run_in_process() -> bool:
+    """False on the API when a dedicated worker service owns Gemini catalog jobs."""
+    return bool(settings.run_catalog_jobs_in_process)
+
+
 def start_job_in_background(job_id: str, account_id: str) -> bool:
     """
     Start a queued job when account capacity allows.
-    Returns False when the job should stay queued (another lot is still running).
+    Returns False when the job should stay queued (another lot is still running),
+    or when this process is configured not to run catalog jobs (dedicated worker mode).
     """
+    if not catalog_jobs_run_in_process():
+        _LOG.debug(
+            "Skipping in-process start job_id=%s (RUN_CATALOG_JOBS_IN_PROCESS=false)",
+            job_id,
+        )
+        return False
+
     reconcile_memory_threads_for_account(account_id)
     if not can_start_job_for_account(account_id):
         return False
@@ -246,6 +259,8 @@ def start_job_in_background(job_id: str, account_id: str) -> bool:
 
 def try_start_next_queued_job(account_id: str) -> None:
     """After a job finishes (or the queue was idle), start the oldest queued job for this account."""
+    if not catalog_jobs_run_in_process():
+        return
     reconcile_memory_threads_for_account(account_id)
     if not can_start_job_for_account(account_id):
         return
@@ -277,6 +292,8 @@ def try_start_next_queued_job(account_id: str) -> None:
 
 def kick_queue_if_idle(account_id: str) -> None:
     """Start waiting queued jobs when nothing is processing (e.g. after API restart or stale reconcile)."""
+    if not catalog_jobs_run_in_process():
+        return
     reconcile_memory_threads_for_account(account_id)
     if effective_running_count(account_id) > 0:
         return

@@ -143,6 +143,20 @@ For a first pilot without R2: avoid redeploying the API unnecessarily, or add a 
 
 **Multiple API replicas:** Without R2 (or a shared volume), uploads can land on instance A while thumbnails hit instance B. Prefer **one replica**, or use R2.
 
+### Background catalog worker (recommended in production)
+
+By default the **API** runs Gemini catalog jobs in background threads inside the same process. Under load that makes the dashboard feel laggy. Prefer a **second Railway service** that only runs the worker:
+
+1. New service → Dockerfile **`infra/docker/Dockerfile.worker`** (no public domain / no `PORT` needed).
+2. Copy the same variables as the API (`DATABASE_URL`, `GOOGLE_API_KEY`, R2_*, `SECRET_KEY`, …).
+3. On the **API** only, set **`RUN_CATALOG_JOBS_IN_PROCESS=false`** and redeploy the API.
+4. Leave that variable unset/true on the worker (the Dockerfile defaults it to true).
+5. Optional: `WORKER_POLL_SECONDS=2`, `CATALOG_JOB_MAX_CONCURRENT=1`.
+
+Local check: `cd backend && RUN_CATALOG_JOBS_IN_PROCESS=true python -m app.worker`
+
+Jobs stay `queued` until the worker claims them (usually within a couple of seconds). Do **not** run migrations on the worker — only the API image runs Alembic.
+
 New uploads use keys **`catalog/{account_id}/{photo_id}.jpg`**. Deleting photos in the app removes the DB row and the R2/local object for that photo.
 
 ---

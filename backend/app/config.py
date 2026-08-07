@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     gemini_global_concurrency: int = Field(default=4, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
     # Stacked Add-one-lot uploads queue automatically when this many jobs are already running.
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
+    # When false, this process only enqueues catalog jobs; a separate ``python -m app.worker`` claims them.
+    # Set false on the Railway API service and true (default) on the worker service.
+    run_catalog_jobs_in_process: bool = Field(default=True, alias="RUN_CATALOG_JOBS_IN_PROCESS")
     gemini_image_max_edge: int = Field(default=3072, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=95, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
