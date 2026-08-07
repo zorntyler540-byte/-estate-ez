@@ -20,6 +20,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSync } from "@/context/SyncContext";
+import {
+  CAMERA_ASPECT_PRESETS,
+  aspectPresetById,
+  centeredAspectRect,
+  maybeCropToAspect,
+  type CameraAspectId
+} from "@/lib/cameraAspect";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import {
   addPhotoToDraft,
@@ -43,6 +50,49 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
+function AspectMask({
+  layout,
+  ratio
+}: {
+  layout: { width: number; height: number };
+  ratio: number | null;
+}) {
+  const rect = centeredAspectRect(layout.width, layout.height, ratio);
+  if (!ratio || (rect.width >= layout.width && rect.height >= layout.height)) {
+    return null;
+  }
+  const { x, y, width: w, height: h } = rect;
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={[styles.maskBar, { left: 0, top: 0, width: layout.width, height: y }]} />
+      <View
+        style={[
+          styles.maskBar,
+          {
+            left: 0,
+            top: y + h,
+            width: layout.width,
+            height: Math.max(0, layout.height - y - h)
+          }
+        ]}
+      />
+      <View style={[styles.maskBar, { left: 0, top: y, width: x, height: h }]} />
+      <View
+        style={[
+          styles.maskBar,
+          {
+            left: x + w,
+            top: y,
+            width: Math.max(0, layout.width - x - w),
+            height: h
+          }
+        ]}
+      />
+      <View style={[styles.maskFrame, { left: x, top: y, width: w, height: h }]} />
+    </View>
+  );
+}
+
 export default function CaptureSessionScreen() {
   const params = useLocalSearchParams<{ channel?: string }>();
   const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
@@ -63,6 +113,8 @@ export default function CaptureSessionScreen() {
   const [previewIndex, setPreviewIndex] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
   const [pictureSize, setPictureSize] = useState<string | undefined>();
+  const [aspectId, setAspectId] = useState<CameraAspectId>("full");
+  const [cameraLayout, setCameraLayout] = useState({ width: 0, height: 0 });
 
   // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
   const [zoom, setZoom] = useState(0);
@@ -170,10 +222,12 @@ export default function CaptureSessionScreen() {
         setError("Camera returned no image.");
         return;
       }
+      const ratio = aspectPresetById(aspectId).ratio;
+      const croppedUri = await maybeCropToAspect(photo.uri, photo.width, photo.height, ratio);
       const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       const dest = `${dir}${Date.now()}.jpg`;
-      await FileSystem.copyAsync({ from: photo.uri, to: dest });
+      await FileSystem.copyAsync({ from: croppedUri, to: dest });
       await addPhotoToDraft(id, dest);
       const photos = await listDraftPhotos(id);
       const uris = photos.map((p) => p.file_uri);
@@ -333,6 +387,10 @@ export default function CaptureSessionScreen() {
           styles.cameraWrap,
           landscape && styles.cameraWrapLandscape
         ]}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setCameraLayout({ width, height });
+        }}
       >
         <CameraView
           ref={cameraRef}
@@ -345,6 +403,12 @@ export default function CaptureSessionScreen() {
           onCameraReady={() => void handleCameraReady()}
         />
         <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
+        {aspectId !== "full" && cameraLayout.width > 0 && cameraLayout.height > 0 ? (
+          <AspectMask
+            layout={cameraLayout}
+            ratio={aspectPresetById(aspectId).ratio}
+          />
+        ) : null}
         {focusPoint ? (
           <View
             pointerEvents="none"
@@ -363,39 +427,60 @@ export default function CaptureSessionScreen() {
           <Text style={styles.closeFabText}>✕</Text>
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
-          <View style={styles.zoomRow}>
-            {ZOOM_PRESETS.map((preset) => {
-              const active =
-                Math.abs(zoom - preset.value) <
-                (preset.value === 0 ? 0.02 : 0.08);
-              return (
-                <Pressable
-                  key={preset.label}
-                  style={[styles.zoomBtn, active && styles.zoomBtnActive]}
-                  onPress={() => applyZoom(preset.value)}
-                >
-                  <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
-                    {preset.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-            {zoom > 0.02 ? (
-              <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
-            ) : null}
+          <View style={styles.controlsCol}>
+            <View style={styles.aspectRow}>
+              {CAMERA_ASPECT_PRESETS.map((preset) => {
+                const active = aspectId === preset.id;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    style={[styles.aspectBtn, active && styles.aspectBtnActive]}
+                    onPress={() => setAspectId(preset.id)}
+                    accessibilityLabel={`Aspect ratio ${preset.label}`}
+                  >
+                    <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                      {preset.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.zoomTorchRow}>
+              <View style={styles.zoomRow}>
+                {ZOOM_PRESETS.map((preset) => {
+                  const active =
+                    Math.abs(zoom - preset.value) <
+                    (preset.value === 0 ? 0.02 : 0.08);
+                  return (
+                    <Pressable
+                      key={preset.label}
+                      style={[styles.zoomBtn, active && styles.zoomBtnActive]}
+                      onPress={() => applyZoom(preset.value)}
+                    >
+                      <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
+                        {preset.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {zoom > 0.02 ? (
+                  <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
+                ) : null}
+              </View>
+              <Pressable
+                style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
+                onPress={() => setTorchOn((v) => !v)}
+              >
+                <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
+                  {torchOn ? "Torch on" : "Torch off"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
-          <Pressable
-            style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
-            onPress={() => setTorchOn((v) => !v)}
-          >
-            <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
-              {torchOn ? "Torch on" : "Torch off"}
-            </Text>
-          </Pressable>
         </View>
         {!landscape ? (
           <Text style={styles.cameraHint} pointerEvents="none">
-            Pinch to zoom · tap to refocus
+            Pinch to zoom · tap to refocus · aspect crops on snap
           </Text>
         ) : null}
       </View>
@@ -514,7 +599,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 12,
     right: 12,
-    bottom: 28,
+    bottom: 36,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -524,6 +609,37 @@ const styles = StyleSheet.create({
     bottom: 12,
     left: 12,
     right: 12
+  },
+  controlsCol: {
+    flex: 1,
+    gap: 8
+  },
+  aspectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 4
+  },
+  aspectBtn: {
+    flex: 1,
+    minWidth: 44,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    borderRadius: 999,
+    alignItems: "center",
+    backgroundColor: "transparent"
+  },
+  aspectBtnActive: { backgroundColor: "#ff4d1a" },
+  aspectBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
+  aspectBtnTextActive: { color: "#fff" },
+  zoomTorchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
   },
   zoomRow: {
     flexDirection: "row",
@@ -557,9 +673,18 @@ const styles = StyleSheet.create({
   torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
   torchBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   torchBtnTextActive: { color: "#1c1917" },
+  maskBar: {
+    position: "absolute",
+    backgroundColor: "rgba(0,0,0,0.45)"
+  },
+  maskFrame: {
+    position: "absolute",
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.85)"
+  },
   cameraHint: {
     position: "absolute",
-    bottom: 8,
+    bottom: 96,
     left: 0,
     right: 0,
     textAlign: "center",
