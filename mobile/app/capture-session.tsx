@@ -644,62 +644,33 @@ export default function CaptureSessionScreen() {
           <Text style={styles.closeFabText}>✕</Text>
         </Pressable>
         <View style={[styles.cameraControls, landscape && styles.cameraControlsLandscape]}>
-          <View style={styles.controlsCol}>
-            <View style={styles.aspectRow}>
-              {CAMERA_ASPECT_PRESETS.map((preset) => {
-                const active = aspectId === preset.id;
+          <View style={styles.zoomTorchRow}>
+            <View style={styles.zoomRow}>
+              {ZOOM_PRESETS.map((preset) => {
+                const active =
+                  Math.abs(zoom - preset.value) < (preset.value === 0 ? 0.02 : 0.08);
                 return (
                   <Pressable
-                    key={preset.id}
-                    style={[styles.aspectBtn, active && styles.aspectBtnActive]}
-                    onPress={() => setAspectId(preset.id)}
-                    accessibilityLabel={`Aspect ratio ${preset.label}`}
+                    key={preset.label}
+                    style={[styles.zoomBtn, active && styles.zoomBtnActive]}
+                    onPress={() => applyZoom(preset.value)}
                   >
-                    <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                    <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
                       {preset.label}
                     </Text>
                   </Pressable>
                 );
               })}
             </View>
-            <View style={styles.zoomTorchRow}>
-              <View style={styles.zoomRow}>
-                {ZOOM_PRESETS.map((preset) => {
-                  const active =
-                    Math.abs(zoom - preset.value) <
-                    (preset.value === 0 ? 0.02 : 0.08);
-                  return (
-                    <Pressable
-                      key={preset.label}
-                      style={[styles.zoomBtn, active && styles.zoomBtnActive]}
-                      onPress={() => applyZoom(preset.value)}
-                    >
-                      <Text style={[styles.zoomBtnText, active && styles.zoomBtnTextActive]}>
-                        {preset.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-                {zoom > 0.02 ? (
-                  <Text style={styles.zoomReadout}>{Math.round(zoom * 100)}%</Text>
-                ) : null}
-              </View>
-              <Pressable
-                style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
-                onPress={() => setTorchOn((v) => !v)}
-              >
-                <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>
-                  {torchOn ? "Torch on" : "Torch off"}
-                </Text>
-              </Pressable>
-            </View>
+            <Pressable
+              style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
+              onPress={() => setTorchOn((v) => !v)}
+              accessibilityLabel={torchOn ? "Turn torch off" : "Turn torch on"}
+            >
+              <Text style={[styles.torchBtnText, torchOn && styles.torchBtnTextActive]}>Torch</Text>
+            </Pressable>
           </View>
         </View>
-        {!landscape ? (
-          <Text style={styles.cameraHint} pointerEvents="none">
-            Pinch to zoom · tap to refocus · aspect crops on snap
-          </Text>
-        ) : null}
       </View>
 
       <ScrollView
@@ -716,19 +687,37 @@ export default function CaptureSessionScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.aspectRow}>
+          {CAMERA_ASPECT_PRESETS.map((preset) => {
+            const active = aspectId === preset.id;
+            return (
+              <Pressable
+                key={preset.id}
+                style={[styles.aspectBtn, active && styles.aspectBtnActive]}
+                onPress={() => setAspectId(preset.id)}
+                accessibilityLabel={`Aspect ratio ${preset.label}`}
+              >
+                <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                  {preset.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
             {isAppendMode
               ? thumbs.length
-                ? `Add to lot · ${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
-                : "Add photos · tap Snap"
+                ? `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
+                : "Add photos"
               : isFacebook
                 ? thumbs.length
-                  ? `Facebook · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                  : "Facebook furniture · Snap photos"
+                  ? `Facebook · ${thumbs.length}`
+                  : "Facebook"
                 : thumbs.length
-                  ? `Lot · ${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
-                  : "Aim · tap Snap"}
+                  ? `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  : "New lot"}
           </Text>
           {resumedNotice ? (
             <Text style={styles.sessionMetaResumed} numberOfLines={2}>
@@ -747,14 +736,7 @@ export default function CaptureSessionScreen() {
         </View>
 
         {!landscape ? (
-          <>
-            <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
-            <Text style={styles.sectionHint}>
-              {isAppendMode
-                ? "These attach to the existing listing · tap to review · × to remove"
-                : "Tap to review · × to remove"}
-            </Text>
-          </>
+          <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
         ) : (
           <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New photos" : "Photos"}</Text>
         )}
@@ -859,38 +841,32 @@ const styles = StyleSheet.create({
   closeFabText: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", lineHeight: 18 },
   cameraControls: {
     position: "absolute",
-    left: 12,
-    right: 12,
-    bottom: 36,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8
+    left: 10,
+    right: 10,
+    bottom: 10
   },
   cameraControlsLandscape: {
-    bottom: 12,
-    left: 12,
-    right: 12
-  },
-  controlsCol: {
-    flex: 1,
-    gap: 8
+    bottom: 10,
+    left: 10,
+    right: 10
   },
   aspectRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
-    borderRadius: 999,
-    paddingHorizontal: 6,
-    paddingVertical: 4
+    gap: 4,
+    backgroundColor: "#141416",
+    borderRadius: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#1f1f22"
   },
   aspectBtn: {
     flex: 1,
-    minWidth: 44,
-    paddingVertical: 7,
+    minWidth: 0,
+    paddingVertical: 8,
     paddingHorizontal: 6,
-    borderRadius: 999,
+    borderRadius: 8,
     alignItems: "center",
     backgroundColor: "transparent"
   },
@@ -906,34 +882,33 @@ const styles = StyleSheet.create({
   zoomRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    gap: 4,
+    backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 5
+    paddingHorizontal: 4,
+    paddingVertical: 3
   },
   zoomBtn: {
     minWidth: 40,
-    paddingVertical: 7,
+    paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 999,
     alignItems: "center",
     backgroundColor: "transparent"
   },
   zoomBtnActive: { backgroundColor: "#ff4d1a" },
-  zoomBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
+  zoomBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
   zoomBtnTextActive: { color: "#fff" },
-  zoomReadout: { color: "#a8a29e", fontSize: 12, fontWeight: "600", paddingHorizontal: 4 },
   torchBtn: {
-    backgroundColor: "rgba(14, 14, 16, 0.72)",
+    backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
-    paddingVertical: 10,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: "rgba(168, 162, 158, 0.35)"
   },
   torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
-  torchBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
+  torchBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
   torchBtnTextActive: { color: "#1c1917" },
   maskBar: {
     position: "absolute",
@@ -943,16 +918,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     borderWidth: 1.5,
     borderColor: "rgba(255,255,255,0.85)"
-  },
-  cameraHint: {
-    position: "absolute",
-    bottom: 96,
-    left: 0,
-    right: 0,
-    textAlign: "center",
-    color: "rgba(245, 245, 244, 0.75)",
-    fontSize: 11,
-    fontWeight: "600"
   },
   focusRing: {
     position: "absolute",
@@ -969,7 +934,7 @@ const styles = StyleSheet.create({
   panel: {
     flexGrow: 0,
     flexShrink: 0,
-    maxHeight: "38%",
+    maxHeight: "40%",
     backgroundColor: "#0e0e10",
     borderTopWidth: 1,
     borderTopColor: "#141416"
@@ -988,9 +953,9 @@ const styles = StyleSheet.create({
   },
   panelContent: {
     paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 10,
-    gap: 8
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 6
   },
   panelContentLandscape: {
     paddingTop: 10,
@@ -1035,7 +1000,7 @@ const styles = StyleSheet.create({
   actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
   snap: {
     flex: 1,
-    backgroundColor: "#3f3f46",
+    backgroundColor: "#ff4d1a",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -1052,7 +1017,7 @@ const styles = StyleSheet.create({
   },
   primary: {
     flex: 1,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: "#3f3f46",
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
