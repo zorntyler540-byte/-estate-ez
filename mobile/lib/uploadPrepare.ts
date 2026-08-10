@@ -1,4 +1,3 @@
-import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 
 /** Keep multipart uploads small enough for field Wi‑Fi / cellular. */
@@ -11,12 +10,18 @@ export type UploadPhotoUri = { uri: string; name: string };
 
 export type PreparePhotosResult = {
   photos: UploadPhotoUri[];
-  /** Local lot_photos.id values whose files were missing on disk. */
+  /** Local lot_photos.id values we could not open for upload. */
   skippedIds: string[];
-  /** Original file_uri values for skipped rows (for DB cleanup by URI). */
-  missingUris: string[];
   skipped: number;
 };
+
+function normalizeFileUri(uri: string): string {
+  const raw = (uri || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("file://")) return raw;
+  if (raw.startsWith("/")) return `file://${raw}`;
+  return raw;
+}
 
 function uriCandidates(uri: string): string[] {
   const raw = (uri || "").trim();
@@ -26,100 +31,73 @@ function uriCandidates(uri: string): string[] {
     if (u && !out.includes(u)) out.push(u);
   };
   add(raw);
-  if (raw.startsWith("file://")) {
-    add(raw.replace(/^file:\/\//, ""));
-  } else if (raw.startsWith("/")) {
-    add(`file://${raw}`);
+  const normalized = normalizeFileUri(raw);
+  add(normalized);
+  if (normalized.startsWith("file://")) {
+    add(normalized.replace(/^file:\/\//, ""));
   }
   return out;
 }
 
-/** Return a readable file:// URI, or null if the photo file is gone. */
-export async function resolveQueuePhotoUri(uri: string): Promise<string | null> {
+/**
+ * Compress for upload. Prefer ImageManipulator (same loader family as camera crop)
+ * over FileSystem.getInfoAsync — that exists-check was rejecting paths Queue still
+ * displays via expo-image, which produced "Photo 1 is missing" on every lot.
+ */
+async function compressForUpload(uri: string): Promise<string | null> {
   for (const candidate of uriCandidates(uri)) {
     try {
-      const info = await FileSystem.getInfoAsync(candidate);
-      if (info.exists && !("isDirectory" in info && info.isDirectory)) {
-        return candidate.startsWith("file://") ? candidate : `file://${candidate}`;
-      }
-    } catch {
-      // try next form
-    }
-  }
-
-  // Last chance: ImageManipulator can sometimes open URIs getInfoAsync rejects.
-  try {
-    const tryUri = uri.startsWith("file://") ? uri : `file://${uri}`;
-    const result = await ImageManipulator.manipulateAsync(
-      tryUri,
-      [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
-      {
-        compress: UPLOAD_JPEG_QUALITY,
-        format: ImageManipulator.SaveFormat.JPEG
-      }
-    );
-    return result.uri;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Verify local files exist and compress for upload.
- * Skips missing files instead of failing the whole lot (Build 9 threw
- * "Photo 1 is missing…" when any single frame was gone).
- */
-export async function preparePhotosForUpload(
-  photos: { id: string; uri: string; name: string }[]
-): Promise<PreparePhotosResult> {
-  const out: UploadPhotoUri[] = [];
-  const skippedIds: string[] = [];
-  const missingUris: string[] = [];
-
-  for (const photo of photos) {
-    const resolved = await resolveQueuePhotoUri(photo.uri);
-    if (!resolved) {
-      skippedIds.push(photo.id);
-      missingUris.push(photo.uri);
-      continue;
-    }
-
-    try {
       const manipulated = await ImageManipulator.manipulateAsync(
-        resolved,
+        normalizeFileUri(candidate) || candidate,
         [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
         {
           compress: UPLOAD_JPEG_QUALITY,
           format: ImageManipulator.SaveFormat.JPEG
         }
       );
-      out.push({
-        uri: manipulated.uri,
-        name: photo.name.replace(/\.[^.]+$/, "") + ".jpg"
-      });
+      if (manipulated.uri) return manipulated.uri;
     } catch {
-      // Compress failed but URI resolved — try uploading the original path.
-      try {
-        const info = await FileSystem.getInfoAsync(resolved);
-        if (info.exists) {
-          out.push({
-            uri: resolved,
-            name: photo.name.replace(/\.[^.]+$/, "") + ".jpg"
-          });
-          continue;
-        }
-      } catch {
-        /* fall through */
-      }
-      skippedIds.push(photo.id);
-      missingUris.push(photo.uri);
+      // try next URI form
     }
+  }
+  return null;
+}
+
+/**
+ * Prepare queue photos for multipart upload.
+ * Never gates on getInfoAsync — if the image opens for compress, upload it;
+ * otherwise fall back to the original file URI (FormData / expo-image can still
+ * read paths getInfoAsync reports as missing).
+ * Does not delete local draft rows; Sync decides how to report failures.
+ */
+export async function preparePhotosForUpload(
+  photos: { id: string; uri: string; name: string }[]
+): Promise<PreparePhotosResult> {
+  const out: UploadPhotoUri[] = [];
+  const skippedIds: string[] = [];
+
+  for (const photo of photos) {
+    const name = photo.name.replace(/\.[^.]+$/, "") + ".jpg";
+    const compressed = await compressForUpload(photo.uri);
+    if (compressed) {
+      out.push({ uri: compressed, name });
+      continue;
+    }
+
+    // Last resort: send the same URI Queue/expo-image uses. Upload may still succeed
+    // even when getInfoAsync / manipulateAsync disagreed.
+    const fallback = normalizeFileUri(photo.uri);
+    if (fallback) {
+      out.push({ uri: fallback, name });
+      continue;
+    }
+
+    skippedIds.push(photo.id);
   }
 
   return {
     photos: out,
     skippedIds,
-    missingUris,
     skipped: skippedIds.length
   };
 }
