@@ -843,6 +843,7 @@ def _process_job_body(
         return
 
     folder = Path(job.input_folder)
+    r2_ensure_error: str | None = None
     try:
         from app.job_batch_storage import ensure_job_input_folder, mirror_folder_to_r2
 
@@ -850,15 +851,33 @@ def _process_job_body(
         if folder.is_dir():
             mirror_folder_to_r2(folder)
         folder = ensure_job_input_folder(folder)
-    except Exception:
+    except Exception as exc:
         _LOG.exception("job-batch R2 ensure failed job_id=%s", job.id)
+        try:
+            from app.object_storage import r2_client_error_hint
+
+            r2_ensure_error = r2_client_error_hint(exc) or str(exc)
+        except Exception:  # noqa: BLE001
+            r2_ensure_error = str(exc)
 
     if not folder.exists() or not folder.is_dir():
         job.status = JobStatus.failed
-        job.error_message = (
-            f"Input folder not found: {folder} "
-            "(upload disk was lost — re-sync from the phone, or attach a Railway volume / keep R2 job staging)"
-        )
+        if r2_ensure_error and "signature" in r2_ensure_error.lower():
+            job.error_message = (
+                f"Input folder not found: {folder}. {r2_ensure_error}. "
+                "Until R2 auth works, re-sync/resend from the phone after fixing Railway R2 keys "
+                "(or attach a Railway volume for local uploads)."
+            )
+        elif r2_ensure_error:
+            job.error_message = (
+                f"Input folder not found: {folder}. R2 restore failed: {r2_ensure_error}. "
+                "Re-sync from the phone, or fix R2 / attach a Railway volume."
+            )
+        else:
+            job.error_message = (
+                f"Input folder not found: {folder} "
+                "(upload disk was lost — re-sync from the phone, or attach a Railway volume / keep R2 job staging)"
+            )
         job.cancel_requested = False
         db.commit()
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})

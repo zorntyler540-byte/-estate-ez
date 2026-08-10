@@ -1210,7 +1210,10 @@ function jobLostUploadFolder(job: Job): boolean {
   return (
     msg.includes("input folder not found") ||
     msg.includes("upload disk was lost") ||
-    msg.includes("re-sync from the phone")
+    msg.includes("re-sync from the phone") ||
+    msg.includes("signaturedoesnotmatch") ||
+    msg.includes("r2 auth failed") ||
+    msg.includes("r2 restore failed")
   );
 }
 
