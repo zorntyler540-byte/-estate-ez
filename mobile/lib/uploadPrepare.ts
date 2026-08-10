@@ -87,7 +87,11 @@ async function compressForUpload(uri: string): Promise<string | null> {
  * uploads send the name FastAPI / catalog expect.
  */
 export async function stageUploadJpeg(photo: UploadPhotoUri): Promise<string> {
-  const dir = `${FileSystem.cacheDirectory ?? ""}ct-upload-stage/`;
+  const cache = FileSystem.cacheDirectory;
+  if (!cache) {
+    throw new Error("Phone storage unavailable for upload staging");
+  }
+  const dir = `${cache}ct-upload-stage/`;
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
   const safe = photo.name.replace(/[^\w.\-]+/g, "_");
   const dest = `${dir}${Date.now()}-${safe}`;
