@@ -12,12 +12,21 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _clean_secret(raw: str | None) -> str:
+    """Strip whitespace / wrapping quotes that break S3V4 signatures when pasted into Railway."""
+    v = (raw or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        v = v[1:-1].strip()
+    # Railway / dotenv sometimes keep a trailing newline or CR inside quotes.
+    return v.replace("\r", "").replace("\n", "").strip()
+
+
 def r2_configured() -> bool:
     return bool(
-        (settings.r2_access_key_id or "").strip()
-        and (settings.r2_secret_access_key or "").strip()
-        and (settings.r2_bucket or "").strip()
-        and (settings.r2_endpoint or "").strip()
+        _clean_secret(settings.r2_access_key_id)
+        and _clean_secret(settings.r2_secret_access_key)
+        and _clean_secret(settings.r2_bucket)
+        and _clean_secret(settings.r2_endpoint)
     )
 
 
@@ -26,11 +35,36 @@ def _normalize_endpoint(raw: str) -> str:
     Accept either ``https://<account>.r2.cloudflarestorage.com`` or the same with
     ``/<bucket>`` appended (Cloudflare bucket Settings UI).
     """
-    endpoint = (raw or "").strip().rstrip("/")
-    bucket = (settings.r2_bucket or "").strip().strip("/")
+    endpoint = _clean_secret(raw).rstrip("/")
+    bucket = _clean_secret(settings.r2_bucket).strip("/")
     if bucket and endpoint.endswith(f"/{bucket}"):
         endpoint = endpoint[: -(len(bucket) + 1)]
     return endpoint
+
+
+def r2_client_error_hint(exc: BaseException) -> str | None:
+    """Return a short operator-facing hint for common R2/boto auth failures."""
+    name = type(exc).__name__
+    msg = str(exc)
+    code = None
+    resp = getattr(exc, "response", None)
+    if isinstance(resp, dict):
+        code = resp.get("Error", {}).get("Code")
+    blob = f"{name} {code or ''} {msg}".lower()
+    if "signaturedoesnotmatch" in blob or "signature does not match" in blob:
+        return (
+            "R2 auth failed (SignatureDoesNotMatch): check Railway R2_ACCESS_KEY_ID + "
+            "R2_SECRET_ACCESS_KEY are a matching pair from Cloudflare R2 → Manage R2 API Tokens "
+            "(no extra quotes), and R2_ENDPOINT is https://<accountid>.r2.cloudflarestorage.com"
+        )
+    if "invalidaccesskeyid" in blob or ("access key" in blob and "invalid" in blob):
+        return (
+            "R2 access key rejected: recreate the R2 API token and update "
+            "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY on Railway"
+        )
+    if "nosuchbucket" in blob:
+        return "R2 bucket not found: check R2_BUCKET matches the Cloudflare bucket name exactly"
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -60,15 +94,15 @@ def _client() -> Any:
     return boto3.client(
         "s3",
         endpoint_url=_normalize_endpoint(settings.r2_endpoint),
-        aws_access_key_id=(settings.r2_access_key_id or "").strip(),
-        aws_secret_access_key=(settings.r2_secret_access_key or "").strip(),
+        aws_access_key_id=_clean_secret(settings.r2_access_key_id),
+        aws_secret_access_key=_clean_secret(settings.r2_secret_access_key),
         region_name="auto",
         config=cfg,
     )
 
 
 def _bucket() -> str:
-    return (settings.r2_bucket or "").strip()
+    return _clean_secret(settings.r2_bucket)
 
 
 def put_bytes(key: str, data: bytes, *, content_type: str | None = None) -> None:
