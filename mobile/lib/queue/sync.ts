@@ -1,13 +1,23 @@
 import NetInfo from "@react-native-community/netinfo";
 
-import { runJob, uploadSingleLotJob } from "../api";
+import {
+  appendFilesToQueuedJob,
+  runJob,
+  uploadSingleLotJob
+} from "../api";
+import { refreshSessionIfPossible } from "../sessionBridge";
+import {
+  UPLOAD_CHUNK_SIZE,
+  chunkPhotos,
+  preparePhotosForUpload
+} from "../uploadPrepare";
 import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
+ * Compresses + chunks photos so Sync cannot hang forever on a giant multipart.
  * ``onProgress`` runs after each status change so Queue can refresh mid-sync.
- * Returns counts for UI feedback.
  */
 export async function syncPendingLots(
   token: string,
@@ -20,6 +30,10 @@ export async function syncPendingLots(
 
   let uploaded = 0;
   let failed = 0;
+  let authToken = token;
+  const refreshed = await refreshSessionIfPossible();
+  if (refreshed) authToken = refreshed;
+
   const drafts = await listLotDrafts();
 
   // App kill / crash mid-upload leaves status as "uploading" forever unless we reset.
@@ -46,17 +60,34 @@ export async function syncPendingLots(
     try {
       await setDraftStatus(draft.id, "uploading", null);
       onProgress?.();
-      const job = await uploadSingleLotJob({
-        saleId: draft.sale_id,
-        token,
-        manualSku: draft.manual_sku ?? undefined,
-        listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
-        photoUris: photos.map((p, i) => ({
+
+      const prepared = await preparePhotosForUpload(
+        photos.map((p, i) => ({
           uri: p.file_uri,
           name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
         }))
+      );
+      const chunks = chunkPhotos(prepared, UPLOAD_CHUNK_SIZE);
+      if (!chunks.length) {
+        throw new Error("No photos to upload");
+      }
+
+      const first = chunks[0]!;
+      const job = await uploadSingleLotJob({
+        saleId: draft.sale_id,
+        token: authToken,
+        manualSku: draft.manual_sku ?? undefined,
+        listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
+        photoUris: first
       });
-      await runJob(job.id, token);
+      onProgress?.();
+
+      for (let c = 1; c < chunks.length; c++) {
+        await appendFilesToQueuedJob(authToken, job.id, chunks[c]!);
+        onProgress?.();
+      }
+
+      await runJob(job.id, authToken);
       await setDraftStatus(draft.id, "uploaded", null);
       uploaded += 1;
       onProgress?.();
