@@ -11,18 +11,12 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
-import {
-  listDraftPhotos,
-  listLotDrafts,
-  setDraftStatus,
-  deletePhotoById
-} from "./db";
+import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
  * Compresses + chunks photos so Sync cannot hang forever on a giant multipart.
- * Skips photo files that are missing on disk and uploads the rest.
  * ``onProgress`` runs after each status change so Queue can refresh mid-sync.
  */
 export async function syncPendingLots(
@@ -75,15 +69,9 @@ export async function syncPendingLots(
         }))
       );
 
-      // Drop gone files from the local lot so Queue stops showing dead thumbs.
-      for (const photoId of prepared.skippedIds) {
-        await deletePhotoById(draft.id, photoId);
-      }
-      if (prepared.skippedIds.length) onProgress?.();
-
       if (!prepared.photos.length) {
         throw new Error(
-          "All photos for this lot are missing on the phone — re-snap and queue again."
+          "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
         );
       }
 
@@ -104,11 +92,7 @@ export async function syncPendingLots(
       }
 
       await runJob(job.id, authToken);
-      const skipNote =
-        prepared.skipped > 0
-          ? `Uploaded with ${prepared.skipped} missing photo${prepared.skipped === 1 ? "" : "s"} skipped`
-          : null;
-      await setDraftStatus(draft.id, "uploaded", skipNote);
+      await setDraftStatus(draft.id, "uploaded", null);
       uploaded += 1;
       onProgress?.();
     } catch (e) {
