@@ -198,7 +198,11 @@ export default function QueueScreen() {
                 </View>
               ) : null}
 
-              {item.error_message ? <Text style={styles.error}>{item.error_message}</Text> : null}
+              {item.error_message ? (
+                <Text style={item.status === "uploading" ? styles.progress : styles.error}>
+                  {item.error_message}
+                </Text>
+              ) : null}
               {item.status === "draft" ? (
                 <View style={styles.draftActions}>
                   <Pressable style={styles.continueBtn} onPress={() => continueDraft(item)}>
@@ -272,6 +276,7 @@ const styles = StyleSheet.create({
   moreThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: "#141416" },
   moreCount: { color: "#78716c", fontSize: 12 },
   error: { color: "#fca5a5", fontSize: 12 },
+  progress: { color: "#fdba74", fontSize: 12, marginTop: 4 },
   draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   continueBtn: {
     alignSelf: "flex-start",
