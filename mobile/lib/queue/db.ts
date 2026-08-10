@@ -221,6 +221,18 @@ export async function deletePhotoFromDraft(draftId: string, fileUri: string): Pr
   return true;
 }
 
+export async function deletePhotoById(draftId: string, photoId: string): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM lot_photos WHERE draft_id = ? AND id = ?",
+    [draftId, photoId]
+  );
+  if (!row) return false;
+  await db.runAsync("DELETE FROM lot_photos WHERE id = ?", [row.id]);
+  await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
+  return true;
+}
+
 export async function deleteLotDraft(draftId: string): Promise<void> {
   const photos = await listDraftPhotos(draftId);
   for (const photo of photos) {
