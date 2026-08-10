@@ -100,7 +100,7 @@ export function draftStatusDisplay(
     case "uploading":
       return {
         label: "Uploading…",
-        hint: "Sending photos to the server. If this sticks, Sync now will retry."
+        hint: "Sending to the server first — the website Lots list fills in after catalog finishes (check Jobs)."
       };
     case "uploaded":
       return { label: "Sent to server", hint: "Open the web dashboard to review the catalog listing" };
