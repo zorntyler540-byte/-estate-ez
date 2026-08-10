@@ -11,6 +11,13 @@ from app.db import Base
 
 
 class JobStatus(str, enum.Enum):
+    """Catalog / export job lifecycle.
+
+    ``receiving`` = multipart upload still in progress (do not start Gemini yet).
+    ``queued`` = ready for a worker / in-process runner (set by ``POST /jobs/{id}/run``).
+    """
+
+    receiving = "receiving"
     queued = "queued"
     processing = "processing"
     completed = "completed"

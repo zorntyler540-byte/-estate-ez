@@ -143,36 +143,13 @@ export async function syncPendingLots(
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Upload failed";
 
-      // Avoid orphan "queued" jobs on the website from a mid-lot Sync failure.
-      if (jobId && uploadedCount > 0) {
-        try {
-          await setDraftStatus(
-            draft.id,
-            "uploading",
-            `Upload interrupted — starting catalog with ${uploadedCount}/${total} photos…`
-          );
-          onProgress?.();
-          await runJob(jobId, authToken);
-          await setDraftStatus(
-            draft.id,
-            "uploaded",
-            `Sent ${uploadedCount} of ${total} photos (rest failed: ${msg})`
-          );
-          uploaded += 1;
-          onProgress?.();
-          continue;
-        } catch {
-          try {
-            await deleteJob(jobId, authToken);
-          } catch {
-            /* leave orphan rather than mask the real error */
-          }
-        }
-      } else if (jobId) {
+      // Never start catalog with a partial lot — that was creating 1–2 photo listings.
+      // Delete the receiving job so Sync can retry the full lot cleanly.
+      if (jobId) {
         try {
           await deleteJob(jobId, authToken);
         } catch {
-          /* ignore */
+          /* leave orphan rather than mask the real error */
         }
       }
 
