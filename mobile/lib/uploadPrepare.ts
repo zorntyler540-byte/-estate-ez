@@ -21,7 +21,7 @@ export type PreparePhotosResult = {
   skipped: number;
 };
 
-function normalizeFileUri(uri: string): string {
+export function normalizeFileUri(uri: string): string {
   const raw = (uri || "").trim();
   if (!raw) return "";
   if (raw.startsWith("file://")) return raw;
@@ -29,7 +29,12 @@ function normalizeFileUri(uri: string): string {
   return raw;
 }
 
-function uriCandidates(uri: string): string[] {
+/**
+ * Build URI variants to try. Includes remapping ``.../Documents/lot-captures/...``
+ * onto the current app container (paths can go stale across reinstalls while
+ * expo-image still shows a cached thumb).
+ */
+export function uriCandidates(uri: string): string[] {
   const raw = (uri || "").trim();
   if (!raw) return [];
   const out: string[] = [];
@@ -41,6 +46,13 @@ function uriCandidates(uri: string): string[] {
   add(normalized);
   if (normalized.startsWith("file://")) {
     add(normalized.replace(/^file:\/\//, ""));
+  }
+
+  const doc = FileSystem.documentDirectory;
+  const relMatch = raw.match(/\/Documents\/(lot-captures\/[^?#]+)/i);
+  if (doc && relMatch?.[1]) {
+    add(`${doc}${relMatch[1]}`);
+    add(normalizeFileUri(`${doc}${relMatch[1]}`));
   }
   return out;
 }
@@ -59,12 +71,18 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-async function compressForUpload(uri: string): Promise<string | null> {
+/**
+ * Produce a cache JPEG ImageManipulator can write (always FileSystem-readable).
+ * Avoids ``copyAsync`` which was failing with "File … is not readable" on paths
+ * that Queue thumbs still display via expo-image cache.
+ */
+export async function materializeUploadJpeg(uri: string): Promise<string | null> {
   for (const candidate of uriCandidates(uri)) {
+    const tryUri = normalizeFileUri(candidate) || candidate;
     try {
       const manipulated = await withTimeout(
         ImageManipulator.manipulateAsync(
-          normalizeFileUri(candidate) || candidate,
+          tryUri,
           [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
           {
             compress: UPLOAD_JPEG_QUALITY,
@@ -76,32 +94,49 @@ async function compressForUpload(uri: string): Promise<string | null> {
       );
       if (manipulated.uri) return manipulated.uri;
     } catch {
-      // try next URI form / fall through
+      // try next candidate
+    }
+    // No-op re-encode (sometimes succeeds when resize path fails).
+    try {
+      const probed = await withTimeout(
+        ImageManipulator.manipulateAsync(tryUri, [], {
+          compress: UPLOAD_JPEG_QUALITY,
+          format: ImageManipulator.SaveFormat.JPEG
+        }),
+        COMPRESS_TIMEOUT_MS,
+        "compress-timeout"
+      );
+      if (probed.uri) return probed.uri;
+    } catch {
+      // try next
     }
   }
   return null;
 }
 
 /**
- * Stage a JPEG under cache with a stable ``.jpg`` filename so native multipart
- * uploads send the name FastAPI / catalog expect.
+ * Resolve a local file URI for native ``uploadAsync``.
+ * Prefers a freshly materialized cache JPEG; falls back to a remapped original.
+ * Never uses ``copyAsync`` (Build 14 failure mode).
  */
-export async function stageUploadJpeg(photo: UploadPhotoUri): Promise<string> {
-  const cache = FileSystem.cacheDirectory;
-  if (!cache) {
-    throw new Error("Phone storage unavailable for upload staging");
+export async function resolveUploadFileUri(photo: UploadPhotoUri): Promise<string> {
+  const materialized = await materializeUploadJpeg(photo.uri);
+  if (materialized) return materialized;
+
+  for (const candidate of uriCandidates(photo.uri)) {
+    const tryUri = normalizeFileUri(candidate) || candidate;
+    // Prefer file:// form for URLSession.
+    if (tryUri.startsWith("file://")) return tryUri;
   }
-  const dir = `${cache}ct-upload-stage/`;
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-  const safe = photo.name.replace(/[^\w.\-]+/g, "_");
-  const dest = `${dir}${Date.now()}-${safe}`;
-  await FileSystem.copyAsync({ from: photo.uri, to: dest });
-  return dest;
+  const fallback = normalizeFileUri(photo.uri);
+  if (fallback) return fallback;
+  throw new Error(
+    "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
+  );
 }
 
 /**
- * Prepare queue photos for upload. Prefer a timed compress; otherwise use the
- * original file URI that Queue/expo-image already displays.
+ * Prepare queue photos for upload.
  */
 export async function preparePhotosForUpload(
   photos: { id: string; uri: string; name: string }[]
@@ -111,17 +146,12 @@ export async function preparePhotosForUpload(
 
   for (const photo of photos) {
     const name = photo.name.replace(/\.[^.]+$/, "") + ".jpg";
-    const compressed = await compressForUpload(photo.uri);
-    if (compressed) {
-      out.push({ uri: compressed, name });
-      continue;
+    try {
+      const uri = await resolveUploadFileUri({ uri: photo.uri, name });
+      out.push({ uri, name });
+    } catch {
+      skippedIds.push(photo.id);
     }
-    const fallback = normalizeFileUri(photo.uri);
-    if (fallback) {
-      out.push({ uri: fallback, name });
-      continue;
-    }
-    skippedIds.push(photo.id);
   }
 
   return { photos: out, skippedIds, skipped: skippedIds.length };
