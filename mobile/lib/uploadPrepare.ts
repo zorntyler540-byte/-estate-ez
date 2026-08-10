@@ -9,34 +9,119 @@ export const UPLOAD_CHUNK_SIZE = 4;
 
 export type UploadPhotoUri = { uri: string; name: string };
 
-/**
- * Verify local files exist and compress for upload.
- * Returns upload-ready JPEG URIs (may be temp files under cache).
- */
-export async function preparePhotosForUpload(
-  photos: UploadPhotoUri[]
-): Promise<UploadPhotoUri[]> {
-  const out: UploadPhotoUri[] = [];
-  for (let i = 0; i < photos.length; i++) {
-    const photo = photos[i]!;
-    const info = await FileSystem.getInfoAsync(photo.uri);
-    if (!info.exists) {
-      throw new Error(`Photo ${i + 1} is missing on this phone — re-snap that lot.`);
+export type PreparePhotosResult = {
+  photos: UploadPhotoUri[];
+  /** Local lot_photos.id values whose files were missing on disk. */
+  skippedIds: string[];
+  /** Original file_uri values for skipped rows (for DB cleanup by URI). */
+  missingUris: string[];
+  skipped: number;
+};
+
+function uriCandidates(uri: string): string[] {
+  const raw = (uri || "").trim();
+  if (!raw) return [];
+  const out: string[] = [];
+  const add = (u: string) => {
+    if (u && !out.includes(u)) out.push(u);
+  };
+  add(raw);
+  if (raw.startsWith("file://")) {
+    add(raw.replace(/^file:\/\//, ""));
+  } else if (raw.startsWith("/")) {
+    add(`file://${raw}`);
+  }
+  return out;
+}
+
+/** Return a readable file:// URI, or null if the photo file is gone. */
+export async function resolveQueuePhotoUri(uri: string): Promise<string | null> {
+  for (const candidate of uriCandidates(uri)) {
+    try {
+      const info = await FileSystem.getInfoAsync(candidate);
+      if (info.exists && !("isDirectory" in info && info.isDirectory)) {
+        return candidate.startsWith("file://") ? candidate : `file://${candidate}`;
+      }
+    } catch {
+      // try next form
     }
-    const manipulated = await ImageManipulator.manipulateAsync(
-      photo.uri,
+  }
+
+  // Last chance: ImageManipulator can sometimes open URIs getInfoAsync rejects.
+  try {
+    const tryUri = uri.startsWith("file://") ? uri : `file://${uri}`;
+    const result = await ImageManipulator.manipulateAsync(
+      tryUri,
       [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
       {
         compress: UPLOAD_JPEG_QUALITY,
         format: ImageManipulator.SaveFormat.JPEG
       }
     );
-    out.push({
-      uri: manipulated.uri,
-      name: photo.name.replace(/\.[^.]+$/, "") + ".jpg"
-    });
+    return result.uri;
+  } catch {
+    return null;
   }
-  return out;
+}
+
+/**
+ * Verify local files exist and compress for upload.
+ * Skips missing files instead of failing the whole lot (Build 9 threw
+ * "Photo 1 is missing…" when any single frame was gone).
+ */
+export async function preparePhotosForUpload(
+  photos: { id: string; uri: string; name: string }[]
+): Promise<PreparePhotosResult> {
+  const out: UploadPhotoUri[] = [];
+  const skippedIds: string[] = [];
+  const missingUris: string[] = [];
+
+  for (const photo of photos) {
+    const resolved = await resolveQueuePhotoUri(photo.uri);
+    if (!resolved) {
+      skippedIds.push(photo.id);
+      missingUris.push(photo.uri);
+      continue;
+    }
+
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        resolved,
+        [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
+        {
+          compress: UPLOAD_JPEG_QUALITY,
+          format: ImageManipulator.SaveFormat.JPEG
+        }
+      );
+      out.push({
+        uri: manipulated.uri,
+        name: photo.name.replace(/\.[^.]+$/, "") + ".jpg"
+      });
+    } catch {
+      // Compress failed but URI resolved — try uploading the original path.
+      try {
+        const info = await FileSystem.getInfoAsync(resolved);
+        if (info.exists) {
+          out.push({
+            uri: resolved,
+            name: photo.name.replace(/\.[^.]+$/, "") + ".jpg"
+          });
+          continue;
+        }
+      } catch {
+        /* fall through */
+      }
+      skippedIds.push(photo.id);
+      missingUris.push(photo.uri);
+    }
+  }
+
+  return {
+    photos: out,
+    skippedIds,
+    missingUris,
+    skipped: skippedIds.length
+  };
 }
 
 export function chunkPhotos<T>(items: T[], size: number): T[][] {
