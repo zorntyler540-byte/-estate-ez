@@ -5243,6 +5243,11 @@ export default function DashboardPage() {
                   SKU:{job.single_lot_manual_sku}
                 </span>
               ) : null}
+              {job.status === "receiving" ? (
+                <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
+                  Receiving uploads… catalog waits until upload finishes
+                </span>
+              ) : null}
               {job.status === "queued" && busyProcessing ? (
                 <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
                   Waiting for current lot…
@@ -5271,7 +5276,7 @@ export default function DashboardPage() {
               {job.error_message ? (
                 <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
               ) : null}
-              {job.status !== "processing" && (
+              {job.status !== "processing" && job.status !== "receiving" && (
                 <button
                   type="button"
                   className="ct-btn ct-btn--ghost"
