@@ -103,7 +103,10 @@ export function draftStatusDisplay(
         hint: "Sending to the server first — the website Lots list fills in after catalog finishes (check Jobs)."
       };
     case "uploaded":
-      return { label: "Sent to server", hint: "Open the web dashboard to review the catalog listing" };
+      return {
+        label: "Sent to server",
+        hint: "Review on the web dashboard. If the job failed or photos are missing online, tap Resend to server."
+      };
     case "failed":
       return { label: "Upload failed", hint: "Tap Sync now to retry" };
     default:

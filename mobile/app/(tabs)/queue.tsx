@@ -67,6 +67,44 @@ export default function QueueScreen() {
     });
   }
 
+  /** Re-queue a lot already marked uploaded so Sync sends photos again (e.g. server lost staging). */
+  function confirmResendLot(item: DraftRow) {
+    if (item.status === "uploading" || syncing) {
+      Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
+      return;
+    }
+    if (!item.photoUris.length) {
+      Alert.alert("No photos", "This lot has no photos saved on the phone to resend.");
+      return;
+    }
+    Alert.alert(
+      "Resend to server?",
+      "Uploads these photos again as a new catalog job. Use this if the web job failed or photos are missing on the dashboard.\n\nIf that listing already looks fine online, skip this — you may create a duplicate.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Resend",
+          onPress: () => {
+            void (async () => {
+              await setDraftStatus(item.id, "queued", null);
+              await refresh();
+              setMessage("Re-queued — syncing…");
+              const result = await syncNow();
+              if (result) {
+                setMessage(
+                  result.uploaded || result.failed
+                    ? `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} failed` : ""}.`
+                    : "Nothing queued to upload."
+                );
+              }
+              await refresh();
+            })();
+          }
+        }
+      ]
+    );
+  }
+
   async function syncAll() {
     setMessage("");
     const result = await syncNow();
@@ -212,6 +250,15 @@ export default function QueueScreen() {
                     <Text style={styles.secondaryText}>Queue for upload</Text>
                   </Pressable>
                 </View>
+              ) : null}
+              {item.status === "uploaded" ? (
+                <Pressable
+                  style={[styles.secondary, syncing && styles.disabled]}
+                  disabled={syncing}
+                  onPress={() => confirmResendLot(item)}
+                >
+                  <Text style={styles.secondaryText}>Resend to server</Text>
+                </Pressable>
               ) : null}
             </View>
           );
