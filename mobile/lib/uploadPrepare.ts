@@ -1,16 +1,22 @@
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 
 /** Keep multipart uploads small enough for field Wi‑Fi / cellular. */
-export const UPLOAD_MAX_EDGE_PX = 2048;
-export const UPLOAD_JPEG_QUALITY = 0.82;
-/** Photos per `/jobs/upload` or `/upload-files` request. */
-export const UPLOAD_CHUNK_SIZE = 3;
+export const UPLOAD_MAX_EDGE_PX = 1600;
+export const UPLOAD_JPEG_QUALITY = 0.72;
+/**
+ * One photo per request. RN ``fetch``+FormData multi-file posts were hanging until
+ * our abort timer; native ``uploadAsync`` one-at-a-time is reliable.
+ */
+export const UPLOAD_CHUNK_SIZE = 1;
+/** Give native upload plenty of time per photo (not the old 160s multi-file abort). */
+export const UPLOAD_PER_FILE_TIMEOUT_MS = 5 * 60_000;
+const COMPRESS_TIMEOUT_MS = 25_000;
 
 export type UploadPhotoUri = { uri: string; name: string };
 
 export type PreparePhotosResult = {
   photos: UploadPhotoUri[];
-  /** Local lot_photos.id values we could not open for upload. */
   skippedIds: string[];
   skipped: number;
 };
@@ -39,36 +45,59 @@ function uriCandidates(uri: string): string[] {
   return out;
 }
 
-/**
- * Compress for upload. Prefer ImageManipulator (same loader family as camera crop)
- * over FileSystem.getInfoAsync — that exists-check was rejecting paths Queue still
- * displays via expo-image, which produced "Photo 1 is missing" on every lot.
- */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label)), ms);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function compressForUpload(uri: string): Promise<string | null> {
   for (const candidate of uriCandidates(uri)) {
     try {
-      const manipulated = await ImageManipulator.manipulateAsync(
-        normalizeFileUri(candidate) || candidate,
-        [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
-        {
-          compress: UPLOAD_JPEG_QUALITY,
-          format: ImageManipulator.SaveFormat.JPEG
-        }
+      const manipulated = await withTimeout(
+        ImageManipulator.manipulateAsync(
+          normalizeFileUri(candidate) || candidate,
+          [{ resize: { width: UPLOAD_MAX_EDGE_PX } }],
+          {
+            compress: UPLOAD_JPEG_QUALITY,
+            format: ImageManipulator.SaveFormat.JPEG
+          }
+        ),
+        COMPRESS_TIMEOUT_MS,
+        "compress-timeout"
       );
       if (manipulated.uri) return manipulated.uri;
     } catch {
-      // try next URI form
+      // try next URI form / fall through
     }
   }
   return null;
 }
 
 /**
- * Prepare queue photos for multipart upload.
- * Never gates on getInfoAsync — if the image opens for compress, upload it;
- * otherwise fall back to the original file URI (FormData / expo-image can still
- * read paths getInfoAsync reports as missing).
- * Does not delete local draft rows; Sync decides how to report failures.
+ * Stage a JPEG under cache with a stable ``.jpg`` filename so native multipart
+ * uploads send the name FastAPI / catalog expect.
+ */
+export async function stageUploadJpeg(photo: UploadPhotoUri): Promise<string> {
+  const dir = `${FileSystem.cacheDirectory ?? ""}ct-upload-stage/`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  const safe = photo.name.replace(/[^\w.\-]+/g, "_");
+  const dest = `${dir}${Date.now()}-${safe}`;
+  await FileSystem.copyAsync({ from: photo.uri, to: dest });
+  return dest;
+}
+
+/**
+ * Prepare queue photos for upload. Prefer a timed compress; otherwise use the
+ * original file URI that Queue/expo-image already displays.
  */
 export async function preparePhotosForUpload(
   photos: { id: string; uri: string; name: string }[]
@@ -83,23 +112,15 @@ export async function preparePhotosForUpload(
       out.push({ uri: compressed, name });
       continue;
     }
-
-    // Last resort: send the same URI Queue/expo-image uses. Upload may still succeed
-    // even when getInfoAsync / manipulateAsync disagreed.
     const fallback = normalizeFileUri(photo.uri);
     if (fallback) {
       out.push({ uri: fallback, name });
       continue;
     }
-
     skippedIds.push(photo.id);
   }
 
-  return {
-    photos: out,
-    skippedIds,
-    skipped: skippedIds.length
-  };
+  return { photos: out, skippedIds, skipped: skippedIds.length };
 }
 
 export function chunkPhotos<T>(items: T[], size: number): T[][] {
@@ -110,11 +131,7 @@ export function chunkPhotos<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-/**
- * Per-chunk HTTP timeout. Build 11 used ~160s for 4 files and aborted healthy
- * uploads; web dashboard allows up to 15 minutes for the same endpoint.
- */
+/** @deprecated Prefer ``UPLOAD_PER_FILE_TIMEOUT_MS``; kept for call sites. */
 export function uploadTimeoutMs(fileCount: number): number {
-  const n = Math.max(1, fileCount);
-  return Math.min(900_000, 180_000 + n * 120_000);
+  return UPLOAD_PER_FILE_TIMEOUT_MS * Math.max(1, fileCount);
 }

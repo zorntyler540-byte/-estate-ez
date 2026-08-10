@@ -1,7 +1,12 @@
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
-import { uploadTimeoutMs, type UploadPhotoUri } from "./uploadPrepare";
+import {
+  UPLOAD_PER_FILE_TIMEOUT_MS,
+  stageUploadJpeg,
+  type UploadPhotoUri
+} from "./uploadPrepare";
+import * as FileSystem from "expo-file-system/legacy";
 
 export type SaleLotCoverUrls = {
   expires_in: number;
@@ -158,84 +163,100 @@ export type UploadLotJobOptions = {
   photoUris: UploadPhotoUri[];
 };
 
-/**
- * Multipart upload with the same 401 → silent re-login retry as ``apiFetch``.
- * Rebuilds FormData on retry; aborts if the request hangs past ``uploadTimeoutMs``.
- */
-async function uploadFormData(
-  path: string,
-  token: string,
-  buildForm: () => FormData,
-  fallbackError: string,
-  fileCount: number,
-  alreadyRetried = false
-): Promise<string> {
-  const timeoutMs = uploadTimeoutMs(fileCount);
-  let res: Response;
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: buildForm(),
-      signal: abortSignalFor(timeoutMs)
-    });
-  } catch (e) {
-    if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
-      throw new Error(
-        `Upload timed out after ${Math.round(timeoutMs / 1000)}s — photos are still on this phone; tap Sync to retry.`
-      );
-    }
-    throw e;
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label)), ms);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  const text = await res.text();
-  if (!res.ok) {
-    if (res.status === 401 && token && !alreadyRetried && !path.startsWith("/auth/login")) {
-      const refreshed = await refreshSessionIfPossible();
-      if (refreshed && refreshed !== token) {
-        return uploadFormData(path, refreshed, buildForm, fallbackError, fileCount, true);
-      }
-    }
-    throw new Error(parseApiError(text, `${fallbackError} (${res.status})`));
-  }
-  return text;
 }
 
-function appendJpegFiles(form: FormData, photoUris: UploadPhotoUri[]) {
-  for (const photo of photoUris) {
-    form.append("files", {
-      uri: photo.uri,
-      name: photo.name,
-      type: "image/jpeg"
-    } as unknown as Blob);
+/**
+ * Native multipart upload (URLSession / OkHttp) — avoids React Native ``fetch``+FormData
+ * hangs that were aborting Sync with fake timeout errors.
+ */
+async function nativeMultipartUpload(opts: {
+  path: string;
+  token: string;
+  fileUri: string;
+  fileName: string;
+  parameters?: Record<string, string>;
+  alreadyRetried?: boolean;
+}): Promise<string> {
+  const staged = await stageUploadJpeg({ uri: opts.fileUri, name: opts.fileName });
+  const url = `${API_BASE}${opts.path}`;
+  let result: FileSystem.FileSystemUploadResult;
+  try {
+    result = await withTimeout(
+      FileSystem.uploadAsync(url, staged, {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: "files",
+        mimeType: "image/jpeg",
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        headers: { Authorization: `Bearer ${opts.token}` },
+        parameters: opts.parameters
+      }),
+      UPLOAD_PER_FILE_TIMEOUT_MS,
+      `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`
+    );
+  } finally {
+    try {
+      await FileSystem.deleteAsync(staged, { idempotent: true });
+    } catch {
+      /* ignore */
+    }
   }
+
+  if (result.status === 401 && opts.token && !opts.alreadyRetried) {
+    const refreshed = await refreshSessionIfPossible();
+    if (refreshed && refreshed !== opts.token) {
+      return nativeMultipartUpload({ ...opts, token: refreshed, alreadyRetried: true });
+    }
+  }
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(parseApiError(result.body ?? "", `Upload failed (${result.status})`));
+  }
+  return result.body ?? "";
 }
 
 /** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
 export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
-  const buildForm = () => {
-    const form = new FormData();
-    form.append("sale_id", opts.saleId);
-    form.append("inherit_sku_from_subfolder", "false");
-    form.append("single_lot_mode", "true");
-    form.append("listing_channel", opts.listingChannel === "facebook" ? "facebook" : "ctseller");
-    if (opts.manualSku?.trim()) {
-      form.append("single_lot_manual_sku", opts.manualSku.trim());
-    }
-    appendJpegFiles(form, opts.photoUris);
-    return form;
+  if (!opts.photoUris.length) {
+    throw new Error("No photos to upload");
+  }
+  const [first, ...rest] = opts.photoUris;
+  const parameters: Record<string, string> = {
+    sale_id: opts.saleId,
+    inherit_sku_from_subfolder: "false",
+    single_lot_mode: "true",
+    listing_channel: opts.listingChannel === "facebook" ? "facebook" : "ctseller"
   };
+  if (opts.manualSku?.trim()) {
+    parameters.single_lot_manual_sku = opts.manualSku.trim();
+  }
 
-  const text = await uploadFormData(
-    "/jobs/upload",
-    opts.token,
-    buildForm,
-    "Upload failed",
-    opts.photoUris.length
-  );
-  return JSON.parse(text) as Job;
+  const text = await nativeMultipartUpload({
+    path: "/jobs/upload",
+    token: opts.token,
+    fileUri: first!.uri,
+    fileName: first!.name,
+    parameters
+  });
+  const job = JSON.parse(text) as Job;
+  for (const photo of rest) {
+    await appendFilesToQueuedJob(opts.token, job.id, [photo]);
+  }
+  return job;
 }
 
-/** Append more images to a queued upload job (chunked mobile sync). */
+/** Append more images to a queued upload job (one photo per request). */
 export async function appendFilesToQueuedJob(
   token: string,
   jobId: string,
@@ -244,19 +265,16 @@ export async function appendFilesToQueuedJob(
   if (!photoUris.length) {
     throw new Error("No photos to append");
   }
-  const buildForm = () => {
-    const form = new FormData();
-    appendJpegFiles(form, photoUris);
-    return form;
-  };
-  const text = await uploadFormData(
-    `/jobs/${encodeURIComponent(jobId)}/upload-files`,
-    token,
-    buildForm,
-    "Upload failed",
-    photoUris.length
-  );
-  return JSON.parse(text) as Job;
+  let lastText = "";
+  for (const photo of photoUris) {
+    lastText = await nativeMultipartUpload({
+      path: `/jobs/${encodeURIComponent(jobId)}/upload-files`,
+      token,
+      fileUri: photo.uri,
+      fileName: photo.name
+    });
+  }
+  return JSON.parse(lastText) as Job;
 }
 
 /** Append photos to an existing catalog lot (same as web lot page “Add photos”). */
@@ -268,23 +286,24 @@ export async function uploadLotPhotos(
   if (!photoUris.length) {
     throw new Error("No photos to upload");
   }
-  const buildForm = () => {
-    const form = new FormData();
-    appendJpegFiles(form, photoUris);
-    return form;
-  };
-  const text = await uploadFormData(
-    `/lots/${encodeURIComponent(lotId)}/photos/upload`,
-    token,
-    buildForm,
-    "Upload failed",
-    photoUris.length
-  );
-  const raw = text ? (JSON.parse(text) as unknown) : null;
-  if (!Array.isArray(raw)) {
-    throw new Error("Upload response was not a photo list");
+  const out: LotPhoto[] = [];
+  for (const photo of photoUris) {
+    const text = await nativeMultipartUpload({
+      path: `/lots/${encodeURIComponent(lotId)}/photos/upload`,
+      token,
+      fileUri: photo.uri,
+      fileName: photo.name
+    });
+    const raw = text ? (JSON.parse(text) as unknown) : null;
+    if (Array.isArray(raw)) {
+      out.push(...(raw as LotPhoto[]));
+    } else if (raw && typeof raw === "object") {
+      out.push(raw as LotPhoto);
+    } else {
+      throw new Error("Upload response was not a photo list");
+    }
   }
-  return raw as LotPhoto[];
+  return out;
 }
 
 export async function runJob(jobId: string, token: string): Promise<Job> {

@@ -81,11 +81,10 @@ export async function syncPendingLots(
       for (let c = 0; c < rowChunks.length; c++) {
         const chunk = rowChunks[c]!;
         const from = uploadedCount + 1;
-        const to = Math.min(uploadedCount + chunk.length, total);
         await setDraftStatus(
           draft.id,
           "uploading",
-          `Preparing photos ${from}–${to} of ${total}…`
+          `Preparing photo ${from} of ${total}…`
         );
         onProgress?.();
 
@@ -102,7 +101,7 @@ export async function syncPendingLots(
         await setDraftStatus(
           draft.id,
           "uploading",
-          `Sending photos ${from}–${to} of ${total} to server…`
+          `Sending photo ${from} of ${total}…`
         );
         onProgress?.();
 
