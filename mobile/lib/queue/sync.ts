@@ -16,7 +16,7 @@ import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
- * Compresses + chunks photos so Sync cannot hang forever on a giant multipart.
+ * Compresses + uploads in small chunks so Sync can make progress without a 160s abort.
  * ``onProgress`` runs after each status change so Queue can refresh mid-sync.
  */
 export async function syncPendingLots(
@@ -37,16 +37,19 @@ export async function syncPendingLots(
   const drafts = await listLotDrafts();
 
   // App kill / crash mid-upload leaves status as "uploading" forever unless we reset.
+  // Also clear stale failures (e.g. build 9 "Photo 1 is missing") so Queue isn't confusing.
   for (const draft of drafts) {
-    if (draft.status === "uploading") {
-      await setDraftStatus(draft.id, "queued", null);
+    if (draft.status === "uploading" || draft.status === "failed" || draft.status === "queued") {
+      if (draft.status === "uploading" || draft.status === "failed") {
+        await setDraftStatus(draft.id, "queued", null);
+      } else if (draft.error_message) {
+        await setDraftStatus(draft.id, "queued", null);
+      }
     }
   }
   onProgress?.();
 
-  const pending = (await listLotDrafts()).filter(
-    (d) => d.status === "queued" || d.status === "failed"
-  );
+  const pending = (await listLotDrafts()).filter((d) => d.status === "queued");
 
   for (const draft of pending) {
     const photos = await listDraftPhotos(draft.id);
@@ -61,37 +64,51 @@ export async function syncPendingLots(
       await setDraftStatus(draft.id, "uploading", null);
       onProgress?.();
 
-      const prepared = await preparePhotosForUpload(
-        photos.map((p, i) => ({
-          id: p.id,
-          uri: p.file_uri,
-          name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
-        }))
-      );
+      const rows = photos.map((p, i) => ({
+        id: p.id,
+        uri: p.file_uri,
+        name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
+      }));
+      const rowChunks = chunkPhotos(rows, UPLOAD_CHUNK_SIZE);
+      let jobId: string | null = null;
+      let uploadedCount = 0;
 
-      if (!prepared.photos.length) {
+      for (let c = 0; c < rowChunks.length; c++) {
+        const chunk = rowChunks[c]!;
+        const prepared = await preparePhotosForUpload(chunk);
+        if (!prepared.photos.length) {
+          if (uploadedCount === 0) {
+            throw new Error(
+              "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
+            );
+          }
+          // Later chunk empty — stop appending; run with what we have.
+          break;
+        }
+
+        if (!jobId) {
+          const job = await uploadSingleLotJob({
+            saleId: draft.sale_id,
+            token: authToken,
+            manualSku: draft.manual_sku ?? undefined,
+            listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
+            photoUris: prepared.photos
+          });
+          jobId = job.id;
+        } else {
+          await appendFilesToQueuedJob(authToken, jobId, prepared.photos);
+        }
+        uploadedCount += prepared.photos.length;
+        onProgress?.();
+      }
+
+      if (!jobId || uploadedCount === 0) {
         throw new Error(
           "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
         );
       }
 
-      const chunks = chunkPhotos(prepared.photos, UPLOAD_CHUNK_SIZE);
-      const first = chunks[0]!;
-      const job = await uploadSingleLotJob({
-        saleId: draft.sale_id,
-        token: authToken,
-        manualSku: draft.manual_sku ?? undefined,
-        listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
-        photoUris: first
-      });
-      onProgress?.();
-
-      for (let c = 1; c < chunks.length; c++) {
-        await appendFilesToQueuedJob(authToken, job.id, chunks[c]!);
-        onProgress?.();
-      }
-
-      await runJob(job.id, authToken);
+      await runJob(jobId, authToken);
       await setDraftStatus(draft.id, "uploaded", null);
       uploaded += 1;
       onProgress?.();
