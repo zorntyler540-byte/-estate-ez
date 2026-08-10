@@ -3,7 +3,7 @@ import { refreshSessionIfPossible } from "./sessionBridge";
 import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
-  stageUploadJpeg,
+  resolveUploadFileUri,
   type UploadPhotoUri
 } from "./uploadPrepare";
 import * as FileSystem from "expo-file-system/legacy";
@@ -189,12 +189,21 @@ async function nativeMultipartUpload(opts: {
   parameters?: Record<string, string>;
   alreadyRetried?: boolean;
 }): Promise<string> {
-  const staged = await stageUploadJpeg({ uri: opts.fileUri, name: opts.fileName });
+  // ``preparePhotosForUpload`` already materializes a cache JPEG when possible.
+  // Do not copyAsync — that was the Build 14 "File … is not readable" failure.
+  let uploadUri = opts.fileUri.trim();
+  if (!uploadUri.startsWith("file://") && uploadUri.startsWith("/")) {
+    uploadUri = `file://${uploadUri}`;
+  }
+  if (!uploadUri.startsWith("file://")) {
+    uploadUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+  }
+
   const url = `${API_BASE}${opts.path}`;
   let result: FileSystem.FileSystemUploadResult;
   try {
     result = await withTimeout(
-      FileSystem.uploadAsync(url, staged, {
+      FileSystem.uploadAsync(url, uploadUri, {
         httpMethod: "POST",
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         fieldName: "files",
@@ -206,11 +215,32 @@ async function nativeMultipartUpload(opts: {
       UPLOAD_PER_FILE_TIMEOUT_MS,
       `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`
     );
-  } finally {
-    try {
-      await FileSystem.deleteAsync(staged, { idempotent: true });
-    } catch {
-      /* ignore */
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not readable|could not be opened|no such file/i.test(msg)) {
+      // Last chance: rematerialize from the original path / remapped Documents URI.
+      const retryUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+      if (retryUri !== uploadUri) {
+        result = await withTimeout(
+          FileSystem.uploadAsync(url, retryUri, {
+            httpMethod: "POST",
+            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+            fieldName: "files",
+            mimeType: "image/jpeg",
+            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+            headers: { Authorization: `Bearer ${opts.token}` },
+            parameters: opts.parameters
+          }),
+          UPLOAD_PER_FILE_TIMEOUT_MS,
+          `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`
+        );
+      } else {
+        throw new Error(
+          "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
+        );
+      }
+    } else {
+      throw e;
     }
   }
 
