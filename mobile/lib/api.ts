@@ -290,3 +290,24 @@ export async function uploadLotPhotos(
 export async function runJob(jobId: string, token: string): Promise<Job> {
   return apiFetch<Job>(`/jobs/${jobId}/run`, token, { method: "POST" });
 }
+
+/** Download Facebook Marketplace inventory PDF bytes for a sale. */
+export async function downloadFacebookInventoryPdf(
+  token: string,
+  saleId: string
+): Promise<ArrayBuffer> {
+  const res = await fetch(
+    `${API_BASE}/exports/facebook-inventory.pdf?sale_id=${encodeURIComponent(saleId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store"
+    }
+  );
+  const textOrBuf = await (res.ok ? res.arrayBuffer() : res.text());
+  if (!res.ok) {
+    throw new Error(
+      parseApiError(typeof textOrBuf === "string" ? textOrBuf : "", `PDF export failed (${res.status})`)
+    );
+  }
+  return textOrBuf as ArrayBuffer;
+}

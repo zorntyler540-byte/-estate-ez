@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { LotThumbnail } from "../../components/LotThumbnail";
-import { apiFetch } from "../../lib/api";
+import { API_BASE, apiFetch, parseApiErrorMessage } from "../../lib/api";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
@@ -65,6 +65,7 @@ export default function FacebookPage() {
   const [selectedSaleId, setSelectedSaleId] = useState("");
   const [lots, setLots] = useState<Lot[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [error, setError] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
 
@@ -132,6 +133,39 @@ export default function FacebookPage() {
     }
   }
 
+  async function downloadInventoryPdf() {
+    if (!token || !selectedSaleId) return;
+    setPdfBusy(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `${API_BASE}/exports/facebook-inventory.pdf?sale_id=${encodeURIComponent(selectedSaleId)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store"
+        }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(parseApiErrorMessage(text, `PDF export failed (${res.status})`));
+      }
+      const blob = await res.blob();
+      const saleName = selectedSale?.name?.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || selectedSaleId;
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `facebook-inventory-${saleName}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not download inventory PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   function logout() {
     localStorage.removeItem("token");
     router.replace("/");
@@ -194,9 +228,19 @@ export default function FacebookPage() {
               {selectedSale ? ` Showing items for ${selectedSale.name}.` : ""}
             </p>
           </div>
-          <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadLots()} disabled={loading}>
-            Refresh
-          </button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              onClick={() => void downloadInventoryPdf()}
+              disabled={!selectedSaleId || pdfBusy}
+            >
+              {pdfBusy ? "Preparing PDF…" : "Download inventory PDF"}
+            </button>
+            <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadLots()} disabled={loading}>
+              Refresh
+            </button>
+          </div>
         </header>
 
         {error ? <p className="ct-error">{error}</p> : null}
