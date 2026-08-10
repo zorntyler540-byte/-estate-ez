@@ -1204,6 +1204,16 @@ function jobInputLabel(folder: string): string {
   return base;
 }
 
+/** True when catalog cannot run because ephemeral upload disk (and R2 restore) had no files. */
+function jobLostUploadFolder(job: Job): boolean {
+  const msg = (job.error_message || "").toLowerCase();
+  return (
+    msg.includes("input folder not found") ||
+    msg.includes("upload disk was lost") ||
+    msg.includes("re-sync from the phone")
+  );
+}
+
 /** Human label for pipeline triage roles shown while Add one lot runs. */
 function pipelineTriageRoleLabel(role: string | undefined): string {
   const r = (role || "").trim().toLowerCase();
@@ -5253,7 +5263,8 @@ export default function DashboardPage() {
                   Waiting for current lot…
                 </span>
               ) : null}
-              {(job.status === "queued" || job.status === "failed") && (
+              {(job.status === "queued" || job.status === "failed") &&
+                !jobLostUploadFolder(job) && (
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"
@@ -5263,6 +5274,11 @@ export default function DashboardPage() {
                   {job.status === "failed" ? "Run again" : "Run now"}
                 </button>
               )}
+              {job.status === "failed" && jobLostUploadFolder(job) ? (
+                <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
+                  Photos are gone from the server — delete this job, then Sync again from the phone (build 16+).
+                </span>
+              ) : null}
               {job.status === "processing" && (
                 <button
                   type="button"
@@ -5279,11 +5295,13 @@ export default function DashboardPage() {
               {job.status !== "processing" && job.status !== "receiving" && (
                 <button
                   type="button"
-                  className="ct-btn ct-btn--ghost"
+                  className={
+                    jobLostUploadFolder(job) ? "ct-btn ct-btn--primary" : "ct-btn ct-btn--ghost"
+                  }
                   onClick={() => void deleteJobRow(job.id)}
-                  disabled={busyProcessing}
+                  disabled={busyProcessing && !jobLostUploadFolder(job)}
                 >
-                  Delete job
+                  {jobLostUploadFolder(job) ? "Delete job" : "Delete job"}
                 </button>
               )}
             </li>
