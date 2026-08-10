@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile
 
 from app.catalog_storage import upload_root
+from app.job_batch_storage import mirror_local_file_to_r2
 from app.services.image_preprocess import compress_upload_bytes_if_image
 
 UPLOAD_ROOT = upload_root()
@@ -28,6 +29,8 @@ async def save_uploaded_files(
     """
     Save uploaded parts under dest_root in parallel (bounded by ``concurrency``).
     Image files may be passed through or resized/compressed with Pillow in a worker thread before writing.
+    When R2 is configured, each saved file is also mirrored under ``job-batches/…`` so a
+    worker or other API replica can restore the batch if local disk is gone.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -72,5 +75,6 @@ async def save_uploaded_files(
                     detail=f"Empty image file: {raw_name!r} (retake or re-export the photo).",
                 )
             target.write_bytes(body)
+            await asyncio.to_thread(mirror_local_file_to_r2, target, root)
 
     await asyncio.gather(*[_save_one(uf) for uf in files])

@@ -133,6 +133,37 @@ def delete_object(key: str) -> None:
         logger.warning("R2 delete_object failed for %s: %s", key, exc)
 
 
+def list_keys(prefix: str, *, max_keys: int = 5000) -> list[str]:
+    """List object keys under ``prefix`` (paged, capped)."""
+    if not r2_configured():
+        return []
+    pref = (prefix or "").lstrip("/")
+    out: list[str] = []
+    token: str | None = None
+    client = _client()
+    while len(out) < max_keys:
+        kwargs: dict[str, Any] = {
+            "Bucket": _bucket(),
+            "Prefix": pref,
+            "MaxKeys": min(1000, max_keys - len(out)),
+        }
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kwargs)
+        for item in resp.get("Contents") or []:
+            key = item.get("Key")
+            if isinstance(key, str) and key and not key.endswith("/"):
+                out.append(key)
+                if len(out) >= max_keys:
+                    break
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+        if not token:
+            break
+    return out
+
+
 def ping() -> str:
     """Write and delete a tiny probe object. Returns 'ok' or raises with detail."""
     key = "_health/r2-ping.txt"

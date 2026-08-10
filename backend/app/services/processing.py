@@ -843,9 +843,22 @@ def _process_job_body(
         return
 
     folder = Path(job.input_folder)
+    try:
+        from app.job_batch_storage import ensure_job_input_folder, mirror_folder_to_r2
+
+        # Last-chance mirror if files are local but never made it to R2 (e.g. older deploys).
+        if folder.is_dir():
+            mirror_folder_to_r2(folder)
+        folder = ensure_job_input_folder(folder)
+    except Exception:
+        _LOG.exception("job-batch R2 ensure failed job_id=%s", job.id)
+
     if not folder.exists() or not folder.is_dir():
         job.status = JobStatus.failed
-        job.error_message = f"Input folder not found: {folder}"
+        job.error_message = (
+            f"Input folder not found: {folder} "
+            "(upload disk was lost — re-sync from the phone, or attach a Railway volume / keep R2 job staging)"
+        )
         job.cancel_requested = False
         db.commit()
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
@@ -855,6 +868,17 @@ def _process_job_body(
         [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
         key=lambda p: str(p).lower(),
     )
+    if not raw_photos:
+        try:
+            from app.job_batch_storage import ensure_job_input_folder
+
+            folder = ensure_job_input_folder(folder)
+            raw_photos = sorted(
+                [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
+                key=lambda p: str(p).lower(),
+            )
+        except Exception:
+            _LOG.exception("job-batch R2 restore retry failed job_id=%s", job.id)
     # Folder jobs may point at originals (server path) or pre-compressed uploads; normalize only when
     # EXIF orientation / HEIC still require it so catalog pixels are upright without re-saving every JPEG.
     seen_paths: set[str] = set()

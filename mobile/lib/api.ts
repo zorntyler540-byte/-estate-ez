@@ -339,3 +339,8 @@ export async function uploadLotPhotos(
 export async function runJob(jobId: string, token: string): Promise<Job> {
   return apiFetch<Job>(`/jobs/${jobId}/run`, token, { method: "POST" });
 }
+
+/** Remove a queued/failed job (and its upload folder when safe). */
+export async function deleteJob(jobId: string, token: string): Promise<void> {
+  await apiFetch<void>(`/jobs/${encodeURIComponent(jobId)}`, token, { method: "DELETE" });
+}

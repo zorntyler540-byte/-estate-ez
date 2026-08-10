@@ -2769,6 +2769,16 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         db.refresh(job)
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be queued or failed to run")
+
+    # When a dedicated worker (or another replica) will process this job, push the
+    # local upload batch to R2 first so "Input folder not found" cannot happen.
+    try:
+        from app.job_batch_storage import mirror_folder_to_r2
+
+        mirror_folder_to_r2(Path(job.input_folder))
+    except Exception:
+        pass
+
     # Dedicated worker mode: leave the row queued; ``app.worker`` claims it shortly.
     if not job_tasks.catalog_jobs_run_in_process():
         db.refresh(job)

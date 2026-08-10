@@ -2,6 +2,7 @@ import NetInfo from "@react-native-community/netinfo";
 
 import {
   appendFilesToQueuedJob,
+  deleteJob,
   runJob,
   uploadSingleLotJob
 } from "../api";
@@ -16,11 +17,9 @@ import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
- * Compresses + uploads in small chunks so Sync can make progress without a 160s abort.
- * ``onProgress`` runs after each status change so Queue can refresh mid-sync.
- *
- * Website Lots only appear after ``runJob`` catalog processing finishes — during
- * "Uploading…" the dashboard Jobs list is the right place to watch.
+ * One photo per request; catalog ``run`` only after the full lot is on the server.
+ * On failure after a job was created: run with whatever uploaded (so Lots can appear),
+ * otherwise delete the orphan queued job so the website is not littered with dead Jobs.
  */
 export async function syncPendingLots(
   token: string,
@@ -39,8 +38,6 @@ export async function syncPendingLots(
 
   const drafts = await listLotDrafts();
 
-  // App kill / crash mid-upload leaves status as "uploading" forever unless we reset.
-  // Also clear stale failures (e.g. build 9 "Photo 1 is missing") so Queue isn't confusing.
   for (const draft of drafts) {
     if (draft.status === "uploading" || draft.status === "failed" || draft.status === "queued") {
       if (draft.status === "uploading" || draft.status === "failed") {
@@ -64,6 +61,8 @@ export async function syncPendingLots(
     }
 
     const total = photos.length;
+    let jobId: string | null = null;
+    let uploadedCount = 0;
 
     try {
       await setDraftStatus(draft.id, "uploading", `Preparing photos (0/${total})…`);
@@ -75,8 +74,6 @@ export async function syncPendingLots(
         name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
       }));
       const rowChunks = chunkPhotos(rows, UPLOAD_CHUNK_SIZE);
-      let jobId: string | null = null;
-      let uploadedCount = 0;
 
       for (let c = 0; c < rowChunks.length; c++) {
         const chunk = rowChunks[c]!;
@@ -121,7 +118,7 @@ export async function syncPendingLots(
         await setDraftStatus(
           draft.id,
           "uploading",
-          `Uploaded ${uploadedCount} of ${total} — check Jobs on the website`
+          `On server ${uploadedCount}/${total} — Jobs may show queued until catalog starts`
         );
         onProgress?.();
       }
@@ -135,7 +132,7 @@ export async function syncPendingLots(
       await setDraftStatus(
         draft.id,
         "uploading",
-        `Starting catalog (${uploadedCount} photos) — Lots fill in when AI finishes`
+        `Starting catalog (${uploadedCount} photos) — Lots appear when AI finishes`
       );
       onProgress?.();
 
@@ -145,6 +142,40 @@ export async function syncPendingLots(
       onProgress?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Upload failed";
+
+      // Avoid orphan "queued" jobs on the website from a mid-lot Sync failure.
+      if (jobId && uploadedCount > 0) {
+        try {
+          await setDraftStatus(
+            draft.id,
+            "uploading",
+            `Upload interrupted — starting catalog with ${uploadedCount}/${total} photos…`
+          );
+          onProgress?.();
+          await runJob(jobId, authToken);
+          await setDraftStatus(
+            draft.id,
+            "uploaded",
+            `Sent ${uploadedCount} of ${total} photos (rest failed: ${msg})`
+          );
+          uploaded += 1;
+          onProgress?.();
+          continue;
+        } catch {
+          try {
+            await deleteJob(jobId, authToken);
+          } catch {
+            /* leave orphan rather than mask the real error */
+          }
+        }
+      } else if (jobId) {
+        try {
+          await deleteJob(jobId, authToken);
+        } catch {
+          /* ignore */
+        }
+      }
+
       await setDraftStatus(draft.id, "failed", msg);
       failed += 1;
       onProgress?.();
