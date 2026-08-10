@@ -89,6 +89,18 @@ def compress_upload_bytes_if_image(
         return out, str(path.with_suffix(".jpg"))
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
         return data, raw_name
+    # Mobile already downscales to ~2048 JPEG; skip a second Pillow pass when the
+    # file already fits the catalog max edge and does not need EXIF rotation.
+    if ext in {".jpg", ".jpeg"} and not image_bytes_need_orientation_reencode(data, filename):
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(data)) as im:
+                w, h = im.size
+            if max(int(w), int(h)) <= me:
+                return data, raw_name
+        except Exception:
+            pass
     try:
         return bytes_to_gemini_jpeg(data, max_edge=me, quality=q), raw_name
     except Exception:

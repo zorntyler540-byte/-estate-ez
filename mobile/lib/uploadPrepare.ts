@@ -4,7 +4,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 export const UPLOAD_MAX_EDGE_PX = 2048;
 export const UPLOAD_JPEG_QUALITY = 0.82;
 /** Photos per `/jobs/upload` or `/upload-files` request. */
-export const UPLOAD_CHUNK_SIZE = 4;
+export const UPLOAD_CHUNK_SIZE = 3;
 
 export type UploadPhotoUri = { uri: string; name: string };
 
@@ -110,7 +110,11 @@ export function chunkPhotos<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-/** Per-request timeout: base + per file, capped. */
+/**
+ * Per-chunk HTTP timeout. Build 11 used ~160s for 4 files and aborted healthy
+ * uploads; web dashboard allows up to 15 minutes for the same endpoint.
+ */
 export function uploadTimeoutMs(fileCount: number): number {
-  return Math.min(8 * 60_000, 40_000 + Math.max(1, fileCount) * 30_000);
+  const n = Math.max(1, fileCount);
+  return Math.min(900_000, 180_000 + n * 120_000);
 }

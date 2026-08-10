@@ -182,7 +182,7 @@ async function uploadFormData(
   } catch (e) {
     if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
       throw new Error(
-        `Upload timed out after ${Math.round(timeoutMs / 1000)}s — try Sync again on stronger Wi‑Fi.`
+        `Upload timed out after ${Math.round(timeoutMs / 1000)}s — photos are still on this phone; tap Sync to retry.`
       );
     }
     throw e;
