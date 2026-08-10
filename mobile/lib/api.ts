@@ -1,6 +1,7 @@
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
+import { uploadTimeoutMs, type UploadPhotoUri } from "./uploadPrepare";
 
 export type SaleLotCoverUrls = {
   expires_in: number;
@@ -35,6 +36,15 @@ type ApiFetchInit = RequestInit & {
   _authRetried?: boolean;
 };
 
+function abortSignalFor(ms: number): AbortSignal {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
 export async function apiFetch<T>(
   path: string,
   token: string | undefined,
@@ -46,7 +56,19 @@ export async function apiFetch<T>(
   }
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      signal: init?.signal ?? abortSignalFor(60_000)
+    });
+  } catch (e) {
+    if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
+      throw new Error("Request timed out — check Wi‑Fi and try Sync again.");
+    }
+    throw e;
+  }
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401 && token && !init?._authRetried && !path.startsWith("/auth/login")) {
@@ -133,32 +155,44 @@ export type UploadLotJobOptions = {
   token: string;
   manualSku?: string;
   listingChannel?: "ctseller" | "facebook";
-  photoUris: { uri: string; name: string }[];
+  photoUris: UploadPhotoUri[];
 };
 
 /**
  * Multipart upload with the same 401 → silent re-login retry as ``apiFetch``.
- * Rebuilds FormData on retry (RN may not reuse a consumed body).
- * (Raw fetch used to skip refresh, so one phone with an expired JWT could fail Sync.)
+ * Rebuilds FormData on retry; aborts if the request hangs past ``uploadTimeoutMs``.
  */
 async function uploadFormData(
   path: string,
   token: string,
   buildForm: () => FormData,
   fallbackError: string,
+  fileCount: number,
   alreadyRetried = false
 ): Promise<string> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: buildForm()
-  });
+  const timeoutMs = uploadTimeoutMs(fileCount);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: buildForm(),
+      signal: abortSignalFor(timeoutMs)
+    });
+  } catch (e) {
+    if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
+      throw new Error(
+        `Upload timed out after ${Math.round(timeoutMs / 1000)}s — try Sync again on stronger Wi‑Fi.`
+      );
+    }
+    throw e;
+  }
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401 && token && !alreadyRetried && !path.startsWith("/auth/login")) {
       const refreshed = await refreshSessionIfPossible();
       if (refreshed && refreshed !== token) {
-        return uploadFormData(path, refreshed, buildForm, fallbackError, true);
+        return uploadFormData(path, refreshed, buildForm, fallbackError, fileCount, true);
       }
     }
     throw new Error(parseApiError(text, `${fallbackError} (${res.status})`));
@@ -166,7 +200,7 @@ async function uploadFormData(
   return text;
 }
 
-function appendJpegFiles(form: FormData, photoUris: { uri: string; name: string }[]) {
+function appendJpegFiles(form: FormData, photoUris: UploadPhotoUri[]) {
   for (const photo of photoUris) {
     form.append("files", {
       uri: photo.uri,
@@ -191,7 +225,37 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
     return form;
   };
 
-  const text = await uploadFormData("/jobs/upload", opts.token, buildForm, "Upload failed");
+  const text = await uploadFormData(
+    "/jobs/upload",
+    opts.token,
+    buildForm,
+    "Upload failed",
+    opts.photoUris.length
+  );
+  return JSON.parse(text) as Job;
+}
+
+/** Append more images to a queued upload job (chunked mobile sync). */
+export async function appendFilesToQueuedJob(
+  token: string,
+  jobId: string,
+  photoUris: UploadPhotoUri[]
+): Promise<Job> {
+  if (!photoUris.length) {
+    throw new Error("No photos to append");
+  }
+  const buildForm = () => {
+    const form = new FormData();
+    appendJpegFiles(form, photoUris);
+    return form;
+  };
+  const text = await uploadFormData(
+    `/jobs/${encodeURIComponent(jobId)}/upload-files`,
+    token,
+    buildForm,
+    "Upload failed",
+    photoUris.length
+  );
   return JSON.parse(text) as Job;
 }
 
@@ -199,7 +263,7 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
 export async function uploadLotPhotos(
   token: string,
   lotId: string,
-  photoUris: { uri: string; name: string }[]
+  photoUris: UploadPhotoUri[]
 ): Promise<LotPhoto[]> {
   if (!photoUris.length) {
     throw new Error("No photos to upload");
@@ -213,7 +277,8 @@ export async function uploadLotPhotos(
     `/lots/${encodeURIComponent(lotId)}/photos/upload`,
     token,
     buildForm,
-    "Upload failed"
+    "Upload failed",
+    photoUris.length
   );
   const raw = text ? (JSON.parse(text) as unknown) : null;
   if (!Array.isArray(raw)) {
