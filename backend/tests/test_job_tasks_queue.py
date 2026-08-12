@@ -78,6 +78,22 @@ class JobTasksQueueTests(unittest.TestCase):
         self.assertFalse(ok)
         mock_claim.assert_not_called()
 
+    def test_force_in_process_starts_despite_worker_mode(self) -> None:
+        with (
+            patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False),
+            patch.object(job_tasks, "_clear_stale_registration"),
+            patch.object(job_tasks, "_claim_queued_job", return_value=True) as mock_claim,
+            patch.object(job_tasks, "can_start_job_for_account", return_value=True),
+            patch.object(job_tasks, "reconcile_memory_threads_for_account"),
+            patch.object(job_tasks.threading, "Thread") as mock_thread,
+        ):
+            mock_thread.return_value.start = lambda: None
+            ok = job_tasks.start_job_in_background(
+                "job-force", "acct-1", force_in_process=True
+            )
+            self.assertTrue(ok)
+            mock_claim.assert_called_once_with("job-force", "acct-1")
+
     @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
     @patch.object(job_tasks, "try_start_next_queued_job")
     def test_kick_noop_when_dedicated_worker_mode(

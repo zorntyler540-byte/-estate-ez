@@ -2759,7 +2759,18 @@ def list_jobs(
 
 
 @app.post("/jobs/{job_id}/run", response_model=JobOut)
-def run_job(job_id: str, current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> JobOut:
+def run_job(
+    job_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    force_in_process: bool = Query(
+        False,
+        description=(
+            "When true (dashboard Run now), start catalog on this API process even if a "
+            "dedicated worker normally owns jobs. Phone Sync should leave this false."
+        ),
+    ),
+) -> JobOut:
     job = (
         db.query(ProcessingJob)
         .filter(
@@ -2794,20 +2805,33 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
     except Exception:
         pass
 
-    # Dedicated worker mode: leave the row queued; ``app.worker`` claims it shortly.
-    if not job_tasks.catalog_jobs_run_in_process():
+    # Dedicated worker mode: phone Sync leaves the row queued for ``app.worker``.
+    # Dashboard **Run now** passes force_in_process so staff are not stuck if the worker is wedged.
+    if not job_tasks.catalog_jobs_run_in_process() and not force_in_process:
         db.refresh(job)
         return _job_out(job)
+
+    if force_in_process and not job_tasks.can_start_job_for_account(current.account_id):
+        freed = job_tasks.requeue_stale_processing_for_account(
+            db, current.account_id, min_age_seconds=10 * 60
+        )
+        if freed:
+            db.commit()
+
     job_tasks.kick_queue_if_idle(current.account_id)
     started = False
     try:
-        started = job_tasks.start_job_in_background(job.id, current.account_id)
+        started = job_tasks.start_job_in_background(
+            job.id, current.account_id, force_in_process=force_in_process
+        )
     except RuntimeError as exc:
         if str(exc) != "job_already_running":
             raise
         job_tasks.reconcile_memory_threads_for_account(current.account_id)
         try:
-            started = job_tasks.start_job_in_background(job.id, current.account_id)
+            started = job_tasks.start_job_in_background(
+                job.id, current.account_id, force_in_process=force_in_process
+            )
         except RuntimeError as retry_exc:
             if str(retry_exc) != "job_already_running":
                 raise
@@ -2818,6 +2842,14 @@ def run_job(job_id: str, current: User = Depends(get_current_user), db: Session 
         if job.status == JobStatus.processing:
             started = True
         else:
+            if force_in_process:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Could not start catalog on the API — another job may still be processing. "
+                        "Wait a minute, or restart the catalog worker service on Railway."
+                    ),
+                )
             return _job_out(job)
     # Worker sets DB to processing asynchronously; return processing so the client
     # starts status polling immediately instead of waiting on the first GET /jobs refresh.

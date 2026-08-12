@@ -4422,14 +4422,22 @@ export default function DashboardPage() {
       );
     }
     try {
-      const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
+      // force_in_process: dedicated-worker mode otherwise leaves Queued forever when the worker is wedged.
+      const updated = (await apiFetch(
+        `/jobs/${jobId}/run?force_in_process=true`,
+        token,
+        { method: "POST" }
+      )) as Job;
       if (updated.status === "processing") {
         liveProgressJobIdRef.current = updated.id;
         setLiveProgressJobId(updated.id);
+        setStagingSuccess("Catalog started on the server — watch this job for Processing → Completed.");
       }
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
       if (updated.status === "queued") {
-        setStagingSuccess("Job queued — it will start automatically when the current lot finishes.");
+        setStagingSuccess(
+          "Still queued — the catalog worker may be busy or stuck. Wait a moment and try Run now again, or restart the worker on Railway."
+        );
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Run failed";

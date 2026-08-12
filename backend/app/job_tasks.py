@@ -141,6 +141,45 @@ def reconcile_stale_processing_jobs(db, account_id: str) -> bool:
     return changed
 
 
+def requeue_stale_processing_for_account(
+    db, account_id: str, *, min_age_seconds: int = 10 * 60
+) -> int:
+    """
+    Emergency capacity free for dashboard **Run now** on the API.
+
+    Unlike the worker helper, this does not use ``is_job_running`` (always false on the API
+    for worker-owned jobs). Only touches rows older than ``min_age_seconds``.
+    """
+    rows = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status == JobStatus.processing,
+        )
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    n = 0
+    grace = max(0, int(min_age_seconds))
+    for row in rows:
+        updated = row.updated_at or row.created_at
+        if grace > 0 and updated is not None:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if (now - updated).total_seconds() < grace:
+                continue
+        row.status = JobStatus.queued
+        row.error_message = None
+        row.cancel_requested = False
+        n += 1
+        _LOG.warning(
+            "Run-now re-queued stale processing job job_id=%s account_id=%s",
+            row.id,
+            account_id,
+        )
+    return n
+
+
 def reconcile_worker_orphaned_processing_jobs(
     db, *, min_age_seconds: int | None = None
 ) -> int:
@@ -303,13 +342,18 @@ def catalog_jobs_run_in_process() -> bool:
     return bool(settings.run_catalog_jobs_in_process)
 
 
-def start_job_in_background(job_id: str, account_id: str) -> bool:
+def start_job_in_background(
+    job_id: str, account_id: str, *, force_in_process: bool = False
+) -> bool:
     """
     Start a queued job when account capacity allows.
     Returns False when the job should stay queued (another lot is still running),
     or when this process is configured not to run catalog jobs (dedicated worker mode).
+
+    ``force_in_process=True`` (dashboard **Run now**) starts on this API process even when
+    ``RUN_CATALOG_JOBS_IN_PROCESS=false``, so staff are not stuck if the worker queue is wedged.
     """
-    if not catalog_jobs_run_in_process():
+    if not force_in_process and not catalog_jobs_run_in_process():
         _LOG.debug(
             "Skipping in-process start job_id=%s (RUN_CATALOG_JOBS_IN_PROCESS=false)",
             job_id,
