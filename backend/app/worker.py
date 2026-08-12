@@ -38,8 +38,27 @@ def _poll_seconds() -> float:
         return 2.0
 
 
+def _requeue_orphaned_processing(*, min_age_seconds: int | None = None) -> int:
+    """Unblock the queue after worker crash — see ``reconcile_worker_orphaned_processing_jobs``."""
+    with SessionLocal() as db:
+        n = job_tasks.reconcile_worker_orphaned_processing_jobs(
+            db, min_age_seconds=min_age_seconds
+        )
+        if n:
+            db.commit()
+        return n
+
+
 def _next_queued_job() -> tuple[str, str] | None:
     """Oldest queued job whose account is under the concurrency cap."""
+    # Free capacity slots held by dead ``processing`` rows before we decide nothing can start.
+    try:
+        freed = _requeue_orphaned_processing()
+        if freed:
+            _LOG.info("Re-queued %d orphan processing job(s) before claim", freed)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("orphan processing reconcile failed")
+
     with SessionLocal() as db:
         rows = (
             db.query(ProcessingJob.id, ProcessingJob.account_id)
@@ -88,6 +107,15 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
         settings.catalog_job_max_concurrent,
         settings.gemini_parallelism,
     )
+
+    # Previous container life may have left rows in ``processing`` with no live thread —
+    # that blocks all new queued Resend jobs until capacity clears.
+    try:
+        boot_freed = _requeue_orphaned_processing(min_age_seconds=0)
+        if boot_freed:
+            _LOG.info("Boot re-queued %d orphan processing job(s)", boot_freed)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("boot orphan processing reconcile failed")
 
     idle_sweeps = 0
     while True:

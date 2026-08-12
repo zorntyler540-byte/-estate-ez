@@ -5523,14 +5523,20 @@ export default function DashboardPage() {
       {(busyProcessing || queuedJobCount > 0) && (
         <div className="ct-banner ct-banner--warning">
           <p style={{ margin: 0 }}>
-            <strong>{busyProcessing ? "Working on your photos." : "Lots are queued."}</strong> New lots will appear in
-            the table below as they are ready. Stacked <strong>Add one lot</strong> uploads run{" "}
-            <strong>one at a time</strong>
+            <strong>
+              {busyProcessing
+                ? "Working on your photos."
+                : "Waiting for the catalog worker."}
+            </strong>{" "}
+            {busyProcessing
+              ? "New lots will appear in the table below as they are ready."
+              : "Upload/Resend finished — jobs stay Queued until the worker picks them up (status → Processing → Completed). Totals stay 0 until then."}{" "}
+            Stacked jobs run <strong>one at a time</strong>
             {queuedJobCount > 0
-              ? ` (${queuedJobCount} waiting in queue${queuedJobCount === 1 ? "" : ""})`
+              ? ` (${queuedJobCount} waiting in queue)`
               : ""}
-            . You can still run <strong>Regenerate AI</strong> on another lot. Use <strong>Cancel</strong> on the job row
-            if you need to stop.
+            . You can still run <strong>Regenerate AI</strong> on another lot. Use <strong>Cancel</strong> on a processing
+            job row if you need to stop.
           </p>
           {cancelNotice ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.92rem" }}>

@@ -19,6 +19,13 @@ _LOG = logging.getLogger(__name__)
 # Shorter values false-fail long Add-one-lot runs on another Railway replica.
 PROCESSING_STALE_SECONDS = 3600
 
+# On the dedicated worker only: ``processing`` rows not tracked in this process are orphans
+# (worker crash/redeploy). Re-queue so new Resend/Sync jobs are not blocked forever behind
+# a dead capacity slot. Do NOT use this on the API process — there ``is_job_running`` is
+# always false for worker-owned jobs. Steady-state grace must exceed long Gemini calls
+# (heartbeats are not per-token); boot reconcile uses age 0 after restart.
+WORKER_ORPHAN_PROCESSING_SECONDS = 20 * 60
+
 # Mobile/web multipart uploads create ``receiving`` jobs until ``POST /run``.
 # If Sync dies mid-lot, ``updated_at`` stops advancing — fail those orphans so the UI
 # is not blocked and the phone can re-upload cleanly. Active uploads bump ``updated_at``
@@ -132,6 +139,50 @@ def reconcile_stale_processing_jobs(db, account_id: str) -> bool:
         row.cancel_requested = False
         changed = True
     return changed
+
+
+def reconcile_worker_orphaned_processing_jobs(
+    db, *, min_age_seconds: int | None = None
+) -> int:
+    """
+    Re-queue ``processing`` jobs this worker process is not running.
+
+    After a worker crash/redeploy, DB rows can stay ``processing`` while nothing is
+    alive. ``can_start_job_for_account`` then thinks capacity is full and never claims
+    new ``queued`` Resend jobs. Safe only on the dedicated worker (local ``is_job_running``).
+
+    Use ``min_age_seconds=0`` on worker boot; steady-state defaults to
+    ``WORKER_ORPHAN_PROCESSING_SECONDS``.
+    """
+    grace = (
+        WORKER_ORPHAN_PROCESSING_SECONDS if min_age_seconds is None else max(0, int(min_age_seconds))
+    )
+    rows = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.status == JobStatus.processing)
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    n = 0
+    for row in rows:
+        if is_job_running(row.id):
+            continue
+        updated = row.updated_at or row.created_at
+        if grace > 0 and updated is not None:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if (now - updated).total_seconds() < grace:
+                continue
+        row.status = JobStatus.queued
+        row.error_message = None
+        row.cancel_requested = False
+        n += 1
+        _LOG.warning(
+            "Re-queued orphan processing job job_id=%s account_id=%s (not running on this worker)",
+            row.id,
+            row.account_id,
+        )
+    return n
 
 
 def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:

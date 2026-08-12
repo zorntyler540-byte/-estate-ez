@@ -137,6 +137,45 @@ class JobTasksQueueTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(row.status, JobStatus.receiving)
 
+    def test_worker_orphan_requeue_skips_live_job(self) -> None:
+        row = MagicMock()
+        row.id = "live-1"
+        row.status = JobStatus.processing
+        row.updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.created_at = row.updated_at
+        row.account_id = "acct-1"
+        row.error_message = None
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "is_job_running", return_value=True):
+            n = job_tasks.reconcile_worker_orphaned_processing_jobs(db, min_age_seconds=0)
+
+        self.assertEqual(n, 0)
+        self.assertEqual(row.status, JobStatus.processing)
+
+    def test_worker_orphan_requeue_boot_frees_capacity(self) -> None:
+        row = MagicMock()
+        row.id = "orphan-1"
+        row.status = JobStatus.processing
+        row.updated_at = datetime.now(timezone.utc)
+        row.created_at = row.updated_at
+        row.account_id = "acct-1"
+        row.error_message = "partial"
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "is_job_running", return_value=False):
+            n = job_tasks.reconcile_worker_orphaned_processing_jobs(db, min_age_seconds=0)
+
+        self.assertEqual(n, 1)
+        self.assertEqual(row.status, JobStatus.queued)
+        self.assertIsNone(row.error_message)
+
     def test_reconcile_fails_stale_receiving(self) -> None:
         row = MagicMock()
         row.id = "recv-stale"
