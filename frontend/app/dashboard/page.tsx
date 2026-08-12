@@ -5255,7 +5255,8 @@ export default function DashboardPage() {
               ) : null}
               {job.status === "receiving" ? (
                 <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
-                  Receiving uploads… catalog waits until upload finishes
+                  Phone upload never finished (Sync stopped mid-lot). Catalog will not start — delete
+                  this job, then Sync/Resend from the phone.
                 </span>
               ) : null}
               {job.status === "queued" && busyProcessing ? (
@@ -5292,16 +5293,18 @@ export default function DashboardPage() {
               {job.error_message ? (
                 <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
               ) : null}
-              {job.status !== "processing" && job.status !== "receiving" && (
+              {job.status !== "processing" && (
                 <button
                   type="button"
                   className={
-                    jobLostUploadFolder(job) ? "ct-btn ct-btn--primary" : "ct-btn ct-btn--ghost"
+                    jobLostUploadFolder(job) || job.status === "receiving"
+                      ? "ct-btn ct-btn--primary"
+                      : "ct-btn ct-btn--ghost"
                   }
                   onClick={() => void deleteJobRow(job.id)}
-                  disabled={busyProcessing && !jobLostUploadFolder(job)}
+                  disabled={busyProcessing && !jobLostUploadFolder(job) && job.status !== "receiving"}
                 >
-                  {jobLostUploadFolder(job) ? "Delete job" : "Delete job"}
+                  Delete job
                 </button>
               )}
             </li>
