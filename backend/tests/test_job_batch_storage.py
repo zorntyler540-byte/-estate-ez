@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.catalog_storage import upload_root
 from app.job_batch_storage import (
+    count_staged_job_files,
     ensure_job_input_folder,
     parse_batch_folder,
     r2_key_for_file,
@@ -38,3 +39,29 @@ def test_ensure_missing_folder_without_r2_is_noop(tmp_path, monkeypatch):
     assert out == folder.resolve()
     assert restore_job_folder_from_r2(folder) == 0
     assert not folder.exists()
+
+
+def test_count_staged_job_files_without_r2_is_zero(tmp_path, monkeypatch):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    monkeypatch.setattr("app.job_batch_storage.upload_root", lambda: root.resolve())
+    monkeypatch.setattr("app.object_storage.r2_configured", lambda: False)
+    folder = root / "acct" / "batch"
+    assert count_staged_job_files(folder) == 0
+
+
+def test_count_staged_job_files_counts_only_images(tmp_path, monkeypatch):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    monkeypatch.setattr("app.job_batch_storage.upload_root", lambda: root.resolve())
+    monkeypatch.setattr("app.object_storage.r2_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.object_storage.list_keys",
+        lambda prefix, **_: [
+            f"{prefix}a.jpg",
+            f"{prefix}b.png",
+            f"{prefix}notes.txt",
+        ],
+    )
+    folder = root / "acct" / "batch"
+    assert count_staged_job_files(folder) == 2

@@ -128,6 +128,19 @@ def restore_job_folder_from_r2(folder: Path) -> int:
     return restored
 
 
+def count_staged_job_files(folder: Path) -> int:
+    """Number of image objects already staged in R2 for this batch (0 if R2 unset / none staged)."""
+    if not object_storage.r2_configured():
+        return 0
+    parsed = parse_batch_folder(folder)
+    if not parsed:
+        return 0
+    account_id, batch_id = parsed
+    prefix = f"{_JOB_BATCH_PREFIX}/{account_id}/{batch_id}/"
+    keys = object_storage.list_keys(prefix)
+    return sum(1 for k in keys if Path(k).suffix.lower() in _IMAGE_SUFFIXES)
+
+
 def ensure_job_input_folder(folder: Path) -> Path:
     """
     Ensure the job input directory exists with at least one image.
