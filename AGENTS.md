@@ -1,0 +1,51 @@
+# AGENTS.md
+
+## Cursor Cloud specific instructions
+
+This repo is the **CaringTransitions / Estate-EZ** monorepo (AI-assisted estate-sale
+cataloging SaaS). See `README_SAAS.md` for the canonical local-dev commands and
+`DEPLOY.md` for production/Railway details. Notes below cover only non-obvious,
+cloud-specific gotchas; do not duplicate standard docs.
+
+### Services
+
+| Service | Path | Scope | Dev command | Notes |
+|---|---|---|---|---|
+| Backend API (FastAPI) | `backend/` | required | `backend/.venv/bin/uvicorn app.main:app --reload --port 8000` (run from `backend/`) | Core REST API all clients depend on. |
+| Frontend web (Next.js 15) | `frontend/` | required | `NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` (run from `frontend/`) | Dashboard UI on port 3000. |
+| Catalog worker | `backend/` | optional | `backend/.venv/bin/python -m app.worker` (run from `backend/`) | Only needed if API sets `RUN_CATALOG_JOBS_IN_PROCESS=false`; default runs jobs in-process. |
+| Mobile (Expo SDK 54) | `mobile/` | optional | `npm install` then `npx expo start` | Needs a device/emulator + Expo Go; not runnable headless. |
+| Chrome extension | `extension/` | optional | load unpacked in Chrome | Vanilla JS, no build/deps; targets `*.ctbids.com`. |
+| Playwright-CT scripts | `playwright-ct/` | optional | `npm install && npm run install:browsers` | Automation utilities against a live CTBids account, not a CI test suite. |
+
+### Non-obvious gotchas
+
+- **Python venv lives at `backend/.venv`** and is created by the update script. Always
+  invoke it explicitly (`backend/.venv/bin/python`, `.../uvicorn`, `.../pytest`) — there is
+  no auto-activation.
+- **`main.py` at the repo root is a legacy CLI scanner, NOT the API.** The FastAPI app is
+  `app.main:app` and must be started from inside `backend/` (its package is `app`).
+- **DB defaults to SQLite in dev** (`backend/app.db`). No Postgres is required locally;
+  tables auto-create on API startup (`Base.metadata.create_all`), so Alembic migrations are
+  optional in dev. `ENVIRONMENT=production` would reject SQLite — keep it `development`.
+- **`backend/.env` is required for local dev** and is git-ignored. If missing, recreate it
+  (SQLite `DATABASE_URL`, `ENVIRONMENT=development`, empty `GOOGLE_API_KEY`). Pydantic loads
+  the cwd `.env` first then `backend/.env`, so run the API from `backend/`.
+- **Frontend `NEXT_PUBLIC_API_BASE` is read at build/start time**, defaulting to
+  `http://localhost:8000`. Set it in the shell before `npm run dev` if the API is elsewhere.
+- **Gemini AI cataloging needs `GOOGLE_API_KEY`.** Without it the API/worker still start and
+  all non-AI flows (auth, sales, lots, exports) work; only actual photo-analysis jobs are
+  no-ops. Set the key in `backend/.env` to exercise the AI pipeline.
+- **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
+  into the environment; they are not part of the update script.
+
+### Testing / lint / build
+
+- Backend tests: `cd backend && ../backend/.venv/bin/python -m pytest`. As of setup, 3
+  pre-existing failures in `tests/test_lotting_textile.py` and
+  `tests/test_lotting_no_components.py` (lotting-prose assertions, unrelated to environment);
+  the other ~116 pass.
+- **No linter is configured** anywhere (no ruff/flake8/eslint/pre-commit config, no lint
+  script in any `package.json`). There is nothing to run for "lint" unless one is added.
+- Frontend has only `dev` / `build` / `start` scripts (no tests/lint). Use `npm run dev`
+  for development; `npm run build` for a production build check.
