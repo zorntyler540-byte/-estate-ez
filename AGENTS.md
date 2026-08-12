@@ -43,6 +43,34 @@ cloud-specific gotchas; do not duplicate standard docs.
 - **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
   into the environment; they are not part of the update script.
 
+### Production architecture & catalog-upload reliability (mobile → API → worker)
+
+The most important production workflow is: mobile app uploads a lot → API → AI catalog pipeline.
+In production (Railway) the API, the catalog **worker**, and the Next.js web app run as **separate
+services with separate, ephemeral disks**. Non-obvious rules that keep uploads from silently failing:
+
+- **API service must set `RUN_CATALOG_JOBS_IN_PROCESS=false`**; the worker (`python -m app.worker`)
+  leaves it `true` (default). If the API is left `true` it also runs Gemini on the web dyno (OOM/restart
+  risk) and races the worker. See the comment on this setting in `backend/app/config.py`.
+- **R2 must be configured on BOTH the API and the worker, pointing at the same bucket**
+  (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`). Because the services don't
+  share a disk, an uploaded batch only reaches the worker via R2 (`job-batches/{account}/{batch}/…`).
+  With R2 unset or a wrong key, the worker can't read the files → job fails "Input folder not found."
+  All R2 mirror/restore helpers in `app/job_batch_storage.py` no-op when R2 is unconfigured.
+- **`POST /jobs/{id}/run` fails loud in worker mode** if the batch isn't actually staged in R2
+  (verified via `count_staged_job_files`), so a storage/config problem surfaces as a real error the
+  phone retries on instead of a silent "queued" job the worker can never read.
+- **Job lifecycle:** `receiving → queued → processing → completed|failed`. `GET /jobs` reconciles stale
+  `processing`/`receiving` rows; the worker requeues its own orphans. Single-lot re-runs dedup via
+  `_single_lot_batch_already_cataloged`; batch re-runs do **not** dedup (can duplicate lots).
+- **Mobile confirms the real outcome** by polling `GET /jobs` after `/run` (see `mobile/lib/queue/sync.ts`);
+  it no longer treats a `/run` 200 as "cataloged." A dedicated worker being down/mid-deploy is the main
+  way jobs stall in `queued`.
+- **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
+  per-profile channels in `eas.json`). JS-only fixes ship with `eas update --branch <channel>`; native/dep
+  changes still require a new `eas build` + TestFlight submission. OTA only works on builds made **after**
+  expo-updates was added.
+
 ### Testing / lint / build
 
 - Backend tests: `cd backend && ../backend/.venv/bin/python -m pytest`. As of setup, 3
