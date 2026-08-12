@@ -1210,7 +1210,9 @@ function jobLostUploadFolder(job: Job): boolean {
   return (
     msg.includes("input folder not found") ||
     msg.includes("upload disk was lost") ||
-    msg.includes("re-sync from the phone")
+    msg.includes("re-sync from the phone") ||
+    msg.includes("upload never finished") ||
+    msg.includes("sync stopped mid-lot")
   );
 }
 

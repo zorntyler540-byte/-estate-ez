@@ -2703,6 +2703,10 @@ async def append_files_to_queued_job(
                 ),
             )
     await save_uploaded_files(dest, files)
+    # Keep ``receiving`` jobs from looking stale while the phone is still appending.
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(job)
     return _job_out(job)
 
 
@@ -2741,6 +2745,7 @@ def list_jobs(
     # If the API process restarted/OOM-killed, in-memory worker threads are gone while DB rows may still say
     # "processing". Reconcile those stale rows so UI actions (delete/purge) do not remain blocked forever.
     changed = job_tasks.reconcile_stale_processing_jobs(db, current.account_id)
+    changed = job_tasks.reconcile_stale_receiving_jobs(db, current.account_id) or changed
     if changed:
         db.commit()
     job_tasks.kick_queue_if_idle_async(current.account_id)

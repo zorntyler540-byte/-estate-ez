@@ -12,14 +12,14 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
-import { listDraftPhotos, listLotDrafts, setDraftStatus } from "./db";
+import { listDraftPhotos, listLotDrafts, setDraftServerJobId, setDraftStatus } from "./db";
 
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
+ * Persists ``server_job_id`` so a killed Sync can delete the orphan ``receiving`` job
+ * before retrying the full lot (avoids dashboard jobs stuck forever mid-upload).
  * One photo per request; catalog ``run`` only after the full lot is on the server.
- * On failure after a job was created: run with whatever uploaded (so Lots can appear),
- * otherwise delete the orphan queued job so the website is not littered with dead Jobs.
  */
 export async function syncPendingLots(
   token: string,
@@ -40,6 +40,15 @@ export async function syncPendingLots(
 
   for (const draft of drafts) {
     if (draft.status === "uploading" || draft.status === "failed" || draft.status === "queued") {
+      // Drop any orphan receiving job from a previous attempt before retrying.
+      if (draft.server_job_id) {
+        try {
+          await deleteJob(draft.server_job_id, authToken);
+        } catch {
+          /* job may already be gone / failed-reconciled */
+        }
+        await setDraftServerJobId(draft.id, null);
+      }
       if (draft.status === "uploading" || draft.status === "failed") {
         await setDraftStatus(draft.id, "queued", null);
       } else if (draft.error_message) {
@@ -111,6 +120,7 @@ export async function syncPendingLots(
             photoUris: prepared.photos
           });
           jobId = job.id;
+          await setDraftServerJobId(draft.id, jobId);
         } else {
           await appendFilesToQueuedJob(authToken, jobId, prepared.photos);
         }
@@ -118,7 +128,7 @@ export async function syncPendingLots(
         await setDraftStatus(
           draft.id,
           "uploading",
-          `On server ${uploadedCount}/${total} — Jobs may show queued until catalog starts`
+          `On server ${uploadedCount}/${total} — Jobs may show receiving until catalog starts`
         );
         onProgress?.();
       }
@@ -137,6 +147,7 @@ export async function syncPendingLots(
       onProgress?.();
 
       await runJob(jobId, authToken);
+      await setDraftServerJobId(draft.id, null);
       await setDraftStatus(draft.id, "uploaded", null);
       uploaded += 1;
       onProgress?.();
@@ -149,9 +160,10 @@ export async function syncPendingLots(
         try {
           await deleteJob(jobId, authToken);
         } catch {
-          /* leave orphan rather than mask the real error */
+          /* leave orphan rather than mask the real error — server stale reconcile will fail it */
         }
       }
+      await setDraftServerJobId(draft.id, null);
 
       await setDraftStatus(draft.id, "failed", msg);
       failed += 1;

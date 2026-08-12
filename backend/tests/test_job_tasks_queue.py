@@ -121,6 +121,39 @@ class JobTasksQueueTests(unittest.TestCase):
         self.assertEqual(row.status, JobStatus.failed)
         self.assertIn("restart", (row.error_message or "").lower())
 
+    def test_reconcile_keeps_active_receiving(self) -> None:
+        row = MagicMock()
+        row.id = "recv-active"
+        row.status = JobStatus.receiving
+        row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        row.created_at = row.updated_at
+        row.error_message = None
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        changed = job_tasks.reconcile_stale_receiving_jobs(db, "acct-1")
+        self.assertFalse(changed)
+        self.assertEqual(row.status, JobStatus.receiving)
+
+    def test_reconcile_fails_stale_receiving(self) -> None:
+        row = MagicMock()
+        row.id = "recv-stale"
+        row.status = JobStatus.receiving
+        row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=45)
+        row.created_at = row.updated_at
+        row.error_message = None
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        changed = job_tasks.reconcile_stale_receiving_jobs(db, "acct-1")
+        self.assertTrue(changed)
+        self.assertEqual(row.status, JobStatus.failed)
+        self.assertIn("never finished", (row.error_message or "").lower())
+
 
 if __name__ == "__main__":
     unittest.main()

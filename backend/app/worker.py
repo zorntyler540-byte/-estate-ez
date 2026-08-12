@@ -54,6 +54,24 @@ def _next_queued_job() -> tuple[str, str] | None:
     return None
 
 
+def _reconcile_stale_receiving_globally() -> int:
+    """Fail orphan ``receiving`` jobs across accounts (Sync died mid-upload)."""
+    n = 0
+    with SessionLocal() as db:
+        account_ids = [
+            str(r[0])
+            for r in db.query(ProcessingJob.account_id)
+            .filter(ProcessingJob.status == JobStatus.receiving)
+            .distinct()
+            .all()
+        ]
+        for account_id in account_ids:
+            if job_tasks.reconcile_stale_receiving_jobs(db, account_id):
+                db.commit()
+                n += 1
+    return n
+
+
 def run_worker_loop(poll_seconds: float | None = None) -> None:
     """Poll Postgres for queued catalog jobs and run them in this process."""
     interval = _poll_seconds() if poll_seconds is None else poll_seconds
@@ -71,11 +89,23 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
         settings.gemini_parallelism,
     )
 
+    idle_sweeps = 0
     while True:
         picked = _next_queued_job()
         if not picked:
+            idle_sweeps += 1
+            # Every ~minute of idle polling, clear orphan mid-upload jobs.
+            if idle_sweeps >= max(1, int(60 / interval)):
+                idle_sweeps = 0
+                try:
+                    swept = _reconcile_stale_receiving_globally()
+                    if swept:
+                        _LOG.info("Reconciled stale receiving jobs for %d account(s)", swept)
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("stale receiving reconcile failed")
             time.sleep(interval)
             continue
+        idle_sweeps = 0
         job_id, account_id = picked
         try:
             started = job_tasks.start_job_in_background(job_id, account_id)

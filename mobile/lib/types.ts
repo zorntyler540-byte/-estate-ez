@@ -76,6 +76,8 @@ export type LotDraft = {
   listing_channel: ListingChannel;
   status: LotDraftStatus;
   error_message: string | null;
+  /** Server ProcessingJob id while a multipart upload is in progress (cleared when done). */
+  server_job_id: string | null;
   created_at: number;
   updated_at: number;
   photo_count: number;

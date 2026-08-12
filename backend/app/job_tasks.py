@@ -19,6 +19,12 @@ _LOG = logging.getLogger(__name__)
 # Shorter values false-fail long Add-one-lot runs on another Railway replica.
 PROCESSING_STALE_SECONDS = 3600
 
+# Mobile/web multipart uploads create ``receiving`` jobs until ``POST /run``.
+# If Sync dies mid-lot, ``updated_at`` stops advancing — fail those orphans so the UI
+# is not blocked and the phone can re-upload cleanly. Active uploads bump ``updated_at``
+# on each append (see ``append_files_to_queued_job``).
+RECEIVING_STALE_SECONDS = 30 * 60
+
 _job_cancels: dict[str, threading.Event] = {}
 _job_accounts: dict[str, str] = {}
 _job_cancels_lock = threading.Lock()
@@ -123,6 +129,41 @@ def reconcile_stale_processing_jobs(db, account_id: str) -> bool:
         row.status = JobStatus.failed
         if not row.error_message:
             row.error_message = "Job interrupted after server restart. Re-run to continue."
+        row.cancel_requested = False
+        changed = True
+    return changed
+
+
+def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
+    """
+    Fail ``receiving`` jobs with no recent append activity (orphaned mid-upload).
+
+    Live uploads touch ``updated_at`` on each photo append. Stale rows are phone/Sync
+    kills — mark failed so staff can delete and the phone can Sync the full lot again.
+    """
+    rows = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status == JobStatus.receiving,
+        )
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    changed = False
+    for row in rows:
+        updated = row.updated_at or row.created_at
+        if updated is not None:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age_sec = (now - updated).total_seconds()
+            if age_sec < RECEIVING_STALE_SECONDS:
+                continue
+        row.status = JobStatus.failed
+        row.error_message = (
+            "Upload never finished (phone Sync stopped mid-lot). "
+            "Delete this job, then Sync/Resend the lot from the phone."
+        )
         row.cancel_requested = False
         changed = True
     return changed

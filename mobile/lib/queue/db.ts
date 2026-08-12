@@ -41,6 +41,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           "ALTER TABLE lot_drafts ADD COLUMN listing_channel TEXT NOT NULL DEFAULT 'ctseller'"
         );
       }
+      if (!cols.some((c) => c.name === "server_job_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_job_id TEXT");
+      }
       return db;
     })();
   }
@@ -58,6 +61,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     listing_channel,
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
+    server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
     photo_count: photoCount
@@ -179,6 +183,16 @@ export async function setDraftStatus(
     "UPDATE lot_drafts SET status = ?, error_message = ?, updated_at = ? WHERE id = ?",
     [status, errorMessage ?? null, Date.now(), draftId]
   );
+}
+
+/** Remember the server ``receiving`` job so a killed Sync can delete the orphan and retry cleanly. */
+export async function setDraftServerJobId(draftId: string, serverJobId: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
+    serverJobId,
+    Date.now(),
+    draftId
+  ]);
 }
 
 export async function updateDraftManualSku(draftId: string, manualSku: string): Promise<void> {
