@@ -105,6 +105,49 @@ export default function QueueScreen() {
     );
   }
 
+  const resendableLots = rows.filter((r) => r.status === "uploaded" && r.photoUris.length > 0);
+
+  /** Re-queue every “Sent to server” lot that still has photos on this phone. */
+  function confirmResendAll() {
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
+      return;
+    }
+    if (!resendableLots.length) {
+      Alert.alert("Nothing to resend", "No sent lots with photos saved on this phone.");
+      return;
+    }
+    const n = resendableLots.length;
+    Alert.alert(
+      "Resend all to server?",
+      `Re-uploads ${n} lot${n === 1 ? "" : "s"} already marked Sent to server as new catalog jobs.\n\nUse this when web jobs failed or photos are missing online. Lots that already look fine may create duplicates — delete those on the website first if you only need some.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: `Resend ${n}`,
+          onPress: () => {
+            void (async () => {
+              for (const lot of resendableLots) {
+                await setDraftStatus(lot.id, "queued", null);
+              }
+              await refresh();
+              setMessage(`Re-queued ${n} lot${n === 1 ? "" : "s"} — syncing…`);
+              const result = await syncNow();
+              if (result) {
+                setMessage(
+                  result.uploaded || result.failed
+                    ? `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} failed` : ""}.`
+                    : "Nothing queued to upload."
+                );
+              }
+              await refresh();
+            })();
+          }
+        }
+      ]
+    );
+  }
+
   async function syncAll() {
     setMessage("");
     const result = await syncNow();
