@@ -162,7 +162,13 @@ Rules:
 - angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
   Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
   Set **shows_measuring_scale** true whenever a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly
-  measuring the merchandise — even when photo_role is angle_only.
+  measuring the merchandise — even when photo_role is angle_only. When it is legible, copy the size into
+  **measurement_text** verbatim with units (e.g. "12 in", "~30 cm", "18 x 24 in"); leave null if unreadable — never guess.
+  Set **shows_weight_scale** true when the item sits on a weight scale (kitchen, postal, hanging, luggage, or bathroom
+  scale) with a visible readout — even when photo_role is angle_only. When the readout is legible, copy it into
+  **weight_text** verbatim with units (e.g. "2.4 lb", "540 g", "1.2 kg"); leave null if unreadable — never guess.
+  A yellow **measuring** tape / ruler is a size scale (measurement_text), NOT estate lot tape (SKU); a **weight** scale
+  display is weight_text, not a size.
   Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
   Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
   are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
@@ -251,6 +257,14 @@ def _dimension_score(row: PhotoTriageResult) -> tuple[int, int, int]:
         QUALITY_SCORE.get(row.quality, 0),
         CONFIDENCE_SCORE.get(row.confidence, 0),
         1 if row.shows_measuring_scale else 0,
+    )
+
+
+def _weight_score(row: PhotoTriageResult) -> tuple[int, int, int]:
+    return (
+        QUALITY_SCORE.get(row.quality, 0),
+        CONFIDENCE_SCORE.get(row.confidence, 0),
+        1 if row.shows_weight_scale else 0,
     )
 
 
@@ -405,10 +419,23 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
     dimension_pool.sort(key=_dimension_score, reverse=True)
     dimension_filenames = [r.filename for r in dimension_pool[:DIMENSION_FLASH_MAX_FRAMES]]
 
+    # Weight-scale frames get the same treatment as ruler/measuring-tape frames so a scale readout
+    # is always fed to the listing/Pro authoring calls (otherwise weight was captured only by luck).
+    weight_pool = [
+        r
+        for r in rows
+        if r.shows_weight_scale and r.photo_role != "unusable"
+    ]
+    weight_pool.sort(key=_weight_score, reverse=True)
+    weight_filenames = [r.filename for r in weight_pool[:DIMENSION_FLASH_MAX_FRAMES]]
+
     listing_filenames: list[str] = []
     if hero_filename:
         listing_filenames.append(hero_filename)
     for fn in dimension_filenames:
+        if fn not in listing_filenames:
+            listing_filenames.append(fn)
+    for fn in weight_filenames:
         if fn not in listing_filenames:
             listing_filenames.append(fn)
     for fn in front_filenames:
@@ -448,6 +475,9 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
     for fn in dimension_filenames:
         if fn and fn not in pro_filenames:
             pro_filenames.append(fn)
+    for fn in weight_filenames:
+        if fn and fn not in pro_filenames:
+            pro_filenames.append(fn)
     maker_row = _best_maker_sticker_row(rows)
 
     # D. Catalog-only
@@ -461,6 +491,7 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
         "front_filenames": front_filenames,
         "listing_filenames": listing_filenames,
         "dimension_filenames": dimension_filenames,
+        "weight_filenames": weight_filenames,
         "pro_filenames": pro_filenames,
         "catalog_only": catalog_only,
         "tape_filenames": tape_filenames,
@@ -799,7 +830,10 @@ def run_brand_audit_pro(
             "(material/handle/finish + object) in natural words — e.g. flair, then 'deer hoof handled hunting knives'. "
             "Use the **same Title Case** as final_auction_title for the hook phrase (not all lowercase). "
             "Do not paste the full title verbatim; weave the same hook in after the opening flair.\n"
-            "15. **Ruler / measuring tape:** Put **Dimensions:** / **Measurement:** in final_specification_lines when visible.\n"
+            "15. **Ruler / measuring tape:** when a ruler, yellow measuring tape, or yardstick is measuring the item, "
+            "**read the number** and put a **Dimensions:** / **Measurement:** line (with units, e.g. '~12 in') in "
+            "final_specification_lines. **Weight scale:** when the item sits on a scale with a visible readout, "
+            "**read it** and add a **Weight:** line (e.g. 'Weight: 2.4 lb'). Do not omit these when a scale is visible.\n"
             "16. Set listing_was_corrected_by_pro true when you write or materially change title or description.\n"
             "17. **Device screens are not the merchandise:** when the item is a phone, tablet, monitor, or TV whose "
             "screen shows a photo, gallery, or app, write the listing for the **device itself** — never for the "
@@ -821,7 +855,9 @@ def run_brand_audit_pro(
             "6. Leave confirmed_brand empty when no readable maker mark exists — never guess.\n"
             "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
             "8. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
-            "9. **Ruler / measuring tape:** Put **Dimensions:** in final_specification_lines when visible.\n"
+            "9. **Ruler / measuring tape:** read the number and put a **Dimensions:** line (with units) in "
+            "final_specification_lines when visible. **Weight scale:** when the item is on a scale with a visible "
+            "readout, read it and add a **Weight:** line (e.g. 'Weight: 2.4 lb').\n"
             "10. Set **ct_category** to the best CT Seller category "
             f"(must be one of: {_ct_category_allowlist_text()}). "
             "Fix Household Goods Other when Electronics, Kitchen & Home, Books, etc. fit better.\n"

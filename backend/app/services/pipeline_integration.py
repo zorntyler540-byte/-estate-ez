@@ -502,6 +502,57 @@ def _apply_pro_manifest_to_lot(
     return brand_audit.model_dump()
 
 
+_DIMENSION_SPEC_RE = re.compile(r"(?i)^(?:dimensions?|measurements?)\s*:")
+_WEIGHT_SPEC_RE = re.compile(r"(?i)^weights?\s*:")
+
+
+def _clean_triage_read(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in ("null", "none", "n/a", "na", "unknown"):
+        return ""
+    return text
+
+
+def _inject_measurement_specs_from_triage(
+    lot: LotOutput | None, triage_rows: list[dict[str, Any]] | None
+) -> None:
+    """
+    Deterministic safety net: if a ruler/tape or weight scale was flagged during triage but the
+    authoring model did not emit a ``Dimensions:``/``Weight:`` spec line, add one from the triage reads.
+
+    Keeps size/weight capture consistent instead of depending on the multi-image listing/Pro call to
+    re-read a small scale display it may have skipped.
+    """
+    if lot is None or not triage_rows:
+        return
+    specs = list(lot.specification_lines or [])
+    has_dimension = any(_DIMENSION_SPEC_RE.match(s.strip()) for s in specs)
+    has_weight = any(_WEIGHT_SPEC_RE.match(s.strip()) for s in specs)
+    if has_dimension and has_weight:
+        return
+
+    if not has_dimension:
+        dimension_reads: list[str] = []
+        for row in triage_rows:
+            read = _clean_triage_read(row.get("measurement_text"))
+            if read and read not in dimension_reads:
+                dimension_reads.append(read)
+        if dimension_reads:
+            specs.append(f"Dimensions: {'; '.join(dimension_reads[:3])} (measured in photos)")
+
+    if not has_weight:
+        weight_read = ""
+        for row in triage_rows:
+            weight_read = _clean_triage_read(row.get("weight_text"))
+            if weight_read:
+                break
+        if weight_read:
+            specs.append(f"Weight: {weight_read} (per scale in photos)")
+
+    if specs != list(lot.specification_lines or []):
+        lot.specification_lines = dedupe_specification_lines_preserve_order(specs)
+
+
 def _estimate_pipeline_tokens(photo_count: int, *, ran_pro: bool, listing_calls: int) -> tuple[int, int]:
     est_in = photo_count * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO
     est_out = photo_count * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO
@@ -734,6 +785,8 @@ def run_single_lot_pipeline(
         manifest_tag=manifest_tag,
     )
     pipeline_result["sku_source_filenames"] = sku_sources
+
+    _inject_measurement_specs_from_triage(lot, triage_rows)
 
     est_in, est_out = _estimate_pipeline_tokens(len(entries), ran_pro=ran_pro, listing_calls=listing_calls)
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}
