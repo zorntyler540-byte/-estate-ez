@@ -292,7 +292,7 @@ export default function QueueScreen() {
               ) : null}
 
               {item.error_message ? (
-                <Text style={item.status === "uploading" ? styles.progress : styles.error}>
+                <Text style={item.status === "failed" ? styles.error : styles.progress}>
                   {item.error_message}
                 </Text>
               ) : null}

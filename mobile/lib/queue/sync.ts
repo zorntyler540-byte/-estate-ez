@@ -3,16 +3,47 @@ import NetInfo from "@react-native-community/netinfo";
 import {
   appendFilesToQueuedJob,
   deleteJob,
+  listJobsForSale,
   runJob,
   uploadSingleLotJob
 } from "../api";
 import { refreshSessionIfPossible } from "../sessionBridge";
+import type { Job } from "../types";
 import {
   UPLOAD_CHUNK_SIZE,
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
 import { listDraftPhotos, listLotDrafts, setDraftServerJobId, setDraftStatus } from "./db";
+
+/**
+ * After ``/run`` is accepted we confirm the server actually catalogs the lot instead of
+ * trusting the HTTP 200 (a dedicated worker can still fail or stall). We poll briefly; lots
+ * that are still processing are reconciled on a later sync (Phase 0 below).
+ */
+const SERVER_CONFIRM_TIMEOUT_MS = 45_000;
+const SERVER_CONFIRM_INTERVAL_MS = 3_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serverFailMessage(job: Job): string {
+  return (job.error_message || "").trim() || "Server could not process this lot — tap Sync now to retry.";
+}
+
+async function fetchServerJob(
+  token: string,
+  saleId: string,
+  jobId: string
+): Promise<Job | null> {
+  try {
+    const jobs = await listJobsForSale(token, saleId);
+    return jobs.find((j) => j.id === jobId) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Upload queued/failed lot drafts when online.
@@ -37,6 +68,25 @@ export async function syncPendingLots(
   if (refreshed) authToken = refreshed;
 
   const drafts = await listLotDrafts();
+
+  // Phase 0: reconcile lots we already sent but had not confirmed cataloged (e.g. the confirm
+  // window timed out, or the app was closed). Turns a silent "sent" into the real server outcome.
+  for (const draft of drafts) {
+    if (draft.status === "uploaded" && draft.server_job_id) {
+      const job = await fetchServerJob(authToken, draft.sale_id, draft.server_job_id);
+      if (!job) {
+        // Job is gone (deleted/expired) — we can no longer confirm; stop tracking it.
+        await setDraftServerJobId(draft.id, null);
+      } else if (job.status === "completed") {
+        await setDraftServerJobId(draft.id, null);
+      } else if (job.status === "failed") {
+        // Keep server_job_id so the recovery pass on the next sync deletes it before retrying.
+        await setDraftStatus(draft.id, "failed", serverFailMessage(job));
+      }
+      // else still receiving/queued/processing: leave as-is and check again next sync.
+    }
+  }
+  onProgress?.();
 
   for (const draft of drafts) {
     if (draft.status === "uploading" || draft.status === "failed" || draft.status === "queued") {
@@ -147,9 +197,40 @@ export async function syncPendingLots(
       onProgress?.();
 
       await runJob(jobId, authToken);
-      await setDraftServerJobId(draft.id, null);
-      await setDraftStatus(draft.id, "uploaded", null);
-      uploaded += 1;
+      await setDraftStatus(draft.id, "uploading", "On server — cataloging…");
+      onProgress?.();
+
+      // Confirm the server actually catalogs it (don't trust the /run 200 alone).
+      const deadline = Date.now() + SERVER_CONFIRM_TIMEOUT_MS;
+      let outcome: "completed" | "failed" | "pending" = "pending";
+      let serverError: string | null = null;
+      while (Date.now() < deadline) {
+        const job = await fetchServerJob(authToken, draft.sale_id, jobId);
+        if (job?.status === "completed") {
+          outcome = "completed";
+          break;
+        }
+        if (job?.status === "failed") {
+          outcome = "failed";
+          serverError = serverFailMessage(job);
+          break;
+        }
+        await sleep(SERVER_CONFIRM_INTERVAL_MS);
+      }
+
+      if (outcome === "failed") {
+        // Keep server_job_id so the next sync's recovery pass clears the failed job before retrying.
+        await setDraftStatus(draft.id, "failed", serverError);
+        failed += 1;
+      } else if (outcome === "completed") {
+        await setDraftServerJobId(draft.id, null);
+        await setDraftStatus(draft.id, "uploaded", null);
+        uploaded += 1;
+      } else {
+        // Still processing after the confirm window — keep server_job_id so Phase 0 reconciles later.
+        await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
+        uploaded += 1;
+      }
       onProgress?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Upload failed";
