@@ -34,6 +34,28 @@ class PhotoTriageResult(BaseModel):
             "measuring the merchandise (even if photo_role is angle_only)."
         ),
     )
+    measurement_text: str | None = Field(
+        default=None,
+        description=(
+            "Verbatim size read off a visible ruler / measuring tape / yardstick that is measuring the item, "
+            "with units — e.g. '12 in', '~30 cm', '18 x 24 in', 'H 6.25 in'. Include what was measured when clear "
+            "(width/height/diameter). null when no measuring scale is visible or the numbers are unreadable — never guess."
+        ),
+    )
+    shows_weight_scale: bool = Field(
+        default=False,
+        description=(
+            "True when the item sits on a weight scale (kitchen, postal, hanging, luggage, or bathroom scale) and a "
+            "weight readout is visible in the frame (even if photo_role is angle_only)."
+        ),
+    )
+    weight_text: str | None = Field(
+        default=None,
+        description=(
+            "Verbatim weight read off a visible scale display, with units — e.g. '2.4 lb', '540 g', '1.2 kg', '3 lb 4 oz'. "
+            "null when no scale readout is visible or the numbers are unreadable — never guess."
+        ),
+    )
     lot_tape_marking: str | None = Field(
         default=None,
         description=(
@@ -124,9 +146,10 @@ class FullyAuditedManifest(BaseModel):
     final_specification_lines: list[str] = Field(
         default_factory=list,
         description=(
-            "Pro-corrected spec bullets. When a ruler or measuring tape is visible, include "
-            "**Dimensions:** / **Measurement:** lines with ~inch reads (or note that dimensions are shown in photos). "
-            "Only these labels: Brand, Condition note, Size / tags, Dimensions, Measurement, Weight."
+            "Pro-corrected spec bullets. When a ruler or measuring tape is visible, include a "
+            "**Dimensions:** / **Measurement:** line with the read (~inch, or note dimensions are shown in photos). "
+            "When the item is on a weight scale with a visible readout, include a **Weight:** line with the read "
+            "(e.g. '2.4 lb', '540 g'). Only these labels: Brand, Condition note, Size / tags, Dimensions, Measurement, Weight."
         ),
     )
     ct_category: str = Field(
