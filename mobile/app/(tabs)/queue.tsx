@@ -222,6 +222,18 @@ export default function QueueScreen() {
         )}
       </Pressable>
 
+      {resendableLots.length > 0 ? (
+        <Pressable
+          style={[styles.resendAll, syncing && styles.disabled]}
+          disabled={syncing}
+          onPress={confirmResendAll}
+        >
+          <Text style={styles.resendAllText}>
+            Resend all sent lots ({resendableLots.length})
+          </Text>
+        </Pressable>
+      ) : null}
+
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
@@ -330,6 +342,15 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   primaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  resendAll: {
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    backgroundColor: "#141416"
+  },
+  resendAllText: { color: "#e7e5e4", fontWeight: "600", fontSize: 15 },
   disabled: { opacity: 0.6 },
   empty: { color: "#78716c", marginTop: 24, textAlign: "center", lineHeight: 22 },
   card: {
