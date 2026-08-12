@@ -364,39 +364,6 @@ def _assign_photos_to_lot(db: Session, lot_id: str, photo_ids: list[str]) -> Non
         )
 
 
-def _hero_filename_from_pipeline(pipeline_result: dict | None) -> str | None:
-    """Pipeline hero key used for listing text — should also be the dashboard thumbnail."""
-    if not pipeline_result:
-        return None
-    selected = pipeline_result.get("selected") or {}
-    name = str(selected.get("hero_filename") or "").strip()
-    return name or None
-
-
-def _order_paths_hero_first(paths: list[Path], hero_filename: str | None) -> list[Path]:
-    """
-    Put the AI hero frame first so ``/lots/{id}/thumbnail`` (first by sort_order) matches the title.
-
-    Without this, jewelry close-ups uploaded first become the thumb while Pro titles a musket
-    wide shot chosen as hero — the jewelry/musket mismatch on the dashboard.
-    """
-    if not paths or not hero_filename:
-        return list(paths)
-    hero_key = hero_filename.replace("\\", "/").lower()
-    hero_name = Path(hero_filename).name.lower()
-    match_idx: int | None = None
-    for i, path in enumerate(paths):
-        resolved = str(path).replace("\\", "/").lower()
-        if path.name.lower() == hero_name or resolved.endswith("/" + hero_key) or resolved.endswith(hero_key):
-            match_idx = i
-            break
-    if match_idx is None or match_idx == 0:
-        return list(paths)
-    ordered = list(paths)
-    hero_path = ordered.pop(match_idx)
-    return [hero_path, *ordered]
-
-
 def _cancel_signaled(
     db: Session, job_id: str, cancel_event: threading.Event | None
 ) -> bool:
@@ -622,9 +589,8 @@ def _process_job_batch_pipeline(
         _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
         _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-        catalog_paths = _order_paths_hero_first(
-            seg_paths, _hero_filename_from_pipeline(pipeline_result)
-        )
+        # Preserve capture order within each detected lot segment (no hero-first reorder).
+        catalog_paths = list(seg_paths)
         role_by_path = photo_roles_by_path(
             catalog_paths,
             list((pipeline_result or {}).get("triage") or seg_triage or []),
@@ -741,7 +707,10 @@ def _process_job_single_lot_pipeline(
     _apply_single_lot_manual_sku(job, lot)
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-    catalog_paths = _order_paths_hero_first(photos, _hero_filename_from_pipeline(pipeline_result))
+    # Preserve capture order: photos are already sorted by upload/filename order upstream.
+    # (Previously the AI "hero" frame was forced to the front, which made the mobile
+    # gallery appear out of the order the photos were taken.)
+    catalog_paths = list(photos)
     role_by_path = photo_roles_by_path(
         catalog_paths, list((pipeline_result or {}).get("triage") or [])
     )
