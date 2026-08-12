@@ -340,6 +340,12 @@ export async function runJob(jobId: string, token: string): Promise<Job> {
   return apiFetch<Job>(`/jobs/${jobId}/run`, token, { method: "POST" });
 }
 
+/** Jobs for a sale (used to confirm a lot actually cataloged on the server, not just that /run was accepted). */
+export async function listJobsForSale(token: string, saleId: string): Promise<Job[]> {
+  const params = new URLSearchParams({ sale_id: saleId });
+  return apiFetch<Job[]>(`/jobs?${params.toString()}`, token);
+}
+
 /** Remove a queued/failed job (and its upload folder when safe). */
 export async function deleteJob(jobId: string, token: string): Promise<void> {
   await apiFetch<void>(`/jobs/${encodeURIComponent(jobId)}`, token, { method: "DELETE" });
