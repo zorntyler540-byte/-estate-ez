@@ -35,7 +35,11 @@ cloud-specific gotchas; do not duplicate standard docs.
   `http://localhost:8000`. Set it in the shell before `npm run dev` if the API is elsewhere.
 - **Gemini AI cataloging needs `GOOGLE_API_KEY`.** Without it the API/worker still start and
   all non-AI flows (auth, sales, lots, exports) work; only actual photo-analysis jobs are
-  no-ops. Set the key in `backend/.env` to exercise the AI pipeline.
+  no-ops. The key is provided as a Cursor Cloud injected secret (an OS env var), which
+  pydantic-settings reads with higher priority than `backend/.env`, so no manual wiring is
+  needed — just start the API from a shell that has the env var. The photo pipeline entry
+  point is `app.core.gemini.analyze_photo_from_bytes` (image bytes -> structured
+  `InventoryTableEntry` row).
 - **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
   into the environment; they are not part of the update script.
 
