@@ -2796,20 +2796,53 @@ def run_job(
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be receiving, queued, or failed to run")
 
-    # When a dedicated worker (or another replica) will process this job, push the
-    # local upload batch to R2 first so "Input folder not found" cannot happen.
-    try:
-        from app.job_batch_storage import mirror_folder_to_r2
-
-        mirror_folder_to_r2(Path(job.input_folder))
-    except Exception:
-        pass
+    from app.job_batch_storage import count_staged_job_files, mirror_folder_to_r2
 
     # Dedicated worker mode: phone Sync leaves the row queued for ``app.worker``.
     # Dashboard **Run now** passes force_in_process so staff are not stuck if the worker is wedged.
-    if not job_tasks.catalog_jobs_run_in_process() and not force_in_process:
+    run_remote = not job_tasks.catalog_jobs_run_in_process() and not force_in_process
+    if run_remote:
+        # The worker runs in a separate container with its own disk; it can only read this
+        # batch from R2. Stage it durably and VERIFY it landed, so a storage/config problem
+        # (e.g. wrong R2 key) surfaces as a real error the phone retries on — instead of a
+        # silent "queued" job the worker can never read ("Input folder not found").
+        folder = Path(job.input_folder)
+        local_images = count_catalog_image_files(folder)
+        try:
+            mirror_folder_to_r2(folder)
+        except Exception:  # noqa: BLE001
+            pass
+        staged = count_staged_job_files(folder)
+        if not catalog_r2_configured():
+            job.status = JobStatus.failed
+            job.error_message = (
+                "Photos could not be staged for the background worker: object storage (R2) is not "
+                "configured on the server. Your photos are safe on the phone — retry after storage is set up."
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=job.error_message,
+            )
+        if staged == 0 or (local_images and staged < local_images):
+            job.status = JobStatus.failed
+            job.error_message = (
+                f"Photos could not be staged for the background worker ({staged} of {local_images} reached "
+                "storage). Your photos are safe on the phone — tap Sync to retry."
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=job.error_message,
+            )
         db.refresh(job)
         return _job_out(job)
+
+    # In-process (or forced Run now): files are on this host; mirror best-effort for durability.
+    try:
+        mirror_folder_to_r2(Path(job.input_folder))
+    except Exception:
+        pass
 
     if force_in_process and not job_tasks.can_start_job_for_account(current.account_id):
         freed = job_tasks.requeue_stale_processing_for_account(
