@@ -1162,6 +1162,7 @@ a.ct-btn:hover {
 
 .ct-sku-cell {
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .ct-sku-cell--review {
@@ -2362,7 +2363,7 @@ select.ct-input option {
 
 .ct-table--lots th:nth-child(3),
 .ct-table--lots td:nth-child(3) {
-  width: 5rem;
+  width: 8.5rem;
 }
 
 .ct-table--lots th:nth-child(4),
@@ -2454,6 +2455,7 @@ select.ct-input option {
   letter-spacing: 0.01em;
   line-height: 1.25;
   white-space: nowrap;
+  /* Ellipsis is a safety for pathologically long codes; the SKU column is sized to fit normal SKUs. */
   overflow: hidden;
   text-overflow: ellipsis;
 }
