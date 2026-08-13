@@ -1060,6 +1060,8 @@ type Lot = {
   many_photos_review: boolean;
   sku_duplicate_in_sale: boolean;
   sku_text_mismatch: boolean;
+  listing_needs_review?: boolean;
+  listing_review_reason?: string | null;
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   listing_channel?: string | null;
@@ -1111,6 +1113,11 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
       (row as { sku_duplicate_in_sale?: unknown }).sku_duplicate_in_sale
     ),
     sku_text_mismatch: Boolean((row as { sku_text_mismatch?: unknown }).sku_text_mismatch),
+    listing_needs_review: Boolean((row as { listing_needs_review?: unknown }).listing_needs_review),
+    listing_review_reason:
+      typeof (row as { listing_review_reason?: unknown }).listing_review_reason === "string"
+        ? (row as { listing_review_reason: string }).listing_review_reason
+        : null,
     auction_title: row.auction_title ?? "",
     professional_description: row.professional_description ?? "",
     is_completed: Boolean(row.is_completed),
@@ -6357,6 +6364,7 @@ export default function DashboardPage() {
               lot.many_photos_review ||
               lot.sku_duplicate_in_sale ||
               lot.sku_text_mismatch ||
+              lot.listing_needs_review ||
               (photoHealthMissing[lot.id] ?? 0) > 0
                 ? " ct-lot-mobile-card--warn"
                 : ""
@@ -6482,6 +6490,7 @@ export default function DashboardPage() {
                 lot.many_photos_review ||
                 lot.sku_duplicate_in_sale ||
                 lot.sku_text_mismatch ||
+                lot.listing_needs_review ||
                 (photoHealthMissing[lot.id] ?? 0) > 0
                   ? "ct-table-row--photo-outlier"
                   : undefined

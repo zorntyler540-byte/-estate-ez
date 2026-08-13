@@ -39,6 +39,8 @@ type Lot = {
   many_photos_review: boolean;
   sku_duplicate_in_sale: boolean;
   sku_text_mismatch: boolean;
+  listing_needs_review?: boolean;
+  listing_review_reason?: string | null;
   ai_regenerating?: boolean;
   ai_regenerate_error?: string | null;
   ctseller_item_id?: number | null;
@@ -963,6 +965,17 @@ export default function LotDetailPage() {
 
   const lotWarnings = lot ? (
     <>
+      {lot.listing_needs_review ? (
+        <div className="ct-banner ct-banner--warning">
+          <strong>This listing needs a rewrite before publishing.</strong>{" "}
+          {lot.listing_review_reason === "garbled_title"
+            ? "The title looks like raw text copied off a tag rather than a real auction title."
+            : lot.listing_review_reason === "placeholder_description"
+              ? "The description is a generic placeholder — add a real description."
+              : "The title is a generic placeholder — give this lot a real title."}{" "}
+          Edit the title/description below (or use Regenerate) before you export or post.
+        </div>
+      ) : null}
       {lot.sku_needs_review ? (
         <div className="ct-banner ct-banner--warning">
           <strong>Double-check the lot number.</strong> We could not read the colored estate tape clearly — make sure

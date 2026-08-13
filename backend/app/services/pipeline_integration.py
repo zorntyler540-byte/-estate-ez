@@ -122,17 +122,28 @@ def _lot_from_flash_draft(flash_draft: dict[str, Any], brand_audit: dict[str, An
         if title:
             specs.append(f"Item {idx}: {title}")
 
+    item_titles = [str(it.get("suggested_title") or "").strip() for it in items]
+    item_titles = [t for t in item_titles if t]
+
     if len(items) == 1:
-        auction_title = str(items[0].get("suggested_title") or "").strip() or "Estate grouping"
+        auction_title = (item_titles[0] if item_titles else "").strip() or "Estate grouping"
     elif len(items) > 1:
         auction_title = f"Estate grouping ({len(items)} items)"
     else:
         auction_title = "Estate grouping"
 
+    # Compose a real description from the item titles instead of a bare "Estate grouping (N items)"
+    # placeholder, so a lot with a usable inventory still reads as a listing (and isn't flagged
+    # purely for an empty description). Truly empty drafts still fall back and get flagged for review.
+    if item_titles:
+        description = "Estate grouping: " + ", ".join(item_titles[:6]) + "."
+    else:
+        description = auction_title
+
     lot = LotOutput(
         sku=None,
         auction_title=auction_title,
-        professional_description=auction_title,
+        professional_description=description,
         specification_lines=specs,
         brands=brands,
         labels_and_tags=labels,
