@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
@@ -36,6 +37,50 @@ BRAND_PRO_MAX_LABEL_FRAMES = max(1, int(os.environ.get("BRAND_PRO_MAX_LABEL_FRAM
 BRAND_SKIP_PRO_IF_AGREEMENT = os.environ.get("BRAND_SKIP_PRO_IF_AGREEMENT", "1") == "1"
 ENABLE_GROUNDED_VALUATION = os.environ.get("ENABLE_GROUNDED_VALUATION", "0") == "1"
 TRIAGE_IMAGE_MAX_EDGE = max(256, int(os.environ.get("TRIAGE_IMAGE_MAX_EDGE", "2048")))
+
+# --- Actual Gemini token usage metering (per catalog job) ---------------------------------
+# Records real prompt/candidate token counts from ``response.usage_metadata`` split by model tier
+# (Flash = triage/listing, Pro = author) so the admin analytics can show true cost instead of an
+# estimate. Reset at the start of a catalog job and snapshotted at the end (see app.services.processing).
+# NOTE: this is a process-global counter guarded by a lock; it assumes catalog jobs run one at a time
+# per process, which holds for the dedicated worker (serial) and the default CATALOG_JOB_MAX_CONCURRENT=1.
+_usage_lock = threading.Lock()
+_usage_state: dict[str, int] = {
+    "flash_input": 0,
+    "flash_output": 0,
+    "flash_calls": 0,
+    "pro_input": 0,
+    "pro_output": 0,
+    "pro_calls": 0,
+}
+
+
+def reset_usage_counters() -> None:
+    with _usage_lock:
+        for key in _usage_state:
+            _usage_state[key] = 0
+
+
+def _record_usage(tier: str, response: Any) -> None:
+    """Add one call's real token usage to the tier counter (best-effort; never raises)."""
+    try:
+        meta = getattr(response, "usage_metadata", None)
+        if meta is None:
+            return
+        inp = int(getattr(meta, "prompt_token_count", 0) or 0)
+        out = int(getattr(meta, "candidates_token_count", 0) or 0)
+        with _usage_lock:
+            _usage_state[f"{tier}_input"] += inp
+            _usage_state[f"{tier}_output"] += out
+            _usage_state[f"{tier}_calls"] += 1
+    except Exception:
+        pass
+
+
+def usage_snapshot() -> dict[str, int]:
+    with _usage_lock:
+        return dict(_usage_state)
+
 
 CONFIDENCE_SCORE = {"high": 3, "medium": 2, "low": 1}
 QUALITY_SCORE = {"sharp": 3, "ok": 2, "blur": 1}
@@ -223,6 +268,7 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
             contents=parts,
             config=config,
         )
+    _record_usage("flash", response)
 
     if response.parsed is not None:
         row = PhotoTriageResult.model_validate(response.parsed)
@@ -907,6 +953,7 @@ def run_brand_audit_pro(
             contents=parts,
             config=config,
         )
+    _record_usage("pro", response)
 
     if response.text:
         manifest = FullyAuditedManifest.model_validate(json.loads(response.text))

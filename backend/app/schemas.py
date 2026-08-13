@@ -95,6 +95,8 @@ class AdminUsageAccountOut(BaseModel):
     est_cost_per_lot_usd: float = 0.0
     est_cost_per_photo_usd: float = 0.0
     avg_tokens_per_job: int = 0
+    # Jobs whose cost is real metered usage (vs estimated). metered == jobs_started means fully measured.
+    metered_jobs: int = 0
     # Distinct calendar days (UTC) with at least one job in the window.
     active_days: int = 0
     last_activity_at: datetime | None = None
