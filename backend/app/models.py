@@ -143,6 +143,20 @@ class ProcessingJob(Base):
     failed_photos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     est_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     est_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Actual Gemini token usage captured from response.usage_metadata, split by model tier so cost
+    # can be priced exactly (Flash = triage/listing, Pro = author). 0 for jobs cataloged before metering.
+    actual_flash_input_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
+    actual_flash_output_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
+    actual_pro_input_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
+    actual_pro_output_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -886,11 +886,25 @@ def _process_job_body(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
+    from pipeline.pipeline import reset_usage_counters, usage_snapshot
+
     single_lot_mode = bool(getattr(job, "single_lot_mode", False))
+    reset_usage_counters()
     if single_lot_mode:
         _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
     else:
         _process_job_batch_pipeline(db, job, photos, folder, cancel_event=cancel_event)
+
+    # Persist the real Gemini token usage metered during this job (feeds accurate admin cost analytics).
+    try:
+        snap = usage_snapshot()
+        job.actual_flash_input_tokens = int(snap.get("flash_input", 0))
+        job.actual_flash_output_tokens = int(snap.get("flash_output", 0))
+        job.actual_pro_input_tokens = int(snap.get("pro_input", 0))
+        job.actual_pro_output_tokens = int(snap.get("pro_output", 0))
+        db.commit()
+    except Exception:  # noqa: BLE001
+        _LOG.exception("persist actual token usage failed job_id=%s", job.id)
     return
 
 LOT_AI_REGENERATE_MAX_PHOTOS = 80

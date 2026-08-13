@@ -1032,6 +1032,7 @@ type AdminUsageAccount = {
   est_cost_per_lot_usd: number;
   est_cost_per_photo_usd: number;
   avg_tokens_per_job: number;
+  metered_jobs: number;
   active_days: number;
   last_activity_at: string | null;
 };
@@ -5678,7 +5679,13 @@ export default function DashboardPage() {
                   {adminUsage.totals.jobs_failed} failed
                   {adminUsage.totals.jobs_in_progress ? `, ${adminUsage.totals.jobs_in_progress} in progress` : ""}) ·{" "}
                   {(adminUsage.totals.success_rate * 100).toFixed(0)}% success · {adminUsage.totals.photos_uploaded} photos ·{" "}
-                  {adminUsage.totals.lots_created} lots · est ${adminUsage.totals.est_total_cost_usd.toFixed(2)} (Flash $
+                  {adminUsage.totals.lots_created} lots ·{" "}
+                  {adminUsage.totals.metered_jobs >= adminUsage.totals.jobs_started && adminUsage.totals.jobs_started > 0
+                    ? "measured "
+                    : adminUsage.totals.metered_jobs > 0
+                      ? `${adminUsage.totals.metered_jobs}/${adminUsage.totals.jobs_started} measured `
+                      : "est. "}
+                  ${adminUsage.totals.est_total_cost_usd.toFixed(2)} (Flash $
                   {adminUsage.totals.est_flash_cost_usd.toFixed(2)} + Pro ${adminUsage.totals.est_pro_cost_usd.toFixed(2)}) ·{" "}
                   ${adminUsage.totals.est_cost_per_lot_usd.toFixed(3)}/lot over {adminUsage.since_days}d.
                 </p>

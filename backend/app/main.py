@@ -836,11 +836,28 @@ def admin_analytics(
             .filter(Lot.account_id == account_id, Lot.created_at >= since_dt).scalar() or 0
         )
 
-        # Reconstruct the Flash vs Pro token split so each is priced at its own rate.
-        flash_in = analyzed_photos * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO + jobs_completed * EST_PIPELINE_LISTING_INPUT
-        flash_out = analyzed_photos * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO + jobs_completed * EST_PIPELINE_LISTING_OUTPUT
-        pro_in = jobs_completed * EST_PIPELINE_PRO_INPUT
-        pro_out = jobs_completed * EST_PIPELINE_PRO_OUTPUT
+        # Prefer real metered usage (response.usage_metadata) per job; fall back to the estimate
+        # model for jobs cataloged before metering existed. Priced per tier (Flash vs Pro).
+        flash_in = flash_out = pro_in = pro_out = 0
+        metered_jobs = 0
+        for j in jobs:
+            a_fi = int(getattr(j, "actual_flash_input_tokens", 0) or 0)
+            a_fo = int(getattr(j, "actual_flash_output_tokens", 0) or 0)
+            a_pi = int(getattr(j, "actual_pro_input_tokens", 0) or 0)
+            a_po = int(getattr(j, "actual_pro_output_tokens", 0) or 0)
+            if a_fi or a_fo or a_pi or a_po:
+                flash_in += a_fi
+                flash_out += a_fo
+                pro_in += a_pi
+                pro_out += a_po
+                metered_jobs += 1
+            else:
+                n = int(getattr(j, "analyzed_photos", 0) or 0)
+                done = 1 if j.status == JobStatus.completed else 0
+                flash_in += n * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO + done * EST_PIPELINE_LISTING_INPUT
+                flash_out += n * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO + done * EST_PIPELINE_LISTING_OUTPUT
+                pro_in += done * EST_PIPELINE_PRO_INPUT
+                pro_out += done * EST_PIPELINE_PRO_OUTPUT
 
         flash_cost = _cost(flash_in, flash_in_rate) + _cost(flash_out, flash_out_rate)
         pro_cost = _cost(pro_in, pro_in_rate) + _cost(pro_out, pro_out_rate)
@@ -866,6 +883,7 @@ def admin_analytics(
             est_flash_cost_usd=round(flash_cost, 4),
             est_pro_cost_usd=round(pro_cost, 4),
             est_total_cost_usd=round(total_cost, 4),
+            metered_jobs=metered_jobs,
             est_cost_per_lot_usd=round(total_cost / lots_created, 4) if lots_created else 0.0,
             est_cost_per_photo_usd=round(total_cost / photos_uploaded, 4) if photos_uploaded else 0.0,
             avg_tokens_per_job=int((est_input_tokens + est_output_tokens) / jobs_started) if jobs_started else 0,
@@ -927,6 +945,7 @@ def admin_analytics(
         est_cost_per_lot_usd=round(total_cost / total_lots, 4) if total_lots else 0.0,
         est_cost_per_photo_usd=round(total_cost / total_photos, 4) if total_photos else 0.0,
         avg_tokens_per_job=int((total_in + total_out) / total_jobs) if total_jobs else 0,
+        metered_jobs=_sum("metered_jobs"),
         active_days=len({j.created_at.date() for j in all_jobs if j.created_at}),
         last_activity_at=max(
             (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
