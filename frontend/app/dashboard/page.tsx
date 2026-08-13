@@ -4706,6 +4706,36 @@ export default function DashboardPage() {
     }
   }
 
+  async function resetSalePhotoOrder() {
+    if (!token || !selectedSaleId) return;
+    if (
+      !window.confirm(
+        "Reset every lot in this sale to the order photos were taken (capture order)?\n\n" +
+          "Use this to fix lots cataloged before the ordering fix. You can still drag photos on a lot afterward."
+      )
+    ) {
+      return;
+    }
+    setPullingCtSellerSales(true);
+    setError("");
+    try {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/reset-photo-order`, token, {
+        method: "POST"
+      })) as { lots_fixed?: number; lots_total?: number };
+      const fixed = res.lots_fixed || 0;
+      setPullCtSellerSalesMsg(
+        fixed > 0
+          ? `Reset photo order on ${fixed} lot${fixed === 1 ? "" : "s"} to capture order.`
+          : "All lots were already in capture order."
+      );
+      setDataReloadNonce((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reset photo order");
+    } finally {
+      setPullingCtSellerSales(false);
+    }
+  }
+
   async function endSelectedSale() {
     if (!token || !selectedSaleId || selectedSaleClosed) return;
     const target = selectedSale?.name || "this sale";
@@ -5524,6 +5554,15 @@ export default function DashboardPage() {
               onClick={() => void fillBlankLotConditions()}
             >
               Fill blank conditions
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
+              title="Reset every lot's photos to the order they were taken (fixes lots cataloged before the ordering fix)"
+              onClick={() => void resetSalePhotoOrder()}
+            >
+              Fix photo order
             </button>
             <button
               type="button"
