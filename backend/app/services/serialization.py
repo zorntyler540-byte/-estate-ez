@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from collections import defaultdict
 
 from app.catalog_storage import catalog_photo_file_on_disk, resolve_catalog_storage_path
+from app.core.lotting import listing_quality_issue
 from app.models import Lot, Photo
 from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut
 
@@ -151,6 +152,10 @@ def lot_to_schema(
     has_thumbnail: bool = False,
     many_photos_review: bool = False,
 ) -> LotOut:
+    spec_lines = json.loads(row.specification_lines_json or "[]")
+    review_reason = listing_quality_issue(
+        row.auction_title, row.professional_description, spec_lines
+    )
     return LotOut(
         id=row.id,
         account_id=row.account_id,
@@ -159,7 +164,7 @@ def lot_to_schema(
         sku=row.sku,
         auction_title=row.auction_title,
         professional_description=row.professional_description,
-        specification_lines=json.loads(row.specification_lines_json or "[]"),
+        specification_lines=spec_lines,
         brands=json.loads(row.brands_json or "[]"),
         labels_and_tags=json.loads(row.labels_and_tags_json or "[]"),
         ct_category=row.ct_category,
@@ -175,6 +180,8 @@ def lot_to_schema(
         many_photos_review=many_photos_review,
         sku_duplicate_in_sale=bool(getattr(row, "sku_duplicate_in_sale", False)),
         sku_text_mismatch=bool(getattr(row, "sku_text_mismatch", False)),
+        listing_needs_review=review_reason is not None,
+        listing_review_reason=review_reason,
         ctseller_item_id=getattr(row, "ctseller_item_id", None),
         ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
         listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),

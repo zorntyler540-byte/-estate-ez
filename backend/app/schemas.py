@@ -176,6 +176,10 @@ class LotOut(BaseModel):
     many_photos_review: bool = False
     sku_duplicate_in_sale: bool = False
     sku_text_mismatch: bool = False
+    # True when the auction title/description look unusable (placeholder or garbled tag OCR) and a
+    # human should rewrite before export. Derived at read time; see ``listing_quality_issue``.
+    listing_needs_review: bool = False
+    listing_review_reason: str | None = None
     ai_regenerating: bool = False
     ai_regenerate_error: str | None = None
     ctseller_item_id: int | None = None

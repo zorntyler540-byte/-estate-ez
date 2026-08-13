@@ -132,7 +132,12 @@ class FullyAuditedManifest(BaseModel):
 
     final_auction_title: str = Field(
         default="",
-        description="Pro-corrected single-line auction title; lead with confirmed brand when readable. Put distinctive material/handle/finish before the object name (hook-first), not trailing 'with …'.",
+        description=(
+            "Pro-corrected single-line auction title; lead with confirmed brand when readable. Put distinctive "
+            "material/handle/finish before the object name (hook-first), not trailing 'with …'. Compose a clean, "
+            "human-readable title — NEVER copy estate-tag field labels (No., STYLE, SIZE, PRICE, COLOR, QTY) or raw "
+            "tag OCR into the title; those values belong in final_specification_lines."
+        ),
     )
     final_professional_description: str = Field(
         default="",
