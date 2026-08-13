@@ -1018,13 +1018,23 @@ type AdminUsageAccount = {
   jobs_started: number;
   jobs_completed: number;
   jobs_failed: number;
+  jobs_in_progress: number;
   photos_uploaded: number;
   lots_created: number;
   avg_photos_per_job: number;
   avg_job_duration_seconds: number;
+  success_rate: number;
   est_input_tokens: number;
   est_output_tokens: number;
+  est_flash_cost_usd: number;
+  est_pro_cost_usd: number;
   est_total_cost_usd: number;
+  est_cost_per_lot_usd: number;
+  est_cost_per_photo_usd: number;
+  avg_tokens_per_job: number;
+  metered_jobs: number;
+  active_days: number;
+  last_activity_at: string | null;
 };
 
 type AdminUsageSummary = {
@@ -1051,6 +1061,8 @@ type Lot = {
   many_photos_review: boolean;
   sku_duplicate_in_sale: boolean;
   sku_text_mismatch: boolean;
+  listing_needs_review?: boolean;
+  listing_review_reason?: string | null;
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   listing_channel?: string | null;
@@ -1102,6 +1114,11 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
       (row as { sku_duplicate_in_sale?: unknown }).sku_duplicate_in_sale
     ),
     sku_text_mismatch: Boolean((row as { sku_text_mismatch?: unknown }).sku_text_mismatch),
+    listing_needs_review: Boolean((row as { listing_needs_review?: unknown }).listing_needs_review),
+    listing_review_reason:
+      typeof (row as { listing_review_reason?: unknown }).listing_review_reason === "string"
+        ? (row as { listing_review_reason: string }).listing_review_reason
+        : null,
     auction_title: row.auction_title ?? "",
     professional_description: row.professional_description ?? "",
     is_completed: Boolean(row.is_completed),
@@ -5659,10 +5676,18 @@ export default function DashboardPage() {
               ) : adminUsage ? (
                 <p className="ct-muted" style={{ margin: 0, fontSize: "0.9rem" }}>
                   {adminUsage.totals.jobs_started} jobs started ({adminUsage.totals.jobs_completed} completed,{" "}
-                  {adminUsage.totals.jobs_failed} failed), {adminUsage.totals.photos_uploaded} photos uploaded,{" "}
-                  avg {adminUsage.totals.avg_photos_per_job.toFixed(2)} photos/job, est tokens{" "}
-                  {(adminUsage.totals.est_input_tokens + adminUsage.totals.est_output_tokens).toLocaleString()} (
-                  est ${adminUsage.totals.est_total_cost_usd.toFixed(2)}).
+                  {adminUsage.totals.jobs_failed} failed
+                  {adminUsage.totals.jobs_in_progress ? `, ${adminUsage.totals.jobs_in_progress} in progress` : ""}) ·{" "}
+                  {(adminUsage.totals.success_rate * 100).toFixed(0)}% success · {adminUsage.totals.photos_uploaded} photos ·{" "}
+                  {adminUsage.totals.lots_created} lots ·{" "}
+                  {adminUsage.totals.metered_jobs >= adminUsage.totals.jobs_started && adminUsage.totals.jobs_started > 0
+                    ? "measured "
+                    : adminUsage.totals.metered_jobs > 0
+                      ? `${adminUsage.totals.metered_jobs}/${adminUsage.totals.jobs_started} measured `
+                      : "est. "}
+                  ${adminUsage.totals.est_total_cost_usd.toFixed(2)} (Flash $
+                  {adminUsage.totals.est_flash_cost_usd.toFixed(2)} + Pro ${adminUsage.totals.est_pro_cost_usd.toFixed(2)}) ·{" "}
+                  ${adminUsage.totals.est_cost_per_lot_usd.toFixed(3)}/lot over {adminUsage.since_days}d.
                 </p>
               ) : (
                 <p className="ct-muted" style={{ margin: 0 }}>
@@ -5727,9 +5752,14 @@ export default function DashboardPage() {
                           {usage ? (
                             <>
                               <br />
-                              30d: {usage.photos_uploaded} photos · avg {usage.avg_photos_per_job.toFixed(2)} photos/job
-                              · est tokens {(usage.est_input_tokens + usage.est_output_tokens).toLocaleString()} · est $
-                              {usage.est_total_cost_usd.toFixed(2)}
+                              30d: {usage.photos_uploaded} photos · {usage.lots_created} lots ·{" "}
+                              {(usage.success_rate * 100).toFixed(0)}% success
+                              {usage.jobs_in_progress ? ` · ${usage.jobs_in_progress} in progress` : ""} · est $
+                              {usage.est_total_cost_usd.toFixed(2)} (Flash ${usage.est_flash_cost_usd.toFixed(2)} + Pro $
+                              {usage.est_pro_cost_usd.toFixed(2)}) · ${usage.est_cost_per_lot_usd.toFixed(3)}/lot
+                              {usage.last_activity_at
+                                ? ` · last ${new Date(usage.last_activity_at).toLocaleDateString()}`
+                                : ""}
                             </>
                           ) : null}
                         </td>
@@ -6341,6 +6371,7 @@ export default function DashboardPage() {
               lot.many_photos_review ||
               lot.sku_duplicate_in_sale ||
               lot.sku_text_mismatch ||
+              lot.listing_needs_review ||
               (photoHealthMissing[lot.id] ?? 0) > 0
                 ? " ct-lot-mobile-card--warn"
                 : ""
@@ -6466,6 +6497,7 @@ export default function DashboardPage() {
                 lot.many_photos_review ||
                 lot.sku_duplicate_in_sale ||
                 lot.sku_text_mismatch ||
+                lot.listing_needs_review ||
                 (photoHealthMissing[lot.id] ?? 0) > 0
                   ? "ct-table-row--photo-outlier"
                   : undefined

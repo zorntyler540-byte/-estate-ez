@@ -1,9 +1,56 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
+
+# Field labels that appear on printed/handwritten estate tags. Several of these leaking into an
+# auction title means the model transcribed the tag form instead of composing a listing title.
+_LISTING_TAG_LABELS = frozenset(
+    {"no", "size", "price", "style", "color", "colour", "qty", "quantity", "cost", "mfg", "sku", "cat", "dept", "pcs"}
+)
+_GROUPING_PLACEHOLDER_RE = re.compile(r"^\s*estate grouping\s*(\(\s*\d+\s*items?\s*\))?\s*$", re.I)
+_PLACEHOLDER_LISTING_TITLES = frozenset(
+    {"", "estate lot", "estate grouping", "estate catalog item", "estate item"}
+)
+
+
+def listing_quality_issue(
+    title: str | None,
+    description: str | None = None,
+    specification_lines: list[str] | None = None,
+) -> str | None:
+    """
+    Heuristic quality gate for a finished listing. Returns a short reason code when the listing
+    looks unusable (placeholder or garbled), else None. Cheap + deterministic so it can run at
+    read time to flag both freshly-cataloged and already-stored lots for review.
+    """
+    t = (title or "").strip()
+    d = (description or "").strip()
+    tl = t.lower()
+
+    if (
+        not t
+        or tl in _PLACEHOLDER_LISTING_TITLES
+        or tl.startswith("estate item (")
+        or tl.startswith("estate item #")
+        or _GROUPING_PLACEHOLDER_RE.match(t)
+    ):
+        return "placeholder_title"
+
+    # A real listing should have real prose; the pipeline's generic grouping fallback is not usable.
+    if not d or _GROUPING_PLACEHOLDER_RE.match(d):
+        return "placeholder_description"
+
+    # Garbled title: raw tag OCR (field labels) dumped into the title. Repeated labels or several
+    # distinct ones is a strong signal (a normal title won't say "STYLE ... STYLE ... PRICE ... PRICE").
+    words = re.findall(r"[A-Za-z]+", t)
+    label_counts = Counter(w.lower() for w in words if w.lower() in _LISTING_TAG_LABELS)
+    if any(c >= 2 for c in label_counts.values()) or sum(label_counts.values()) >= 4:
+        return "garbled_title"
+
+    return None
 
 _MENS_IN_TITLE_RE = re.compile(r"\bmen(?:'|’)?s\b", re.I)
 _WOMENS_IN_TITLE_RE = re.compile(r"\bwomen(?:'|’)?s\b", re.I)
