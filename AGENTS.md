@@ -60,9 +60,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **`POST /jobs/{id}/run` fails loud in worker mode** if the batch isn't actually staged in R2
   (verified via `count_staged_job_files`), so a storage/config problem surfaces as a real error the
   phone retries on instead of a silent "queued" job the worker can never read.
-- **Job lifecycle:** `receiving → queued → processing → completed|failed`. `GET /jobs` reconciles stale
-  `processing`/`receiving` rows; the worker requeues its own orphans. Single-lot re-runs dedup via
-  `_single_lot_batch_already_cataloged`; batch re-runs do **not** dedup (can duplicate lots).
+- **Live dashboard progress is stored in Postgres** (`job_sse_events` + `processing_jobs.progress_*`).
+  Gemini runs on the worker; the dashboard EventSource hits the API. In-memory pub/sub cannot cross
+  those processes, so the worker persists each SSE payload and the API replays/polls it. Do not
+  revert `job_events.publish` to memory-only. Deploy **API and worker together** after this change;
+  wait until the catalog queue is idle so a worker restart does not kill a processing lot.
 - **Mobile confirms the real outcome** by polling `GET /jobs` after `/run` (see `mobile/lib/queue/sync.ts`);
   it no longer treats a `/run` 200 as "cataloged." A dedicated worker being down/mid-deploy is the main
   way jobs stall in `queued`.

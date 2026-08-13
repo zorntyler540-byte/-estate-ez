@@ -1196,6 +1196,10 @@ type Job = {
   inherit_sku_from_subfolder?: boolean;
   single_lot_mode?: boolean;
   single_lot_manual_sku?: string | null;
+  progress_phase?: string | null;
+  progress_done?: number;
+  progress_total?: number;
+  progress_file_name?: string | null;
 };
 
 function jobFromUploadResponse(data: unknown): Job {
@@ -1372,8 +1376,8 @@ function PhotoProcessingProgressPanel({
   inInventoryPhase,
   catalogStepProgress
 }: PhotoProcessingProgressProps) {
-  if (!slots.length) return null;
   const pct = analyzedTotal > 0 ? Math.min(100, Math.round((analyzedDone / analyzedTotal) * 100)) : 0;
+  const indeterminate = analyzedTotal <= 0 && !(inInventoryPhase && catalogStepProgress);
   const phaseLine = photoProgressPhaseLine({
     analyzedDone,
     analyzedTotal,
@@ -1390,7 +1394,9 @@ function PhotoProcessingProgressPanel({
         <span className="ct-photo-progress__count">
           {inInventoryPhase && catalogStepProgress
             ? `${catalogStepProgress.index + 1} / ${catalogStepProgress.total}`
-            : `${analyzedDone} / ${analyzedTotal}`}
+            : analyzedTotal > 0
+              ? `${analyzedDone} / ${analyzedTotal}`
+              : "…"}
         </span>
       </div>
       <div
@@ -1398,19 +1404,24 @@ function PhotoProcessingProgressPanel({
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={inInventoryPhase && catalogStepProgress ? undefined : pct}
+        aria-valuenow={indeterminate ? undefined : inInventoryPhase && catalogStepProgress ? undefined : pct}
         aria-label="Photo processing progress"
       >
         <div
-          className="ct-photo-progress__bar-fill"
-          style={{
-            width: inInventoryPhase && catalogStepProgress
-              ? `${Math.min(100, Math.round(((catalogStepProgress.index + 1) / catalogStepProgress.total) * 100))}%`
-              : `${pct}%`
-          }}
+          className={`ct-photo-progress__bar-fill${indeterminate ? " ct-photo-progress__bar-fill--indeterminate" : ""}`}
+          style={
+            indeterminate
+              ? undefined
+              : {
+                  width: inInventoryPhase && catalogStepProgress
+                    ? `${Math.min(100, Math.round(((catalogStepProgress.index + 1) / catalogStepProgress.total) * 100))}%`
+                    : `${pct}%`
+                }
+          }
         />
       </div>
       <p className="ct-photo-progress__phase">{phaseLine}</p>
+      {slots.length > 0 ? (
       <details className="ct-photo-progress__details">
         <summary>Per-photo status ({slots.length})</summary>
         <ul className="ct-photo-progress__list">
@@ -1447,6 +1458,7 @@ function PhotoProcessingProgressPanel({
           ))}
         </ul>
       </details>
+      ) : null}
     </div>
   );
 }
@@ -1886,6 +1898,45 @@ export default function DashboardPage() {
     );
   }, [jobs, liveProgressJobId]);
   const processingJobId = processingJob?.id ?? null;
+
+  useEffect(() => {
+    if (!processingJob || processingJob.status !== "processing") return;
+    const total = processingJob.progress_total || 0;
+    const done = processingJob.progress_done || 0;
+    const phase = processingJob.progress_phase || null;
+    const jobId = processingJob.id;
+    if (phase && phase !== "completed" && phase !== "failed") {
+      setPipelinePhase((prev) => prev ?? phase);
+      if (phase === "inventory") setInInventoryPhase(true);
+    }
+    if (total < 1) return;
+    const fileName = processingJob.progress_file_name || "";
+    setPhotoPendingSlots((prev) => {
+      if (prev.length === total && prev[0]?.jobId === jobId) {
+        const sseDone = prev.filter((s) => s.status === "analyzed").length;
+        if (sseDone >= done) return prev;
+        return prev.map((s, i) =>
+          i < done && s.status === "queued" ? { ...s, status: "analyzed" as const } : s
+        );
+      }
+      if (prev.length > 0 && prev[0]?.jobId === jobId) return prev;
+      return Array.from({ length: total }, (_, i) => ({
+        id: `${jobId}-slot-${i}`,
+        jobId,
+        index: i,
+        total,
+        status: i < done ? "analyzed" : "queued",
+        fileName: i === done - 1 ? fileName : ""
+      }));
+    });
+  }, [
+    processingJob?.id,
+    processingJob?.status,
+    processingJob?.progress_done,
+    processingJob?.progress_total,
+    processingJob?.progress_phase,
+    processingJob?.progress_file_name
+  ]);
   const photoHealthLotCount = useMemo(
     () => Object.keys(photoHealthMissing).length,
     [photoHealthMissing]
@@ -2800,7 +2851,7 @@ export default function DashboardPage() {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return 60000;
       if (busyProcessing || queuedJobCount > 0) {
         if (queuedJobCount > 0 && !busyProcessing) return 4000;
-        return 8000;
+        return busyProcessing ? 2500 : 8000;
       }
       return 12000;
     };
@@ -5272,7 +5323,7 @@ export default function DashboardPage() {
 
   const jobsPanelContent = (
     <>
-      {photoPendingSlots.length > 0 ? (
+      {photoPendingSlots.length > 0 || busyProcessing ? (
         <PhotoProcessingProgressPanel
           slots={photoPendingSlots}
           analyzedDone={geminiAnalyzedCount.done}
@@ -5338,14 +5389,21 @@ export default function DashboardPage() {
                 </span>
               ) : null}
               {job.status === "processing" && (
-                <button
-                  type="button"
-                  className="ct-btn"
-                  onClick={() => void cancelRun(job.id)}
-                  disabled={cancellingJobId === job.id}
-                >
-                  {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
-                </button>
+                <>
+                  <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
+                    {(job.progress_total || 0) > 0
+                      ? `${job.progress_done || 0} / ${job.progress_total}`
+                      : "Working…"}
+                  </span>
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    onClick={() => void cancelRun(job.id)}
+                    disabled={cancellingJobId === job.id}
+                  >
+                    {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
+                  </button>
+                </>
               )}
               {job.error_message ? (
                 <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>

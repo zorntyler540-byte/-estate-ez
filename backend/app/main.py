@@ -284,6 +284,10 @@ def _job_out(job: ProcessingJob) -> JobOut:
         single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
         single_lot_manual_sku=job.single_lot_manual_sku,
         listing_channel=normalize_listing_channel(getattr(job, "listing_channel", None)),
+        progress_phase=getattr(job, "progress_phase", None),
+        progress_done=int(getattr(job, "progress_done", 0) or 0),
+        progress_total=int(getattr(job, "progress_total", 0) or 0),
+        progress_file_name=getattr(job, "progress_file_name", None),
     )
 
 
@@ -3100,8 +3104,9 @@ async def job_events_sse(
     """
     Server-Sent Events for one processing job. Auth: ``Authorization: Bearer`` or query ``access_token``
     (EventSource cannot set custom headers in all browsers).
-    Events are delivered on the channel ``(account_id, job_id)`` so any authenticated user on the
-    account can watch the same sale's catalog job (e.g. office dashboard while field staff upload).
+    Events are persisted by the catalog worker and replayed from Postgres so the dashboard still
+    sees live progress when Gemini runs in a separate Railway service (in-memory pub/sub cannot
+    cross processes).
     """
     # Short-lived session: do not use Depends(get_db) on this route — the response stays open for the whole
     # SSE stream and would pin a QueuePool connection until disconnect (same issue as get_current_user_sse).
@@ -3117,18 +3122,22 @@ async def job_events_sse(
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    q = job_events.subscribe(current.account_id, job_id)
+    account_id = current.account_id
 
     async def event_generator():
-        try:
-            yield {"data": json.dumps({"type": "connected", "job_id": job_id}, ensure_ascii=False)}
-            await asyncio.sleep(0)
-            while True:
-                if await request.is_disconnected():
-                    break
-                line = await asyncio.to_thread(_queue_get_line, q, 1.0)
-                if line is None:
-                    continue
+        last_id = 0
+        yield {"data": json.dumps({"type": "connected", "job_id": job_id}, ensure_ascii=False)}
+        await asyncio.sleep(0)
+        while True:
+            if await request.is_disconnected():
+                break
+            rows = await asyncio.to_thread(job_events.list_events_after, account_id, job_id, last_id)
+            if not rows:
+                await asyncio.sleep(0.4)
+                continue
+            stop = False
+            for event_id, line in rows:
+                last_id = event_id
                 yield {"data": line}
                 await asyncio.sleep(0)
                 try:
@@ -3136,9 +3145,10 @@ async def job_events_sse(
                 except json.JSONDecodeError:
                     continue
                 if obj.get("type") == "status" and obj.get("status") in ("completed", "failed"):
+                    stop = True
                     break
-        finally:
-            job_events.unsubscribe(current.account_id, job_id, q)
+            if stop:
+                break
 
     return EventSourceResponse(
         event_generator(),
