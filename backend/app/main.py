@@ -788,84 +788,154 @@ def admin_analytics(
     db: Session = Depends(get_db),
 ) -> AdminUsageSummaryOut:
     _require_master_admin(current)
-    in_rate = float(settings.gemini_input_cost_per_million)
-    out_rate = float(settings.gemini_output_cost_per_million)
+    # Pipeline token model (mirror of app.services.pipeline_integration estimate constants):
+    # Flash triage runs per photo; a Flash listing pass and a Pro author pass run per finished lot.
+    from app.services.pipeline_integration import (
+        EST_PIPELINE_INPUT_TOKENS_PER_PHOTO,
+        EST_PIPELINE_LISTING_INPUT,
+        EST_PIPELINE_LISTING_OUTPUT,
+        EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO,
+        EST_PIPELINE_PRO_INPUT,
+        EST_PIPELINE_PRO_OUTPUT,
+    )
 
-    def _est_cost_usd(inp: int, out: int) -> float:
-        return round((inp / 1_000_000.0) * in_rate + (out / 1_000_000.0) * out_rate, 4)
+    flash_in_rate = float(settings.gemini_flash_input_cost_per_million)
+    flash_out_rate = float(settings.gemini_flash_output_cost_per_million)
+    pro_in_rate = float(settings.gemini_pro_input_cost_per_million)
+    pro_out_rate = float(settings.gemini_pro_output_cost_per_million)
 
-    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
-    accounts = db.query(Account).order_by(Account.created_at.asc()).all()
-    rows: list[AdminUsageAccountOut] = []
-    for a in accounts:
-        jobs = (
-            db.query(ProcessingJob)
-            .filter(ProcessingJob.account_id == a.id, ProcessingJob.created_at >= since_dt)
-            .all()
-        )
+    def _cost(tokens: int, rate_per_million: float) -> float:
+        return (tokens / 1_000_000.0) * rate_per_million
+
+    in_progress_statuses = {JobStatus.receiving, JobStatus.queued, JobStatus.processing}
+
+    def _account_row(account_id: str, account_name: str, jobs: list) -> AdminUsageAccountOut:
         jobs_started = len(jobs)
         jobs_completed = sum(1 for j in jobs if j.status == JobStatus.completed)
         jobs_failed = sum(1 for j in jobs if j.status == JobStatus.failed)
-        durations: list[float] = []
-        for j in jobs:
-            if j.updated_at and j.created_at:
-                durations.append(max(0.0, (j.updated_at - j.created_at).total_seconds()))
+        jobs_in_progress = sum(1 for j in jobs if j.status in in_progress_statuses)
+        analyzed_photos = sum(int(getattr(j, "analyzed_photos", 0) or 0) for j in jobs)
+
+        durations = [
+            max(0.0, (j.updated_at - j.created_at).total_seconds())
+            for j in jobs
+            if j.updated_at and j.created_at and j.status == JobStatus.completed
+        ]
+        active_days = len({j.created_at.date() for j in jobs if j.created_at})
+        last_activity = max(
+            (j.updated_at or j.created_at for j in jobs if (j.updated_at or j.created_at)),
+            default=None,
+        )
+
         photos_uploaded = int(
-            db.query(func.count())
-            .select_from(Photo)
-            .filter(Photo.account_id == a.id, Photo.created_at >= since_dt)
-            .scalar()
-            or 0
+            db.query(func.count()).select_from(Photo)
+            .filter(Photo.account_id == account_id, Photo.created_at >= since_dt).scalar() or 0
         )
         lots_created = int(
-            db.query(func.count())
-            .select_from(Lot)
-            .filter(Lot.account_id == a.id, Lot.created_at >= since_dt)
-            .scalar()
-            or 0
+            db.query(func.count()).select_from(Lot)
+            .filter(Lot.account_id == account_id, Lot.created_at >= since_dt).scalar() or 0
         )
-        est_input_tokens = int(sum(int(getattr(j, "est_input_tokens", 0) or 0) for j in jobs))
-        est_output_tokens = int(sum(int(getattr(j, "est_output_tokens", 0) or 0) for j in jobs))
-        rows.append(
-            AdminUsageAccountOut(
-                account_id=a.id,
-                account_name=a.name,
-                jobs_started=jobs_started,
-                jobs_completed=jobs_completed,
-                jobs_failed=jobs_failed,
-                photos_uploaded=photos_uploaded,
-                lots_created=lots_created,
-                avg_photos_per_job=round((photos_uploaded / jobs_started), 2) if jobs_started else 0.0,
-                avg_job_duration_seconds=round(mean(durations), 1) if durations else 0.0,
-                est_input_tokens=est_input_tokens,
-                est_output_tokens=est_output_tokens,
-                est_total_cost_usd=_est_cost_usd(est_input_tokens, est_output_tokens),
-            )
+
+        # Reconstruct the Flash vs Pro token split so each is priced at its own rate.
+        flash_in = analyzed_photos * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO + jobs_completed * EST_PIPELINE_LISTING_INPUT
+        flash_out = analyzed_photos * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO + jobs_completed * EST_PIPELINE_LISTING_OUTPUT
+        pro_in = jobs_completed * EST_PIPELINE_PRO_INPUT
+        pro_out = jobs_completed * EST_PIPELINE_PRO_OUTPUT
+
+        flash_cost = _cost(flash_in, flash_in_rate) + _cost(flash_out, flash_out_rate)
+        pro_cost = _cost(pro_in, pro_in_rate) + _cost(pro_out, pro_out_rate)
+        total_cost = flash_cost + pro_cost
+        est_input_tokens = flash_in + pro_in
+        est_output_tokens = flash_out + pro_out
+        finished = jobs_completed + jobs_failed
+
+        return AdminUsageAccountOut(
+            account_id=account_id,
+            account_name=account_name,
+            jobs_started=jobs_started,
+            jobs_completed=jobs_completed,
+            jobs_failed=jobs_failed,
+            jobs_in_progress=jobs_in_progress,
+            photos_uploaded=photos_uploaded,
+            lots_created=lots_created,
+            avg_photos_per_job=round(photos_uploaded / jobs_started, 2) if jobs_started else 0.0,
+            avg_job_duration_seconds=round(mean(durations), 1) if durations else 0.0,
+            success_rate=round(jobs_completed / finished, 3) if finished else 0.0,
+            est_input_tokens=est_input_tokens,
+            est_output_tokens=est_output_tokens,
+            est_flash_cost_usd=round(flash_cost, 4),
+            est_pro_cost_usd=round(pro_cost, 4),
+            est_total_cost_usd=round(total_cost, 4),
+            est_cost_per_lot_usd=round(total_cost / lots_created, 4) if lots_created else 0.0,
+            est_cost_per_photo_usd=round(total_cost / photos_uploaded, 4) if photos_uploaded else 0.0,
+            avg_tokens_per_job=int((est_input_tokens + est_output_tokens) / jobs_started) if jobs_started else 0,
+            active_days=active_days,
+            last_activity_at=last_activity,
         )
-    total_accounts = len(rows)
+
+    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
+    accounts = db.query(Account).order_by(Account.created_at.asc()).all()
+    all_jobs = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.created_at >= since_dt)
+        .all()
+    )
+    jobs_by_account: dict[str, list] = {}
+    for j in all_jobs:
+        jobs_by_account.setdefault(j.account_id, []).append(j)
+
+    rows = [_account_row(a.id, a.name, jobs_by_account.get(a.id, [])) for a in accounts]
+
+    # Totals aggregate the per-account rows (photos/lots are per-account DB counts) and recompute
+    # rates from all jobs so the "All accounts" line stays internally consistent.
+    def _sum(attr: str) -> int:
+        return int(sum(getattr(r, attr) for r in rows))
+
+    total_jobs = _sum("jobs_started")
+    total_completed = _sum("jobs_completed")
+    total_failed = _sum("jobs_failed")
+    total_photos = _sum("photos_uploaded")
+    total_lots = _sum("lots_created")
+    total_in = _sum("est_input_tokens")
+    total_out = _sum("est_output_tokens")
+    total_flash = round(sum(r.est_flash_cost_usd for r in rows), 4)
+    total_pro = round(sum(r.est_pro_cost_usd for r in rows), 4)
+    total_cost = round(total_flash + total_pro, 4)
+    total_durations = [
+        max(0.0, (j.updated_at - j.created_at).total_seconds())
+        for j in all_jobs
+        if j.updated_at and j.created_at and j.status == JobStatus.completed
+    ]
+    total_finished = total_completed + total_failed
     totals = AdminUsageAccountOut(
         account_id="all",
         account_name="All accounts",
-        jobs_started=sum(r.jobs_started for r in rows),
-        jobs_completed=sum(r.jobs_completed for r in rows),
-        jobs_failed=sum(r.jobs_failed for r in rows),
-        photos_uploaded=sum(r.photos_uploaded for r in rows),
-        lots_created=sum(r.lots_created for r in rows),
-        avg_photos_per_job=(
-            round(sum(r.photos_uploaded for r in rows) / sum(r.jobs_started for r in rows), 2)
-            if sum(r.jobs_started for r in rows) > 0
-            else 0.0
+        jobs_started=total_jobs,
+        jobs_completed=total_completed,
+        jobs_failed=total_failed,
+        jobs_in_progress=_sum("jobs_in_progress"),
+        photos_uploaded=total_photos,
+        lots_created=total_lots,
+        avg_photos_per_job=round(total_photos / total_jobs, 2) if total_jobs else 0.0,
+        avg_job_duration_seconds=round(mean(total_durations), 1) if total_durations else 0.0,
+        success_rate=round(total_completed / total_finished, 3) if total_finished else 0.0,
+        est_input_tokens=total_in,
+        est_output_tokens=total_out,
+        est_flash_cost_usd=total_flash,
+        est_pro_cost_usd=total_pro,
+        est_total_cost_usd=total_cost,
+        est_cost_per_lot_usd=round(total_cost / total_lots, 4) if total_lots else 0.0,
+        est_cost_per_photo_usd=round(total_cost / total_photos, 4) if total_photos else 0.0,
+        avg_tokens_per_job=int((total_in + total_out) / total_jobs) if total_jobs else 0,
+        active_days=len({j.created_at.date() for j in all_jobs if j.created_at}),
+        last_activity_at=max(
+            (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
+            default=None,
         ),
-        avg_job_duration_seconds=round(mean([r.avg_job_duration_seconds for r in rows if r.jobs_started > 0]), 1)
-        if any(r.jobs_started > 0 for r in rows)
-        else 0.0,
-        est_input_tokens=sum(r.est_input_tokens for r in rows),
-        est_output_tokens=sum(r.est_output_tokens for r in rows),
-        est_total_cost_usd=round(sum(r.est_total_cost_usd for r in rows), 4),
     )
     return AdminUsageSummaryOut(
         since_days=since_days,
-        total_accounts=total_accounts,
+        total_accounts=len(rows),
         totals=totals,
         by_account=rows,
     )

@@ -55,11 +55,28 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
     gemini_api_version: str = Field(default="v1beta", alias="GEMINI_API_VERSION")
     # Estimated Gemini pricing used for admin analytics (USD per 1M tokens).
+    # Legacy single/blended rates (kept for backward compatibility / fallback).
     gemini_input_cost_per_million: float = Field(
         default=0.35, ge=0.0, alias="GEMINI_INPUT_COST_PER_MILLION"
     )
     gemini_output_cost_per_million: float = Field(
         default=1.05, ge=0.0, alias="GEMINI_OUTPUT_COST_PER_MILLION"
+    )
+    # Per-model rates (USD per 1M tokens). Defaults track published Gemini 2.5 paid pricing
+    # (Flash $0.30 in / $2.50 out; Pro $1.25 in / $10.00 out, prompts <=200k). Override via env
+    # when Google changes pricing or you move models. Flash covers triage + listing; Pro covers
+    # the brand/listing author pass.
+    gemini_flash_input_cost_per_million: float = Field(
+        default=0.30, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
+    )
+    gemini_flash_output_cost_per_million: float = Field(
+        default=2.50, ge=0.0, alias="GEMINI_FLASH_OUTPUT_COST_PER_MILLION"
+    )
+    gemini_pro_input_cost_per_million: float = Field(
+        default=1.25, ge=0.0, alias="GEMINI_PRO_INPUT_COST_PER_MILLION"
+    )
+    gemini_pro_output_cost_per_million: float = Field(
+        default=10.00, ge=0.0, alias="GEMINI_PRO_OUTPUT_COST_PER_MILLION"
     )
     skip_tape_verify: bool = Field(default=False, alias="SKIP_TAPE_VERIFY")
     # Default is conservative: many parallel Gemini calls decode large JPEGs in RAM and trigger OOM on small hosts (e.g. Railway). Override with GEMINI_PARALLELISM=12–15 on a beefy machine.

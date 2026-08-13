@@ -77,13 +77,27 @@ class AdminUsageAccountOut(BaseModel):
     jobs_started: int
     jobs_completed: int
     jobs_failed: int
+    # Jobs still moving through the pipeline (receiving/queued/processing) in the window.
+    jobs_in_progress: int = 0
     photos_uploaded: int
     lots_created: int
     avg_photos_per_job: float
     avg_job_duration_seconds: float
+    # completed / (completed + failed), 0..1; 0 when no finished jobs.
+    success_rate: float = 0.0
     est_input_tokens: int
     est_output_tokens: int
+    # Cost split by model tier (Flash = triage + listing, Pro = author pass).
+    est_flash_cost_usd: float = 0.0
+    est_pro_cost_usd: float = 0.0
     est_total_cost_usd: float = 0.0
+    # Unit economics for per-client pricing.
+    est_cost_per_lot_usd: float = 0.0
+    est_cost_per_photo_usd: float = 0.0
+    avg_tokens_per_job: int = 0
+    # Distinct calendar days (UTC) with at least one job in the window.
+    active_days: int = 0
+    last_activity_at: datetime | None = None
 
 
 class AdminUsageSummaryOut(BaseModel):
