@@ -2785,6 +2785,21 @@ select.ct-input option {
   transition: width 0.35s ease;
 }
 
+.ct-photo-progress__bar-fill--indeterminate {
+  width: 38%;
+  transition: none;
+  animation: ct-progress-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes ct-progress-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
 .ct-photo-progress__phase {
   margin: 0 0 0.55rem;
   font-size: 0.84rem;

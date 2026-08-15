@@ -330,6 +330,10 @@ class JobOut(BaseModel):
     single_lot_mode: bool = False
     single_lot_manual_sku: str | None = None
     listing_channel: str = "ctseller"
+    progress_phase: str | None = None
+    progress_done: int = 0
+    progress_total: int = 0
+    progress_file_name: str | None = None
 
 
 class LotPhotoOut(BaseModel):
