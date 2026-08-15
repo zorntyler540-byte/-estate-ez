@@ -811,9 +811,12 @@ export default function CaptureSessionScreen() {
       </ScrollView>
 
       <PhotoPreviewModal
-        uri={previewUri}
+        uris={previewUri ? thumbs : []}
         index={previewIndex}
-        total={thumbs.length}
+        onIndexChange={(next) => {
+          setPreviewIndex(next);
+          setPreviewUri(thumbs[next] ?? null);
+        }}
         onClose={() => setPreviewUri(null)}
         onDelete={deleteFromPreview}
       />

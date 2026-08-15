@@ -75,6 +75,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   per-profile channels in `eas.json`). JS-only fixes ship with `eas update --branch <channel>`; native/dep
   changes still require a new `eas build` + TestFlight submission. OTA only works on builds made **after**
   expo-updates was added.
+- **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
+  `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
+  sort. Do not reorder queue thumbs for listing presentation.
 
 ### Testing / lint / build
 

@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 
-import { draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
+import { DraftPhotoStrip, draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { useSync } from "@/context/SyncContext";
@@ -28,9 +28,8 @@ export default function QueueScreen() {
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [message, setMessage] = useState("");
-  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
-  const [previewTotal, setPreviewTotal] = useState(0);
 
   const refresh = useCallback(async () => {
     await refreshSales();
@@ -195,9 +194,9 @@ export default function QueueScreen() {
     );
   }
   function openPreview(uris: string[], index: number) {
-    setPreviewIndex(index);
-    setPreviewTotal(uris.length);
-    setPreviewUri(uris[index] ?? null);
+    if (!uris.length) return;
+    setPreviewUris(uris);
+    setPreviewIndex(Math.max(0, Math.min(index, uris.length - 1)));
   }
 
   const banner = message || lastMessage;
@@ -210,7 +209,8 @@ export default function QueueScreen() {
       </Text>
       <Text style={styles.hint}>
         Each row shows photos saved on this phone. Unfinished lots stay here if you leave the app —
-        tap Continue to keep shooting, or Queue / Sync to upload. Catalog review is on the web dashboard.
+        tap Continue to keep shooting, or Queue / Sync to upload. Review photos here in the order they
+        were taken. Catalog review is on the web dashboard.
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 
@@ -278,15 +278,22 @@ export default function QueueScreen() {
                 </View>
               </View>
 
-              {item.photoUris.length > 1 ? (
-                <View style={styles.moreRow}>
-                  {item.photoUris.slice(1, 4).map((uri, i) => (
-                    <Pressable key={uri} onPress={() => openPreview(item.photoUris, i + 1)}>
-                      <Image source={{ uri }} style={styles.moreThumb} contentFit="cover" />
+              {item.photoUris.length > 0 ? (
+                <View style={styles.reviewBlock}>
+                  <DraftPhotoStrip
+                    uris={item.photoUris}
+                    size="md"
+                    onPressPhoto={(_uri, index) => openPreview(item.photoUris, index)}
+                  />
+                  {item.photoUris.length > 1 ? (
+                    <Pressable
+                      style={styles.reviewBtn}
+                      onPress={() => openPreview(item.photoUris, 0)}
+                    >
+                      <Text style={styles.reviewBtnText}>
+                        Review all {item.photoUris.length} photos (taken order)
+                      </Text>
                     </Pressable>
-                  ))}
-                  {item.photoUris.length > 4 ? (
-                    <Text style={styles.moreCount}>+{item.photoUris.length - 4} more</Text>
                   ) : null}
                 </View>
               ) : null}
@@ -321,10 +328,10 @@ export default function QueueScreen() {
       />
 
       <PhotoPreviewModal
-        uri={previewUri}
+        uris={previewUris}
         index={previewIndex}
-        total={previewTotal}
-        onClose={() => setPreviewUri(null)}
+        onIndexChange={setPreviewIndex}
+        onClose={() => setPreviewUris([])}
       />
     </View>
   );
@@ -383,9 +390,17 @@ const styles = StyleSheet.create({
   cardSaleOther: { color: "#fcd34d" },
   cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },
   cardMeta: { color: "#78716c", fontSize: 12, marginTop: 2 },
-  moreRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  moreThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: "#141416" },
-  moreCount: { color: "#78716c", fontSize: 12 },
+  reviewBlock: { gap: 4 },
+  reviewBtn: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: "#1c1917",
+    borderWidth: 1,
+    borderColor: "#44403c"
+  },
+  reviewBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   error: { color: "#fca5a5", fontSize: 12 },
   progress: { color: "#fdba74", fontSize: 12, marginTop: 4 },
   draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

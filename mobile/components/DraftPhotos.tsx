@@ -1,5 +1,8 @@
 import { Image } from "expo-image";
+import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+
+import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -46,14 +49,33 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
 }
 
 type PhotoPreviewModalProps = {
-  uri: string | null;
+  /** Photos in capture order (first taken = index 0). */
+  uris: string[];
   index: number;
-  total: number;
+  onIndexChange?: (index: number) => void;
   onClose: () => void;
   onDelete?: () => void;
 };
 
-export function PhotoPreviewModal({ uri, index, total, onClose, onDelete }: PhotoPreviewModalProps) {
+export function PhotoPreviewModal({
+  uris,
+  index,
+  onIndexChange,
+  onClose,
+  onDelete
+}: PhotoPreviewModalProps) {
+  const uri = uris[index] ?? null;
+  const total = uris.length;
+  const canPrev = index > 0;
+  const canNext = index < total - 1;
+  const swipeStartX = useRef<number | null>(null);
+
+  function go(delta: number) {
+    const next = stepCaptureIndex(index, total, delta);
+    if (next === index) return;
+    onIndexChange?.(next);
+  }
+
   return (
     <Modal visible={Boolean(uri)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
@@ -61,8 +83,46 @@ export function PhotoPreviewModal({ uri, index, total, onClose, onDelete }: Phot
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>
             Photo {index + 1} of {total}
+            {total > 1 ? " · taken order" : ""}
           </Text>
-          {uri ? <Image source={{ uri }} style={styles.modalImage} contentFit="contain" /> : null}
+          {uri ? (
+            <View
+              style={styles.modalImageWrap}
+              onTouchStart={(e) => {
+                swipeStartX.current = e.nativeEvent.pageX;
+              }}
+              onTouchEnd={(e) => {
+                const start = swipeStartX.current;
+                swipeStartX.current = null;
+                if (start == null) return;
+                const dx = e.nativeEvent.pageX - start;
+                if (dx > 56) go(-1);
+                else if (dx < -56) go(1);
+              }}
+            >
+              <Image source={{ uri }} style={styles.modalImage} contentFit="contain" />
+            </View>
+          ) : null}
+          {total > 1 ? (
+            <View style={styles.modalNav}>
+              <Pressable
+                style={[styles.modalNavBtn, !canPrev && styles.modalNavBtnDisabled]}
+                disabled={!canPrev}
+                onPress={() => go(-1)}
+                accessibilityLabel="Previous photo"
+              >
+                <Text style={styles.modalNavText}>Previous</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalNavBtn, styles.modalNavBtnNext, !canNext && styles.modalNavBtnDisabled]}
+                disabled={!canNext}
+                onPress={() => go(1)}
+                accessibilityLabel="Next photo"
+              >
+                <Text style={styles.modalNavText}>Next</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <View style={styles.modalActions}>
             {onDelete ? (
               <Pressable style={styles.modalDelete} onPress={onDelete}>
@@ -169,7 +229,21 @@ const styles = StyleSheet.create({
   },
   modalCard: { gap: 12 },
   modalTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  modalImage: { width: "100%", height: "72%", borderRadius: 12, backgroundColor: "#0e0e10" },
+  modalImageWrap: { width: "100%", height: "68%" },
+  modalImage: { width: "100%", height: "100%", borderRadius: 12, backgroundColor: "#0e0e10" },
+  modalNav: { flexDirection: "row", gap: 10 },
+  modalNavBtn: {
+    flex: 1,
+    backgroundColor: "#292524",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#44403c"
+  },
+  modalNavBtnNext: { backgroundColor: "#1c1917" },
+  modalNavBtnDisabled: { opacity: 0.35 },
+  modalNavText: { color: "#f5f5f4", fontWeight: "700", fontSize: 16 },
   modalActions: { flexDirection: "row", justifyContent: "center", gap: 12 },
   modalDelete: {
     backgroundColor: "#7f1d1d",
