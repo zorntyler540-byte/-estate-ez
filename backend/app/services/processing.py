@@ -34,6 +34,7 @@ from app.services.pipeline_integration import (
     triage_ordered_photo_batch,
     triage_tape_marking_from_row,
 )
+from app.services.photo_order import reorder_photos_for_listing
 from app.services.photo_roles import normalize_catalog_photo_role, photo_roles_by_path
 from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
@@ -363,6 +364,9 @@ def _finalize_open_lot(
     )
     db.flush()
     _assign_photos_to_lot(db, persisted.id, pending_photo_ids)
+    # Group by triage role for a shopper-friendly gallery (hero → items → details → tape).
+    # Within each role, capture order is kept. Staff can still drag or restore capture order.
+    reorder_photos_for_listing(db, persisted.id, account_id)
     pending_photo_ids.clear()
     return None, pending_photo_ids, persisted
 
@@ -603,7 +607,7 @@ def _process_job_batch_pipeline(
         _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
         _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-        # Preserve capture order within each detected lot segment (no hero-first reorder).
+        # Persist photos in capture order first; _finalize_open_lot then groups by listing role.
         catalog_paths = list(seg_paths)
         role_by_path = photo_roles_by_path(
             catalog_paths,
@@ -721,9 +725,8 @@ def _process_job_single_lot_pipeline(
     _apply_single_lot_manual_sku(job, lot)
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-    # Preserve capture order: photos are already sorted by upload/filename order upstream.
-    # (Previously the AI "hero" frame was forced to the front, which made the mobile
-    # gallery appear out of the order the photos were taken.)
+    # Persist photos in capture order first; _finalize_open_lot then groups by listing role
+    # (hero → item fronts → details). Within a role, capture order is kept.
     catalog_paths = list(photos)
     role_by_path = photo_roles_by_path(
         catalog_paths, list((pipeline_result or {}).get("triage") or [])

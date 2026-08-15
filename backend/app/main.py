@@ -119,6 +119,7 @@ from app.services.suggestion_email import (
 from app.services.photo_order import (
     renormalize_photo_sort_orders,
     reorder_photos_by_capture_name,
+    reorder_photos_for_listing,
 )
 from app.services.photo_roles import filter_photos_excluding_sku_tape
 from app.services.listing_channels import (
@@ -1209,6 +1210,55 @@ def reset_sale_photo_order(
     if fixed:
         db.commit()
     return {"lots_total": len(lots), "lots_fixed": fixed}
+
+
+@app.post("/sales/{sale_id}/sort-photos-for-listing")
+def sort_sale_photos_for_listing(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """
+    Re-sort every lot's photos in this sale into listing order (hero → items → details → tape).
+
+    Uses persisted triage ``photo_role``. Within a role, current/capture order is kept.
+    Lots without roles are left unchanged. Staff can still drag photos or restore capture order.
+    """
+    sale = _sale_for_user(sale_id, current, db)
+    lots = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .all()
+    )
+    fixed = 0
+    for lot in lots:
+        if reorder_photos_for_listing(db, lot.id, current.account_id):
+            fixed += 1
+    if fixed:
+        db.commit()
+    return {"lots_total": len(lots), "lots_fixed": fixed}
+
+
+@app.post("/lots/{lot_id}/photos/sort-for-listing", response_model=list[LotPhotoOut])
+def sort_lot_photos_for_listing(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[LotPhotoOut]:
+    """Re-sort this lot's photos into listing order (hero → items → details → tape)."""
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    if reorder_photos_for_listing(db, lot_id, current.account_id):
+        db.commit()
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
 @app.delete("/sales/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, Loader2, Save, Trash2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, Save, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -19,6 +19,15 @@ type LotPhoto = {
   created_at: string;
   sort_order?: number;
   file_on_disk?: boolean;
+  photo_role?: string | null;
+};
+
+const LISTING_ROLE_LABEL: Record<string, string> = {
+  hero: "Group",
+  item_front: "Item",
+  angle_only: "Detail",
+  tape: "SKU tape",
+  unusable: "Skip"
 };
 
 type Lot = {
@@ -675,6 +684,33 @@ export default function LotDetailPage() {
     lastPhotoSelectAnchorRef.current = index;
   }
 
+  async function sortCatalogPhotosForListing() {
+    if (!lot || !token) return;
+    if (
+      !window.confirm(
+        "Sort this lot’s photos for a listing?\n\n" +
+          "Order becomes: group/hero shot, then each item, then details/measurements, then SKU tape.\n" +
+          "You can still drag photos afterward, or use Fix photo order on the dashboard to restore capture order."
+      )
+    ) {
+      return;
+    }
+    setReorderBusy(true);
+    setError("");
+    setOrganizeMsg("");
+    try {
+      const photos = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/photos/sort-for-listing`, token, {
+        method: "POST"
+      })) as LotPhoto[];
+      setCatalogPhotos(Array.isArray(photos) ? photos : []);
+      setOrganizeMsg("Sorted photos for listing (group → items → details).");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sort photos for listing");
+    } finally {
+      setReorderBusy(false);
+    }
+  }
+
   async function persistCatalogPhotoOrder(orderedIds: string[]) {
     if (!lot || !token) return;
     setReorderBusy(true);
@@ -1281,7 +1317,8 @@ export default function LotDetailPage() {
             ) : null}
           </h2>
           <p className="ct-upload-intro">
-            Gallery order is export order. Drag to reorder; tap a photo to crop or fine-tune.
+            Gallery order is export order. New lots are auto-sorted for listing (group → items →
+            details). Drag to fine-tune; tap a photo to crop.
           </p>
           <input
             ref={addPhotosInputRef}
@@ -1324,6 +1361,27 @@ export default function LotDetailPage() {
                     : "Add photos…"}
               </button>
             </div>
+            {catalogPhotos.length > 1 ? (
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <LayoutList size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Sort for listing</span>
+                  <span className="ct-upload-option__desc">
+                    Group/hero first, then each item, then details and measurements. SKU tape last.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ct-btn ct-upload-option__btn"
+                  disabled={organizeBusy || reorderBusy || addPhotosBusy}
+                  onClick={() => void sortCatalogPhotosForListing()}
+                >
+                  {reorderBusy ? "Sorting…" : "Sort for listing"}
+                </button>
+              </div>
+            ) : null}
             {catalogPhotos.length > 0 ? (
               <div className="ct-upload-option">
                 <span className="ct-upload-option__icon" aria-hidden>
@@ -1353,6 +1411,11 @@ export default function LotDetailPage() {
                 <li>
                   Same order as <strong>Upload lot photos</strong> in the browser extension: first row left to right,
                   then the next row.
+                </li>
+                <li>
+                  <strong>Sort for listing</strong> groups photos the way shoppers expect (wide shot, then
+                  individuals, then close-ups). Use dashboard <strong>Fix photo order</strong> to restore the
+                  order photos were taken.
                 </li>
                 <li>Order is saved for ZIP downloads, extension upload, and AI.</li>
                 <li>
@@ -1437,6 +1500,11 @@ export default function LotDetailPage() {
                     }}
                   >
                     {index + 1}
+                    {p.photo_role && LISTING_ROLE_LABEL[p.photo_role] ? (
+                      <span style={{ fontWeight: 600, marginLeft: "0.28rem", opacity: 0.9 }}>
+                        {LISTING_ROLE_LABEL[p.photo_role]}
+                      </span>
+                    ) : null}
                   </span>
                   <span
                     draggable={!organizeBusy && !reorderBusy}

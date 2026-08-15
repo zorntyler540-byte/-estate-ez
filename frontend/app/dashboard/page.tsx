@@ -4748,6 +4748,39 @@ export default function DashboardPage() {
     }
   }
 
+  async function sortSalePhotosForListing() {
+    if (!token || !selectedSaleId) return;
+    if (
+      !window.confirm(
+        "Sort every lot in this sale for listings?\n\n" +
+          "Order becomes: group/hero shot, then each item, then details/measurements, then SKU tape.\n" +
+          "Use Fix photo order if you want the order photos were taken instead. You can still drag photos on a lot afterward."
+      )
+    ) {
+      return;
+    }
+    setPullingCtSellerSales(true);
+    setError("");
+    try {
+      const res = (await apiFetch(
+        `/sales/${encodeURIComponent(selectedSaleId)}/sort-photos-for-listing`,
+        token,
+        { method: "POST" }
+      )) as { lots_fixed?: number; lots_total?: number };
+      const fixed = res.lots_fixed || 0;
+      setPullCtSellerSalesMsg(
+        fixed > 0
+          ? `Sorted photos for listing on ${fixed} lot${fixed === 1 ? "" : "s"}.`
+          : "All lots were already in listing order (or have no photo roles yet)."
+      );
+      setDataReloadNonce((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not sort photos for listing");
+    } finally {
+      setPullingCtSellerSales(false);
+    }
+  }
+
   async function resetSalePhotoOrder() {
     if (!token || !selectedSaleId) return;
     if (
@@ -5603,6 +5636,15 @@ export default function DashboardPage() {
               onClick={() => void fillBlankLotConditions()}
             >
               Fill blank conditions
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
+              title="Sort every lot: group/hero, then items, then details (uses AI photo roles)"
+              onClick={() => void sortSalePhotosForListing()}
+            >
+              Sort for listing
             </button>
             <button
               type="button"
