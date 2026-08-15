@@ -75,6 +75,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   per-profile channels in `eas.json`). JS-only fixes ship with `eas update --branch <channel>`; native/dep
   changes still require a new `eas build` + TestFlight submission. OTA only works on builds made **after**
   expo-updates was added.
+- **Photo gallery order is not the same as capture order.** After catalog, `_finalize_open_lot`
+  groups photos by triage `photo_role` (hero → item_front → angle_only → leftover → unusable → tape)
+  while keeping capture order *within* each role. Dashboard **Sort for listing** reapplies that;
+  **Fix photo order** restores capture order from `original_name` (`mobile-<draft>-NN.jpg`).
+  Do not bring back naive hero-first-only reordering — that scrambled the rest of the gallery.
 
 ### Testing / lint / build
 
