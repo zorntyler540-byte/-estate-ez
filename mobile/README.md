@@ -50,6 +50,29 @@ eas submit --platform ios --latest
 
 Sign in with your **Apple Developer** Apple ID when prompted. After Apple processes the build (~10–15 min), open [App Store Connect](https://appstoreconnect.apple.com) → your app → **TestFlight**, add Internal Testers (or invite by email). Employees install the **TestFlight** app and accept the invite — no Developer Mode, no per-device rebuilds.
 
+## Push a JS-only fix (EAS Update) — no new TestFlight build
+
+Use this when the change is only JavaScript/TypeScript (Queue screen, sync logic, copy). The phones already have the native app from TestFlight; this just swaps the JS bundle.
+
+You do **not** need Apple login for this. You do need your **Expo** login (the same account as `eas build`).
+
+```powershell
+cd C:\Users\User\Documents\CaringTransitions_AI\mobile
+npm install -g eas-cli
+eas login
+git pull
+eas update --channel production --message "Queue: review all photos in taken order"
+```
+
+1. `eas login` — browser or email/password for Expo (`vtz1900` / owner in `app.json`).
+2. `eas update --channel production` — TestFlight builds use the `production` profile, which listens to the `production` channel (see `eas.json`).
+3. Wait until the command prints a URL on expo.dev. That means phones can download it.
+4. On each iPhone: **fully quit** Estate-EZ Capture (swipe up from the app switcher) and open it again. Updates check on launch (`ON_LOAD` in `app.json`).
+
+If a phone was installed from an **ad hoc / preview** build instead of TestFlight, use `--channel preview`.
+
+**Do not use EAS Update** when you changed native code or added a native dependency (camera, sqlite, expo-updates itself). Those still need `eas build` + `eas submit` + a new TestFlight version.
+
 ## Setup (Windows)
 
 **SDK 54** — matches the **App Store Expo Go** app. When you’re ready for newer SDKs / `eas go`, upgrade with `npx expo install expo@^55.0.0 --fix`.
