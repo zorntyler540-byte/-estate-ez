@@ -72,9 +72,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   duplicate lots and a second Gemini bill. Server-side, `process_job` skips Gemini when the same
   `mobile-<draft>-NN.jpg` names already exist on a lot in that sale (`same_sale=True`).
 - **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
-  per-profile channels in `eas.json`). JS-only fixes ship with `eas update --branch <channel>`; native/dep
-  changes still require a new `eas build` + TestFlight submission. OTA only works on builds made **after**
-  expo-updates was added.
+  per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
+  Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`
+  under “Push a JS-only fix”. Native/dep changes still need `eas build` + `eas submit`.
+  OTA only works on builds made **after** expo-updates was added. Do not run `eas update`
+  from Cloud Agents unless a valid Expo token is available (this environment’s token is not).
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.
