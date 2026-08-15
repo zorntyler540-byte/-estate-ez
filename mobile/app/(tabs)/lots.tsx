@@ -168,14 +168,11 @@ export default function LotsScreen() {
                     {lotSubtitle(item)}
                   </Text>
                   <View style={styles.badges}>
-                    {item.ctseller_item_id != null ? (
+                    {item.ctseller_item_id != null || item.ctseller_posted_at ? (
                       <Text style={[styles.badge, styles.badgePosted]}>Posted</Text>
                     ) : (
                       <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
                     )}
-                    {item.is_completed ? (
-                      <Text style={[styles.badge, styles.badgeDone]}>Complete</Text>
-                    ) : null}
                     {item.sku_needs_review || item.sku_duplicate_in_sale || item.sku_text_mismatch ? (
                       <Text style={[styles.badge, styles.badgeWarn]}>SKU review</Text>
                     ) : null}

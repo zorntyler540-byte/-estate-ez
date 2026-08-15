@@ -1135,18 +1135,18 @@ export default function LotDetailPage() {
             )}
           </div>
           <div className="ct-lot-detail-hero__side">
-            <label
-              className={`ct-lot-detail-status${lot.is_completed ? " ct-lot-detail-status--done" : ""}`}
-              style={{ cursor: "pointer" }}
+            <span
+              className={`ct-lot-detail-status${
+                lot.ctseller_item_id || lot.ctseller_posted_at ? " ct-lot-detail-status--done" : ""
+              }`}
+              title={
+                lot.ctseller_item_id || lot.ctseller_posted_at
+                  ? "Posted to CT Seller"
+                  : "Not posted to CT Seller yet"
+              }
             >
-              <input
-                type="checkbox"
-                checked={lot.is_completed}
-                onChange={(e) => updateListingFields({ is_completed: e.target.checked })}
-                disabled={saving || showAiRegenProgress}
-              />
-              <span>{lot.is_completed ? "Done" : "Not done"}</span>
-            </label>
+              {lot.ctseller_item_id || lot.ctseller_posted_at ? "Posted" : "Not posted"}
+            </span>
             <div className="ct-lot-detail-hero__actions">
               <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.82rem" }}>
                 <input

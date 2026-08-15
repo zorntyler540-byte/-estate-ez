@@ -15,6 +15,7 @@ import {
   preparePhotosForUpload
 } from "../uploadPrepare";
 import { listDraftPhotos, listLotDrafts, setDraftServerJobId, setDraftStatus } from "./db";
+import { decideSyncRecovery, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
  * After ``/run`` is accepted we confirm the server actually catalogs the lot instead of
@@ -89,21 +90,35 @@ export async function syncPendingLots(
   onProgress?.();
 
   for (const draft of drafts) {
-    if (draft.status === "uploading" || draft.status === "failed" || draft.status === "queued") {
-      // Drop any orphan receiving job from a previous attempt before retrying.
-      if (draft.server_job_id) {
+    if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
+      continue;
+    }
+    if (draft.server_job_id) {
+      const job = await fetchServerJob(authToken, draft.sale_id, draft.server_job_id);
+      if (decideSyncRecovery(draft.status, job) === "adopt") {
+        if (job?.status === "completed") {
+          await setDraftServerJobId(draft.id, null);
+          await setDraftStatus(draft.id, "uploaded", null);
+        } else {
+          await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
+        }
+        continue;
+      }
+      // Only delete a job that never cataloged (receiving) or already failed. Never delete
+      // queued/processing — that left the first AI run alive and started a second one.
+      if (job && (job.status === "receiving" || job.status === "failed")) {
         try {
           await deleteJob(draft.server_job_id, authToken);
         } catch {
-          /* job may already be gone / failed-reconciled */
+          /* job may already be gone */
         }
-        await setDraftServerJobId(draft.id, null);
       }
-      if (draft.status === "uploading" || draft.status === "failed") {
-        await setDraftStatus(draft.id, "queued", null);
-      } else if (draft.error_message) {
-        await setDraftStatus(draft.id, "queued", null);
-      }
+      await setDraftServerJobId(draft.id, null);
+    }
+    if (draft.status === "uploading" || draft.status === "failed") {
+      await setDraftStatus(draft.id, "queued", null);
+    } else if (draft.error_message) {
+      await setDraftStatus(draft.id, "queued", null);
     }
   }
   onProgress?.();
@@ -197,7 +212,9 @@ export async function syncPendingLots(
       onProgress?.();
 
       await runJob(jobId, authToken);
-      await setDraftStatus(draft.id, "uploading", "On server — cataloging…");
+      // Mark sent as soon as catalog is queued. Staying on "uploading" until the 45s
+      // confirm window ended is what made a killed Sync start a second AI job.
+      await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
       onProgress?.();
 
       // Confirm the server actually catalogs it (don't trust the /run 200 alone).
@@ -227,7 +244,6 @@ export async function syncPendingLots(
         await setDraftStatus(draft.id, "uploaded", null);
         uploaded += 1;
       } else {
-        // Still processing after the confirm window — keep server_job_id so Phase 0 reconciles later.
         await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
         uploaded += 1;
       }
@@ -235,13 +251,22 @@ export async function syncPendingLots(
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Upload failed";
 
-      // Never start catalog with a partial lot — that was creating 1–2 photo listings.
-      // Delete the receiving job so Sync can retry the full lot cleanly.
+      // Only delete a receiving/failed job. If /run already queued catalog, keep that job
+      // and treat the lot as sent — deleting it (or ignoring a 409) used to start a duplicate.
       if (jobId) {
-        try {
-          await deleteJob(jobId, authToken);
-        } catch {
-          /* leave orphan rather than mask the real error — server stale reconcile will fail it */
+        const existing = await fetchServerJob(authToken, draft.sale_id, jobId);
+        if (existing && jobIsLiveOrDone(existing.status)) {
+          await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
+          onProgress?.();
+          uploaded += 1;
+          continue;
+        }
+        if (!existing || existing.status === "receiving" || existing.status === "failed") {
+          try {
+            await deleteJob(jobId, authToken);
+          } catch {
+            /* leave orphan rather than mask the real error — server stale reconcile will fail it */
+          }
         }
       }
       await setDraftServerJobId(draft.id, null);

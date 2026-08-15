@@ -1159,6 +1159,10 @@ function formatLotPrice(price: number | null): string {
   }).format(price);
 }
 
+function lotIsPostedToCtSeller(lot: Lot): boolean {
+  return Boolean(lot.ctseller_item_id || lot.ctseller_posted_at);
+}
+
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
   return (
     (lot.listing_channel || "ctseller") !== "facebook" &&
@@ -4520,19 +4524,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function toggleLotCompleted(lotId: string, nextValue: boolean) {
-    setError("");
-    try {
-      const updated = (await apiFetch(`/lots/${lotId}`, token, {
-        method: "PATCH",
-        body: JSON.stringify({ is_completed: nextValue })
-      })) as Lot;
-      setLots((prev) => prev.map((l) => (l.id === lotId ? updated : l)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update completion");
-    }
-  }
-
   async function deleteJobRow(jobId: string) {
     if (
       !window.confirm(
@@ -6260,8 +6251,8 @@ export default function DashboardPage() {
       <header className="ct-dash-lots__header">
         <h2 className="ct-dash-panel__title">Lots ({lots.length})</h2>
         <p className="ct-dash-lots__stats">
-          {lots.filter((l) => l.is_completed).length} completed ·{" "}
-          {lots.filter((l) => !l.is_completed).length} not done
+          {lots.filter((l) => lotIsPostedToCtSeller(l)).length} posted ·{" "}
+          {lots.filter((l) => !lotIsPostedToCtSeller(l)).length} not posted
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
           Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
@@ -6472,18 +6463,18 @@ export default function DashboardPage() {
               >
                 Details
               </Link>
-              <label
+              <span
                 className={`ct-lot-detail-status ct-lot-mobile-card__status${
-                  lot.is_completed ? " ct-lot-detail-status--done" : ""
+                  lotIsPostedToCtSeller(lot) ? " ct-lot-detail-status--done" : ""
                 }`}
+                title={
+                  lotIsPostedToCtSeller(lot)
+                    ? "Posted to CT Seller"
+                    : "Not posted to CT Seller yet"
+                }
               >
-                <input
-                  type="checkbox"
-                  checked={lot.is_completed}
-                  onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
-                />
-                <span>{lot.is_completed ? "Done" : "Not done"}</span>
-              </label>
+                {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+              </span>
               <button
                 type="button"
                 className="ct-btn ct-btn--danger-outline ct-lot-mobile-card__delete-btn"
@@ -6586,19 +6577,18 @@ export default function DashboardPage() {
                 )}
               </td>
               <td>
-                <label
+                <span
                   className={`ct-lot-detail-status ct-lot-detail-status--table${
-                    lot.is_completed ? " ct-lot-detail-status--done" : ""
+                    lotIsPostedToCtSeller(lot) ? " ct-lot-detail-status--done" : ""
                   }`}
-                  style={{ cursor: "pointer" }}
+                  title={
+                    lotIsPostedToCtSeller(lot)
+                      ? "Posted to CT Seller"
+                      : "Not posted to CT Seller yet"
+                  }
                 >
-                  <input
-                    type="checkbox"
-                    checked={lot.is_completed}
-                    onChange={(e) => void toggleLotCompleted(lot.id, e.target.checked)}
-                  />
-                  <span>{lot.is_completed ? "Done" : "Not done"}</span>
-                </label>
+                  {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+                </span>
               </td>
               <td className="ct-lots-table__photo-count">
                 {lot.photo_count}

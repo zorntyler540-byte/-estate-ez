@@ -65,7 +65,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `_single_lot_batch_already_cataloged`; batch re-runs do **not** dedup (can duplicate lots).
 - **Mobile confirms the real outcome** by polling `GET /jobs` after `/run` (see `mobile/lib/queue/sync.ts`);
   it no longer treats a `/run` 200 as "cataloged." A dedicated worker being down/mid-deploy is the main
-  way jobs stall in `queued`.
+  way jobs stall in `queued`. After `/run` the draft is marked **uploaded** immediately. Sync must
+  **adopt** (not delete + re-upload) a `queued`/`processing`/`completed` job — retrying created
+  duplicate lots and a second Gemini bill. Server-side, `process_job` skips Gemini when the same
+  `mobile-<draft>-NN.jpg` names already exist on a lot in that sale (`same_sale=True`).
 - **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
   per-profile channels in `eas.json`). JS-only fixes ship with `eas update --branch <channel>`; native/dep
   changes still require a new `eas build` + TestFlight submission. OTA only works on builds made **after**

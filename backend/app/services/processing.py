@@ -101,8 +101,21 @@ def _heartbeat_job(db: Session, job: ProcessingJob) -> None:
     db.commit()
 
 
-def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_paths: list[Path]) -> bool:
-    """True when this Add-one-lot upload already produced catalog rows (re-run / duplicate worker)."""
+def _single_lot_batch_already_cataloged(
+    db: Session,
+    job: ProcessingJob,
+    photo_paths: list[Path],
+    *,
+    same_sale: bool = False,
+) -> bool:
+    """True when this Add-one-lot upload already produced catalog rows.
+
+    Default (``same_sale=False``) only looks at lots created at/after this job — used mid-pipeline
+    so we do not treat photos just inserted by *this* run as a prior listing.
+
+    ``same_sale=True`` looks at the whole sale. Use that *before* Gemini so a Sync retry / Resend
+    of the same ``mobile-<draft>-NN.jpg`` names does not pay for a second catalog pass.
+    """
     if not bool(getattr(job, "single_lot_mode", False)) or not photo_paths:
         return False
     db.refresh(job)
@@ -112,9 +125,6 @@ def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_p
     if not names:
         return False
     needed = set(names)
-    created_after = job.created_at
-    if created_after is not None and created_after.tzinfo is None:
-        created_after = created_after.replace(tzinfo=timezone.utc)
     q = (
         db.query(Photo.lot_id, Photo.original_name)
         .join(Lot, Photo.lot_id == Lot.id)
@@ -124,8 +134,12 @@ def _single_lot_batch_already_cataloged(db: Session, job: ProcessingJob, photo_p
             Photo.original_name.in_(names),
         )
     )
-    if created_after is not None:
-        q = q.filter(Lot.created_at >= created_after)
+    if not same_sale:
+        created_after = job.created_at
+        if created_after is not None and created_after.tzinfo is None:
+            created_after = created_after.replace(tzinfo=timezone.utc)
+        if created_after is not None:
+            q = q.filter(Lot.created_at >= created_after)
     by_lot: dict[str, set[str]] = {}
     for lot_id, original_name in q.all():
         if lot_id and original_name:
@@ -693,9 +707,9 @@ def _process_job_single_lot_pipeline(
     db.commit()
     _heartbeat_job(db, job)
 
-    if _single_lot_batch_already_cataloged(db, job, photos):
+    if _single_lot_batch_already_cataloged(db, job, photos, same_sale=True):
         _LOG.info(
-            "pipeline inventory skipped — batch already cataloged job_id=%s photos=%d",
+            "pipeline inventory skipped — same photos already cataloged in this sale job_id=%s photos=%d",
             job.id,
             total_photos,
         )
@@ -867,9 +881,9 @@ def _process_job_body(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    if _single_lot_batch_already_cataloged(db, job, photos):
+    if _single_lot_batch_already_cataloged(db, job, photos, same_sale=True):
         _LOG.info(
-            "process_job skipped — Add-one-lot batch already cataloged job_id=%s photos=%d",
+            "process_job skipped — same photos already cataloged in this sale job_id=%s photos=%d",
             job.id,
             len(photos),
         )
