@@ -80,14 +80,11 @@ export default function LotDetailScreen() {
 
             <Text style={styles.title}>{title}</Text>
             <View style={styles.badges}>
-              {lot.ctseller_item_id != null ? (
+              {lot.ctseller_item_id != null || lot.ctseller_posted_at ? (
                 <Text style={[styles.badge, styles.badgePosted]}>Posted to CT Seller</Text>
               ) : (
                 <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
               )}
-              {lot.is_completed ? (
-                <Text style={[styles.badge, styles.badgeDone]}>Marked complete</Text>
-              ) : null}
             </View>
 
             <Field label="SKU" value={lot.sku?.trim() || "—"} />
