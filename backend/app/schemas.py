@@ -363,6 +363,12 @@ class SalePhotoHealthOut(BaseModel):
     lots: list[LotPhotoHealthRow]
 
 
+class CatalogedMobileDraftsOut(BaseModel):
+    """Phone draft ids that already have catalog photos on this sale (``mobile-<draft>-NN.jpg``)."""
+
+    draft_ids: list[str]
+
+
 class ReorderLotPhotosIn(BaseModel):
     """Every catalog photo id for this lot exactly once, in desired display order (left-to-right, then rows)."""
 

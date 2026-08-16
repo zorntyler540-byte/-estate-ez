@@ -28,3 +28,25 @@ export function decideSyncRecovery(
 export function jobIsLiveOrDone(status: string | undefined): boolean {
   return status === "queued" || status === "processing" || status === "completed";
 }
+
+/** Website was busy (DB pool / timeout) — lot may already be on the server. */
+export function isTransientSyncError(message: string | null | undefined): boolean {
+  const m = (message || "").toLowerCase();
+  if (!m) return false;
+  return (
+    m.includes("timed out") ||
+    m.includes("timeout") ||
+    m.includes("queuepool") ||
+    m.includes("connection timed out") ||
+    m.includes("network request failed") ||
+    m.includes("502") ||
+    m.includes("503") ||
+    m.includes("504") ||
+    m.includes("didn't finish") ||
+    m.includes("did not finish") ||
+    m.includes("website was busy") ||
+    m.includes("website busy") ||
+    m.includes("check the website") ||
+    m.includes("do not resend")
+  );
+}

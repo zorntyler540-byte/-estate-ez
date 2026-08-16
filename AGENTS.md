@@ -71,6 +71,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   **adopt** (not delete + re-upload) a `queued`/`processing`/`completed` job — retrying created
   duplicate lots and a second Gemini bill. Server-side, `process_job` skips Gemini when the same
   `mobile-<draft>-NN.jpg` names already exist on a lot in that sale (`same_sale=True`).
+- **Queue leftover “failed / didn’t finish” notices are often false.** A full DB pool can time out
+  the phone after `/run` while the worker still catalogs. Sync Phase 0 calls
+  `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
+  notice). Do not tell the user to Resend all when lots are already on the website. This needs
+  an API deploy **and** an EAS Update (`production` channel) before phones stop showing the old copy.
 - **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
   per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
   Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`

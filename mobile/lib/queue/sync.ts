@@ -3,6 +3,7 @@ import NetInfo from "@react-native-community/netinfo";
 import {
   appendFilesToQueuedJob,
   deleteJob,
+  listCatalogedMobileDrafts,
   listJobsForSale,
   runJob,
   uploadSingleLotJob
@@ -15,7 +16,7 @@ import {
   preparePhotosForUpload
 } from "../uploadPrepare";
 import { listDraftPhotos, listLotDrafts, setDraftServerJobId, setDraftStatus } from "./db";
-import { decideSyncRecovery, jobIsLiveOrDone } from "./syncRecovery";
+import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
  * After ``/run`` is accepted we confirm the server actually catalogs the lot instead of
@@ -46,6 +47,28 @@ async function fetchServerJob(
   }
 }
 
+async function fetchServerJobChecked(
+  token: string,
+  saleId: string,
+  jobId: string
+): Promise<{ ok: true; job: Job | null } | { ok: false }> {
+  try {
+    const jobs = await listJobsForSale(token, saleId);
+    return { ok: true, job: jobs.find((j) => j.id === jobId) ?? null };
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function catalogedDraftIdSet(token: string, saleId: string): Promise<Set<string>> {
+  try {
+    const ids = await listCatalogedMobileDrafts(token, saleId);
+    return new Set(ids);
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
@@ -56,40 +79,68 @@ async function fetchServerJob(
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void
-): Promise<{ uploaded: number; failed: number }> {
+): Promise<{ uploaded: number; failed: number; reconciled: number }> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
-    return { uploaded: 0, failed: 0 };
+    return { uploaded: 0, failed: 0, reconciled: 0 };
   }
 
   let uploaded = 0;
   let failed = 0;
+  let reconciled = 0;
   let authToken = token;
   const refreshed = await refreshSessionIfPossible();
   if (refreshed) authToken = refreshed;
 
   const drafts = await listLotDrafts();
 
-  // Phase 0: reconcile lots we already sent but had not confirmed cataloged (e.g. the confirm
-  // window timed out, or the app was closed). Turns a silent "sent" into the real server outcome.
+  // Phase 0: if the website already has the lot, clear fake "failed / didn't finish" rows.
+  // The phone often timed out on a full DB pool after /run while the worker still cataloged.
+  const catalogedBySale = new Map<string, Set<string>>();
   for (const draft of drafts) {
-    if (draft.status === "uploaded" && draft.server_job_id) {
-      const job = await fetchServerJob(authToken, draft.sale_id, draft.server_job_id);
-      if (!job) {
-        // Job is gone (deleted/expired) — we can no longer confirm; stop tracking it.
+    if (!catalogedBySale.has(draft.sale_id)) {
+      catalogedBySale.set(draft.sale_id, await catalogedDraftIdSet(authToken, draft.sale_id));
+    }
+    const cataloged = catalogedBySale.get(draft.sale_id) ?? new Set<string>();
+    if (cataloged.has(draft.id.toLowerCase())) {
+      if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
-      } else if (job.status === "completed") {
-        await setDraftServerJobId(draft.id, null);
-      } else if (job.status === "failed") {
-        // Keep server_job_id so the recovery pass on the next sync deletes it before retrying.
-        await setDraftStatus(draft.id, "failed", serverFailMessage(job));
+        await setDraftStatus(draft.id, "uploaded", null);
+        reconciled += 1;
       }
-      // else still receiving/queued/processing: leave as-is and check again next sync.
+      continue;
+    }
+    if (!draft.server_job_id) continue;
+    if (
+      draft.status !== "uploaded" &&
+      draft.status !== "failed" &&
+      draft.status !== "uploading" &&
+      draft.status !== "queued"
+    ) {
+      continue;
+    }
+    const looked = await fetchServerJobChecked(authToken, draft.sale_id, draft.server_job_id);
+    if (!looked.ok) continue;
+    const job = looked.job;
+    if (!job) {
+      await setDraftServerJobId(draft.id, null);
+    } else if (job.status === "completed") {
+      await setDraftServerJobId(draft.id, null);
+      await setDraftStatus(draft.id, "uploaded", null);
+      reconciled += 1;
+    } else if (job.status === "failed") {
+      await setDraftStatus(draft.id, "failed", serverFailMessage(job));
+    } else if (jobIsLiveOrDone(job.status)) {
+      await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
     }
   }
   onProgress?.();
 
-  for (const draft of drafts) {
+  for (const draft of await listLotDrafts()) {
+    const cataloged = catalogedBySale.get(draft.sale_id) ?? new Set<string>();
+    if (cataloged.has(draft.id.toLowerCase())) {
+      continue;
+    }
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
       continue;
     }
@@ -253,14 +304,21 @@ export async function syncPendingLots(
 
       // Only delete a receiving/failed job. If /run already queued catalog, keep that job
       // and treat the lot as sent — deleting it (or ignoring a 409) used to start a duplicate.
+      // If we cannot read job status (website busy / timeout), do not delete and do not
+      // mark failed — the worker may still be cataloging.
       if (jobId) {
-        const existing = await fetchServerJob(authToken, draft.sale_id, jobId);
-        if (existing && jobIsLiveOrDone(existing.status)) {
-          await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
+        const looked = await fetchServerJobChecked(authToken, draft.sale_id, jobId);
+        if (!looked.ok || (looked.job && jobIsLiveOrDone(looked.job.status))) {
+          await setDraftStatus(
+            draft.id,
+            "uploaded",
+            looked.ok ? "On server — cataloging…" : "On server — check the website"
+          );
           onProgress?.();
           uploaded += 1;
           continue;
         }
+        const existing = looked.job;
         if (!existing || existing.status === "receiving" || existing.status === "failed") {
           try {
             await deleteJob(jobId, authToken);
@@ -271,11 +329,19 @@ export async function syncPendingLots(
       }
       await setDraftServerJobId(draft.id, null);
 
-      await setDraftStatus(draft.id, "failed", msg);
+      if (isTransientSyncError(msg)) {
+        await setDraftStatus(
+          draft.id,
+          "failed",
+          "Website was busy — tap Sync to confirm. Do not Resend if the lot is already online."
+        );
+      } else {
+        await setDraftStatus(draft.id, "failed", msg);
+      }
       failed += 1;
       onProgress?.();
     }
   }
 
-  return { uploaded, failed };
+  return { uploaded, failed, reconciled };
 }

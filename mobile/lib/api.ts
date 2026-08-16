@@ -346,6 +346,15 @@ export async function listJobsForSale(token: string, saleId: string): Promise<Jo
   return apiFetch<Job[]>(`/jobs?${params.toString()}`, token);
 }
 
+/** Phone draft ids that already have catalog photos on this sale. */
+export async function listCatalogedMobileDrafts(token: string, saleId: string): Promise<string[]> {
+  const res = await apiFetch<{ draft_ids?: string[] }>(
+    `/sales/${encodeURIComponent(saleId)}/cataloged-mobile-drafts`,
+    token
+  );
+  return (res.draft_ids || []).map((id) => id.toLowerCase());
+}
+
 /** Remove a queued/failed job (and its upload folder when safe). */
 export async function deleteJob(jobId: string, token: string): Promise<void> {
   await apiFetch<void>(`/jobs/${encodeURIComponent(jobId)}`, token, { method: "DELETE" });
