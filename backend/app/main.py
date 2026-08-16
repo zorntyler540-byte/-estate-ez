@@ -84,6 +84,7 @@ from app.schemas import (
     LotAiRegenerateIn,
     LotPhotoOut,
     ReorderLotPhotosIn,
+    CatalogedMobileDraftsOut,
     SalePhotoHealthOut,
     SaleZipExportOut,
     SplitPhotosToNewLotIn,
@@ -121,6 +122,7 @@ from app.services.photo_order import (
     reorder_photos_by_capture_name,
     reorder_photos_for_listing,
 )
+from app.services.mobile_drafts import cataloged_mobile_draft_ids
 from app.services.photo_roles import filter_photos_excluding_sku_tape
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
@@ -1046,6 +1048,19 @@ def sale_photo_health(
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
     return SalePhotoHealthOut(lots=sale_lots_with_missing_photo_files(db, current.account_id, sale_id))
+
+
+@app.get("/sales/{sale_id}/cataloged-mobile-drafts", response_model=CatalogedMobileDraftsOut)
+def sale_cataloged_mobile_drafts(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogedMobileDraftsOut:
+    """Draft ids whose ``mobile-<draft>-NN.jpg`` photos already exist as catalog rows on this sale."""
+    _sale_for_user(sale_id, current, db)
+    return CatalogedMobileDraftsOut(
+        draft_ids=cataloged_mobile_draft_ids(db, current.account_id, sale_id)
+    )
 
 
 @app.get("/sales/{sale_id}/lot-cover-urls", response_model=SaleLotCoverUrlsOut)

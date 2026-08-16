@@ -1,4 +1,4 @@
-import { decideSyncRecovery } from "./syncRecovery";
+import { decideSyncRecovery, isTransientSyncError } from "./syncRecovery";
 
 const cases: Array<{
   status: "uploading" | "failed" | "queued" | "uploaded";
@@ -24,4 +24,22 @@ for (const c of cases) {
   }
 }
 
-console.log(`syncRecovery selftest ok (${cases.length} cases)`);
+const transientCases: Array<{ msg: string; want: boolean }> = [
+  { msg: "Sync didn't finish. Use Resend if the lot is missing.", want: true },
+  { msg: "The website was busy. Open Queue and tap Sync again.", want: true },
+  { msg: "Website was busy — tap Sync to confirm. Do not Resend if the lot is already online.", want: true },
+  { msg: "Request timed out — check Wi‑Fi and try Sync again.", want: true },
+  { msg: "QueuePool overflow", want: true },
+  { msg: "On server — check the website", want: true },
+  { msg: "Photo file is missing on this phone.", want: false },
+  { msg: "No photos in lot", want: false }
+];
+
+for (const c of transientCases) {
+  const got = isTransientSyncError(c.msg);
+  if (got !== c.want) {
+    throw new Error(`isTransientSyncError(${JSON.stringify(c.msg)}) => ${got}, expected ${c.want}`);
+  }
+}
+
+console.log(`syncRecovery selftest ok (${cases.length + transientCases.length} cases)`);

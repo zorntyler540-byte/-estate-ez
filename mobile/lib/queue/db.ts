@@ -272,8 +272,12 @@ export async function countPendingDrafts(): Promise<number> {
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
   // Include "uploading" so Sync Now / foreground sync recover lots stuck after an app kill.
+  // Also include leftover "uploaded" notices (timeout / still-cataloging copy) so Phase 0
+  // can clear fake errors even when nothing is queued.
   const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed', 'uploading')"
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE status IN ('queued', 'failed', 'uploading')
+        OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))`
   );
   return Number(row?.c ?? 0);
 }

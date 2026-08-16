@@ -14,12 +14,23 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 import { DraftPhotoStrip, draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
+import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
-import { useSync } from "@/context/SyncContext";
+import { useSync, type SyncResult } from "@/context/SyncContext";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftStatus } from "@/lib/queue/db";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
+
+function formatQueueSyncMessage(result: SyncResult, online: boolean | null): string {
+  if (result.uploaded || result.failed) {
+    return `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.`;
+  }
+  if (result.reconciled > 0) {
+    return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
+  }
+  return online ? "Nothing queued to upload." : "Offline — connect to Wi‑Fi or cellular to sync.";
+}
 
 export default function QueueScreen() {
   const { selectedSaleId } = useAuth();
@@ -90,11 +101,7 @@ export default function QueueScreen() {
               setMessage("Re-queued — syncing…");
               const result = await syncNow();
               if (result) {
-                setMessage(
-                  result.uploaded || result.failed
-                    ? `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} failed` : ""}.`
-                    : "Nothing queued to upload."
-                );
+                setMessage(formatQueueSyncMessage(result, online));
               }
               await refresh();
             })();
@@ -133,11 +140,7 @@ export default function QueueScreen() {
               setMessage(`Re-queued ${n} lot${n === 1 ? "" : "s"} — syncing…`);
               const result = await syncNow();
               if (result) {
-                setMessage(
-                  result.uploaded || result.failed
-                    ? `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} failed` : ""}.`
-                    : "Nothing queued to upload."
-                );
+                setMessage(formatQueueSyncMessage(result, online));
               }
               await refresh();
             })();
@@ -151,13 +154,7 @@ export default function QueueScreen() {
     setMessage("");
     const result = await syncNow();
     if (result) {
-      setMessage(
-        result.uploaded || result.failed
-          ? `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} failed` : ""}.`
-          : online
-            ? "Nothing queued to upload."
-            : "Offline — connect to Wi‑Fi or cellular to sync."
-      );
+      setMessage(formatQueueSyncMessage(result, online));
     } else if (!syncing) {
       setMessage(lastMessage ?? "Sync skipped.");
     }
@@ -240,7 +237,15 @@ export default function QueueScreen() {
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />}
         ListEmptyComponent={<Text style={styles.empty}>No local lots yet. Capture photos on the Capture tab.</Text>}
         renderItem={({ item }) => {
-          const status = draftStatusDisplay(item.status, { online, syncing });
+          const status = draftStatusDisplay(item.status, {
+            online,
+            syncing,
+            errorMessage: item.error_message
+          });
+          const noticeIsError =
+            item.status === "failed" &&
+            Boolean(item.error_message) &&
+            !isTransientSyncError(item.error_message);
           const hero = item.photoUris[0];
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           return (
@@ -299,7 +304,7 @@ export default function QueueScreen() {
               ) : null}
 
               {item.error_message ? (
-                <Text style={item.status === "failed" ? styles.error : styles.progress}>
+                <Text style={noticeIsError ? styles.error : styles.progress}>
                   {item.error_message}
                 </Text>
               ) : null}

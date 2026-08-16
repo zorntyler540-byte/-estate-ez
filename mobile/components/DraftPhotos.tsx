@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
+import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -141,7 +142,7 @@ export function PhotoPreviewModal({
 
 export function draftStatusDisplay(
   status: string,
-  opts?: { online?: boolean | null; syncing?: boolean }
+  opts?: { online?: boolean | null; syncing?: boolean; errorMessage?: string | null }
 ): { label: string; hint: string } {
   switch (status) {
     case "draft":
@@ -168,7 +169,16 @@ export function draftStatusDisplay(
         hint: "Review on the web dashboard. If the job failed or photos are missing online, tap Resend to server."
       };
     case "failed":
-      return { label: "Upload failed", hint: "Tap Sync now to retry" };
+      if (isTransientSyncError(opts?.errorMessage) || !opts?.errorMessage) {
+        return {
+          label: "Needs a check",
+          hint: "Tap Sync now. If the lot is already on the website, remove it from the phone — do not Resend."
+        };
+      }
+      return {
+        label: "Failed",
+        hint: "Tap Sync now to retry. Only Resend if this lot is missing on the website."
+      };
     default:
       return { label: status, hint: "" };
   }

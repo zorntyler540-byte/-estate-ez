@@ -18,6 +18,7 @@ import { syncPendingLots } from "@/lib/queue/sync";
 export type SyncResult = {
   uploaded: number;
   failed: number;
+  reconciled: number;
 };
 
 type SyncContextValue = {
@@ -31,12 +32,15 @@ const SyncContext = createContext<SyncContextValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
   if (result.uploaded === 0 && result.failed === 0) {
+    if (result.reconciled > 0) {
+      return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
+    }
     return "Nothing queued to upload.";
   }
   if (result.failed === 0) {
     return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}.`;
   }
-  return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, ${result.failed} failed.`;
+  return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, ${result.failed} need a check.`;
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
@@ -71,7 +75,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       const pending = await countUploadPending();
       if (pending === 0) {
         setLastMessage(null);
-        return { uploaded: 0, failed: 0 };
+        return { uploaded: 0, failed: 0, reconciled: 0 };
       }
 
       const result = await syncPendingLots(token, () => {
