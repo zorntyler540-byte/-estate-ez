@@ -5,9 +5,9 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 
-ARG NEXT_PUBLIC_API_BASE
+ARG NEXT_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app
 ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
-ARG NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL
+ARG NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL=https://drive.google.com/file/d/1bDhxQqcDpDCKNbCxD5y7p-ZjmSGI11iS/view?usp=sharing
 ENV NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL=${NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL}
 
 RUN npm run build

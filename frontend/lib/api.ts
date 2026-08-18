@@ -1,4 +1,13 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
+
+function resolveApiBase(): string {
+  const fromEnv = (process.env.NEXT_PUBLIC_API_BASE || "").trim().replace(/\/$/, "");
+  if (fromEnv) return fromEnv;
+  if (process.env.NODE_ENV === "production") return PRODUCTION_API_BASE;
+  return "http://localhost:8000";
+}
+
+const API_BASE = resolveApiBase();
 
 /** Turn FastAPI / fetch failures into a short string for banners. */
 export function parseApiErrorMessage(raw: string, fallback = "Request failed"): string {
