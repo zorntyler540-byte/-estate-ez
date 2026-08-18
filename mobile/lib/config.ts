@@ -1,5 +1,10 @@
-/** FastAPI base URL — set ``EXPO_PUBLIC_API_BASE`` in ``mobile/.env`` (see ``.env.example``). */
-export const API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? "http://localhost:8000").replace(/\/$/, "");
+/** FastAPI base URL — ``EXPO_PUBLIC_API_BASE`` overrides this (see ``mobile/.env`` / EAS). */
+const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
+
+export const API_BASE = (process.env.EXPO_PUBLIC_API_BASE || PRODUCTION_API_BASE).replace(
+  /\/$/,
+  ""
+);
 
 export const SELECTED_SALE_KEY = "ct_mobile_selected_sale_id";
 
