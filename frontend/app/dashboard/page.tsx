@@ -2836,7 +2836,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (processingJobId) return;
-    if (jobs.some((j) => j.status === "queued")) return;
+    // Do not keep the finished lot's 19/19 bar just because another job is Queued —
+    // that made a completed run look like it was still active.
     setPhotoPendingSlots([]);
     setInInventoryPhase(false);
     setPipelinePhase(null);
@@ -2845,7 +2846,7 @@ export default function DashboardPage() {
     setCancellingJobId(null);
     liveProgressJobIdRef.current = null;
     setLiveProgressJobId(null);
-  }, [processingJobId, jobs]);
+  }, [processingJobId]);
 
   /** Poll jobs/lots so field uploads appear on other devices (same account) without a manual refresh. */
   useEffect(() => {
@@ -5347,7 +5348,7 @@ export default function DashboardPage() {
 
   const jobsPanelContent = (
     <>
-      {photoPendingSlots.length > 0 || busyProcessing ? (
+      {busyProcessing ? (
         <PhotoProcessingProgressPanel
           slots={photoPendingSlots}
           analyzedDone={geminiAnalyzedCount.done}

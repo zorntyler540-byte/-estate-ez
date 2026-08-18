@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import update
 
@@ -26,7 +28,12 @@ PROCESSING_STALE_SECONDS = 3600
 # (heartbeats are not per-token); boot reconcile uses age 0 after restart.
 WORKER_ORPHAN_PROCESSING_SECONDS = 20 * 60
 
-# Mobile/web multipart uploads create ``receiving`` jobs until ``POST /run``.
+# Dedicated worker should claim within a couple of seconds. If a job is still queued after
+# this grace (and nothing is processing), the API starts it so field uploads do not sit forever.
+WORKER_CLAIM_GRACE_SECONDS = 8
+# Dashboard + phones hit GET /jobs often while lots are queued. Each kick opens extra
+# sessions; debounce so poll storms cannot stack QueuePool checkouts.
+KICK_QUEUE_DEBOUNCE_SECONDS = 5.0
 # If Sync dies mid-lot, ``updated_at`` stops advancing — fail those orphans so the UI
 # is not blocked and the phone can re-upload cleanly. Active uploads bump ``updated_at``
 # on each append (see ``append_files_to_queued_job``).
@@ -35,6 +42,8 @@ RECEIVING_STALE_SECONDS = 30 * 60
 _job_cancels: dict[str, threading.Event] = {}
 _job_accounts: dict[str, str] = {}
 _job_cancels_lock = threading.Lock()
+_kick_debounce_lock = threading.Lock()
+_last_kick_mono: dict[str, float] = {}
 
 
 def is_job_running(job_id: str) -> bool:
@@ -300,8 +309,33 @@ def _clear_stale_registration(job_id: str, account_id: str) -> None:
             _job_accounts.pop(job_id, None)
 
 
+def _stage_job_folder_from_r2(job_id: str, folder_s: str) -> None:
+    """Restore/mirror the batch without holding a QueuePool connection."""
+    try:
+        from app.job_batch_storage import ensure_job_input_folder, mirror_folder_to_r2
+
+        folder = Path(folder_s)
+        if folder.is_dir():
+            mirror_folder_to_r2(folder)
+        ensure_job_input_folder(folder)
+    except Exception:
+        _LOG.exception("job-batch R2 ensure failed job_id=%s", job_id)
+
+
 def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event) -> None:
     try:
+        folder_s: str | None = None
+        with SessionLocal() as db:
+            job = (
+                db.query(ProcessingJob)
+                .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == account_id)
+                .first()
+            )
+            if job is None or job.status not in (JobStatus.queued, JobStatus.processing):
+                return
+            folder_s = job.input_folder
+        if folder_s:
+            _stage_job_folder_from_r2(job_id, folder_s)
         with SessionLocal() as db:
             job = (
                 db.query(ProcessingJob)
@@ -393,9 +427,9 @@ def start_job_in_background(
     return True
 
 
-def try_start_next_queued_job(account_id: str) -> None:
+def try_start_next_queued_job(account_id: str, *, force_in_process: bool = False) -> None:
     """After a job finishes (or the queue was idle), start the oldest queued job for this account."""
-    if not catalog_jobs_run_in_process():
+    if not force_in_process and not catalog_jobs_run_in_process():
         return
     reconcile_memory_threads_for_account(account_id)
     if not can_start_job_for_account(account_id):
@@ -414,41 +448,102 @@ def try_start_next_queued_job(account_id: str) -> None:
             return
         job_id = row.id
     try:
-        if not start_job_in_background(job_id, account_id):
+        if not start_job_in_background(job_id, account_id, force_in_process=force_in_process):
             return
     except RuntimeError:
         _clear_stale_registration(job_id, account_id)
         try:
-            if not start_job_in_background(job_id, account_id):
+            if not start_job_in_background(job_id, account_id, force_in_process=force_in_process):
                 return
         except RuntimeError:
             return
     _LOG.info("Started queued catalog job job_id=%s account_id=%s", job_id, account_id)
 
 
-def kick_queue_if_idle(account_id: str) -> None:
-    """Start waiting queued jobs when nothing is processing (e.g. after API restart or stale reconcile)."""
-    if not catalog_jobs_run_in_process():
-        return
-    reconcile_memory_threads_for_account(account_id)
-    if effective_running_count(account_id) > 0:
-        return
+def _oldest_queued_job(account_id: str) -> tuple[str, float] | None:
+    """Return ``(job_id, age_seconds)`` for the oldest queued job, if any."""
     with SessionLocal() as db:
-        has_queued = (
-            db.query(ProcessingJob.id)
+        row = (
+            db.query(ProcessingJob)
             .filter(
                 ProcessingJob.account_id == account_id,
                 ProcessingJob.status == JobStatus.queued,
             )
+            .order_by(ProcessingJob.created_at.asc())
             .first()
-            is not None
         )
-    if has_queued:
-        try_start_next_queued_job(account_id)
+        if row is None:
+            return None
+        updated = row.updated_at or row.created_at
+        age = 0.0
+        if updated is not None:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age = max(0.0, (datetime.now(timezone.utc) - updated).total_seconds())
+        return str(row.id), age
+
+
+def kick_queue_if_idle(account_id: str) -> None:
+    """Start waiting queued jobs when nothing is processing (e.g. after API restart or stale reconcile).
+
+    In dedicated-worker mode the worker normally claims within a couple of seconds. If a job is
+    still queued after ``WORKER_CLAIM_GRACE_SECONDS`` with no processing slot in use, start it
+    on this API process (same as dashboard Run now) so phone uploads do not sit forever.
+    """
+    reconcile_memory_threads_for_account(account_id)
+    if effective_running_count(account_id) > 0:
+        return
+
+    if catalog_jobs_run_in_process():
+        queued = _oldest_queued_job(account_id)
+        if queued:
+            try_start_next_queued_job(account_id)
+        return
+
+    queued = _oldest_queued_job(account_id)
+    if queued is None:
+        return
+    job_id, age = queued
+    if age < WORKER_CLAIM_GRACE_SECONDS:
+        return
+    _LOG.warning(
+        "Worker did not claim queued job after %.0fs — starting on API job_id=%s account_id=%s",
+        age,
+        job_id,
+        account_id,
+    )
+    try_start_next_queued_job(account_id, force_in_process=True)
+
+
+def schedule_worker_claim_fallback(account_id: str, job_id: str) -> None:
+    """After phone/dashboard ``/run`` in worker mode, start the job here if the worker never claims it."""
+    if catalog_jobs_run_in_process():
+        return
+
+    def _wait_then_kick() -> None:
+        time.sleep(WORKER_CLAIM_GRACE_SECONDS)
+        try:
+            kick_queue_if_idle(account_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "worker-claim fallback failed job_id=%s account_id=%s", job_id, account_id
+            )
+
+    threading.Thread(
+        target=_wait_then_kick,
+        daemon=True,
+        name=f"wk-fb-{job_id[:8]}",
+    ).start()
 
 
 def kick_queue_if_idle_async(account_id: str) -> None:
     """Non-blocking wrapper for ``list_jobs`` — must not delay dashboard load."""
+    now = time.monotonic()
+    with _kick_debounce_lock:
+        last = _last_kick_mono.get(account_id, 0.0)
+        if now - last < KICK_QUEUE_DEBOUNCE_SECONDS:
+            return
+        _last_kick_mono[account_id] = now
     threading.Thread(
         target=kick_queue_if_idle,
         args=(account_id,),

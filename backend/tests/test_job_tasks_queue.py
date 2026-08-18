@@ -15,6 +15,8 @@ class JobTasksQueueTests(unittest.TestCase):
         with job_tasks._job_cancels_lock:
             job_tasks._job_cancels.clear()
             job_tasks._job_accounts.clear()
+        with job_tasks._kick_debounce_lock:
+            job_tasks._last_kick_mono.clear()
 
     @patch.object(job_tasks, "reconcile_memory_threads_for_account")
     @patch.object(job_tasks, "try_start_next_queued_job")
@@ -31,8 +33,15 @@ class JobTasksQueueTests(unittest.TestCase):
             def filter(self, *args: object, **kwargs: object) -> _FakeQuery:
                 return self
 
+            def order_by(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return self
+
             def first(self) -> object:
-                return object()
+                row = MagicMock()
+                row.id = "job-q"
+                row.updated_at = datetime.now(timezone.utc)
+                row.created_at = row.updated_at
+                return row
 
         class _FakeDb:
             def query(self, *args: object, **kwargs: object) -> _FakeQuery:
@@ -96,11 +105,93 @@ class JobTasksQueueTests(unittest.TestCase):
 
     @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
     @patch.object(job_tasks, "try_start_next_queued_job")
-    def test_kick_noop_when_dedicated_worker_mode(
-        self, mock_try: object, _mock_flag: object
+    @patch.object(job_tasks, "effective_running_count", return_value=0)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks, "SessionLocal")
+    def test_kick_worker_mode_waits_for_fresh_queue(
+        self,
+        mock_session_local: object,
+        _mock_reconcile: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_flag: object,
     ) -> None:
+        row = MagicMock()
+        row.id = "job-fresh"
+        row.updated_at = datetime.now(timezone.utc)
+        row.created_at = row.updated_at
+
+        class _FakeQuery:
+            def filter(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return self
+
+            def order_by(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return self
+
+            def first(self) -> object:
+                return row
+
+        class _FakeDb:
+            def query(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return _FakeQuery()
+
+            def __enter__(self) -> _FakeDb:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        mock_session_local.return_value = _FakeDb()
         job_tasks.kick_queue_if_idle("acct-1")
         mock_try.assert_not_called()
+
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "try_start_next_queued_job")
+    @patch.object(job_tasks, "effective_running_count", return_value=0)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks, "SessionLocal")
+    def test_kick_worker_mode_starts_stale_queue(
+        self,
+        mock_session_local: object,
+        _mock_reconcile: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_flag: object,
+    ) -> None:
+        row = MagicMock()
+        row.id = "job-stale-q"
+        row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        row.created_at = row.updated_at
+
+        class _FakeQuery:
+            def filter(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return self
+
+            def order_by(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return self
+
+            def first(self) -> object:
+                return row
+
+        class _FakeDb:
+            def query(self, *args: object, **kwargs: object) -> _FakeQuery:
+                return _FakeQuery()
+
+            def __enter__(self) -> _FakeDb:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        mock_session_local.return_value = _FakeDb()
+        job_tasks.kick_queue_if_idle("acct-1")
+        mock_try.assert_called_once_with("acct-1", force_in_process=True)
+
+    def test_kick_queue_if_idle_async_debounces(self) -> None:
+        with patch.object(job_tasks.threading, "Thread") as mock_thread:
+            job_tasks.kick_queue_if_idle_async("acct-debounce")
+            job_tasks.kick_queue_if_idle_async("acct-debounce")
+            self.assertEqual(mock_thread.call_count, 1)
 
     def test_reconcile_does_not_fail_recent_processing_on_other_replica(self) -> None:
         row = MagicMock()

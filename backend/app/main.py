@@ -2823,24 +2823,40 @@ async def create_job_from_upload(
             ),
         )
     dest = new_batch_dir(current.account_id)
-    await save_uploaded_files(dest, files)
+    account_id = current.account_id
+    user_id = current.id
+    sale_pk = sale.id
     _manual_sku = (single_lot_manual_sku or "").strip() or None
-    job = ProcessingJob(
-        account_id=current.account_id,
-        user_id=current.id,
-        sale_id=sale.id,
-        # Hold Gemini until ``POST /jobs/{id}/run`` — mobile/web may still be appending files.
-        status=JobStatus.receiving,
-        input_folder=str(dest.resolve()),
-        inherit_sku_from_subfolder=bool(inherit_sku_from_subfolder),
-        single_lot_mode=bool(single_lot_mode),
-        single_lot_manual_sku=_manual_sku,
-        listing_channel=channel,
+    inherit = bool(inherit_sku_from_subfolder)
+    single = bool(single_lot_mode)
+    # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O.
+    db.close()
+    await save_uploaded_files(dest, files)
+    with SessionLocal() as db2:
+        job = ProcessingJob(
+            account_id=account_id,
+            user_id=user_id,
+            sale_id=sale_pk,
+            # Hold Gemini until ``POST /jobs/{id}/run`` — mobile/web may still be appending files.
+            status=JobStatus.receiving,
+            input_folder=str(dest.resolve()),
+            inherit_sku_from_subfolder=inherit,
+            single_lot_mode=single,
+            single_lot_manual_sku=_manual_sku,
+            listing_channel=channel,
+        )
+        db2.add(job)
+        db2.commit()
+        db2.refresh(job)
+        return _job_out(job)
+
+
+def _owned_processing_job(db: Session, job_id: str, account_id: str) -> ProcessingJob | None:
+    return (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == account_id)
+        .first()
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return _job_out(job)
 
 
 def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
@@ -2892,12 +2908,19 @@ async def append_files_to_queued_job(
                     f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
                 ),
             )
+    account_id = current.account_id
+    # Compress + R2 per photo while the phone is still shooting — release the pool first.
+    db.close()
     await save_uploaded_files(dest, files)
-    # Keep ``receiving`` jobs from looking stale while the phone is still appending.
-    job.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(job)
-    return _job_out(job)
+    with SessionLocal() as db2:
+        job = _owned_processing_job(db2, job_id, account_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        # Keep ``receiving`` jobs from looking stale while the phone is still appending.
+        job.updated_at = datetime.now(timezone.utc)
+        db2.commit()
+        db2.refresh(job)
+        return _job_out(job)
 
 
 @app.post("/jobs", response_model=JobOut)
@@ -2972,17 +2995,12 @@ def run_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status == JobStatus.failed:
-        job.status = JobStatus.queued
         job.error_message = None
         job.cancel_requested = False
         db.commit()
-        db.refresh(job)
     elif job.status == JobStatus.receiving:
-        # Upload finished — release for worker / in-process catalog.
-        job.status = JobStatus.queued
-        job.error_message = None
-        db.commit()
-        db.refresh(job)
+        # Stay receiving until R2 staging finishes so the worker cannot claim a half-copied batch.
+        pass
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be receiving, queued, or failed to run")
 
@@ -2991,94 +3009,118 @@ def run_job(
     # Dedicated worker mode: phone Sync leaves the row queued for ``app.worker``.
     # Dashboard **Run now** passes force_in_process so staff are not stuck if the worker is wedged.
     run_remote = not job_tasks.catalog_jobs_run_in_process() and not force_in_process
+    folder = Path(job.input_folder)
+    account_id = current.account_id
+    # R2 of a full lot can take longer than pool_timeout. Return this connection first
+    # (QueuePool 10+20 was exhausting while phones waited on /run).
+    db.close()
+
     if run_remote:
         # The worker runs in a separate container with its own disk; it can only read this
         # batch from R2. Stage it durably and VERIFY it landed, so a storage/config problem
         # (e.g. wrong R2 key) surfaces as a real error the phone retries on — instead of a
         # silent "queued" job the worker can never read ("Input folder not found").
-        folder = Path(job.input_folder)
         local_images = count_catalog_image_files(folder)
         try:
             mirror_folder_to_r2(folder)
         except Exception:  # noqa: BLE001
             pass
         staged = count_staged_job_files(folder)
-        if not catalog_r2_configured():
-            job.status = JobStatus.failed
-            job.error_message = (
-                "Photos could not be staged for the background worker: object storage (R2) is not "
-                "configured on the server. Your photos are safe on the phone — retry after storage is set up."
-            )
-            db.commit()
-            raise HTTPException(
-                status_code=503,
-                detail=job.error_message,
-            )
-        if staged == 0 or (local_images and staged < local_images):
-            job.status = JobStatus.failed
-            job.error_message = (
-                f"Photos could not be staged for the background worker ({staged} of {local_images} reached "
-                "storage). Your photos are safe on the phone — tap Sync to retry."
-            )
-            db.commit()
-            raise HTTPException(
-                status_code=503,
-                detail=job.error_message,
-            )
-        db.refresh(job)
-        return _job_out(job)
+        with SessionLocal() as db2:
+            job = _owned_processing_job(db2, job_id, account_id)
+            if not job:
+                raise HTTPException(status_code=404, detail="Job not found")
+            if not catalog_r2_configured():
+                job.status = JobStatus.failed
+                job.error_message = (
+                    "Photos could not be staged for the background worker: object storage (R2) is not "
+                    "configured on the server. Your photos are safe on the phone — retry after storage is set up."
+                )
+                db2.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail=job.error_message,
+                )
+            if staged == 0 or (local_images and staged < local_images):
+                job.status = JobStatus.failed
+                job.error_message = (
+                    f"Photos could not be staged for the background worker ({staged} of {local_images} reached "
+                    "storage). Your photos are safe on the phone — tap Sync to retry."
+                )
+                db2.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail=job.error_message,
+                )
+            if job.status in (JobStatus.receiving, JobStatus.failed, JobStatus.queued):
+                job.status = JobStatus.queued
+                job.error_message = None
+                db2.commit()
+                db2.refresh(job)
+            job_tasks.schedule_worker_claim_fallback(account_id, job.id)
+            return _job_out(job)
 
     # In-process (or forced Run now): files are on this host; mirror best-effort for durability.
     try:
-        mirror_folder_to_r2(Path(job.input_folder))
+        mirror_folder_to_r2(folder)
     except Exception:
         pass
 
-    if force_in_process and not job_tasks.can_start_job_for_account(current.account_id):
-        freed = job_tasks.requeue_stale_processing_for_account(
-            db, current.account_id, min_age_seconds=10 * 60
-        )
-        if freed:
-            db.commit()
+    with SessionLocal() as db2:
+        job = _owned_processing_job(db2, job_id, account_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status in (JobStatus.receiving, JobStatus.failed):
+            job.status = JobStatus.queued
+            job.error_message = None
+            db2.commit()
+            db2.refresh(job)
 
-    job_tasks.kick_queue_if_idle(current.account_id)
-    started = False
-    try:
-        started = job_tasks.start_job_in_background(
-            job.id, current.account_id, force_in_process=force_in_process
-        )
-    except RuntimeError as exc:
-        if str(exc) != "job_already_running":
-            raise
-        job_tasks.reconcile_memory_threads_for_account(current.account_id)
+        if force_in_process and not job_tasks.can_start_job_for_account(account_id):
+            freed = job_tasks.requeue_stale_processing_for_account(
+                db2, account_id, min_age_seconds=10 * 60
+            )
+            if freed:
+                db2.commit()
+
+        job_tasks.kick_queue_if_idle(account_id)
+        started = False
         try:
             started = job_tasks.start_job_in_background(
-                job.id, current.account_id, force_in_process=force_in_process
+                job.id, account_id, force_in_process=force_in_process
             )
-        except RuntimeError as retry_exc:
-            if str(retry_exc) != "job_already_running":
+        except RuntimeError as exc:
+            if str(exc) != "job_already_running":
                 raise
-            raise HTTPException(status_code=409, detail="Job is already running") from retry_exc
-    if not started:
-        job_tasks.kick_queue_if_idle(current.account_id)
-        db.refresh(job)
-        if job.status == JobStatus.processing:
-            started = True
-        else:
-            if force_in_process:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Could not start catalog on the API — another job may still be processing. "
-                        "Wait a minute, or restart the catalog worker service on Railway."
-                    ),
+            job_tasks.reconcile_memory_threads_for_account(account_id)
+            try:
+                started = job_tasks.start_job_in_background(
+                    job.id, account_id, force_in_process=force_in_process
                 )
-            return _job_out(job)
-    # Worker sets DB to processing asynchronously; return processing so the client
-    # starts status polling immediately instead of waiting on the first GET /jobs refresh.
-    db.expire(job)
-    db.refresh(job)
-    return _job_out(job).model_copy(update={"status": JobStatus.processing.value})
+            except RuntimeError as retry_exc:
+                if str(retry_exc) != "job_already_running":
+                    raise
+                raise HTTPException(status_code=409, detail="Job is already running") from retry_exc
+        if not started:
+            job_tasks.kick_queue_if_idle(account_id)
+            db2.refresh(job)
+            if job.status == JobStatus.processing:
+                started = True
+            else:
+                if force_in_process:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Could not start catalog on the API — another job may still be processing. "
+                            "Wait a minute, or restart the catalog worker service on Railway."
+                        ),
+                    )
+                return _job_out(job)
+        # Worker sets DB to processing asynchronously; return processing so the client
+        # starts status polling immediately instead of waiting on the first GET /jobs refresh.
+        db2.expire(job)
+        db2.refresh(job)
+        return _job_out(job).model_copy(update={"status": JobStatus.processing.value})
 
 
 @app.post("/jobs/{job_id}/cancel", response_model=JobOut)
@@ -3198,7 +3240,7 @@ async def job_events_sse(
                 break
             rows = await asyncio.to_thread(job_events.list_events_after, account_id, job_id, last_id)
             if not rows:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(1.0)
                 continue
             stop = False
             for event_id, line in rows:

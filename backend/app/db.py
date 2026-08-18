@@ -21,6 +21,9 @@ def _create_engine_kwargs() -> dict:
         kwargs["pool_size"] = settings.db_pool_size
         kwargs["max_overflow"] = settings.db_max_overflow
         kwargs["pool_timeout"] = settings.db_pool_timeout
+        # Recycle the most-recently-used connection first so bursty HTTP (phone Sync,
+        # dashboard poll) does not keep every overflow slot checked out.
+        kwargs["pool_use_lifo"] = True
     return kwargs
 
 
