@@ -151,6 +151,10 @@ export default function HomePage() {
             {error}
           </p>
         ) : null}
+        <p className="ct-muted" style={{ margin: 0, textAlign: "center", fontSize: "0.88rem" }}>
+          Need the Windows app?{" "}
+          <a href="/desktop">Download CTBids Sale Suite</a>
+        </p>
       </div>
     </main>
   );

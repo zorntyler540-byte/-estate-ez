@@ -72,7 +72,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `NEXT_PUBLIC_API_BASE` | **Exact public API base**, e.g. `https://caring-api.up.railway.app` — no trailing slash. |
 | `NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL` | Optional. Direct HTTPS URL to `CTBids-Sale-Suite.zip` (OneDrive / R2 / S3). If unset, the **Desktop tools** page uses `/downloads/CTBids-Sale-Suite.zip` from the web image. |
 
-**CTBids Sale Suite (Windows desktop app):** Build the zip with `build_suite.bat` in the `coins ale` project. For a quick boss test, copy `dist\CTBids-Sale-Suite.zip` into `frontend/public/downloads/` before deploying the web image, **or** host the zip externally and set `NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL`. Prefer external hosting for production — the zip is large (~Chromium).
+**CTBids Sale Suite (Windows desktop app):** Public download page is **`/desktop`** (no sign-in). Logged-in users also see it under **Desktop tools**. Build the zip with `build_suite.bat` in the `coins ale` project. For a local test, copy `dist\CTBids-Sale-Suite.zip` into `frontend/public/downloads/`. For production, host the zip externally (OneDrive / R2 / S3) and set `NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL` at **image build** time — the zip is ~700 MB and should not be committed to git.
 
 On Railway: add `NEXT_PUBLIC_API_BASE` under **Variables**, then enable **“Available at build time”** (or equivalent) so the Docker `ARG` receives it during `docker build`.
 

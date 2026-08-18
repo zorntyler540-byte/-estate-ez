@@ -1,7 +1,7 @@
 CTBids Sale Suite download
 ==========================
 
-Put the built zip here so the Tools page can serve it:
+Put the built zip here so /desktop and the Tools page can serve it:
 
   CTBids-Sale-Suite.zip
 

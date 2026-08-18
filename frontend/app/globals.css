@@ -2037,6 +2037,88 @@ select.ct-input option {
   color: var(--ct-text);
 }
 
+/* Public desktop-app download (GitHub Desktop-style landing) */
+.ct-download-screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1.25rem, 4vw, 2.75rem);
+  text-align: center;
+}
+
+.ct-download-card {
+  width: 100%;
+  max-width: 560px;
+  text-align: left;
+}
+
+.ct-download-logo {
+  display: block;
+  width: 88px;
+  height: auto;
+  margin: 0 auto 0.85rem;
+  border-radius: 12px;
+  background: #000;
+}
+
+.ct-download-features {
+  margin: 1.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ct-download-features li {
+  position: relative;
+  padding-left: 1.45rem;
+  color: var(--ct-text-muted);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.ct-download-features li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.45rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ct-primary);
+  box-shadow: 0 0 8px rgba(255, 77, 26, 0.45);
+}
+
+.ct-download-btn {
+  width: 100%;
+  margin-top: 1.5rem;
+  padding: 0.9rem 1.25rem;
+  font-size: 1.05rem;
+  gap: 0.5rem;
+}
+
+.ct-download-note {
+  margin: 0.65rem 0 0;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.ct-download-steps {
+  margin: 1.35rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--ct-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.ct-download-foot {
+  margin: 1.5rem 0 0;
+  color: var(--ct-text-subtle);
+  font-size: 0.9rem;
+}
+
 .ct-app-topbar__menu {
   display: none;
   flex-shrink: 0;

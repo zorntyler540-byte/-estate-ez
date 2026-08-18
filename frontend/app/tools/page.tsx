@@ -5,18 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Download, Monitor } from "lucide-react";
 import { AppShell } from "../../components/AppShell";
-
-const DEFAULT_DOWNLOAD = "/downloads/CTBids-Sale-Suite.zip";
-
-function resolveDownloadUrl(): string {
-  const fromEnv = (process.env.NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL || "").trim();
-  return fromEnv || DEFAULT_DOWNLOAD;
-}
+import { saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
 
 export default function ToolsPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
-  const downloadUrl = useMemo(() => resolveDownloadUrl(), []);
+  const downloadUrl = useMemo(() => saleSuiteDownloadUrl(), []);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
