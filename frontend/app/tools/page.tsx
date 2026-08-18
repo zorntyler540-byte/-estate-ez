@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Download, Monitor } from "lucide-react";
 import { AppShell } from "../../components/AppShell";
-import { saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
+import { saleSuiteDownloadAnchorProps, saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
 
 export default function ToolsPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
   const downloadUrl = useMemo(() => saleSuiteDownloadUrl(), []);
+  const downloadProps = saleSuiteDownloadAnchorProps(downloadUrl);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -100,7 +101,7 @@ export default function ToolsPage() {
               </ol>
 
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", alignItems: "center" }}>
-                <a className="ct-btn ct-btn--primary" href={downloadUrl} download>
+                <a className="ct-btn ct-btn--primary" {...downloadProps}>
                   <Download size={16} aria-hidden style={{ marginRight: 6 }} />
                   Download for Windows
                 </a>

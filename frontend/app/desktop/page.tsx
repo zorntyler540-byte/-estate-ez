@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
-import { saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
+import { saleSuiteDownloadAnchorProps, saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
 
 export const metadata: Metadata = {
   title: "Download CTBids Sale Suite",
@@ -18,6 +18,7 @@ const FEATURES = [
 
 export default function DesktopDownloadPage() {
   const downloadUrl = saleSuiteDownloadUrl();
+  const downloadProps = saleSuiteDownloadAnchorProps(downloadUrl);
 
   return (
     <main className="ct-download-screen">
@@ -50,11 +51,13 @@ export default function DesktopDownloadPage() {
           ))}
         </ul>
 
-        <a className="ct-btn ct-btn--primary ct-download-btn" href={downloadUrl} download>
+        <a className="ct-btn ct-btn--primary ct-download-btn" {...downloadProps}>
           <Download size={18} aria-hidden />
           Download for Windows (64-bit)
         </a>
-        <p className="ct-muted ct-download-note">About 700 MB · includes Chromium for Sign in</p>
+        <p className="ct-muted ct-download-note">
+          About 700 MB · Google Drive will ask you to click Download
+        </p>
 
         <ol className="ct-download-steps">
           <li>Download the zip, then right-click → Extract All…</li>
