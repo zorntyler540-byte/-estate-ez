@@ -11,8 +11,13 @@ from sqlalchemy.orm import Session
 from app.catalog_storage import resolve_catalog_storage_path
 from app.core.lotting import normalize_tape_sku_input, sku_digits
 from app.models import JobStatus, Lot, Photo, SalePhotoZipExport
+from app.services.photo_order import listing_photo_sort_key
+from app.services.photo_roles import is_sku_tape_photo_role, normalize_catalog_photo_role
 
 EXPORT_ROOT = Path("data") / "exports"
+ZIP_KIND_ALL = "all"
+ZIP_KIND_HEROES = "heroes"
+ZIP_KINDS = frozenset({ZIP_KIND_ALL, ZIP_KIND_HEROES})
 
 
 def export_dir_for_account(account_id: str) -> Path:
@@ -33,6 +38,38 @@ def count_sale_catalog_photos(db: Session, sale_id: str, account_id: str) -> int
         .scalar()
         or 0
     )
+
+
+def count_sale_hero_photos(db: Session, sale_id: str, account_id: str) -> int:
+    """Lots in this sale that have at least one catalog photo (one hero zip entry each)."""
+    return (
+        db.query(func.count(func.distinct(Lot.id)))
+        .join(Photo, Photo.lot_id == Lot.id)
+        .filter(
+            Lot.sale_id == sale_id,
+            Lot.account_id == account_id,
+            Photo.account_id == account_id,
+        )
+        .scalar()
+        or 0
+    )
+
+
+def normalize_sale_zip_kind(raw: object | None) -> str:
+    kind = str(raw or ZIP_KIND_ALL).strip().lower()
+    return kind if kind in ZIP_KINDS else ZIP_KIND_ALL
+
+
+def pick_lot_hero_photo(photos: list[Photo]) -> Photo | None:
+    """One listing photo per lot: AI hero, else first non-tape frame. Never prefer SKU tape."""
+    if not photos:
+        return None
+    heroes = [p for p in photos if normalize_catalog_photo_role(p.photo_role) == "hero"]
+    if heroes:
+        return min(heroes, key=listing_photo_sort_key)
+    nontape = [p for p in photos if not is_sku_tape_photo_role(p.photo_role)]
+    pool = nontape or photos
+    return min(pool, key=listing_photo_sort_key)
 
 
 def _lot_folder_name(lot: Lot, used_folders: set[str]) -> str:
@@ -121,6 +158,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
         )
         written = 0
         used_folders: set[str] = set()
+        kind = normalize_sale_zip_kind(getattr(row, "kind", None))
         with zipfile.ZipFile(zip_final, "w", compression=zipfile.ZIP_STORED) as zf:
             for lot in lots:
                 folder = _lot_folder_name(lot, used_folders)
@@ -134,12 +172,23 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                     .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
                     .all()
                 )
+                if kind == ZIP_KIND_HEROES:
+                    hero = pick_lot_hero_photo(photos)
+                    photos = [hero] if hero is not None else []
                 for pi, ph in enumerate(photos, start=1):
                     src = resolve_catalog_storage_path(ph.storage_path)
                     if not src.is_file():
                         continue
-                    base = _arc_base(ph.original_name, pi, used_names)
-                    arcname = f"{folder}/{base}"
+                    if kind == ZIP_KIND_HEROES:
+                        suf = Path(ph.original_name.replace("\\", "/")).suffix or src.suffix or ".jpg"
+                        base = folder + suf
+                        if base in used_names:
+                            base = f"{folder}-{pi}{suf}"
+                        used_names.add(base)
+                        arcname = base
+                    else:
+                        base = _arc_base(ph.original_name, pi, used_names)
+                        arcname = f"{folder}/{base}"
                     zf.write(src, arcname=arcname)
                     written += 1
                     if written % 100 == 0:

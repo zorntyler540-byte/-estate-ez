@@ -130,7 +130,14 @@ from app.services.listing_channels import (
     is_facebook_listing_channel,
     normalize_listing_channel,
 )
-from app.services.sale_zip_export import cleanup_expired_sale_zip_exports, count_sale_catalog_photos
+from app.services.sale_zip_export import (
+    ZIP_KIND_ALL,
+    ZIP_KIND_HEROES,
+    cleanup_expired_sale_zip_exports,
+    count_sale_catalog_photos,
+    count_sale_hero_photos,
+    normalize_sale_zip_kind,
+)
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import (
     delete_catalog_photo,
@@ -312,6 +319,25 @@ if _th:
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_sale_zip_kind_column()
+
+
+def _ensure_sale_zip_kind_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing tables — add ``kind`` if missing."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "sale_photo_zip_exports" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("sale_photo_zip_exports")}
+    if "kind" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE sale_photo_zip_exports ADD COLUMN kind VARCHAR(20) DEFAULT 'all' NOT NULL"
+            )
+        )
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -3376,6 +3402,7 @@ def _sale_zip_export_out(row: SalePhotoZipExport) -> SaleZipExportOut:
         expires_at=row.expires_at,
         created_at=row.created_at,
         ready=ready,
+        kind=normalize_sale_zip_kind(getattr(row, "kind", None)),
     )
 
 
@@ -3404,11 +3431,16 @@ def _reconcile_stale_sale_zip_export(db: Session, row: SalePhotoZipExport) -> No
 @app.post("/exports/sale-photos-zip", response_model=SaleZipExportOut)
 def start_sale_photos_zip_export(
     sale_id: str,
+    kind: str = Query("all", description="all = every photo in SKU folders; heroes = one group shot per lot."),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleZipExportOut:
-    """Queue a background ZIP of all catalog photos for lots in this sale (600–3000+ images)."""
+    """Queue a background ZIP of catalog photos for lots in this sale (600–3000+ images)."""
     sale = _sale_for_user(sale_id, current, db)
+    raw_kind = str(kind or ZIP_KIND_ALL).strip().lower() or ZIP_KIND_ALL
+    if raw_kind not in (ZIP_KIND_ALL, ZIP_KIND_HEROES):
+        raise HTTPException(status_code=400, detail="kind must be 'all' or 'heroes'")
+    zip_kind = raw_kind
     cleanup_expired_sale_zip_exports(db, current.account_id)
     in_progress = (
         db.query(SalePhotoZipExport)
@@ -3416,6 +3448,7 @@ def start_sale_photos_zip_export(
             SalePhotoZipExport.sale_id == sale.id,
             SalePhotoZipExport.account_id == current.account_id,
             SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
+            SalePhotoZipExport.kind == zip_kind,
         )
         .order_by(SalePhotoZipExport.created_at.desc())
         .first()
@@ -3427,7 +3460,9 @@ def start_sale_photos_zip_export(
             return _sale_zip_export_out(in_progress)
 
     n = int(
-        count_sale_catalog_photos(db, sale.id, current.account_id)
+        count_sale_hero_photos(db, sale.id, current.account_id)
+        if zip_kind == ZIP_KIND_HEROES
+        else count_sale_catalog_photos(db, sale.id, current.account_id)
     )
     if n <= 0:
         raise HTTPException(status_code=400, detail="No catalog photos in this sale to export.")
@@ -3438,6 +3473,7 @@ def start_sale_photos_zip_export(
         status=JobStatus.queued,
         total_photos_expected=n,
         photo_files_written=0,
+        kind=zip_kind,
     )
     db.add(row)
     db.commit()
@@ -3494,7 +3530,8 @@ def download_sale_photos_zip_export(
         raise HTTPException(status_code=404, detail="ZIP file missing on disk")
     sale = db.query(Sale).filter(Sale.id == row.sale_id).first()
     slug = re.sub(r"[^\w\-]+", "_", (sale.name if sale else "sale")[:60]).strip("_") or "sale"
-    return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-photos.zip")
+    suffix = "heroes" if normalize_sale_zip_kind(getattr(row, "kind", None)) == ZIP_KIND_HEROES else "photos"
+    return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-{suffix}.zip")
 
 
 def _require_appraiser_enabled() -> None:
