@@ -14,6 +14,7 @@ import {
   FileText,
   FolderOpen,
   ImagePlus,
+  Images,
   Minus,
   Pencil,
   Plus,
@@ -1311,6 +1312,7 @@ type SaleZipExport = {
   expires_at?: string | null;
   created_at: string;
   ready: boolean;
+  kind?: string;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -1834,6 +1836,8 @@ export default function DashboardPage() {
   const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
+  const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
+  const [saleHeroZipBusy, setSaleHeroZipBusy] = useState(false);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
   const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
@@ -2237,6 +2241,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setSaleZipExport(null);
+    setSaleHeroZipExport(null);
   }, [selectedSaleId]);
 
   /** Refresh/close during multipart upload aborts the request and clears staging — warn first. */
@@ -2278,6 +2283,7 @@ export default function DashboardPage() {
     inInventoryPhase,
     catalogStepProgress,
     saleZipExport,
+    saleHeroZipExport,
     dataReloadNonce,
     selectedSaleId,
     saleZipBusy,
@@ -2370,6 +2376,33 @@ export default function DashboardPage() {
       if (intervalId !== undefined) window.clearInterval(intervalId);
     };
   }, [token, saleZipExport?.id]);
+
+  useEffect(() => {
+    if (!token || !saleHeroZipExport?.id) return;
+    if (saleHeroZipExport.status !== "queued" && saleHeroZipExport.status !== "processing") return;
+    const id = saleHeroZipExport.id;
+    let cancelled = false;
+    let intervalId: number | undefined;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const row = (await apiFetch(`/exports/sale-photos-zip/${encodeURIComponent(id)}`, token)) as SaleZipExport;
+        if (!cancelled) setSaleHeroZipExport(row);
+        if (row.ready || row.status === "failed") {
+          cancelled = true;
+          if (intervalId !== undefined) window.clearInterval(intervalId);
+        }
+      } catch {
+        /* keep last row; user can refresh */
+      }
+    };
+    intervalId = window.setInterval(() => void tick(), 2500);
+    void tick();
+    return () => {
+      cancelled = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [token, saleHeroZipExport?.id]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -5235,35 +5268,34 @@ export default function DashboardPage() {
     }
   }
 
-  async function startSalePhotosZipExport() {
+  async function startSalePhotosZipExport(kind: "all" | "heroes" = "all") {
     if (!token || !selectedSaleId) return;
     setError("");
-    setSaleZipBusy(true);
+    const setBusy = kind === "heroes" ? setSaleHeroZipBusy : setSaleZipBusy;
+    const setRow = kind === "heroes" ? setSaleHeroZipExport : setSaleZipExport;
+    setBusy(true);
     try {
-      const row = (await apiFetch(
-        `/exports/sale-photos-zip?sale_id=${encodeURIComponent(selectedSaleId)}`,
-        token,
-        { method: "POST" }
-      )) as SaleZipExport;
-      setSaleZipExport(row);
+      const q = new URLSearchParams({ sale_id: selectedSaleId, kind });
+      const row = (await apiFetch(`/exports/sale-photos-zip?${q.toString()}`, token, {
+        method: "POST"
+      })) as SaleZipExport;
+      setRow(row);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start photo ZIP export");
     } finally {
-      setSaleZipBusy(false);
+      setBusy(false);
     }
   }
 
-  async function downloadSaleZipExport() {
-    if (!token || !saleZipExport?.id || !saleZipExport.ready) return;
+  async function downloadSaleZipExport(kind: "all" | "heroes" = "all") {
+    const row = kind === "heroes" ? saleHeroZipExport : saleZipExport;
+    if (!token || !row?.id || !row.ready) return;
     setError("");
     try {
-      const res = await fetch(
-        `${API_BASE}/exports/sale-photos-zip/${encodeURIComponent(saleZipExport.id)}/download`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store"
-        }
-      );
+      const res = await fetch(`${API_BASE}/exports/sale-photos-zip/${encodeURIComponent(row.id)}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
+      });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || `Download failed (${res.status})`);
@@ -5271,7 +5303,7 @@ export default function DashboardPage() {
       const blob = await res.blob();
       const saleName = sales.find((s) => s.id === selectedSaleId)?.name?.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
       const base = saleName || selectedSaleId || "sale";
-      const fileName = `sale-${base}-photos.zip`;
+      const fileName = kind === "heroes" ? `sale-${base}-heroes.zip` : `sale-${base}-photos.zip`;
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
@@ -6805,10 +6837,9 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     className="ct-btn ct-upload-option__btn"
-                    onClick={() => void startSalePhotosZipExport()}
+                    onClick={() => void startSalePhotosZipExport("all")}
                     disabled={
                       !selectedSaleId ||
-                      selectedSaleClosed ||
                       saleZipBusy ||
                       busyProcessing ||
                       saleZipExport?.status === "queued" ||
@@ -6821,9 +6852,45 @@ export default function DashboardPage() {
                     <button
                       type="button"
                       className="ct-btn ct-btn--primary ct-upload-option__btn"
-                      onClick={() => void downloadSaleZipExport()}
+                      onClick={() => void downloadSaleZipExport("all")}
                     >
                       Download ZIP
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Images size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Hero shots ZIP</span>
+                  <span className="ct-upload-option__desc">
+                    One group/hero photo per lot (not SKU tape), named by SKU — for EstateSales.net.
+                  </span>
+                </div>
+                <div className="ct-upload-option__actions">
+                  <button
+                    type="button"
+                    className="ct-btn ct-upload-option__btn"
+                    onClick={() => void startSalePhotosZipExport("heroes")}
+                    disabled={
+                      !selectedSaleId ||
+                      saleHeroZipBusy ||
+                      busyProcessing ||
+                      saleHeroZipExport?.status === "queued" ||
+                      saleHeroZipExport?.status === "processing"
+                    }
+                  >
+                    {saleHeroZipBusy ? "Starting…" : "Prepare ZIP…"}
+                  </button>
+                  {saleHeroZipExport?.ready ? (
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary ct-upload-option__btn"
+                      onClick={() => void downloadSaleZipExport("heroes")}
+                    >
+                      Download heroes
                     </button>
                   ) : null}
                 </div>
@@ -6834,7 +6901,13 @@ export default function DashboardPage() {
               <div className="ct-help-details__body">
                 <ul>
                   <li>
-                    Original images, <strong>one folder per lot</strong> (named by SKU, e.g. <code>lot-045</code>).
+                    <strong>Photo ZIP</strong>: original images, <strong>one folder per lot</strong> (named
+                    by SKU, e.g. <code>lot-045</code>).
+                  </li>
+                  <li>
+                    <strong>Hero shots ZIP</strong>: one listing photo per lot (AI group/hero, never the
+                    dedicated SKU-tape frame). Files are named like <code>lot-045.jpg</code> for
+                    EstateSales.net.
                   </li>
                   <li>Progress counts update every few seconds while the server builds the archive.</li>
                   <li>
@@ -6846,13 +6919,25 @@ export default function DashboardPage() {
             </details>
             {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
               <p className="ct-dash-exports__status ct-muted">
-                Building ZIP… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+                Building photo ZIP… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
                 <strong>{saleZipExport.total_photos_expected}</strong> files in archive
+              </p>
+            ) : null}
+            {saleHeroZipExport &&
+            (saleHeroZipExport.status === "queued" || saleHeroZipExport.status === "processing") ? (
+              <p className="ct-dash-exports__status ct-muted">
+                Building hero ZIP… <strong>{saleHeroZipExport.photo_files_written}</strong> /{" "}
+                <strong>{saleHeroZipExport.total_photos_expected}</strong> lots
               </p>
             ) : null}
             {saleZipExport?.status === "failed" ? (
               <p className="ct-dash-exports__status" style={{ color: "var(--ct-error)" }}>
-                {saleZipExport.error_message || "Export failed"}
+                {saleZipExport.error_message || "Photo ZIP failed"}
+              </p>
+            ) : null}
+            {saleHeroZipExport?.status === "failed" ? (
+              <p className="ct-dash-exports__status" style={{ color: "var(--ct-error)" }}>
+                {saleHeroZipExport.error_message || "Hero ZIP failed"}
               </p>
             ) : null}
           </section>

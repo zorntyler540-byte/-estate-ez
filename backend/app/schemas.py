@@ -439,6 +439,7 @@ class SaleZipExportOut(BaseModel):
     expires_at: datetime | None
     created_at: datetime
     ready: bool = False
+    kind: str = "all"
 
 
 class AppraisalResultOut(BaseModel):
