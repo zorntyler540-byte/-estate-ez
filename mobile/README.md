@@ -61,11 +61,14 @@ cd C:\Users\User\Documents\CaringTransitions_AI\mobile
 npm install -g eas-cli
 eas login
 git pull
+# ``eas.json`` build.env is NOT applied to ``eas update``. SDK 54 reads local ``.env``.
+# Always set the Railway URL so a leftover localhost .env cannot ship to phones.
+$env:EXPO_PUBLIC_API_BASE="https://caringtransitions-ai-production.up.railway.app"
 eas update --channel production --message "Queue: review all photos in taken order"
 ```
 
 1. `eas login` — browser or email/password for Expo (`vtz1900` / owner in `app.json`).
-2. `eas update --channel production` — TestFlight builds use the `production` profile, which listens to the `production` channel (see `eas.json`).
+2. `eas update --channel production` — TestFlight builds listen to the **`production`** channel (see `eas.json`). Do **not** omit `EXPO_PUBLIC_API_BASE`; the release bundle also ignores localhost, but set the Railway URL anyway.
 3. Wait until the command prints a URL on expo.dev. That means phones can download it.
 4. On each iPhone: **fully quit** Estate-EZ Capture (swipe up from the app switcher) and open it again. Updates check on launch (`ON_LOAD` in `app.json`).
 
@@ -95,7 +98,7 @@ Scan the QR code with **Expo Go** on your iPhone, or press `a` for Android emula
 | Local backend on PC | `http://YOUR_LAN_IP:8000` (not `localhost` from a phone) |
 | Android emulator | `http://10.0.2.2:8000` |
 
-EAS profiles bake `EXPO_PUBLIC_API_BASE` into the binary (see `eas.json`). Local Expo Go uses `mobile/.env`.
+EAS **build** profiles bake `EXPO_PUBLIC_API_BASE` into the native binary (see `eas.json`). **EAS Update does not read that `env` block** — it uses local `.env` / the shell. Release JS (`__DEV__ === false`) ignores localhost and falls back to the Railway API in `mobile/lib/config.ts`. Local Expo Go (`__DEV__`) still uses `mobile/.env` / localhost.
 
 ## App flow (MVP scaffold)
 

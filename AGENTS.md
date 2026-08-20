@@ -82,6 +82,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   under “Push a JS-only fix”. Native/dep changes still need `eas build` + `eas submit`.
   OTA only works on builds made **after** expo-updates was added. Do not run `eas update`
   from Cloud Agents unless a valid Expo token is available (this environment’s token is not).
+  **`eas.json` `build.env` is not applied to `eas update`.** SDK 54 reads local `mobile/.env`.
+  Always set `EXPO_PUBLIC_API_BASE` to the Railway API in the same command. Release bundles
+  (`__DEV__ === false`) also drop localhost in `mobile/lib/config.ts` so a leftover `.env`
+  cannot ship `http://localhost:8000` to field phones again.
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.

@@ -1,13 +1,32 @@
-const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
+export const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
 
-function resolveApiBase(): string {
-  const fromEnv = (process.env.NEXT_PUBLIC_API_BASE || "").trim().replace(/\/$/, "");
-  if (fromEnv) return fromEnv;
-  if (process.env.NODE_ENV === "production") return PRODUCTION_API_BASE;
-  return "http://localhost:8000";
+export function isLocalApiBase(url: string): boolean {
+  const raw = url.trim();
+  if (!raw) return false;
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return /localhost|127\.0\.0\.1/i.test(raw);
+  }
 }
 
-const API_BASE = resolveApiBase();
+/**
+ * Railway/Docker production must never bake localhost. An empty or localhost
+ * ``NEXT_PUBLIC_API_BASE`` at image-build time used to ship a site that could
+ * not reach the API from phones or other machines.
+ */
+export function resolveApiBase(fromEnv: string | undefined, nodeEnv: string | undefined): string {
+  const raw = (fromEnv || "").trim().replace(/\/$/, "");
+  const production = nodeEnv === "production";
+  if (production) {
+    if (!raw || isLocalApiBase(raw)) return PRODUCTION_API_BASE;
+    return raw;
+  }
+  return raw || "http://localhost:8000";
+}
+
+const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_BASE, process.env.NODE_ENV);
 
 /** Turn FastAPI / fetch failures into a short string for banners. */
 export function parseApiErrorMessage(raw: string, fallback = "Request failed"): string {
