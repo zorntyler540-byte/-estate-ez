@@ -1245,7 +1245,7 @@ export default function LotDetailPage() {
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">CT Seller</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            Post this lot straight to seller.ctbids.com (no browser extension). Connect your Seller login on{" "}
+            Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
             <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
             photos stay in this gallery and are <strong>not</strong> uploaded to CT Bids.
           </p>
@@ -1410,15 +1410,15 @@ export default function LotDetailPage() {
             <div className="ct-help-details__body">
               <ul>
                 <li>
-                  Same order as <strong>Upload lot photos</strong> in the browser extension: first row left to right,
-                  then the next row.
+                  Gallery order is left to right, then the next row — the same order CT Bids and ZIP
+                  downloads use.
                 </li>
                 <li>
                   <strong>Sort for listing</strong> groups photos the way shoppers expect (wide shot, then
                   individuals, then close-ups). Use dashboard <strong>Fix photo order</strong> to restore the
                   order photos were taken.
                 </li>
-                <li>Order is saved for ZIP downloads, extension upload, and AI.</li>
+                <li>Order is saved for ZIP downloads, CT Bids posting, and AI.</li>
                 <li>
                   Use <strong>↺ ↻</strong> on a thumbnail for a quick rotate; click the image for crop and other edits
                   in the full viewer.

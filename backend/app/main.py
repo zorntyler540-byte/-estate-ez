@@ -305,8 +305,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allow_origins(),
-    # Allow Chrome extension UIs to call API directly.
-    allow_origin_regex=r"^chrome-extension://[a-z]{32}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -2460,7 +2458,7 @@ def lot_photo_thumbnail(
     max_px: int = 320,
     token: str = Depends(oauth2_scheme),
 ) -> Response:
-    """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos`` and extension upload sequence."""
+    """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos``."""
     # Cap high enough for CT Seller / marketplace re-uploads; still bounded to limit abuse.
     max_px = min(2048, max(64, int(max_px)))
     with SessionLocal() as db:

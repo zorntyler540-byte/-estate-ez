@@ -91,13 +91,7 @@ If the browser console shows **CORS** errors, `CORS_ORIGINS` on the API does not
 
 ---
 
-## 6. Chrome extension (optional)
-
-`extension/manifest.json` only allows `localhost` APIs today. For production, add a **host permission** for your public API origin, e.g. `https://caring-api.up.railway.app/*`, reload the extension in `chrome://extensions`, and set the API base in the popup to that URL.
-
----
-
-## 7. Uploads and redeploys
+## 6. Uploads and redeploys
 
 ### Cloudflare R2 (recommended)
 
@@ -161,7 +155,7 @@ New uploads use keys **`catalog/{account_id}/{photo_id}.jpg`**. Deleting photos 
 
 ---
 
-## 7b. Backups (photos + database)
+## 6b. Backups (photos + database)
 
 Postgres backups and photo storage protect **different things**:
 
@@ -172,7 +166,7 @@ Postgres backups and photo storage protect **different things**:
 
 **Recommended:**
 
-1. Configure **R2** (§7) on the API service.
+1. Configure **R2** (§6) on the API service.
 2. Enable **Postgres** automated backups.
 3. Periodically download a **sale photo ZIP** from the dashboard after major catalog days.
 4. Keep a copy of original camera/upload folders on your PC until the sale is published.
@@ -181,13 +175,13 @@ Postgres backups and photo storage protect **different things**:
 
 ---
 
-## 8. Updating after launch
+## 7. Updating after launch
 
 Same as local: edit code → commit → push → the host rebuilds/redeploys. Run new **Alembic** migrations when you add them (`upgrade head` already runs on API container start).
 
 ---
 
-## 9. Security checklist (production API)
+## 8. Security checklist (production API)
 
 - **`ENVIRONMENT=production`** — Refuses weak `SECRET_KEY`, SQLite URLs, and missing `CORS_ORIGINS` at startup.
 - **Secrets only in the host dashboard** — Never commit `.env` (see `.gitignore`).

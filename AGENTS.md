@@ -15,8 +15,6 @@ cloud-specific gotchas; do not duplicate standard docs.
 | Frontend web (Next.js 15) | `frontend/` | required | `NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` (run from `frontend/`) | Dashboard UI on port 3000. |
 | Catalog worker | `backend/` | optional | `backend/.venv/bin/python -m app.worker` (run from `backend/`) | Only needed if API sets `RUN_CATALOG_JOBS_IN_PROCESS=false`; default runs jobs in-process. |
 | Mobile (Expo SDK 54) | `mobile/` | optional | `npm install` then `npx expo start` | Needs a device/emulator + Expo Go; not runnable headless. |
-| Chrome extension | `extension/` | optional | load unpacked in Chrome | Vanilla JS, no build/deps; targets `*.ctbids.com`. |
-| Playwright-CT scripts | `playwright-ct/` | optional | `npm install && npm run install:browsers` | Automation utilities against a live CTBids account, not a CI test suite. |
 
 ### Non-obvious gotchas
 
@@ -100,11 +98,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   when `shows_whole_lot` is true. Persisted roles feed listing sort, CT Seller cover, and the
   Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
   lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
-- **CT Bids / CT Seller posts omit SKU-tape frames.** Dashboard **Post to CT Seller** and the
-  Chrome extension **Upload lot photos** both drop `photo_role=tape`. Tape stays in the Estate-Ez
-  gallery for SKU reference. Lots that were already posted keep whatever photos are on CT Bids
-  until someone edits that item there; do not Resend all. Reload the unpacked extension after this
-  change (manifest 1.0.10) so the media-page upload path picks it up.
+- **CT Bids / CT Seller posts omit SKU-tape frames.** Dashboard **Post to CT Seller** drops
+  `photo_role=tape`. Tape stays in the Estate-Ez gallery for SKU reference. Lots that were
+  already posted keep whatever photos are on CT Bids until someone edits that item there;
+  do not Resend all. Posting is dashboard-only — there is no browser extension.
 
 ### Testing / lint / build
 
