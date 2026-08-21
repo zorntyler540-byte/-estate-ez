@@ -1246,7 +1246,8 @@ export default function LotDetailPage() {
           <h2 className="ct-dash-panel__title">CT Seller</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
             Post this lot straight to seller.ctbids.com (no browser extension). Connect your Seller login on{" "}
-            <Link href="/account">Account</Link>, pick the matching CTBids auction, then post.
+            <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
+            photos stay in this gallery and are <strong>not</strong> uploaded to CT Bids.
           </p>
           {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
           {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}

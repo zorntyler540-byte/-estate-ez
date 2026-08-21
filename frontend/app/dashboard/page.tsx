@@ -5017,8 +5017,8 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         useSelection
-          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?`
-          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nLots are sent in batches of 10. Already-posted lots are skipped.\n\nTip: check rows to post only some of them.`
+          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nSKU-tape photos are not uploaded.`
+          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nLots are sent in batches of 10. Already-posted lots are skipped.\nSKU-tape photos are not uploaded.\n\nTip: check rows to post only some of them.`
       )
     ) {
       return;
@@ -6389,7 +6389,8 @@ export default function DashboardPage() {
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
           Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
-          post a subset to CT Seller, or leave none checked to post all unposted.
+          post a subset to CT Seller, or leave none checked to post all unposted. SKU-tape photos stay in
+          the catalog and are not uploaded to CT Bids.
         </p>
         <div className="ct-dash-lots__toolbar">
           <div className="ct-dash-lots__toolbar-filters">

@@ -100,6 +100,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   when `shows_whole_lot` is true. Persisted roles feed listing sort, CT Seller cover, and the
   Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
   lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
+- **CT Bids / CT Seller posts omit SKU-tape frames.** Dashboard **Post to CT Seller** and the
+  Chrome extension **Upload lot photos** both drop `photo_role=tape`. Tape stays in the Estate-Ez
+  gallery for SKU reference. Lots that were already posted keep whatever photos are on CT Bids
+  until someone edits that item there; do not Resend all. Reload the unpacked extension after this
+  change (manifest 1.0.10) so the media-page upload path picks it up.
 
 ### Testing / lint / build
 

@@ -61,5 +61,10 @@ def photo_roles_by_path(
 
 
 def filter_photos_excluding_sku_tape(photos: Iterable[Any]) -> list[Any]:
-    """Keep catalog photos for CT Seller (drop dedicated ``tape`` role frames)."""
+    """Keep catalog photos for CT Seller / CT Bids (drop dedicated ``tape`` role frames)."""
     return [p for p in photos if not is_sku_tape_photo_role(getattr(p, "photo_role", None))]
+
+
+def photos_for_ctbids_listing(photos: Iterable[Any]) -> list[Any]:
+    """Photos to upload to seller.ctbids.com — SKU-tape close-ups are never posted."""
+    return filter_photos_excluding_sku_tape(photos)

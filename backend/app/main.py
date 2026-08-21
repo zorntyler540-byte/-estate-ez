@@ -123,7 +123,7 @@ from app.services.photo_order import (
     reorder_photos_for_listing,
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_ids
-from app.services.photo_roles import filter_photos_excluding_sku_tape
+from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
     LISTING_CHANNEL_FACEBOOK,
@@ -1452,7 +1452,7 @@ def _post_one_lot_to_ctseller(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
         .all()
     )
-    listing_photos = filter_photos_excluding_sku_tape(photos)
+    listing_photos = photos_for_ctbids_listing(photos)
     if photos and not listing_photos:
         raise HTTPException(
             status_code=400,
@@ -1920,7 +1920,13 @@ def get_lot(lot_id: str, current: User = Depends(get_current_user), db: Session 
 
 @app.get("/lots/{lot_id}/photos", response_model=list[LotPhotoOut])
 def list_lot_photos(
-    lot_id: str, current: User = Depends(get_current_user), db: Session = Depends(get_db)
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    for_listing: bool = Query(
+        False,
+        description="If true, omit dedicated SKU-tape frames (same filter as CT Bids posting).",
+    ),
 ) -> list[LotPhotoOut]:
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
@@ -1931,6 +1937,8 @@ def list_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
+    if for_listing:
+        photos = photos_for_ctbids_listing(photos)
     return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 

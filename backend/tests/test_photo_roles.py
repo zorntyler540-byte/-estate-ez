@@ -11,6 +11,7 @@ from app.services.photo_roles import (
     is_sku_tape_photo_role,
     normalize_catalog_photo_role,
     photo_roles_by_path,
+    photos_for_ctbids_listing,
 )
 
 
@@ -77,3 +78,15 @@ def test_filter_only_tape_leaves_empty() -> None:
         SimpleNamespace(id="2", photo_role="TAPE"),
     ]
     assert filter_photos_excluding_sku_tape(photos) == []
+    assert photos_for_ctbids_listing(photos) == []
+
+
+def test_ctbids_listing_photos_drop_tape_keep_product_shots() -> None:
+    photos = [
+        SimpleNamespace(id="tape", photo_role="tape"),
+        SimpleNamespace(id="hero", photo_role="hero"),
+        SimpleNamespace(id="front", photo_role="item_front"),
+        SimpleNamespace(id="detail", photo_role="angle_only"),
+    ]
+    kept = photos_for_ctbids_listing(photos)
+    assert [p.id for p in kept] == ["hero", "front", "detail"]

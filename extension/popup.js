@@ -347,8 +347,17 @@ async function markLotCompleted(apiBase, token, lotId) {
   return res.json();
 }
 
-async function fetchLotPhotos(apiBase, token, lotId) {
-  const res = await fetchWithRetry(`${apiBase}/lots/${encodeURIComponent(lotId)}/photos`, {
+function isSkuTapePhoto(photo) {
+  return String(photo?.photo_role || "").trim().toLowerCase() === "tape";
+}
+
+function listingPhotosForCtBids(photos) {
+  return (Array.isArray(photos) ? photos : []).filter((p) => !isSkuTapePhoto(p));
+}
+
+async function fetchLotPhotos(apiBase, token, lotId, { forListing = false } = {}) {
+  const qs = forListing ? "?for_listing=true" : "";
+  const res = await fetchWithRetry(`${apiBase}/lots/${encodeURIComponent(lotId)}/photos${qs}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
@@ -356,10 +365,18 @@ async function fetchLotPhotos(apiBase, token, lotId) {
     throw new Error(text || `Photo list API ${res.status}`);
   }
   const list = await res.json();
-  if (!Array.isArray(list) || list.length === 0) {
+  if (!Array.isArray(list)) {
     throw new Error("No linked photos found for this lot.");
   }
-  return list;
+  const photos = forListing ? listingPhotosForCtBids(list) : list;
+  if (!photos.length) {
+    throw new Error(
+      forListing
+        ? "Only SKU tape photos on this lot — add a product photo before posting to CT Bids."
+        : "No linked photos found for this lot."
+    );
+  }
+  return photos;
 }
 
 /**
@@ -844,7 +861,10 @@ document.addEventListener("DOMContentLoaded", () => {
         await appendActivity(`Blocked photo upload: wrong step (${step})`);
         return;
       }
-      const photos = await fetchLotPhotos(apiBase, token, lot.id);
+      const photos = await fetchLotPhotos(apiBase, token, lot.id, { forListing: true });
+      if (!photos.length) {
+        throw new Error("Only SKU tape photos on this lot — add a product photo before posting to CT Bids.");
+      }
 
       const total = photos.length;
       let fetchDone = 0;
