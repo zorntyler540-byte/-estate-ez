@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.services.photo_roles import (
     filter_photos_excluding_sku_tape,
+    is_hero_eligible_photo_role,
     is_sku_tape_photo_role,
     normalize_catalog_photo_role,
     photo_roles_by_path,
@@ -26,6 +27,10 @@ def test_is_sku_tape_photo_role() -> None:
     assert is_sku_tape_photo_role("tape") is True
     assert is_sku_tape_photo_role("hero") is False
     assert is_sku_tape_photo_role(None) is False
+    assert is_hero_eligible_photo_role("hero") is True
+    assert is_hero_eligible_photo_role("item_front") is True
+    assert is_hero_eligible_photo_role("tape") is False
+    assert is_hero_eligible_photo_role("unusable") is False
 
 
 def test_photo_roles_by_path_from_triage(tmp_path: Path) -> None:

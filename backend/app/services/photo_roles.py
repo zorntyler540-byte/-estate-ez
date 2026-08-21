@@ -22,6 +22,12 @@ def is_sku_tape_photo_role(role: object | None) -> bool:
     return normalize_catalog_photo_role(role) == "tape"
 
 
+def is_hero_eligible_photo_role(role: object | None) -> bool:
+    """False for SKU-tape and unusable frames — they must never be the listing cover."""
+    normalized = normalize_catalog_photo_role(role)
+    return normalized not in ("tape", "unusable")
+
+
 def photo_roles_by_path(
     paths: list[Path],
     triage_rows: list[dict[str, Any]] | None,

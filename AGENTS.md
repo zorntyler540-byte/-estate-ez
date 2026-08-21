@@ -94,6 +94,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   while keeping capture order *within* each role. Dashboard **Sort for listing** reapplies that;
   **Fix photo order** restores capture order from `original_name` (`mobile-<draft>-NN.jpg`).
   Do not bring back naive hero-first-only reordering — that scrambled the rest of the gallery.
+- **SKU-tape frames are never the lot hero.** After Stage-1 triage, `select_analysis_photos`
+  coerces dedicated tape shots to `photo_role=tape` (including a mis-tagged `hero` that has a
+  lot-tape marking but is not a wide group shot) and excludes tape from hero selection even
+  when `shows_whole_lot` is true. Persisted roles feed listing sort, CT Seller cover, and the
+  Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
+  lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
 
 ### Testing / lint / build
 

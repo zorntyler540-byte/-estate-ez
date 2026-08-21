@@ -202,7 +202,7 @@ TRIAGE_SYSTEM_INSTRUCTION = (
 TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 
 Rules:
-- hero: single best wide shot showing most of the lot (only one file should win hero selection). Use hero even when lot tape with SKU is visible at the edge of the frame.
+- hero: single best wide shot showing most of the lot (only one file should win hero selection). A table/group shot may still be hero when lot tape with SKU is visible at the **edge** of the frame. **Never** tag a dedicated SKU-tape close-up as hero — not even when the strip fills the frame or merchandise is visible behind it.
 - item_front: primary face of each distinct sellable item; brand/tag when visible.
 - angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
   Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
@@ -223,7 +223,7 @@ Rules:
   text verbatim into brand_text (e.g. PEDERSOLI, TOWER, GR, maker name + date).
   **Handwritten inventory tags** (paper/card in plastic, tied to item): use item_front when the tag fills much of
   the frame; copy every readable line into brand_text (model name, caliber, maker, serial).
-- tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image.
+- tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image. **Hard rule: a tape frame must never be photo_role hero.**
   When **any** colored estate lot tape with a lot number is visible (even on a **tape roll** in the foreground of a hero shot), copy the marking into **lot_tape_marking** (e.g. MS530, MS 530, #8524).
 - unusable: blank, extreme blur, or not catalog-worthy.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
@@ -417,15 +417,51 @@ def _parse_triage_rows(triage_results: list[dict[str, Any]]) -> list[PhotoTriage
     return rows
 
 
+def is_dedicated_sku_tape_triage_row(row: dict[str, Any] | PhotoTriageResult) -> bool:
+    """True when this frame is (or was mis-tagged as) a dedicated estate SKU-tape shot."""
+    if isinstance(row, PhotoTriageResult):
+        role = row.photo_role
+        marking = (row.lot_tape_marking or "").strip()
+        shows_whole_lot = bool(row.shows_whole_lot)
+    else:
+        role = str(row.get("photo_role") or "").strip().lower()
+        marking = str(row.get("lot_tape_marking") or "").strip()
+        shows_whole_lot = bool(row.get("shows_whole_lot"))
+    if role == "tape":
+        return True
+    # Gemini sometimes labels a tape close-up as hero. A readable SKU strip that is not a
+    # wide lot/group shot is still a tape frame — never a listing cover.
+    if role == "hero" and marking and not shows_whole_lot:
+        return True
+    return False
+
+
+def apply_sku_tape_never_hero_roles(triage_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hard rule: dedicated SKU-tape frames are stored as ``tape`` and cannot remain ``hero``."""
+    for raw in triage_results:
+        if not isinstance(raw, dict):
+            continue
+        if is_dedicated_sku_tape_triage_row(raw) and raw.get("photo_role") != "tape":
+            raw["photo_role"] = "tape"
+    return triage_results
+
+
+def _hero_eligible_row(row: PhotoTriageResult) -> bool:
+    """SKU-tape and unusable frames must never win hero / listing-cover selection."""
+    return row.photo_role not in ("tape", "unusable")
+
+
 def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Section 4 — deterministic hero, fronts, pro pool from all triage rows."""
+    apply_sku_tape_never_hero_roles(triage_results)
     rows = _parse_triage_rows(triage_results)
 
-    # A. Hero (one file)
+    # A. Hero (one file) — SKU tape is never eligible, even when shows_whole_lot.
     hero_pool = [
         r
         for r in rows
-        if r.photo_role == "hero" or (r.shows_whole_lot and r.quality != "blur")
+        if _hero_eligible_row(r)
+        and (r.photo_role == "hero" or (r.shows_whole_lot and r.quality != "blur"))
     ]
     hero_filename = ""
     brand_needs_review = False
@@ -433,11 +469,25 @@ def select_analysis_photos(triage_results: list[dict[str, Any]]) -> dict[str, An
     if hero_pool:
         hero_filename = max(hero_pool, key=_hero_score).filename
     else:
-        fallback_fronts = [r for r in rows if r.photo_role == "item_front" and r.shows_whole_lot]
+        fallback_fronts = [r for r in rows if r.photo_role == "item_front"]
         if fallback_fronts:
             hero_filename = max(fallback_fronts, key=_front_score).filename
         else:
-            brand_needs_review = True
+            nontape = [r for r in rows if _hero_eligible_row(r)]
+            if nontape:
+                hero_filename = max(nontape, key=_hero_score).filename
+            else:
+                brand_needs_review = True
+
+    if hero_filename:
+        for raw in triage_results:
+            if not isinstance(raw, dict):
+                continue
+            if str(raw.get("filename") or "") != hero_filename:
+                continue
+            if raw.get("photo_role") != "tape":
+                raw["photo_role"] = "hero"
+            break
 
     # B. Item fronts — one best primary front per distinct_item_id
     front_pool = [

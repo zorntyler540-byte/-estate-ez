@@ -12,7 +12,7 @@ from app.catalog_storage import resolve_catalog_storage_path
 from app.core.lotting import normalize_tape_sku_input, sku_digits
 from app.models import JobStatus, Lot, Photo, SalePhotoZipExport
 from app.services.photo_order import listing_photo_sort_key
-from app.services.photo_roles import is_sku_tape_photo_role, normalize_catalog_photo_role
+from app.services.photo_roles import is_hero_eligible_photo_role, normalize_catalog_photo_role
 
 EXPORT_ROOT = Path("data") / "exports"
 ZIP_KIND_ALL = "all"
@@ -64,10 +64,15 @@ def pick_lot_hero_photo(photos: list[Photo]) -> Photo | None:
     """One listing photo per lot: AI hero, else first non-tape frame. Never prefer SKU tape."""
     if not photos:
         return None
-    heroes = [p for p in photos if normalize_catalog_photo_role(p.photo_role) == "hero"]
+    heroes = [
+        p
+        for p in photos
+        if normalize_catalog_photo_role(p.photo_role) == "hero"
+        and is_hero_eligible_photo_role(p.photo_role)
+    ]
     if heroes:
         return min(heroes, key=listing_photo_sort_key)
-    nontape = [p for p in photos if not is_sku_tape_photo_role(p.photo_role)]
+    nontape = [p for p in photos if is_hero_eligible_photo_role(p.photo_role)]
     pool = nontape or photos
     return min(pool, key=listing_photo_sort_key)
 
