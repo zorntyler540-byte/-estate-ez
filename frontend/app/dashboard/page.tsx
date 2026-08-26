@@ -1251,6 +1251,24 @@ function jobLostUploadFolder(job: Job): boolean {
   );
 }
 
+function jobSkuMatchKey(raw: string | null | undefined): string {
+  return (raw || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+/** Leftover FAILED mid-upload card whose SKU (or a later completed job) is already on this sale. */
+function jobOrphanUploadAlreadyOnSale(job: Job, saleLots: Lot[], allJobs: Job[]): boolean {
+  if (job.status !== "failed" || !jobLostUploadFolder(job)) return false;
+  const sku = jobSkuMatchKey(job.single_lot_manual_sku);
+  if (!sku) return false;
+  if (saleLots.some((lot) => jobSkuMatchKey(lot.sku) === sku)) return true;
+  return allJobs.some(
+    (other) =>
+      other.id !== job.id &&
+      other.status === "completed" &&
+      jobSkuMatchKey(other.single_lot_manual_sku) === sku
+  );
+}
+
 /** Human label for pipeline triage roles shown while Add one lot runs. */
 function pipelineTriageRoleLabel(role: string | undefined): string {
   const r = (role || "").trim().toLowerCase();
@@ -1967,14 +1985,15 @@ export default function DashboardPage() {
     const completed: Job[] = [];
     let queuedCount = 0;
     for (const j of jobs) {
-      if (j.status === "completed") completed.push(j);
-      else {
+      if (j.status === "completed" || jobOrphanUploadAlreadyOnSale(j, lots, jobs)) {
+        completed.push(j);
+      } else {
         active.push(j);
         if (j.status === "queued") queuedCount += 1;
       }
     }
     return { activeJobs: active, completedJobs: completed, queuedJobCount: queuedCount };
-  }, [jobs]);
+  }, [jobs, lots]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
   const ctSellerUnpostedEligible = useMemo(
@@ -5518,6 +5537,8 @@ export default function DashboardPage() {
                 <span className="ct-muted" style={{ fontSize: "0.82rem" }}>
                   Photos are gone from the server — delete this job, then Sync again from the phone (build 16+).
                 </span>
+              ) : job.error_message ? (
+                <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
               ) : null}
               {job.status === "processing" && (
                 <>
@@ -5536,9 +5557,6 @@ export default function DashboardPage() {
                   </button>
                 </>
               )}
-              {job.error_message ? (
-                <span style={{ color: "var(--ct-error)", fontSize: "0.85rem" }}>— {job.error_message}</span>
-              ) : null}
               {job.status !== "processing" && (
                 <button
                   type="button"

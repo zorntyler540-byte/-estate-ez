@@ -3213,6 +3213,7 @@ def list_jobs(
     # "processing". Reconcile those stale rows so UI actions (delete/purge) do not remain blocked forever.
     changed = job_tasks.reconcile_stale_processing_jobs(db, current.account_id)
     changed = job_tasks.reconcile_stale_receiving_jobs(db, current.account_id) or changed
+    changed = job_tasks.reconcile_superseded_failed_jobs(db, current.account_id) or changed
     if changed:
         db.commit()
     job_tasks.kick_queue_if_idle_async(current.account_id)

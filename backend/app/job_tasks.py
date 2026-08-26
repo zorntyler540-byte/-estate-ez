@@ -11,8 +11,9 @@ from sqlalchemy import update
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import JobStatus, ProcessingJob
+from app.models import JobStatus, Lot, ProcessingJob
 from app.services import job_events
+from app.services.mobile_drafts import cataloged_mobile_draft_ids, mobile_draft_id_from_original_name
 from app.services.processing import process_job
 
 _LOG = logging.getLogger(__name__)
@@ -36,8 +37,19 @@ WORKER_CLAIM_GRACE_SECONDS = 8
 KICK_QUEUE_DEBOUNCE_SECONDS = 5.0
 # If Sync dies mid-lot, ``updated_at`` stops advancing — fail those orphans so the UI
 # is not blocked and the phone can re-upload cleanly. Active uploads bump ``updated_at``
-# on each append (see ``append_files_to_queued_job``).
+# on each append (see ``append_files_to_queued_job``). When a later retry already
+# cataloged the same SKU/draft, mark the leftover **completed** instead of failed.
 RECEIVING_STALE_SECONDS = 30 * 60
+
+# Dashboard copy + worker fail text for mid-upload / lost ephemeral disk. Gemini and
+# Cancelled failures must not match — those still need staff attention.
+_ORPHAN_UPLOAD_ERROR_MARKERS = (
+    "input folder not found",
+    "upload disk was lost",
+    "re-sync from the phone",
+    "upload never finished",
+    "sync stopped mid-lot",
+)
 
 _job_cancels: dict[str, threading.Event] = {}
 _job_accounts: dict[str, str] = {}
@@ -233,12 +245,116 @@ def reconcile_worker_orphaned_processing_jobs(
     return n
 
 
+def _sku_match_keys(raw: str | None) -> set[str]:
+    """Comparable SKU tokens (case-fold + alphanumeric compact)."""
+    s = (raw or "").strip()
+    if not s:
+        return set()
+    keys = {s.casefold()}
+    compact = "".join(ch for ch in s if ch.isalnum()).upper()
+    if compact:
+        keys.add(compact)
+        keys.add(compact.casefold())
+    return keys
+
+
+def _skus_overlap(left: str | None, right: str | None) -> bool:
+    a = _sku_match_keys(left)
+    b = _sku_match_keys(right)
+    return bool(a and b and a & b)
+
+
+def is_orphan_upload_error(msg: str | None) -> bool:
+    text = (msg or "").lower()
+    return any(marker in text for marker in _ORPHAN_UPLOAD_ERROR_MARKERS)
+
+
+def _job_folder_mobile_draft_ids(job: ProcessingJob) -> set[str]:
+    """Draft ids from leftover local filenames — never hits R2 (GET /jobs must stay cheap)."""
+    folder_s = getattr(job, "input_folder", None)
+    if not folder_s:
+        return set()
+    try:
+        folder = Path(folder_s)
+        if not folder.is_dir():
+            return set()
+        found: set[str] = set()
+        for path in folder.iterdir():
+            if not path.is_file():
+                continue
+            draft_id = mobile_draft_id_from_original_name(path.name)
+            if draft_id:
+                found.add(draft_id)
+        return found
+    except OSError:
+        return set()
+
+
+def _mark_job_superseded_complete(row: ProcessingJob) -> None:
+    row.status = JobStatus.completed
+    row.error_message = None
+    row.cancel_requested = False
+    _LOG.info(
+        "Leftover job marked completed — lot already on sale job_id=%s sale_id=%s sku=%s",
+        row.id,
+        getattr(row, "sale_id", None),
+        getattr(row, "single_lot_manual_sku", None),
+    )
+
+
+def job_outcome_already_on_sale(db, job: ProcessingJob) -> bool:
+    """True when this upload's SKU or phone draft already produced a catalog lot on the sale.
+
+    Phone Sync often starts a new job after a mid-lot kill; the abandoned row must not keep
+    showing FAILED once the retry (or an earlier run) already listed the item.
+    """
+    sale_id = getattr(job, "sale_id", None)
+    account_id = getattr(job, "account_id", None)
+    if not sale_id or not account_id:
+        return False
+
+    job_sku = getattr(job, "single_lot_manual_sku", None)
+    if _sku_match_keys(job_sku):
+        lot_skus = (
+            db.query(Lot.sku)
+            .filter(
+                Lot.account_id == account_id,
+                Lot.sale_id == sale_id,
+                Lot.sku.isnot(None),
+            )
+            .all()
+        )
+        if any(_skus_overlap(job_sku, sku) for (sku,) in lot_skus):
+            return True
+        completed_skus = (
+            db.query(ProcessingJob.single_lot_manual_sku)
+            .filter(
+                ProcessingJob.account_id == account_id,
+                ProcessingJob.sale_id == sale_id,
+                ProcessingJob.status == JobStatus.completed,
+                ProcessingJob.id != job.id,
+                ProcessingJob.single_lot_manual_sku.isnot(None),
+            )
+            .all()
+        )
+        if any(_skus_overlap(job_sku, sku) for (sku,) in completed_skus):
+            return True
+
+    drafts = _job_folder_mobile_draft_ids(job)
+    if drafts:
+        cataloged = set(cataloged_mobile_draft_ids(db, str(account_id), str(sale_id)))
+        if drafts & cataloged:
+            return True
+    return False
+
+
 def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
     """
-    Fail ``receiving`` jobs with no recent append activity (orphaned mid-upload).
+    Close ``receiving`` jobs with no recent append activity (orphaned mid-upload).
 
     Live uploads touch ``updated_at`` on each photo append. Stale rows are phone/Sync
-    kills — mark failed so staff can delete and the phone can Sync the full lot again.
+    kills. If a later retry already cataloged the lot, mark **completed**; otherwise
+    mark failed so staff can delete and the phone can Sync the full lot again.
     """
     rows = (
         db.query(ProcessingJob)
@@ -258,12 +374,40 @@ def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
             age_sec = (now - updated).total_seconds()
             if age_sec < RECEIVING_STALE_SECONDS:
                 continue
-        row.status = JobStatus.failed
-        row.error_message = (
-            "Upload never finished (phone Sync stopped mid-lot). "
-            "Delete this job, then Sync/Resend the lot from the phone."
+        if job_outcome_already_on_sale(db, row):
+            _mark_job_superseded_complete(row)
+        else:
+            row.status = JobStatus.failed
+            row.error_message = (
+                "Upload never finished (phone Sync stopped mid-lot). "
+                "Delete this job, then Sync/Resend the lot from the phone."
+            )
+            row.cancel_requested = False
+        changed = True
+    return changed
+
+
+def reconcile_superseded_failed_jobs(db, account_id: str) -> bool:
+    """Complete leftover FAILED orphan-upload rows whose lot is already on the sale.
+
+    Does not touch Gemini / Cancelled / restart failures — only the mid-Sync messages
+    that remain after a successful retry already listed the SKU.
+    """
+    rows = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status == JobStatus.failed,
         )
-        row.cancel_requested = False
+        .all()
+    )
+    changed = False
+    for row in rows:
+        if not is_orphan_upload_error(row.error_message):
+            continue
+        if not job_outcome_already_on_sale(db, row):
+            continue
+        _mark_job_superseded_complete(row)
         changed = True
     return changed
 

@@ -295,10 +295,67 @@ class JobTasksQueueTests(unittest.TestCase):
         db = MagicMock()
         db.query.return_value.filter.return_value.all.return_value = [row]
 
-        changed = job_tasks.reconcile_stale_receiving_jobs(db, "acct-1")
+        with patch.object(job_tasks, "job_outcome_already_on_sale", return_value=False):
+            changed = job_tasks.reconcile_stale_receiving_jobs(db, "acct-1")
         self.assertTrue(changed)
         self.assertEqual(row.status, JobStatus.failed)
         self.assertIn("never finished", (row.error_message or "").lower())
+
+    def test_reconcile_completes_stale_receiving_when_lot_exists(self) -> None:
+        row = MagicMock()
+        row.id = "recv-stale-done"
+        row.status = JobStatus.receiving
+        row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=45)
+        row.created_at = row.updated_at
+        row.error_message = None
+        row.cancel_requested = False
+        row.single_lot_manual_sku = "JZ5126AD"
+        row.sale_id = "sale-1"
+        row.account_id = "acct-1"
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "job_outcome_already_on_sale", return_value=True):
+            changed = job_tasks.reconcile_stale_receiving_jobs(db, "acct-1")
+        self.assertTrue(changed)
+        self.assertEqual(row.status, JobStatus.completed)
+        self.assertIsNone(row.error_message)
+
+    def test_reconcile_superseded_failed_skips_gemini_errors(self) -> None:
+        row = MagicMock()
+        row.id = "fail-gemini"
+        row.status = JobStatus.failed
+        row.error_message = "Gemini 500: overloaded"
+        row.cancel_requested = False
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "job_outcome_already_on_sale", return_value=True):
+            changed = job_tasks.reconcile_superseded_failed_jobs(db, "acct-1")
+        self.assertFalse(changed)
+        self.assertEqual(row.status, JobStatus.failed)
+
+    def test_reconcile_superseded_failed_completes_orphan_upload(self) -> None:
+        row = MagicMock()
+        row.id = "fail-orphan"
+        row.status = JobStatus.failed
+        row.error_message = (
+            "Upload never finished (phone Sync stopped mid-lot). "
+            "Delete this job, then Sync/Resend the lot from the phone."
+        )
+        row.cancel_requested = False
+        row.single_lot_manual_sku = "JZ5126AD"
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+
+        with patch.object(job_tasks, "job_outcome_already_on_sale", return_value=True):
+            changed = job_tasks.reconcile_superseded_failed_jobs(db, "acct-1")
+        self.assertTrue(changed)
+        self.assertEqual(row.status, JobStatus.completed)
+        self.assertIsNone(row.error_message)
 
 
 if __name__ == "__main__":

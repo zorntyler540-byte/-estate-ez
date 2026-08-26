@@ -74,18 +74,20 @@ def _next_queued_job() -> tuple[str, str] | None:
 
 
 def _reconcile_stale_receiving_globally() -> int:
-    """Fail orphan ``receiving`` jobs across accounts (Sync died mid-upload)."""
+    """Close orphan ``receiving`` jobs and leftover FAILED mid-upload cards across accounts."""
     n = 0
     with SessionLocal() as db:
         account_ids = [
             str(r[0])
             for r in db.query(ProcessingJob.account_id)
-            .filter(ProcessingJob.status == JobStatus.receiving)
+            .filter(ProcessingJob.status.in_((JobStatus.receiving, JobStatus.failed)))
             .distinct()
             .all()
         ]
         for account_id in account_ids:
-            if job_tasks.reconcile_stale_receiving_jobs(db, account_id):
+            changed = job_tasks.reconcile_stale_receiving_jobs(db, account_id)
+            changed = job_tasks.reconcile_superseded_failed_jobs(db, account_id) or changed
+            if changed:
                 db.commit()
                 n += 1
     return n

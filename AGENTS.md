@@ -76,6 +76,13 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
   notice). Do not tell the user to Resend all when lots are already on the website. This needs
   an API deploy **and** an EAS Update (`production` channel) before phones stop showing the old copy.
+- **Dashboard leftover FAILED receiving cards are often superseded retries.** If phone Sync dies
+  mid-lot, the abandoned `receiving` row is marked failed after 30 minutes (“Upload never
+  finished”) even when a later Sync already cataloged the same SKU. `GET /jobs` (and the worker
+  sweep) completes those orphan-upload rows when the sale already has that SKU, a completed job
+  with the same SKU, or matching `mobile-<draft>-NN.jpg` names. Gemini / Cancelled failures stay
+  failed. The dashboard also treats matching FAILED cards as completed so they leave the “active”
+  list. Do not tell staff to Resend all — the lots are already on the website.
 - **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
   per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
   Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`
