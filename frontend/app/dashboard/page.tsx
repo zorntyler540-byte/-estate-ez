@@ -1036,6 +1036,12 @@ type AdminUsageAccount = {
   metered_jobs: number;
   active_days: number;
   last_activity_at: string | null;
+  hunts_run?: number;
+  hunts_skipped?: number;
+  hunts_failed?: number;
+  hunt_groups_found?: number;
+  hunt_search_calls?: number;
+  hunt_pro_cost_usd?: number;
 };
 
 type AdminUsageSummary = {
@@ -1067,6 +1073,7 @@ type Lot = {
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   listing_channel?: string | null;
+  audience_hold?: boolean;
 };
 
 type CTSellerRemoteSale = {
@@ -1140,7 +1147,8 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     listing_channel:
       typeof (row as { listing_channel?: unknown }).listing_channel === "string"
         ? (row as { listing_channel: string }).listing_channel
-        : "ctseller"
+        : "ctseller",
+    audience_hold: Boolean((row as { audience_hold?: unknown }).audience_hold)
   };
 }
 
@@ -1167,6 +1175,7 @@ function lotIsPostedToCtSeller(lot: Lot): boolean {
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
   return (
     (lot.listing_channel || "ctseller") !== "facebook" &&
+    !lot.audience_hold &&
     !lot.ctseller_item_id &&
     Boolean((lot.sku || "").trim()) &&
     Boolean((lot.auction_title || "").trim())
@@ -1845,6 +1854,9 @@ export default function DashboardPage() {
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
   /** Lots checked for selective CT Seller post (empty = post all unposted). */
   const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
+  const [audienceHuntBusy, setAudienceHuntBusy] = useState(false);
+  const [audienceHuntMsg, setAudienceHuntMsg] = useState("");
+  const [audienceHuntErr, setAudienceHuntErr] = useState("");
   const [pullingCtSellerSales, setPullingCtSellerSales] = useState(false);
   const [pullCtSellerSalesMsg, setPullCtSellerSalesMsg] = useState("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
@@ -5181,6 +5193,68 @@ export default function DashboardPage() {
     }
   }
 
+  async function bulkHuntSaleAudience() {
+    if (!token || !selectedSaleId) return;
+    const selectedIds = lots.filter((l) => ctSellerPostSelected.has(l.id)).map((l) => l.id);
+    const useSelection = selectedIds.length > 0;
+    const targetHint = useSelection ? selectedIds.length : lots.length;
+    if (targetHint < 1) {
+      setAudienceHuntErr("This sale has no lots yet.");
+      return;
+    }
+    if (
+      !window.confirm(
+        useSelection
+          ? `Find public collector groups for ${selectedIds.length} selected lot${selectedIds.length === 1 ? "" : "s"}?\n\nEveryday household lots are skipped. Already-hunted lots are skipped. Does not recatalog photos or auto-post.`
+          : `Find public collector groups for nicer lots already in this sale?\n\nEveryday household lots are skipped. Lots that already have a hunt are skipped. Gemini runs one lot at a time (about half a minute each). Does not recatalog photos or auto-post.`
+      )
+    ) {
+      return;
+    }
+    setAudienceHuntBusy(true);
+    setAudienceHuntErr("");
+    setAudienceHuntMsg(useSelection ? "Queueing selected lots…" : "Queueing specialist lots in this sale…");
+    try {
+      const body: { force: boolean; only_unhunted: boolean; limit: number; lot_ids?: string[] } = {
+        force: false,
+        only_unhunted: true,
+        limit: 40
+      };
+      if (useSelection) body.lot_ids = selectedIds;
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/audience-hunt`, token, {
+        method: "POST",
+        body: JSON.stringify(body)
+      })) as {
+        queued: number;
+        skipped: number;
+        results?: Array<{ sku?: string | null; skipped?: boolean; error?: string | null }>;
+      };
+      const skipSamples = (res.results || [])
+        .filter((r) => r.skipped && r.error)
+        .slice(0, 3)
+        .map((r) => `${r.sku || "lot"}: ${r.error}`);
+      if (res.queued < 1) {
+        setAudienceHuntMsg(
+          `Nothing queued — ${res.skipped} skipped (household, already hunted, or already running).`
+        );
+      } else {
+        setAudienceHuntMsg(
+          `Hunting ${res.queued} lot${res.queued === 1 ? "" : "s"} in the background` +
+            (res.skipped ? ` (${res.skipped} skipped)` : "") +
+            ". Open a lot’s Details → Audience to see groups when it finishes."
+        );
+      }
+      if (skipSamples.length && res.queued < 1) {
+        setAudienceHuntErr(skipSamples.join(" · "));
+      }
+    } catch (e) {
+      setAudienceHuntErr(e instanceof Error ? e.message : "Audience hunt failed");
+      setAudienceHuntMsg("");
+    } finally {
+      setAudienceHuntBusy(false);
+    }
+  }
+
   async function purgeCurrentSaleCatalog() {
     if (!selectedSaleId) {
       setError("Select a sale first.");
@@ -5851,6 +5925,29 @@ export default function DashboardPage() {
                   ${adminUsage.totals.est_total_cost_usd.toFixed(2)} (Flash $
                   {adminUsage.totals.est_flash_cost_usd.toFixed(2)} + Pro ${adminUsage.totals.est_pro_cost_usd.toFixed(2)}) ·{" "}
                   ${adminUsage.totals.est_cost_per_lot_usd.toFixed(3)}/lot over {adminUsage.since_days}d.
+                  {(adminUsage.totals.hunts_run || 0) +
+                  (adminUsage.totals.hunts_skipped || 0) +
+                  (adminUsage.totals.hunts_failed || 0) >
+                  0 ? (
+                    <>
+                      {" "}
+                      · Hunts: {adminUsage.totals.hunts_run || 0} run
+                      {adminUsage.totals.hunts_skipped
+                        ? `, ${adminUsage.totals.hunts_skipped} skipped`
+                        : ""}
+                      {adminUsage.totals.hunts_failed
+                        ? `, ${adminUsage.totals.hunts_failed} failed`
+                        : ""}{" "}
+                      · ${Number(adminUsage.totals.hunt_pro_cost_usd || 0).toFixed(2)} hunt Pro
+                      {adminUsage.totals.hunt_search_calls
+                        ? ` · ${adminUsage.totals.hunt_search_calls} Google Search`
+                        : ""}
+                      {adminUsage.totals.hunt_groups_found
+                        ? ` · ${adminUsage.totals.hunt_groups_found} groups found`
+                        : ""}
+                      . Search grounding is free for the first 1,500/day on Google, then extra.
+                    </>
+                  ) : null}
                 </p>
               ) : (
                 <p className="ct-muted" style={{ margin: 0 }}>
@@ -5920,6 +6017,9 @@ export default function DashboardPage() {
                               {usage.jobs_in_progress ? ` · ${usage.jobs_in_progress} in progress` : ""} · est $
                               {usage.est_total_cost_usd.toFixed(2)} (Flash ${usage.est_flash_cost_usd.toFixed(2)} + Pro $
                               {usage.est_pro_cost_usd.toFixed(2)}) · ${usage.est_cost_per_lot_usd.toFixed(3)}/lot
+                              {(usage.hunts_run || 0) + (usage.hunts_skipped || 0) + (usage.hunts_failed || 0) > 0
+                                ? ` · hunts ${usage.hunts_run || 0} run / ${usage.hunts_skipped || 0} skipped · $${Number(usage.hunt_pro_cost_usd || 0).toFixed(2)}`
+                                : ""}
                               {usage.last_activity_at
                                 ? ` · last ${new Date(usage.last_activity_at).toLocaleDateString()}`
                                 : ""}
@@ -6494,6 +6594,23 @@ export default function DashboardPage() {
                 ? `Post selected to CT Seller (${ctSellerSelectedCount})`
                 : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
           </button>
+          <button
+            type="button"
+            className="ct-btn"
+            onClick={() => void bulkHuntSaleAudience()}
+            disabled={audienceHuntBusy || busyProcessing || !selectedSaleId || lots.length < 1}
+            title={
+              ctSellerSelectedCount > 0
+                ? `Hunt public collector groups for ${ctSellerSelectedCount} selected lot(s)`
+                : "Hunt nicer lots already in this sale (skips everyday household and already-hunted lots)"
+            }
+          >
+            {audienceHuntBusy
+              ? "Queueing audience hunt…"
+              : ctSellerSelectedCount > 0
+                ? `Find audience for selected (${ctSellerSelectedCount})`
+                : "Find audience for this sale"}
+          </button>
           {ctSellerEligibleIds.length > 0 ? (
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
               <button
@@ -6523,6 +6640,16 @@ export default function DashboardPage() {
         {ctSellerBulkErr ? (
           <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
             {ctSellerBulkErr}
+          </div>
+        ) : null}
+        {audienceHuntMsg ? (
+          <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
+            {audienceHuntMsg}
+          </div>
+        ) : null}
+        {audienceHuntErr ? (
+          <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
+            {audienceHuntErr}
           </div>
         ) : null}
       </header>
@@ -6555,9 +6682,11 @@ export default function DashboardPage() {
                   title={
                     lot.ctseller_item_id
                       ? "Already posted"
-                      : lotEligibleForCtSellerPost(lot)
-                        ? "Select to post to CT Seller"
-                        : "Needs SKU and title before posting"
+                      : lot.audience_hold
+                        ? "Held for collector groups"
+                        : lotEligibleForCtSellerPost(lot)
+                          ? "Select to post to CT Seller"
+                          : "Needs SKU and title before posting"
                   }
                 />
               </div>
@@ -6582,6 +6711,11 @@ export default function DashboardPage() {
                     </span>
                   ) : null}
                   <span className="ct-lot-mobile-card__meta-item">{formatLotPrice(lot.starting_price)}</span>
+                  {lot.audience_hold ? (
+                    <span className="ct-lot-mobile-card__meta-item" title="Held for collector groups — skipped on bulk CT Seller post">
+                      Held
+                    </span>
+                  ) : null}
                   {lot.condition_text ? (
                     <span className="ct-lot-condition-chip">{lot.condition_text}</span>
                   ) : null}
@@ -6603,10 +6737,12 @@ export default function DashboardPage() {
                 title={
                   lotIsPostedToCtSeller(lot)
                     ? "Posted to CT Seller"
-                    : "Not posted to CT Seller yet"
+                    : lot.audience_hold
+                      ? "Held for collector groups — skipped on bulk CT Seller post"
+                      : "Not posted to CT Seller yet"
                 }
               >
-                {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+                {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
               </span>
               <button
                 type="button"
@@ -6680,9 +6816,11 @@ export default function DashboardPage() {
                   title={
                     lot.ctseller_item_id
                       ? "Already posted"
-                      : lotEligibleForCtSellerPost(lot)
-                        ? "Select to post to CT Seller"
-                        : "Needs SKU and title before posting"
+                      : lot.audience_hold
+                        ? "Held for collector groups"
+                        : lotEligibleForCtSellerPost(lot)
+                          ? "Select to post to CT Seller"
+                          : "Needs SKU and title before posting"
                   }
                 />
               </td>
@@ -6717,10 +6855,12 @@ export default function DashboardPage() {
                   title={
                     lotIsPostedToCtSeller(lot)
                       ? "Posted to CT Seller"
-                      : "Not posted to CT Seller yet"
+                      : lot.audience_hold
+                        ? "Held for collector groups — skipped on bulk CT Seller post"
+                        : "Not posted to CT Seller yet"
                   }
                 >
-                  {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+                  {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
                 </span>
               </td>
               <td className="ct-lots-table__photo-count">

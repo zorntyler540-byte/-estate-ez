@@ -38,8 +38,19 @@ from app.auth import (
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
-from app import appraisal_tasks, export_tasks, job_tasks, regeneration_tasks
-from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
+from app import appraisal_tasks, audience_tasks, export_tasks, job_tasks, regeneration_tasks
+from app.models import (
+    Account,
+    AppraisalCheck,
+    AudienceHuntEvent,
+    JobStatus,
+    Lot,
+    Photo,
+    ProcessingJob,
+    Sale,
+    SalePhotoZipExport,
+    User,
+)
 from app.schemas import (
     CreateJobRequest,
     CTSellerCredentialsIn,
@@ -82,6 +93,10 @@ from app.schemas import (
     AppraisalResultOut,
     UserSummary,
     LotAiRegenerateIn,
+    LotAudienceHuntIn,
+    SaleAudienceHuntIn,
+    SaleAudienceHuntOut,
+    SaleAudienceHuntLotResult,
     LotPhotoOut,
     ReorderLotPhotosIn,
     CatalogedMobileDraftsOut,
@@ -124,6 +139,7 @@ from app.services.photo_order import (
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_ids
 from app.services.photo_roles import filter_photos_excluding_sku_tape
+from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
     LISTING_CHANNEL_FACEBOOK,
@@ -275,8 +291,17 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
     regen = regeneration_tasks.lot_regenerate_is_active(row)
     err = regeneration_tasks.pop_regeneration_error(db, row) if not regen else None
+    hunting = audience_tasks.lot_hunt_is_active(row)
+    hunt_err = audience_tasks.pop_hunt_error(db, row) if not hunting else None
+    updates: dict = {}
     if regen or err:
-        return out.model_copy(update={"ai_regenerating": regen, "ai_regenerate_error": err})
+        updates["ai_regenerating"] = regen
+        updates["ai_regenerate_error"] = err
+    if hunting or hunt_err:
+        updates["audience_hunting"] = hunting
+        updates["audience_hunt_error"] = hunt_err
+    if updates:
+        return out.model_copy(update=updates)
     return out
 
 
@@ -320,6 +345,7 @@ if _th:
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sale_zip_kind_column()
+    _ensure_lot_audience_columns()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -338,6 +364,30 @@ def _ensure_sale_zip_kind_column() -> None:
                 "ALTER TABLE sale_photo_zip_exports ADD COLUMN kind VARCHAR(20) DEFAULT 'all' NOT NULL"
             )
         )
+
+
+def _ensure_lot_audience_columns() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing lots tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "lots" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("lots")}
+    stmts: list[str] = []
+    if "audience_hold" not in cols:
+        stmts.append("ALTER TABLE lots ADD COLUMN audience_hold BOOLEAN DEFAULT 0 NOT NULL")
+    if "audience_hunting_at" not in cols:
+        stmts.append("ALTER TABLE lots ADD COLUMN audience_hunting_at DATETIME")
+    if "audience_hunt_error" not in cols:
+        stmts.append("ALTER TABLE lots ADD COLUMN audience_hunt_error TEXT")
+    if "audience_json" not in cols:
+        stmts.append("ALTER TABLE lots ADD COLUMN audience_json TEXT DEFAULT '{}' NOT NULL")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -843,7 +893,18 @@ def admin_analytics(
     def _cost(tokens: int, rate_per_million: float) -> float:
         return (tokens / 1_000_000.0) * rate_per_million
 
+    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     in_progress_statuses = {JobStatus.receiving, JobStatus.queued, JobStatus.processing}
+    from app.services.audience_hunt import hunt_pro_cost_usd, summarize_hunt_events
+
+    hunt_events = (
+        db.query(AudienceHuntEvent)
+        .filter(AudienceHuntEvent.created_at >= since_dt)
+        .all()
+    )
+    hunts_by_account: dict[str, list] = {}
+    for ev in hunt_events:
+        hunts_by_account.setdefault(ev.account_id, []).append(ev)
 
     def _account_row(account_id: str, account_name: str, jobs: list) -> AdminUsageAccountOut:
         jobs_started = len(jobs)
@@ -897,10 +958,21 @@ def admin_analytics(
 
         flash_cost = _cost(flash_in, flash_in_rate) + _cost(flash_out, flash_out_rate)
         pro_cost = _cost(pro_in, pro_in_rate) + _cost(pro_out, pro_out_rate)
+        hunt = summarize_hunt_events(hunts_by_account.get(account_id, []))
+        hunt_cost = hunt_pro_cost_usd(
+            pro_in=int(hunt["hunt_pro_input_tokens"]),
+            pro_out=int(hunt["hunt_pro_output_tokens"]),
+            in_rate=pro_in_rate,
+            out_rate=pro_out_rate,
+        )
+        pro_cost = round(pro_cost + hunt_cost, 4)
         total_cost = flash_cost + pro_cost
-        est_input_tokens = flash_in + pro_in
-        est_output_tokens = flash_out + pro_out
+        est_input_tokens = flash_in + pro_in + int(hunt["hunt_pro_input_tokens"])
+        est_output_tokens = flash_out + pro_out + int(hunt["hunt_pro_output_tokens"])
         finished = jobs_completed + jobs_failed
+        last_hunt = hunt.get("last_hunt_at")
+        if last_hunt is not None and (last_activity is None or last_hunt > last_activity):
+            last_activity = last_hunt
 
         return AdminUsageAccountOut(
             account_id=account_id,
@@ -925,9 +997,16 @@ def admin_analytics(
             avg_tokens_per_job=int((est_input_tokens + est_output_tokens) / jobs_started) if jobs_started else 0,
             active_days=active_days,
             last_activity_at=last_activity,
+            hunts_run=int(hunt["hunts_run"]),
+            hunts_skipped=int(hunt["hunts_skipped"]),
+            hunts_failed=int(hunt["hunts_failed"]),
+            hunt_groups_found=int(hunt["hunt_groups_found"]),
+            hunt_search_calls=int(hunt["hunt_search_calls"]),
+            hunt_pro_input_tokens=int(hunt["hunt_pro_input_tokens"]),
+            hunt_pro_output_tokens=int(hunt["hunt_pro_output_tokens"]),
+            hunt_pro_cost_usd=hunt_cost,
         )
 
-    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     accounts = db.query(Account).order_by(Account.created_at.asc()).all()
     all_jobs = (
         db.query(ProcessingJob)
@@ -961,6 +1040,14 @@ def admin_analytics(
         if j.updated_at and j.created_at and j.status == JobStatus.completed
     ]
     total_finished = total_completed + total_failed
+    job_last = max(
+        (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
+        default=None,
+    )
+    hunt_last = max((r.last_activity_at for r in rows if r.last_activity_at), default=None)
+    last_all = job_last
+    if hunt_last is not None and (last_all is None or hunt_last > last_all):
+        last_all = hunt_last
     totals = AdminUsageAccountOut(
         account_id="all",
         account_name="All accounts",
@@ -983,10 +1070,15 @@ def admin_analytics(
         avg_tokens_per_job=int((total_in + total_out) / total_jobs) if total_jobs else 0,
         metered_jobs=_sum("metered_jobs"),
         active_days=len({j.created_at.date() for j in all_jobs if j.created_at}),
-        last_activity_at=max(
-            (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
-            default=None,
-        ),
+        last_activity_at=last_all,
+        hunts_run=_sum("hunts_run"),
+        hunts_skipped=_sum("hunts_skipped"),
+        hunts_failed=_sum("hunts_failed"),
+        hunt_groups_found=_sum("hunt_groups_found"),
+        hunt_search_calls=_sum("hunt_search_calls"),
+        hunt_pro_input_tokens=_sum("hunt_pro_input_tokens"),
+        hunt_pro_output_tokens=_sum("hunt_pro_output_tokens"),
+        hunt_pro_cost_usd=round(sum(r.hunt_pro_cost_usd for r in rows), 4),
     )
     return AdminUsageSummaryOut(
         since_days=since_days,
@@ -1445,6 +1537,11 @@ def _post_one_lot_to_ctseller(
             status_code=400,
             detail="This lot is marked for Facebook Marketplace — it cannot be posted to CT Seller",
         )
+    if lot_is_held_from_ctseller(lot) and not force:
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is held for collector groups — turn off Hold for groups, or pass force=true",
+        )
 
     photos = (
         db.query(Photo)
@@ -1666,6 +1763,18 @@ def post_sale_lots_to_ctseller(
                     skipped=True,
                     error=f"Already posted as item {lot.ctseller_item_id}",
                     ctseller_item_id=lot.ctseller_item_id,
+                )
+            )
+            skipped += 1
+            continue
+        if lot_is_held_from_ctseller(lot) and not body.force:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Held for collector groups",
                 )
             )
             skipped += 1
@@ -2671,15 +2780,14 @@ def update_lot(
         s = (patch.sku or "").strip()
         row.sku = s or None
         row.sku_needs_review = False
+    if patch.audience_hold is not None:
+        row.audience_hold = bool(patch.audience_hold)
     db.commit()
     db.refresh(row)
     recompute_sku_sanity_flags_for_sale(db, row.sale_id, current.account_id)
     db.commit()
     db.refresh(row)
-    has = lot_id in lot_ids_with_linked_photos(db, current.account_id, [lot_id])
-    peer = sale_lot_photo_counts(db, row.sale_id, current.account_id)
-    many = photo_count_is_sale_outlier(row.photo_count, peer)
-    return lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    return _lot_out_for_id(db, current.account_id, lot_id)
 
 
 @app.post("/lots/{lot_id}/ai-regenerate", response_model=LotOut)
@@ -2732,6 +2840,126 @@ def regenerate_lot_with_ai(
             raise HTTPException(status_code=409, detail="AI regenerate is already running for this lot.") from exc
         raise
     return _lot_out_for_id(db, current.account_id, lot_id)
+
+
+@app.post("/lots/{lot_id}/audience-hunt", response_model=LotOut)
+def hunt_lot_audience(
+    lot_id: str,
+    body: LotAudienceHuntIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    """Find public collector groups and draft outreach blurbs. Does not scrape or auto-post."""
+    from app.services.audience_hunt import apply_skip_without_model, should_run_audience_hunt
+
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    force = bool(body.force) if body else False
+    if audience_tasks.is_hunting(db, lot_id=lot_id, account_id=current.account_id):
+        raise HTTPException(status_code=409, detail="Audience hunt is already running for this lot.")
+    brands: list[str] = []
+    try:
+        brands = [str(b) for b in json.loads(row.brands_json or "[]")]
+    except json.JSONDecodeError:
+        brands = []
+    hunt, reason = should_run_audience_hunt(
+        title=row.auction_title or "",
+        brands=brands,
+        category=row.ct_category,
+        force=force,
+    )
+    if not hunt:
+        apply_skip_without_model(row, reason)
+        db.commit()
+        return _lot_out_for_id(db, current.account_id, lot_id)
+    try:
+        audience_tasks.mark_lot_hunt_started(db, lot_id=lot_id, account_id=current.account_id)
+    except RuntimeError as exc:
+        if str(exc) == "audience_hunt_already_running":
+            raise HTTPException(status_code=409, detail="Audience hunt is already running for this lot.") from exc
+        raise
+    try:
+        audience_tasks.start_audience_hunt_in_background(
+            lot_id=lot_id,
+            account_id=current.account_id,
+            force=force,
+        )
+    except RuntimeError as exc:
+        audience_tasks.finish_lot_hunt(
+            db,
+            lot_id=lot_id,
+            account_id=current.account_id,
+            error=str(exc)[:2000] if str(exc) != "audience_hunt_already_running" else None,
+        )
+        if str(exc) == "audience_hunt_already_running":
+            raise HTTPException(status_code=409, detail="Audience hunt is already running for this lot.") from exc
+        raise
+    return _lot_out_for_id(db, current.account_id, lot_id)
+
+
+@app.post("/sales/{sale_id}/audience-hunt", response_model=SaleAudienceHuntOut)
+def hunt_sale_audience(
+    sale_id: str,
+    body: SaleAudienceHuntIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleAudienceHuntOut:
+    """Queue collector-group hunts for existing lots. Does not recatalog photos or auto-post."""
+    from app.services.audience_hunt import plan_sale_audience_hunts
+
+    payload = body or SaleAudienceHuntIn()
+    sale = _sale_for_user(sale_id, current, db)
+    q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+    wanted: list[str] | None = None
+    if payload.lot_ids:
+        wanted = [x.strip() for x in payload.lot_ids if (x or "").strip()]
+        q = q.filter(Lot.id.in_(wanted))
+    lots = q.order_by(Lot.created_at.asc()).all()
+    if wanted:
+        by_id = {r.id: r for r in lots}
+        lots = [by_id[i] for i in wanted if i in by_id]
+
+    queued_ids, skipped_rows = plan_sale_audience_hunts(
+        lots,
+        force=payload.force,
+        only_unhunted=payload.only_unhunted,
+        limit=payload.limit,
+    )
+    results: list[SaleAudienceHuntLotResult] = [
+        SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku or None, skipped=True, error=reason)
+        for lot_id, sku, reason in skipped_rows
+    ]
+    by_id = {r.id: r for r in lots}
+    started: list[str] = []
+    for lot_id in queued_ids:
+        lot = by_id.get(lot_id)
+        sku = (lot.sku or "").strip() or None if lot is not None else None
+        if audience_tasks.is_hunting(db, lot_id=lot_id, account_id=current.account_id):
+            results.append(
+                SaleAudienceHuntLotResult(
+                    lot_id=lot_id, sku=sku, skipped=True, error="Hunt already running"
+                )
+            )
+            continue
+        try:
+            audience_tasks.mark_lot_hunt_started(db, lot_id=lot_id, account_id=current.account_id)
+        except RuntimeError as exc:
+            results.append(
+                SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku, skipped=True, error=str(exc))
+            )
+            continue
+        started.append(lot_id)
+        results.append(SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku, queued=True))
+
+    if started:
+        audience_tasks.start_sequential_hunts_in_background(
+            account_id=current.account_id,
+            lot_ids=started,
+            force=payload.force,
+        )
+    skipped_n = sum(1 for r in results if r.skipped)
+    return SaleAudienceHuntOut(queued=len(started), skipped=skipped_n, results=results)
 
 
 @app.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)

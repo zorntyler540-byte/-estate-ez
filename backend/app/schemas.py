@@ -100,6 +100,15 @@ class AdminUsageAccountOut(BaseModel):
     # Distinct calendar days (UTC) with at least one job in the window.
     active_days: int = 0
     last_activity_at: datetime | None = None
+    # Audience hunt (Gemini Pro + Google Search) — separate from catalog jobs.
+    hunts_run: int = 0
+    hunts_skipped: int = 0
+    hunts_failed: int = 0
+    hunt_groups_found: int = 0
+    hunt_search_calls: int = 0
+    hunt_pro_input_tokens: int = 0
+    hunt_pro_output_tokens: int = 0
+    hunt_pro_cost_usd: float = 0.0
 
 
 class AdminUsageSummaryOut(BaseModel):
@@ -187,6 +196,10 @@ class LotOut(BaseModel):
     ctseller_item_id: int | None = None
     ctseller_posted_at: datetime | None = None
     listing_channel: str = "ctseller"
+    audience_hold: bool = False
+    audience_hunting: bool = False
+    audience_hunt_error: str | None = None
+    audience: dict | None = None
 
 
 class LotUpdate(BaseModel):
@@ -199,6 +212,7 @@ class LotUpdate(BaseModel):
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
+    audience_hold: bool | None = None
 
 
 class CTSellerCredentialsIn(BaseModel):
@@ -420,6 +434,41 @@ class LotAiRegenerateIn(BaseModel):
         default=False,
         description="When true, keep the lot's current estate-tape SKU and only refresh title/description/specs/etc.",
     )
+
+
+class LotAudienceHuntIn(BaseModel):
+    """Find public collector groups for this lot (Google Search). Does not recatalog photos."""
+
+    force: bool = Field(
+        default=False,
+        description="Hunt even when the lot looks like everyday household goods.",
+    )
+
+
+class SaleAudienceHuntIn(BaseModel):
+    """Hunt public collector groups for existing lots in a sale. Does not recatalog or auto-post."""
+
+    lot_ids: list[str] | None = Field(
+        default=None,
+        description="When set, hunt these lots (household still skipped unless force). When omitted, hunt unhunted specialist lots in the sale.",
+    )
+    force: bool = False
+    only_unhunted: bool = True
+    limit: int = Field(default=40, ge=1, le=80)
+
+
+class SaleAudienceHuntLotResult(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    queued: bool = False
+    skipped: bool = False
+    error: str | None = None
+
+
+class SaleAudienceHuntOut(BaseModel):
+    queued: int
+    skipped: int
+    results: list[SaleAudienceHuntLotResult]
 
 
 class MergeLotsIn(BaseModel):
