@@ -6,13 +6,17 @@ import json
 from types import SimpleNamespace
 
 from app.services.audience_hunt import (
+    add_audience_usage,
     apply_skip_without_model,
+    audience_usage_tokens,
+    hunt_pro_cost_usd,
     lot_has_audience_research,
     lot_is_held_from_ctseller,
     parse_audience_payload,
     plan_sale_audience_hunts,
     run_audience_hunt_for_lot,
     should_run_audience_hunt,
+    summarize_hunt_events,
 )
 
 
@@ -176,3 +180,67 @@ def test_plan_sale_audience_hunts_skips_household_and_already_hunted() -> None:
     assert "h1" in reasons
     assert "f2" in reasons
     assert "Already hunted" in reasons["f2"]
+
+
+def test_audience_usage_tokens_includes_thinking() -> None:
+    class _Meta:
+        prompt_token_count = 1200
+        candidates_token_count = 400
+        thoughts_token_count = 8000
+
+    class _Resp:
+        usage_metadata = _Meta()
+
+    inp, out = audience_usage_tokens(_Resp())
+    assert inp == 1200
+    assert out == 8400
+    usage = {"pro_in": 0, "pro_out": 0, "search_calls": 0}
+    add_audience_usage(usage, _Resp(), search=True)
+    assert usage["search_calls"] == 1
+    assert usage["pro_in"] == 1200
+    assert usage["pro_out"] == 8400
+
+
+def test_audience_usage_tokens_missing_metadata() -> None:
+    assert audience_usage_tokens(object()) == (0, 0)
+
+
+def test_summarize_hunt_events_and_cost() -> None:
+    run = SimpleNamespace(
+        skipped=False,
+        error=None,
+        group_count=4,
+        search_calls=1,
+        actual_pro_input_tokens=2000,
+        actual_pro_output_tokens=8000,
+        created_at="2026-08-01",
+    )
+    skip = SimpleNamespace(
+        skipped=True,
+        error=None,
+        group_count=0,
+        search_calls=0,
+        actual_pro_input_tokens=0,
+        actual_pro_output_tokens=0,
+        created_at="2026-08-02",
+    )
+    fail = SimpleNamespace(
+        skipped=False,
+        error="RuntimeError: boom",
+        group_count=0,
+        search_calls=1,
+        actual_pro_input_tokens=500,
+        actual_pro_output_tokens=100,
+        created_at="2026-08-03",
+    )
+    summary = summarize_hunt_events([run, skip, fail])
+    assert summary["hunts_run"] == 1
+    assert summary["hunts_skipped"] == 1
+    assert summary["hunts_failed"] == 1
+    assert summary["hunt_groups_found"] == 4
+    assert summary["hunt_search_calls"] == 2
+    assert summary["hunt_pro_input_tokens"] == 2500
+    assert summary["hunt_pro_output_tokens"] == 8100
+    # $1.25/M in + $10/M out
+    cost = hunt_pro_cost_usd(pro_in=2500, pro_out=8100, in_rate=1.25, out_rate=10.0)
+    assert cost == round(2500 / 1_000_000 * 1.25 + 8100 / 1_000_000 * 10.0, 4)

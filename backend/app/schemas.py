@@ -100,6 +100,15 @@ class AdminUsageAccountOut(BaseModel):
     # Distinct calendar days (UTC) with at least one job in the window.
     active_days: int = 0
     last_activity_at: datetime | None = None
+    # Audience hunt (Gemini Pro + Google Search) — separate from catalog jobs.
+    hunts_run: int = 0
+    hunts_skipped: int = 0
+    hunts_failed: int = 0
+    hunt_groups_found: int = 0
+    hunt_search_calls: int = 0
+    hunt_pro_input_tokens: int = 0
+    hunt_pro_output_tokens: int = 0
+    hunt_pro_cost_usd: float = 0.0
 
 
 class AdminUsageSummaryOut(BaseModel):

@@ -1036,6 +1036,12 @@ type AdminUsageAccount = {
   metered_jobs: number;
   active_days: number;
   last_activity_at: string | null;
+  hunts_run?: number;
+  hunts_skipped?: number;
+  hunts_failed?: number;
+  hunt_groups_found?: number;
+  hunt_search_calls?: number;
+  hunt_pro_cost_usd?: number;
 };
 
 type AdminUsageSummary = {
@@ -5919,6 +5925,29 @@ export default function DashboardPage() {
                   ${adminUsage.totals.est_total_cost_usd.toFixed(2)} (Flash $
                   {adminUsage.totals.est_flash_cost_usd.toFixed(2)} + Pro ${adminUsage.totals.est_pro_cost_usd.toFixed(2)}) ·{" "}
                   ${adminUsage.totals.est_cost_per_lot_usd.toFixed(3)}/lot over {adminUsage.since_days}d.
+                  {(adminUsage.totals.hunts_run || 0) +
+                  (adminUsage.totals.hunts_skipped || 0) +
+                  (adminUsage.totals.hunts_failed || 0) >
+                  0 ? (
+                    <>
+                      {" "}
+                      · Hunts: {adminUsage.totals.hunts_run || 0} run
+                      {adminUsage.totals.hunts_skipped
+                        ? `, ${adminUsage.totals.hunts_skipped} skipped`
+                        : ""}
+                      {adminUsage.totals.hunts_failed
+                        ? `, ${adminUsage.totals.hunts_failed} failed`
+                        : ""}{" "}
+                      · ${Number(adminUsage.totals.hunt_pro_cost_usd || 0).toFixed(2)} hunt Pro
+                      {adminUsage.totals.hunt_search_calls
+                        ? ` · ${adminUsage.totals.hunt_search_calls} Google Search`
+                        : ""}
+                      {adminUsage.totals.hunt_groups_found
+                        ? ` · ${adminUsage.totals.hunt_groups_found} groups found`
+                        : ""}
+                      . Search grounding is free for the first 1,500/day on Google, then extra.
+                    </>
+                  ) : null}
                 </p>
               ) : (
                 <p className="ct-muted" style={{ margin: 0 }}>
@@ -5988,6 +6017,9 @@ export default function DashboardPage() {
                               {usage.jobs_in_progress ? ` · ${usage.jobs_in_progress} in progress` : ""} · est $
                               {usage.est_total_cost_usd.toFixed(2)} (Flash ${usage.est_flash_cost_usd.toFixed(2)} + Pro $
                               {usage.est_pro_cost_usd.toFixed(2)}) · ${usage.est_cost_per_lot_usd.toFixed(3)}/lot
+                              {(usage.hunts_run || 0) + (usage.hunts_skipped || 0) + (usage.hunts_failed || 0) > 0
+                                ? ` · hunts ${usage.hunts_run || 0} run / ${usage.hunts_skipped || 0} skipped · $${Number(usage.hunt_pro_cost_usd || 0).toFixed(2)}`
+                                : ""}
                               {usage.last_activity_at
                                 ? ` · last ${new Date(usage.last_activity_at).toLocaleDateString()}`
                                 : ""}

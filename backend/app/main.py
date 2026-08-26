@@ -39,7 +39,18 @@ from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
 from app import appraisal_tasks, audience_tasks, export_tasks, job_tasks, regeneration_tasks
-from app.models import Account, AppraisalCheck, JobStatus, Lot, Photo, ProcessingJob, Sale, SalePhotoZipExport, User
+from app.models import (
+    Account,
+    AppraisalCheck,
+    AudienceHuntEvent,
+    JobStatus,
+    Lot,
+    Photo,
+    ProcessingJob,
+    Sale,
+    SalePhotoZipExport,
+    User,
+)
 from app.schemas import (
     CreateJobRequest,
     CTSellerCredentialsIn,
@@ -882,7 +893,18 @@ def admin_analytics(
     def _cost(tokens: int, rate_per_million: float) -> float:
         return (tokens / 1_000_000.0) * rate_per_million
 
+    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     in_progress_statuses = {JobStatus.receiving, JobStatus.queued, JobStatus.processing}
+    from app.services.audience_hunt import hunt_pro_cost_usd, summarize_hunt_events
+
+    hunt_events = (
+        db.query(AudienceHuntEvent)
+        .filter(AudienceHuntEvent.created_at >= since_dt)
+        .all()
+    )
+    hunts_by_account: dict[str, list] = {}
+    for ev in hunt_events:
+        hunts_by_account.setdefault(ev.account_id, []).append(ev)
 
     def _account_row(account_id: str, account_name: str, jobs: list) -> AdminUsageAccountOut:
         jobs_started = len(jobs)
@@ -936,10 +958,21 @@ def admin_analytics(
 
         flash_cost = _cost(flash_in, flash_in_rate) + _cost(flash_out, flash_out_rate)
         pro_cost = _cost(pro_in, pro_in_rate) + _cost(pro_out, pro_out_rate)
+        hunt = summarize_hunt_events(hunts_by_account.get(account_id, []))
+        hunt_cost = hunt_pro_cost_usd(
+            pro_in=int(hunt["hunt_pro_input_tokens"]),
+            pro_out=int(hunt["hunt_pro_output_tokens"]),
+            in_rate=pro_in_rate,
+            out_rate=pro_out_rate,
+        )
+        pro_cost = round(pro_cost + hunt_cost, 4)
         total_cost = flash_cost + pro_cost
-        est_input_tokens = flash_in + pro_in
-        est_output_tokens = flash_out + pro_out
+        est_input_tokens = flash_in + pro_in + int(hunt["hunt_pro_input_tokens"])
+        est_output_tokens = flash_out + pro_out + int(hunt["hunt_pro_output_tokens"])
         finished = jobs_completed + jobs_failed
+        last_hunt = hunt.get("last_hunt_at")
+        if last_hunt is not None and (last_activity is None or last_hunt > last_activity):
+            last_activity = last_hunt
 
         return AdminUsageAccountOut(
             account_id=account_id,
@@ -964,9 +997,16 @@ def admin_analytics(
             avg_tokens_per_job=int((est_input_tokens + est_output_tokens) / jobs_started) if jobs_started else 0,
             active_days=active_days,
             last_activity_at=last_activity,
+            hunts_run=int(hunt["hunts_run"]),
+            hunts_skipped=int(hunt["hunts_skipped"]),
+            hunts_failed=int(hunt["hunts_failed"]),
+            hunt_groups_found=int(hunt["hunt_groups_found"]),
+            hunt_search_calls=int(hunt["hunt_search_calls"]),
+            hunt_pro_input_tokens=int(hunt["hunt_pro_input_tokens"]),
+            hunt_pro_output_tokens=int(hunt["hunt_pro_output_tokens"]),
+            hunt_pro_cost_usd=hunt_cost,
         )
 
-    since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     accounts = db.query(Account).order_by(Account.created_at.asc()).all()
     all_jobs = (
         db.query(ProcessingJob)
@@ -1000,6 +1040,14 @@ def admin_analytics(
         if j.updated_at and j.created_at and j.status == JobStatus.completed
     ]
     total_finished = total_completed + total_failed
+    job_last = max(
+        (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
+        default=None,
+    )
+    hunt_last = max((r.last_activity_at for r in rows if r.last_activity_at), default=None)
+    last_all = job_last
+    if hunt_last is not None and (last_all is None or hunt_last > last_all):
+        last_all = hunt_last
     totals = AdminUsageAccountOut(
         account_id="all",
         account_name="All accounts",
@@ -1022,10 +1070,15 @@ def admin_analytics(
         avg_tokens_per_job=int((total_in + total_out) / total_jobs) if total_jobs else 0,
         metered_jobs=_sum("metered_jobs"),
         active_days=len({j.created_at.date() for j in all_jobs if j.created_at}),
-        last_activity_at=max(
-            (j.updated_at or j.created_at for j in all_jobs if (j.updated_at or j.created_at)),
-            default=None,
-        ),
+        last_activity_at=last_all,
+        hunts_run=_sum("hunts_run"),
+        hunts_skipped=_sum("hunts_skipped"),
+        hunts_failed=_sum("hunts_failed"),
+        hunt_groups_found=_sum("hunt_groups_found"),
+        hunt_search_calls=_sum("hunt_search_calls"),
+        hunt_pro_input_tokens=_sum("hunt_pro_input_tokens"),
+        hunt_pro_output_tokens=_sum("hunt_pro_output_tokens"),
+        hunt_pro_cost_usd=round(sum(r.hunt_pro_cost_usd for r in rows), 4),
     )
     return AdminUsageSummaryOut(
         since_days=since_days,

@@ -7,9 +7,9 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
-from app.models import Lot
+from app.models import AudienceHuntEvent, Lot
 
 GENERIC_SKIP_CATEGORIES = frozenset(
     {
@@ -89,7 +89,105 @@ def should_run_audience_hunt(
     return False, "No brand or collector category — skip hunt unless you force it."
 
 
-def empty_audience_payload(*, skip_reason: str = "") -> dict[str, Any]:
+def empty_hunt_usage() -> dict[str, int]:
+    return {"pro_in": 0, "pro_out": 0, "search_calls": 0}
+
+
+def audience_usage_tokens(response: object) -> tuple[int, int]:
+    """Prompt + billed output (candidates + thinking) from Gemini usage_metadata."""
+    try:
+        meta = getattr(response, "usage_metadata", None)
+        if meta is None:
+            return 0, 0
+        inp = int(getattr(meta, "prompt_token_count", 0) or 0)
+        out = int(getattr(meta, "candidates_token_count", 0) or 0)
+        thoughts = int(getattr(meta, "thoughts_token_count", 0) or 0)
+        return inp, out + thoughts
+    except (TypeError, ValueError):
+        return 0, 0
+
+
+def add_audience_usage(usage: dict[str, int], response: object, *, search: bool = False) -> None:
+    inp, out = audience_usage_tokens(response)
+    usage["pro_in"] = int(usage.get("pro_in", 0) or 0) + inp
+    usage["pro_out"] = int(usage.get("pro_out", 0) or 0) + out
+    if search:
+        usage["search_calls"] = int(usage.get("search_calls", 0) or 0) + 1
+
+
+def hunt_pro_cost_usd(*, pro_in: int, pro_out: int, in_rate: float, out_rate: float) -> float:
+    return round((pro_in / 1_000_000.0) * in_rate + (pro_out / 1_000_000.0) * out_rate, 4)
+
+
+def summarize_hunt_events(events: list[Any]) -> dict[str, Any]:
+    """Roll hunt rows into admin analytics fields."""
+    hunts_run = hunts_skipped = hunts_failed = 0
+    hunt_groups_found = hunt_search_calls = 0
+    pro_in = pro_out = 0
+    last_at = None
+    for ev in events:
+        skipped = bool(getattr(ev, "skipped", False))
+        err = (getattr(ev, "error", None) or "").strip()
+        if skipped:
+            hunts_skipped += 1
+        elif err:
+            hunts_failed += 1
+        else:
+            hunts_run += 1
+        hunt_groups_found += int(getattr(ev, "group_count", 0) or 0)
+        hunt_search_calls += int(getattr(ev, "search_calls", 0) or 0)
+        pro_in += int(getattr(ev, "actual_pro_input_tokens", 0) or 0)
+        pro_out += int(getattr(ev, "actual_pro_output_tokens", 0) or 0)
+        created = getattr(ev, "created_at", None)
+        if created is not None and (last_at is None or created > last_at):
+            last_at = created
+    return {
+        "hunts_run": hunts_run,
+        "hunts_skipped": hunts_skipped,
+        "hunts_failed": hunts_failed,
+        "hunt_groups_found": hunt_groups_found,
+        "hunt_search_calls": hunt_search_calls,
+        "hunt_pro_input_tokens": pro_in,
+        "hunt_pro_output_tokens": pro_out,
+        "last_hunt_at": last_at,
+    }
+
+
+def record_audience_hunt_event(
+    lot: Lot,
+    *,
+    skipped: bool = False,
+    skip_reason: str = "",
+    payload: dict[str, Any] | None = None,
+    usage: dict[str, int] | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist one hunt attempt. Caller owns commit. No-op if the lot is not session-bound."""
+    try:
+        sess = object_session(lot)
+    except Exception:
+        return
+    if sess is None:
+        return
+    data = payload or {}
+    groups = data.get("groups") if isinstance(data.get("groups"), list) else []
+    u = usage or empty_hunt_usage()
+    sess.add(
+        AudienceHuntEvent(
+            account_id=lot.account_id,
+            lot_id=getattr(lot, "id", None),
+            sale_id=getattr(lot, "sale_id", None),
+            skipped=bool(skipped),
+            skip_reason=(skip_reason or str(data.get("skip_reason") or ""))[:400] or None,
+            worthy=bool(data.get("worthy")),
+            recommend_hold=bool(data.get("recommend_hold")),
+            group_count=len(groups),
+            search_calls=int(u.get("search_calls", 0) or 0),
+            actual_pro_input_tokens=int(u.get("pro_in", 0) or 0),
+            actual_pro_output_tokens=int(u.get("pro_out", 0) or 0),
+            error=(error or None)[:2000] if error else None,
+        )
+    )
     return {
         "worthy": False,
         "skip_reason": skip_reason,
@@ -113,6 +211,18 @@ def _safe_public_url(raw: object | None) -> str:
     if low.startswith("https://") or low.startswith("http://"):
         return u[:500]
     return ""
+
+
+def empty_audience_payload(*, skip_reason: str = "") -> dict[str, Any]:
+    return {
+        "worthy": False,
+        "skip_reason": skip_reason,
+        "groups": [],
+        "blurb_ctbids": "",
+        "blurb_hold": "",
+        "recommend_hold": False,
+        "researched_at": None,
+    }
 
 
 def parse_audience_payload(raw: object | None) -> dict[str, Any]:
@@ -254,7 +364,9 @@ def _ensure_gemini_env() -> None:
         os.environ.setdefault("GEMINI_API_KEY", key)
 
 
-def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
+def run_audience_research_and_structure(
+    lot: Lot, usage: dict[str, int] | None = None
+) -> dict[str, Any]:
     """Two-step hunt: Google Search memo, then structured JSON (no tools on schema call)."""
     from google.genai import types
 
@@ -262,6 +374,7 @@ def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
     from pipeline.pipeline import GEMINI_PRO_MODEL, _get_client
     from pipeline.schemas import AudienceHuntResult
 
+    bag = usage if usage is not None else empty_hunt_usage()
     _ensure_gemini_env()
     client = _get_client()
     listing = _lot_research_text(lot)
@@ -287,6 +400,7 @@ def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
         contents=research_parts,
         config=research_config,
     )
+    add_audience_usage(bag, research, search=True)
     memo = (research.text or "").strip()
     if not memo:
         raise RuntimeError("Audience research returned no text.")
@@ -315,6 +429,7 @@ def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
         contents=structure_parts,
         config=structure_config,
     )
+    add_audience_usage(bag, structured)
     if structured.parsed is not None:
         result = AudienceHuntResult.model_validate(structured.parsed)
     elif structured.text:
@@ -331,16 +446,13 @@ def apply_skip_without_model(lot: Lot, reason: str) -> dict[str, Any]:
     payload = empty_audience_payload(skip_reason=reason)
     payload["researched_at"] = datetime.now(timezone.utc).isoformat()
     save_audience_payload(lot, payload)
+    record_audience_hunt_event(lot, skipped=True, skip_reason=reason, payload=payload)
     return parse_audience_payload(payload)
 
 
 def run_audience_hunt_for_lot(db: Session, lot: Lot, *, force: bool = False) -> dict[str, Any]:
     """Hunt (or skip) and persist on the lot. Caller owns commit."""
-    brands: list[str] = []
-    try:
-        brands = [str(b) for b in json.loads(lot.brands_json or "[]")]
-    except json.JSONDecodeError:
-        brands = []
+    brands = lot_brands(lot)
     hunt, reason = should_run_audience_hunt(
         title=lot.auction_title or "",
         brands=brands,
@@ -349,8 +461,14 @@ def run_audience_hunt_for_lot(db: Session, lot: Lot, *, force: bool = False) -> 
     )
     if not hunt:
         return apply_skip_without_model(lot, reason)
-    payload = run_audience_research_and_structure(lot)
-    save_audience_payload(lot, payload)
-    if payload.get("recommend_hold") and not lot.audience_hold:
-        lot.audience_hold = True
-    return parse_audience_payload(lot.audience_json)
+    usage = empty_hunt_usage()
+    try:
+        payload = run_audience_research_and_structure(lot, usage)
+        save_audience_payload(lot, payload)
+        if payload.get("recommend_hold") and not lot.audience_hold:
+            lot.audience_hold = True
+        record_audience_hunt_event(lot, payload=payload, usage=usage)
+        return parse_audience_payload(lot.audience_json)
+    except Exception as exc:
+        record_audience_hunt_event(lot, usage=usage, error=f"{type(exc).__name__}: {exc}"[:2000])
+        raise
