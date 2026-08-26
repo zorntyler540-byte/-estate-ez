@@ -6683,7 +6683,10 @@ export default function DashboardPage() {
             {audienceHuntBusy && !audienceHuntStatus?.active
               ? "Queueing audience hunt…"
               : audienceHuntStatus?.active
-                ? `Hunting ${audienceHuntStatus.done}/${audienceHuntStatus.total}…`
+                ? `Hunting ${Math.min(
+                    audienceHuntStatus.total,
+                    audienceHuntStatus.done + 1
+                  )}/${audienceHuntStatus.total}…`
                 : ctSellerSelectedCount > 0
                   ? `Find audience for selected (${ctSellerSelectedCount})`
                   : "Find audience for this sale"}
@@ -6723,7 +6726,11 @@ export default function DashboardPage() {
           <div style={{ marginTop: "0.75rem" }}>
             <AudienceHuntProgress
               title="Audience hunt"
-              done={audienceHuntStatus.done}
+              done={
+                audienceHuntStatus.active
+                  ? Math.min(audienceHuntStatus.total, audienceHuntStatus.done + 1)
+                  : audienceHuntStatus.done
+              }
               total={audienceHuntStatus.total}
               percent={saleHuntBarPercent(audienceHuntStatus)}
               phaseLabel={
