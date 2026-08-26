@@ -1429,9 +1429,10 @@ export default function LotDetailPage() {
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">Audience</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            Find public collector groups for nicer or niche lots. Staff still paste into the groups — this only hunts
-            names and URLs. Everyday household lots are skipped unless you force a hunt. Does not scrape members or
-            auto-post.
+            Find public **United States** collector groups for nicer or niche lots. Staff still paste
+            into the groups — this only hunts names and URLs. Everyday household lots are skipped unless
+            you force a hunt. International / worldwide clubs are omitted (small items can ship inside
+            the US). Does not scrape members or auto-post.
           </p>
           {audienceCopyMsg ? (
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">

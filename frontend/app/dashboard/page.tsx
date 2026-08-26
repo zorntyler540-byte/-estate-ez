@@ -5205,8 +5205,8 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         useSelection
-          ? `Find public collector groups for ${selectedIds.length} selected lot${selectedIds.length === 1 ? "" : "s"}?\n\nEveryday household lots are skipped. Already-hunted lots are skipped. Does not recatalog photos or auto-post.`
-          : `Find public collector groups for nicer lots already in this sale?\n\nEveryday household lots are skipped. Lots that already have a hunt are skipped. Gemini runs one lot at a time (about half a minute each). Does not recatalog photos or auto-post.`
+          ? `Find United States collector groups for ${selectedIds.length} selected lot${selectedIds.length === 1 ? "" : "s"}?\n\nEveryday household lots are skipped. Already-hunted lots are skipped. International/worldwide clubs are omitted. Does not recatalog photos or auto-post.`
+          : `Find United States collector groups for nicer lots already in this sale?\n\nEveryday household lots are skipped. Lots that already have a hunt are skipped. International/worldwide clubs are omitted. Gemini runs one lot at a time (about half a minute each). Does not recatalog photos or auto-post.`
       )
     ) {
       return;
@@ -6601,8 +6601,8 @@ export default function DashboardPage() {
             disabled={audienceHuntBusy || busyProcessing || !selectedSaleId || lots.length < 1}
             title={
               ctSellerSelectedCount > 0
-                ? `Hunt public collector groups for ${ctSellerSelectedCount} selected lot(s)`
-                : "Hunt nicer lots already in this sale (skips everyday household and already-hunted lots)"
+                ? `Hunt United States collector groups for ${ctSellerSelectedCount} selected lot(s)`
+                : "Hunt nicer lots already in this sale (US groups only; skips everyday household and already-hunted lots)"
             }
           >
             {audienceHuntBusy

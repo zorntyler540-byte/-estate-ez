@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session, object_session
 
@@ -213,6 +215,119 @@ def _safe_public_url(raw: object | None) -> str:
     return ""
 
 
+# Longest first so ``.co.uk`` matches before ``.uk``.
+_NON_US_HOST_SUFFIXES = (
+    ".co.uk",
+    ".org.uk",
+    ".ac.uk",
+    ".gov.uk",
+    ".com.au",
+    ".org.au",
+    ".net.au",
+    ".co.nz",
+    ".co.za",
+    ".co.jp",
+    ".gc.ca",
+    ".uk",
+    ".ca",
+    ".au",
+    ".nz",
+    ".za",
+    ".ie",
+    ".eu",
+    ".de",
+    ".fr",
+    ".nl",
+    ".be",
+    ".at",
+    ".ch",
+    ".it",
+    ".es",
+    ".pt",
+    ".pl",
+    ".se",
+    ".no",
+    ".dk",
+    ".fi",
+    ".jp",
+    ".kr",
+    ".cn",
+    ".tw",
+    ".hk",
+    ".sg",
+    ".in",
+    ".mx",
+    ".br",
+    ".ru",
+)
+
+# Group location / membership — not object origin (keep "English china" US groups).
+_FOREIGN_GROUP_LOCATION = re.compile(
+    r"\b("
+    r"united kingdom|u\.?k\.?|britain|great britain|"
+    r"canada|canadian|"
+    r"australia|australian|"
+    r"new zealand|"
+    r"ireland|"
+    r"germany|deutschland|"
+    r"france|"
+    r"netherlands|holland|"
+    r"sweden|norway|denmark|"
+    r"japan|"
+    r"singapore|hong kong|"
+    r"south africa|"
+    r"mexico|mexican|"
+    r"india|"
+    r"scotland|wales"
+    r")\b",
+    re.I,
+)
+_INTERNATIONAL_SCOPE = re.compile(r"\b(international|worldwide|global|europe(?:an)?)\b", re.I)
+_US_GROUP_LOCATION = re.compile(
+    r"\b(united states|u\.s\.a\.?|usa|u\.s\.|american|us-based|us based)\b",
+    re.I,
+)
+
+
+def _host_is_non_us(host: str) -> bool:
+    h = (host or "").lower().rstrip(".")
+    if h.startswith("www."):
+        h = h[4:]
+    if not h:
+        return False
+    for suffix in _NON_US_HOST_SUFFIXES:
+        bare = suffix.lstrip(".")
+        if h == bare or h.endswith(suffix):
+            return True
+    return False
+
+
+def is_us_audience_group(*, name: str, url: str, why: str = "") -> bool:
+    """True when this community is usable for a US estate sale (not a foreign/international club)."""
+    title = (name or "").strip()
+    if _US_GROUP_LOCATION.search(title):
+        return True
+    href = (url or "").strip()
+    if href:
+        try:
+            parsed = urlparse(href)
+        except ValueError:
+            parsed = None
+        if parsed is not None and _host_is_non_us(parsed.hostname or ""):
+            return False
+        if _FOREIGN_GROUP_LOCATION.search(href) or _INTERNATIONAL_SCOPE.search(href):
+            return False
+    loc_text = f"{title} {why or ''}"
+    if _INTERNATIONAL_SCOPE.search(loc_text):
+        return False
+    if _FOREIGN_GROUP_LOCATION.search(title):
+        return False
+    if _FOREIGN_GROUP_LOCATION.search(why or "") and not _US_GROUP_LOCATION.search(why or ""):
+        # "UK based club" in why — drop. "English hobnail" does not match these patterns.
+        return False
+    return True
+
+
 def empty_audience_payload(*, skip_reason: str = "") -> dict[str, Any]:
     return {
         "worthy": False,
@@ -243,20 +358,22 @@ def parse_audience_payload(raw: object | None) -> dict[str, Any]:
         name = str(row.get("name") or "").strip()
         if not name:
             continue
-        groups.append(
-            {
-                "name": name[:200],
-                "url": _safe_public_url(row.get("url")),
-                "why": str(row.get("why") or "").strip()[:400],
-            }
-        )
+        hit = {
+            "name": name[:200],
+            "url": _safe_public_url(row.get("url")),
+            "why": str(row.get("why") or "").strip()[:400],
+        }
+        if not is_us_audience_group(name=hit["name"], url=hit["url"], why=hit["why"]):
+            continue
+        groups.append(hit)
+    kept = groups[:8]
     return {
-        "worthy": bool(data.get("worthy")),
+        "worthy": bool(data.get("worthy")) and bool(kept),
         "skip_reason": str(data.get("skip_reason") or "")[:400],
-        "groups": groups[:8],
+        "groups": kept,
         "blurb_ctbids": str(data.get("blurb_ctbids") or "")[:1500],
         "blurb_hold": str(data.get("blurb_hold") or "")[:1500],
-        "recommend_hold": bool(data.get("recommend_hold")),
+        "recommend_hold": bool(data.get("recommend_hold")) and bool(kept),
         "researched_at": data.get("researched_at") if isinstance(data.get("researched_at"), str) else None,
     }
 
@@ -380,16 +497,20 @@ def run_audience_research_and_structure(
     listing = _lot_research_text(lot)
 
     research_parts = [
-        "Find public collector communities for this estate lot.\n"
+        "Find public United States collector communities for this estate lot.\n"
         "Search for Facebook groups, collector clubs, forums, and association pages that would "
         "care about this object. Prefer official/group URLs. Do not invent member names or emails.\n"
+        "United States only: staff paste into US groups; small items can ship inside the US; "
+        "pickup is at a US estate sale. Do not list UK, Canada, Australia, EU, or worldwide-only "
+        "clubs. US groups that collect foreign-made objects (English china, Japanese pottery) are OK.\n"
         "If this is generic household junk, say so.\n\n"
         f"{listing}"
     ]
     research_config = types.GenerateContentConfig(
         system_instruction=(
-            "You research where collectors of estate-sale items gather online. "
-            "Use Google Search. Name public groups/clubs/forums with URLs when you can find them. "
+            "You research where United States collectors of estate-sale items gather online. "
+            "Use Google Search. Name public US groups/clubs/forums with URLs when you can find them. "
+            "Skip international, worldwide, and non-US country communities. "
             "Never harvest personal emails or private member lists. Plain text memo only."
         ),
         tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -407,11 +528,12 @@ def run_audience_research_and_structure(
 
     structure_parts = [
         "Turn the research memo into structured JSON for staff. "
-        "groups: public communities only (name, url, why). Empty url is OK if the name is real. "
-        "blurb_ctbids: 2–4 sentences inviting those people to bid on a local CT Bids estate auction "
+        "groups: United States public communities only (name, url, why). Empty url is OK if the name is real. "
+        "Drop UK/Canada/Australia/EU/worldwide clubs even if they collect this brand. "
+        "blurb_ctbids: 2–4 sentences inviting those US people to bid on a local CT Bids estate auction "
         "(bidding often starts at $1; pickup at the sale). Do not invent a sale URL. "
-        "blurb_hold: 2–4 sentences offering the piece to a collector group before it goes to auction. "
-        "worthy true only if a named collector community is realistic. "
+        "blurb_hold: 2–4 sentences offering the piece to a US collector group before it goes to auction. "
+        "worthy true only if a named US collector community is realistic. "
         "recommend_hold true only for clearly niche/high-interest pieces.\n\n"
         f"Lot:\n{listing}\n\nResearch memo:\n{memo}"
     ]
@@ -420,7 +542,8 @@ def run_audience_research_and_structure(
         response_schema=pydantic_model_to_gemini_schema(AudienceHuntResult),
         system_instruction=(
             "You convert collector-community research into structured JSON only. "
-            "Public group/club/forum names and official URLs — no personal contact harvesting."
+            "United States public group/club/forum names and official URLs — no international clubs, "
+            "no personal contact harvesting."
         ),
         temperature=0.1,
     )
