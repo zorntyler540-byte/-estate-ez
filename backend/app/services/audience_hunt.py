@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -187,6 +188,16 @@ def _lot_research_text(lot: Lot) -> str:
     )
 
 
+def _ensure_gemini_env() -> None:
+    """Pipeline client reads os.environ; copy the same key catalog jobs use from settings/.env."""
+    from app.config import settings
+
+    key = (settings.google_api_key or "").strip()
+    if key:
+        os.environ.setdefault("GOOGLE_API_KEY", key)
+        os.environ.setdefault("GEMINI_API_KEY", key)
+
+
 def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
     """Two-step hunt: Google Search memo, then structured JSON (no tools on schema call)."""
     from google.genai import types
@@ -195,6 +206,7 @@ def run_audience_research_and_structure(lot: Lot) -> dict[str, Any]:
     from pipeline.pipeline import GEMINI_PRO_MODEL, _get_client
     from pipeline.schemas import AudienceHuntResult
 
+    _ensure_gemini_env()
     client = _get_client()
     listing = _lot_research_text(lot)
 
