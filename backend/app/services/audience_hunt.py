@@ -155,6 +155,62 @@ def audience_payload_for_lot(lot: Lot) -> dict[str, Any]:
     return parse_audience_payload(getattr(lot, "audience_json", None) or "{}")
 
 
+def lot_brands(lot: Lot) -> list[str]:
+    try:
+        raw = json.loads(getattr(lot, "brands_json", None) or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(b).strip() for b in raw if str(b).strip()]
+
+
+def lot_has_audience_research(lot: Lot) -> bool:
+    """True after a hunt or skip has been saved (so sale-wide re-runs can leave it alone)."""
+    payload = audience_payload_for_lot(lot)
+    if payload.get("researched_at"):
+        return True
+    if payload.get("groups"):
+        return True
+    if str(payload.get("skip_reason") or "").strip():
+        return True
+    return False
+
+
+def plan_sale_audience_hunts(
+    lots: list[Lot],
+    *,
+    force: bool = False,
+    only_unhunted: bool = True,
+    limit: int = 40,
+) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """Pick lots worth queueing. Returns (queue_ids, skips of lot_id, sku, reason)."""
+    queued: list[str] = []
+    skipped: list[tuple[str, str, str]] = []
+    for lot in lots:
+        lot_id = str(getattr(lot, "id", "") or "")
+        sku = str(getattr(lot, "sku", None) or "")
+        if not lot_id:
+            continue
+        if only_unhunted and not force and lot_has_audience_research(lot):
+            skipped.append((lot_id, sku, "Already hunted"))
+            continue
+        hunt, reason = should_run_audience_hunt(
+            title=getattr(lot, "auction_title", None) or "",
+            brands=lot_brands(lot),
+            category=getattr(lot, "ct_category", None),
+            force=force,
+        )
+        if not hunt:
+            skipped.append((lot_id, sku, reason or "Skipped"))
+            continue
+        if len(queued) >= limit:
+            skipped.append((lot_id, sku, "Over hunt limit this run"))
+            continue
+        queued.append(lot_id)
+    return queued, skipped
+
+
 def lot_is_held_from_ctseller(lot: Lot) -> bool:
     """True when staff (or hunt) asked to keep this lot off CT Bids for now."""
     return bool(getattr(lot, "audience_hold", False))

@@ -436,6 +436,32 @@ class LotAudienceHuntIn(BaseModel):
     )
 
 
+class SaleAudienceHuntIn(BaseModel):
+    """Hunt public collector groups for existing lots in a sale. Does not recatalog or auto-post."""
+
+    lot_ids: list[str] | None = Field(
+        default=None,
+        description="When set, hunt these lots (household still skipped unless force). When omitted, hunt unhunted specialist lots in the sale.",
+    )
+    force: bool = False
+    only_unhunted: bool = True
+    limit: int = Field(default=40, ge=1, le=80)
+
+
+class SaleAudienceHuntLotResult(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    queued: bool = False
+    skipped: bool = False
+    error: str | None = None
+
+
+class SaleAudienceHuntOut(BaseModel):
+    queued: int
+    skipped: int
+    results: list[SaleAudienceHuntLotResult]
+
+
 class MergeLotsIn(BaseModel):
     """Merge ``source_lot_id`` into this lot: all photos move here, then the source lot row is deleted."""
 

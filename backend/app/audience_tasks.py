@@ -114,3 +114,49 @@ def start_audience_hunt_in_background(*, lot_id: str, account_id: str, force: bo
         daemon=True,
         name=f"audience-{lot_id[:8]}",
     ).start()
+
+
+def start_sequential_hunts_in_background(
+    *,
+    account_id: str,
+    lot_ids: list[str],
+    force: bool,
+) -> None:
+    """Hunt existing lots one at a time (Gemini + Search). Caller already marked hunting_at."""
+    ordered = [x for x in lot_ids if (x or "").strip()]
+    if not ordered:
+        return
+    with _lock:
+        for lot_id in ordered:
+            _active.add(lot_id)
+
+    def _runner() -> None:
+        for lot_id in ordered:
+            err_msg: str | None = None
+            try:
+                with SessionLocal() as db:
+                    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+                    if row is None:
+                        raise RuntimeError("Lot not found")
+                    run_audience_hunt_for_lot(db, row, force=force)
+                    db.commit()
+            except Exception as exc:
+                tb = traceback.format_exc()
+                _LOG.error("audience hunt crashed lot_id=%s\n%s", lot_id, tb)
+                err_msg = f"{type(exc).__name__}: {exc}"[:2000]
+            finally:
+                with SessionLocal() as db:
+                    finish_lot_hunt(
+                        db,
+                        lot_id=lot_id,
+                        account_id=account_id,
+                        error=err_msg,
+                    )
+                with _lock:
+                    _active.discard(lot_id)
+
+    threading.Thread(
+        target=_runner,
+        daemon=True,
+        name=f"audience-sale-{ordered[0][:8]}",
+    ).start()

@@ -101,6 +101,8 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
   Hunt copies `GOOGLE_API_KEY` from app settings into `os.environ` (same as catalog jobs) because
   `pipeline._get_client` does not read `.env` itself.
+  Existing lots: lot page **Find audience**, or dashboard **Find audience for this sale**
+  (`POST /sales/{id}/audience-hunt`) which queues unhunted specialist lots sequentially.
 
 ### Testing / lint / build
 

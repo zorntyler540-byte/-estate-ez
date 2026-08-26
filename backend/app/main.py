@@ -83,6 +83,9 @@ from app.schemas import (
     UserSummary,
     LotAiRegenerateIn,
     LotAudienceHuntIn,
+    SaleAudienceHuntIn,
+    SaleAudienceHuntOut,
+    SaleAudienceHuntLotResult,
     LotPhotoOut,
     ReorderLotPhotosIn,
     CatalogedMobileDraftsOut,
@@ -2840,6 +2843,70 @@ def hunt_lot_audience(
             raise HTTPException(status_code=409, detail="Audience hunt is already running for this lot.") from exc
         raise
     return _lot_out_for_id(db, current.account_id, lot_id)
+
+
+@app.post("/sales/{sale_id}/audience-hunt", response_model=SaleAudienceHuntOut)
+def hunt_sale_audience(
+    sale_id: str,
+    body: SaleAudienceHuntIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleAudienceHuntOut:
+    """Queue collector-group hunts for existing lots. Does not recatalog photos or auto-post."""
+    from app.services.audience_hunt import plan_sale_audience_hunts
+
+    payload = body or SaleAudienceHuntIn()
+    sale = _sale_for_user(sale_id, current, db)
+    q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+    wanted: list[str] | None = None
+    if payload.lot_ids:
+        wanted = [x.strip() for x in payload.lot_ids if (x or "").strip()]
+        q = q.filter(Lot.id.in_(wanted))
+    lots = q.order_by(Lot.created_at.asc()).all()
+    if wanted:
+        by_id = {r.id: r for r in lots}
+        lots = [by_id[i] for i in wanted if i in by_id]
+
+    queued_ids, skipped_rows = plan_sale_audience_hunts(
+        lots,
+        force=payload.force,
+        only_unhunted=payload.only_unhunted,
+        limit=payload.limit,
+    )
+    results: list[SaleAudienceHuntLotResult] = [
+        SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku or None, skipped=True, error=reason)
+        for lot_id, sku, reason in skipped_rows
+    ]
+    by_id = {r.id: r for r in lots}
+    started: list[str] = []
+    for lot_id in queued_ids:
+        lot = by_id.get(lot_id)
+        sku = (lot.sku or "").strip() or None if lot is not None else None
+        if audience_tasks.is_hunting(db, lot_id=lot_id, account_id=current.account_id):
+            results.append(
+                SaleAudienceHuntLotResult(
+                    lot_id=lot_id, sku=sku, skipped=True, error="Hunt already running"
+                )
+            )
+            continue
+        try:
+            audience_tasks.mark_lot_hunt_started(db, lot_id=lot_id, account_id=current.account_id)
+        except RuntimeError as exc:
+            results.append(
+                SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku, skipped=True, error=str(exc))
+            )
+            continue
+        started.append(lot_id)
+        results.append(SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku, queued=True))
+
+    if started:
+        audience_tasks.start_sequential_hunts_in_background(
+            account_id=current.account_id,
+            lot_ids=started,
+            force=payload.force,
+        )
+    skipped_n = sum(1 for r in results if r.skipped)
+    return SaleAudienceHuntOut(queued=len(started), skipped=skipped_n, results=results)
 
 
 @app.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
