@@ -99,6 +99,8 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,
   harvest emails, or auto-post. Everyday household lots skip the model unless `force=true`.
   `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
+  Hunt copies `GOOGLE_API_KEY` from app settings into `os.environ` (same as catalog jobs) because
+  `pipeline._get_client` does not read `.env` itself.
 
 ### Testing / lint / build
 
