@@ -187,6 +187,10 @@ class LotOut(BaseModel):
     ctseller_item_id: int | None = None
     ctseller_posted_at: datetime | None = None
     listing_channel: str = "ctseller"
+    audience_hold: bool = False
+    audience_hunting: bool = False
+    audience_hunt_error: str | None = None
+    audience: dict | None = None
 
 
 class LotUpdate(BaseModel):
@@ -199,6 +203,7 @@ class LotUpdate(BaseModel):
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
+    audience_hold: bool | None = None
 
 
 class CTSellerCredentialsIn(BaseModel):
@@ -419,6 +424,15 @@ class LotAiRegenerateIn(BaseModel):
     preserve_sku: bool = Field(
         default=False,
         description="When true, keep the lot's current estate-tape SKU and only refresh title/description/specs/etc.",
+    )
+
+
+class LotAudienceHuntIn(BaseModel):
+    """Find public collector groups for this lot (Google Search). Does not recatalog photos."""
+
+    force: bool = Field(
+        default=False,
+        description="Hunt even when the lot looks like everyday household goods.",
     )
 
 

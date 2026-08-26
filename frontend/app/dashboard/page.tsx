@@ -1067,6 +1067,7 @@ type Lot = {
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   listing_channel?: string | null;
+  audience_hold?: boolean;
 };
 
 type CTSellerRemoteSale = {
@@ -1140,7 +1141,8 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     listing_channel:
       typeof (row as { listing_channel?: unknown }).listing_channel === "string"
         ? (row as { listing_channel: string }).listing_channel
-        : "ctseller"
+        : "ctseller",
+    audience_hold: Boolean((row as { audience_hold?: unknown }).audience_hold)
   };
 }
 
@@ -1167,6 +1169,7 @@ function lotIsPostedToCtSeller(lot: Lot): boolean {
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
   return (
     (lot.listing_channel || "ctseller") !== "facebook" &&
+    !lot.audience_hold &&
     !lot.ctseller_item_id &&
     Boolean((lot.sku || "").trim()) &&
     Boolean((lot.auction_title || "").trim())
@@ -6555,9 +6558,11 @@ export default function DashboardPage() {
                   title={
                     lot.ctseller_item_id
                       ? "Already posted"
-                      : lotEligibleForCtSellerPost(lot)
-                        ? "Select to post to CT Seller"
-                        : "Needs SKU and title before posting"
+                      : lot.audience_hold
+                        ? "Held for collector groups"
+                        : lotEligibleForCtSellerPost(lot)
+                          ? "Select to post to CT Seller"
+                          : "Needs SKU and title before posting"
                   }
                 />
               </div>
@@ -6582,6 +6587,11 @@ export default function DashboardPage() {
                     </span>
                   ) : null}
                   <span className="ct-lot-mobile-card__meta-item">{formatLotPrice(lot.starting_price)}</span>
+                  {lot.audience_hold ? (
+                    <span className="ct-lot-mobile-card__meta-item" title="Held for collector groups — skipped on bulk CT Seller post">
+                      Held
+                    </span>
+                  ) : null}
                   {lot.condition_text ? (
                     <span className="ct-lot-condition-chip">{lot.condition_text}</span>
                   ) : null}
@@ -6603,10 +6613,12 @@ export default function DashboardPage() {
                 title={
                   lotIsPostedToCtSeller(lot)
                     ? "Posted to CT Seller"
-                    : "Not posted to CT Seller yet"
+                    : lot.audience_hold
+                      ? "Held for collector groups — skipped on bulk CT Seller post"
+                      : "Not posted to CT Seller yet"
                 }
               >
-                {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+                {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
               </span>
               <button
                 type="button"
@@ -6680,9 +6692,11 @@ export default function DashboardPage() {
                   title={
                     lot.ctseller_item_id
                       ? "Already posted"
-                      : lotEligibleForCtSellerPost(lot)
-                        ? "Select to post to CT Seller"
-                        : "Needs SKU and title before posting"
+                      : lot.audience_hold
+                        ? "Held for collector groups"
+                        : lotEligibleForCtSellerPost(lot)
+                          ? "Select to post to CT Seller"
+                          : "Needs SKU and title before posting"
                   }
                 />
               </td>
@@ -6717,10 +6731,12 @@ export default function DashboardPage() {
                   title={
                     lotIsPostedToCtSeller(lot)
                       ? "Posted to CT Seller"
-                      : "Not posted to CT Seller yet"
+                      : lot.audience_hold
+                        ? "Held for collector groups — skipped on bulk CT Seller post"
+                        : "Not posted to CT Seller yet"
                   }
                 >
-                  {lotIsPostedToCtSeller(lot) ? "Posted" : "Not posted"}
+                  {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
                 </span>
               </td>
               <td className="ct-lots-table__photo-count">

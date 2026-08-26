@@ -97,6 +97,11 @@ class Lot(Base):
     listing_channel: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ctseller", server_default="ctseller"
     )
+    # Keep niche lots off bulk CT Bids post until staff un-holds after group outreach.
+    audience_hold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    audience_hunting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    audience_hunt_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audience_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

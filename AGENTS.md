@@ -94,6 +94,11 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   while keeping capture order *within* each role. Dashboard **Sort for listing** reapplies that;
   **Fix photo order** restores capture order from `original_name` (`mobile-<draft>-NN.jpg`).
   Do not bring back naive hero-first-only reordering — that scrambled the rest of the gallery.
+- **Audience hunt is public groups only.** `POST /lots/{id}/audience-hunt` uses Gemini Pro + Google
+  Search, then a separate structured JSON call (schema + search tools 400 together). It stores
+  group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,
+  harvest emails, or auto-post. Everyday household lots skip the model unless `force=true`.
+  `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
 
 ### Testing / lint / build
 

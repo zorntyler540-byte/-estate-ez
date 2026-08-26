@@ -215,3 +215,26 @@ class AppraisalCheckResult(BaseModel):
     rationale: str = ""
     search_summary: str = ""
     items: list[AppraisalItemLine] = Field(default_factory=list)
+
+
+class AudienceGroupHit(BaseModel):
+    """One public collector community (group, club, or forum) — official URL only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    url: str = ""
+    why: str = ""
+
+
+class AudienceHuntResult(BaseModel):
+    """Structured audience hunt after a Google Search research memo."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worthy: bool = False
+    skip_reason: str = ""
+    groups: list[AudienceGroupHit] = Field(default_factory=list)
+    blurb_ctbids: str = ""
+    blurb_hold: str = ""
+    recommend_hold: bool = False

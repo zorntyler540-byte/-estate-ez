@@ -54,6 +54,18 @@ type Lot = {
   ai_regenerate_error?: string | null;
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
+  audience_hold?: boolean;
+  audience_hunting?: boolean;
+  audience_hunt_error?: string | null;
+  audience?: {
+    worthy?: boolean;
+    skip_reason?: string;
+    groups?: { name: string; url?: string; why?: string }[];
+    blurb_ctbids?: string;
+    blurb_hold?: string;
+    recommend_hold?: boolean;
+    researched_at?: string | null;
+  } | null;
 };
 
 type CTSellerRemoteSale = {
@@ -183,6 +195,14 @@ export default function LotDetailPage() {
   /** True after server has reported ``ai_regenerating`` at least once this run. */
   const aiRegenSawActiveRef = useRef(false);
   const [preserveSkuForAi, setPreserveSkuForAi] = useState(false);
+  const [audienceHunting, setAudienceHunting] = useState(false);
+  const [audienceHuntError, setAudienceHuntError] = useState("");
+  const [audienceHuntNotice, setAudienceHuntNotice] = useState("");
+  const [audienceCopyMsg, setAudienceCopyMsg] = useState("");
+  const [audienceForce, setAudienceForce] = useState(false);
+  const [audienceHoldBusy, setAudienceHoldBusy] = useState(false);
+  const audienceHuntPostAckRef = useRef(false);
+  const audienceHuntSawActiveRef = useRef(false);
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
@@ -196,6 +216,11 @@ export default function LotDetailPage() {
     () => aiRegenerating || Boolean(lot?.ai_regenerating),
     [aiRegenerating, lot?.ai_regenerating]
   );
+  const showAudienceHuntProgress = useMemo(
+    () => audienceHunting || Boolean(lot?.audience_hunting),
+    [audienceHunting, lot?.audience_hunting]
+  );
+  const audienceHeld = Boolean(lot?.audience_hold);
   const lastPhotoSelectAnchorRef = useRef<number | null>(null);
   const dragPhotoIdRef = useRef<string | null>(null);
   const addPhotosInputRef = useRef<HTMLInputElement>(null);
@@ -246,6 +271,11 @@ export default function LotDetailPage() {
         if (row.ai_regenerating) {
           aiRegenPostAckRef.current = true;
           aiRegenSawActiveRef.current = true;
+        }
+        setAudienceHunting(Boolean(row.audience_hunting));
+        if (row.audience_hunting) {
+          audienceHuntPostAckRef.current = true;
+          audienceHuntSawActiveRef.current = true;
         }
         try {
           const photos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/photos`, t)) as LotPhoto[];
@@ -300,6 +330,47 @@ export default function LotDetailPage() {
       clearInterval(timer);
     };
   }, [token, routeLotId, showAiRegenProgress]);
+
+  useEffect(() => {
+    if (!token || !routeLotId || !showAudienceHuntProgress) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const row = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, token)) as Lot;
+        if (cancelled) return;
+        setLot(row);
+        if (row.audience_hunting) {
+          audienceHuntSawActiveRef.current = true;
+          setAudienceHunting(true);
+        }
+        if (!row.audience_hunting && audienceHuntPostAckRef.current && audienceHuntSawActiveRef.current) {
+          setAudienceHunting(false);
+          if (row.audience_hunt_error) {
+            setAudienceHuntNotice("");
+            setAudienceHuntError(parseFastApiErrorMessage(row.audience_hunt_error));
+          } else {
+            setAudienceHuntError("");
+            const skipped = Boolean(row.audience?.skip_reason) && !(row.audience?.groups?.length);
+            setAudienceHuntNotice(
+              skipped
+                ? row.audience?.skip_reason || "Skipped — everyday household lot."
+                : row.audience?.groups?.length
+                  ? `Found ${row.audience.groups.length} public group${row.audience.groups.length === 1 ? "" : "s"}.`
+                  : "Hunt finished — no public groups found."
+            );
+          }
+        }
+      } catch {
+        /* keep polling until server reports done */
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [token, routeLotId, showAudienceHuntProgress]);
 
   useEffect(() => {
     if (!token || !lot?.sale_id) return;
@@ -565,6 +636,78 @@ export default function LotDetailPage() {
         e instanceof Error ? parseFastApiErrorMessage(e.message) || "AI regenerate failed" : "AI regenerate failed"
       );
       setAiRegenerating(false);
+    }
+  }
+
+  async function findAudience() {
+    if (!lot || !token) return;
+    audienceHuntPostAckRef.current = false;
+    audienceHuntSawActiveRef.current = false;
+    setAudienceHunting(true);
+    setAudienceHuntError("");
+    setAudienceHuntNotice("");
+    setAudienceCopyMsg("");
+    try {
+      const updated = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/audience-hunt`, token, {
+        method: "POST",
+        body: JSON.stringify({ force: audienceForce })
+      })) as Lot;
+      setLot(updated);
+      audienceHuntPostAckRef.current = true;
+      if (updated.audience_hunting) {
+        audienceHuntSawActiveRef.current = true;
+        setAudienceHunting(true);
+        return;
+      }
+      setAudienceHunting(false);
+      if (updated.audience_hunt_error) {
+        setAudienceHuntError(parseFastApiErrorMessage(updated.audience_hunt_error));
+        return;
+      }
+      const skipped = Boolean(updated.audience?.skip_reason) && !(updated.audience?.groups?.length);
+      setAudienceHuntNotice(
+        skipped
+          ? updated.audience?.skip_reason || "Skipped — everyday household lot."
+          : updated.audience?.groups?.length
+            ? `Found ${updated.audience.groups.length} public group${updated.audience.groups.length === 1 ? "" : "s"}.`
+            : "Hunt finished — no public groups found."
+      );
+    } catch (e) {
+      audienceHuntPostAckRef.current = false;
+      audienceHuntSawActiveRef.current = false;
+      setAudienceHuntNotice("");
+      setAudienceHuntError(
+        e instanceof Error ? parseFastApiErrorMessage(e.message) || "Audience hunt failed" : "Audience hunt failed"
+      );
+      setAudienceHunting(false);
+    }
+  }
+
+  async function setAudienceHold(next: boolean) {
+    if (!lot || !token) return;
+    setAudienceHoldBusy(true);
+    setAudienceHuntError("");
+    try {
+      const updated = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ audience_hold: next })
+      })) as Lot;
+      setLot((prev) => (prev ? { ...prev, ...updated } : updated));
+    } catch (e) {
+      setAudienceHuntError(e instanceof Error ? e.message : "Could not update hold");
+    } finally {
+      setAudienceHoldBusy(false);
+    }
+  }
+
+  async function copyAudienceText(label: string, text: string) {
+    const t = text.trim();
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t);
+      setAudienceCopyMsg(`Copied ${label}`);
+    } catch {
+      setAudienceCopyMsg("Could not copy — select the text instead.");
     }
   }
 
@@ -1094,6 +1237,41 @@ export default function LotDetailPage() {
           {aiRegenNotice}
         </div>
       ) : null}
+      {showAudienceHuntProgress ? (
+        <div
+          className="ct-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.5rem",
+            borderColor: "rgba(96, 165, 250, 0.45)",
+            background: "rgba(59, 130, 246, 0.12)"
+          }}
+        >
+          <Loader2 size={16} className="ct-spin" aria-hidden />
+          <span>Finding public collector groups…</span>
+        </div>
+      ) : null}
+      {audienceHuntError ? (
+        <div className="ct-banner ct-banner--error" role="alert">
+          <strong style={{ display: "block", marginBottom: "0.2rem" }}>Audience hunt failed</strong>
+          {audienceHuntError}
+        </div>
+      ) : null}
+      {!showAudienceHuntProgress && audienceHuntNotice ? (
+        <div
+          className="ct-banner"
+          style={{
+            borderColor: "rgba(74, 222, 128, 0.35)",
+            background: "rgba(34, 197, 94, 0.1)"
+          }}
+          role="status"
+        >
+          {audienceHuntNotice}
+        </div>
+      ) : null}
     </>
   ) : null;
 
@@ -1136,7 +1314,10 @@ export default function LotDetailPage() {
     photoFileHealth.someMissing ||
     showAiRegenProgress ||
     Boolean(aiRegenError) ||
-    Boolean(aiRegenNotice);
+    Boolean(aiRegenNotice) ||
+    showAudienceHuntProgress ||
+    Boolean(audienceHuntError) ||
+    Boolean(audienceHuntNotice);
 
   const lotMobileSaveBar = (
     <>
@@ -1218,16 +1399,19 @@ export default function LotDetailPage() {
                   saving ||
                   listingDirty ||
                   showAiRegenProgress ||
+                  audienceHeld ||
                   !(lot.sku || "").trim() ||
                   !(lot.auction_title || "").trim()
                 }
                 aria-busy={ctSellerPostBusy}
                 title={
-                  listingDirty
-                    ? "Save listing first"
-                    : lot.ctseller_item_id
-                      ? "Already posted — click to post again"
-                      : "Create this lot on seller.ctbids.com"
+                  audienceHeld
+                    ? "Held for collector groups — turn off Hold for groups to post"
+                    : listingDirty
+                      ? "Save listing first"
+                      : lot.ctseller_item_id
+                        ? "Already posted — click to post again"
+                        : "Create this lot on seller.ctbids.com"
                 }
               >
                 {ctSellerPostBusy
@@ -1243,11 +1427,141 @@ export default function LotDetailPage() {
         {showLotAlerts ? <div className="ct-lot-detail-alerts">{lotWarnings}</div> : null}
 
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">Audience</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            Find public collector groups for nicer or niche lots. Staff still paste into the groups — this only hunts
+            names and URLs. Everyday household lots are skipped unless you force a hunt. Does not scrape members or
+            auto-post.
+          </p>
+          {audienceCopyMsg ? (
+            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">
+              {audienceCopyMsg}
+            </p>
+          ) : null}
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              onClick={() => void findAudience()}
+              disabled={showAudienceHuntProgress || saving}
+              aria-busy={showAudienceHuntProgress}
+            >
+              {showAudienceHuntProgress ? (
+                <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
+                  <Loader2 size={16} className="ct-spin" aria-hidden />
+                  Hunting…
+                </span>
+              ) : (
+                "Find audience"
+              )}
+            </button>
+            <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
+              <input
+                type="checkbox"
+                checked={audienceForce}
+                onChange={(e) => setAudienceForce(e.target.checked)}
+                disabled={showAudienceHuntProgress}
+              />
+              <span className="ct-muted">Force hunt (even everyday lots)</span>
+            </label>
+            <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
+              <input
+                type="checkbox"
+                checked={audienceHeld}
+                onChange={(e) => void setAudienceHold(e.target.checked)}
+                disabled={audienceHoldBusy || saving}
+              />
+              <span>Hold for groups (skip CT Bids post)</span>
+            </label>
+          </div>
+          {lot.audience?.skip_reason && !(lot.audience.groups?.length) ? (
+            <p className="ct-field-hint" style={{ marginTop: "0.75rem" }}>
+              {lot.audience.skip_reason}
+            </p>
+          ) : null}
+          {lot.audience?.groups && lot.audience.groups.length > 0 ? (
+            <ul style={{ margin: "0.85rem 0 0", paddingLeft: "1.15rem" }}>
+              {lot.audience.groups.map((g, i) => (
+                <li key={`${g.name}-${i}`} style={{ marginBottom: "0.45rem" }}>
+                  {g.url ? (
+                    <a href={g.url} target="_blank" rel="noopener noreferrer">
+                      {g.name}
+                    </a>
+                  ) : (
+                    <strong>{g.name}</strong>
+                  )}
+                  {g.why ? <span className="ct-muted"> — {g.why}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {lot.audience?.blurb_ctbids || lot.audience?.blurb_hold ? (
+            <div
+              className="ct-row ct-row--gap-lg"
+              style={{ flexWrap: "wrap", alignItems: "stretch", marginTop: "0.9rem" }}
+            >
+              {lot.audience?.blurb_ctbids ? (
+                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+                  <label className="ct-label" htmlFor="audience-blurb-ctbids">
+                    Invite to CT Bids
+                  </label>
+                  <textarea
+                    id="audience-blurb-ctbids"
+                    className="ct-input"
+                    rows={5}
+                    readOnly
+                    value={lot.audience?.blurb_ctbids || ""}
+                    style={{ resize: "vertical" }}
+                  />
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    style={{ marginTop: "0.4rem" }}
+                    onClick={() => void copyAudienceText("CT Bids blurb", lot.audience?.blurb_ctbids || "")}
+                  >
+                    Copy
+                  </button>
+                </div>
+              ) : null}
+              {lot.audience?.blurb_hold ? (
+                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+                  <label className="ct-label" htmlFor="audience-blurb-hold">
+                    Hold / talk to groups first
+                  </label>
+                  <textarea
+                    id="audience-blurb-hold"
+                    className="ct-input"
+                    rows={5}
+                    readOnly
+                    value={lot.audience?.blurb_hold || ""}
+                    style={{ resize: "vertical" }}
+                  />
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    style={{ marginTop: "0.4rem" }}
+                    onClick={() => void copyAudienceText("hold blurb", lot.audience?.blurb_hold || "")}
+                  >
+                    Copy
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">CT Seller</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
             Post this lot straight to seller.ctbids.com (no browser extension). Connect your Seller login on{" "}
             <Link href="/account">Account</Link>, pick the matching CTBids auction, then post.
           </p>
+          {audienceHeld ? (
+            <div className="ct-banner ct-banner--warning">
+              Held for collector groups — bulk and single CT Seller post will skip this lot until you uncheck{" "}
+              <strong>Hold for groups</strong> above.
+            </div>
+          ) : null}
           {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
           {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
           {lot.ctseller_item_id ? (
@@ -1293,10 +1607,12 @@ export default function LotDetailPage() {
                 ctSellerPostBusy ||
                 saving ||
                 listingDirty ||
+                audienceHeld ||
                 !(lot.sku || "").trim() ||
                 !(lot.auction_title || "").trim() ||
                 !ctSellerPickId
               }
+              title={audienceHeld ? "Held for collector groups — turn off Hold for groups to post" : undefined}
             >
               {ctSellerPostBusy
                 ? "Posting…"

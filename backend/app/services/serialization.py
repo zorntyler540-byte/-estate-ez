@@ -12,6 +12,7 @@ from app.catalog_storage import catalog_photo_file_on_disk, resolve_catalog_stor
 from app.core.lotting import listing_quality_issue
 from app.models import Lot, Photo
 from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut
+from app.services.audience_hunt import audience_payload_for_lot
 
 
 def sale_lot_photo_counts(db: Session, sale_id: str, account_id: str) -> list[int]:
@@ -185,5 +186,7 @@ def lot_to_schema(
         ctseller_item_id=getattr(row, "ctseller_item_id", None),
         ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
         listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
+        audience_hold=bool(getattr(row, "audience_hold", False)),
+        audience=audience_payload_for_lot(row),
     )
 
