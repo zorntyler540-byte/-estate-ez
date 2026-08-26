@@ -103,6 +103,8 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `pipeline._get_client` does not read `.env` itself.
   Existing lots: lot page **Find audience**, or dashboard **Find audience for this sale**
   (`POST /sales/{id}/audience-hunt`) which queues unhunted specialist lots sequentially.
+  Sale-wide progress is `GET /sales/{id}/audience-hunt` (in-memory in the API process; poll ~1.5s).
+  Lot rows include `audience_hunting` + `audience_hunt_phase` (`queued` / `searching` / `structuring`).
   Each hunt/skip writes `audience_hunt_events` (metered Pro tokens). Admin analytics
   (`GET /admin/analytics`) includes hunt counts and hunt Pro $ in the 30-day totals.
 

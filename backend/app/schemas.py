@@ -199,6 +199,7 @@ class LotOut(BaseModel):
     audience_hold: bool = False
     audience_hunting: bool = False
     audience_hunt_error: str | None = None
+    audience_hunt_phase: str | None = None
     audience: dict | None = None
 
 
@@ -469,6 +470,25 @@ class SaleAudienceHuntOut(BaseModel):
     queued: int
     skipped: int
     results: list[SaleAudienceHuntLotResult]
+
+
+class SaleAudienceHuntLotProgress(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    status: str = "queued"
+    phase: str | None = None
+
+
+class SaleAudienceHuntStatusOut(BaseModel):
+    """Live progress for a sale-wide hunt (sequential Gemini + Search)."""
+
+    active: bool = False
+    total: int = 0
+    done: int = 0
+    current_lot_id: str | None = None
+    current_sku: str | None = None
+    current_phase: str | None = None
+    lots: list[SaleAudienceHuntLotProgress] = Field(default_factory=list)
 
 
 class MergeLotsIn(BaseModel):

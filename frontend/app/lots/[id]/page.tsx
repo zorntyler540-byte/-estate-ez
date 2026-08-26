@@ -8,6 +8,11 @@ import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { AppShell } from "../../../components/AppShell";
+import {
+  AudienceHuntProgress,
+  audienceHuntPhaseLabel,
+  audienceHuntStepPercent
+} from "../../../components/AudienceHuntProgress";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
 import { rotateImageBlob } from "../../../lib/photoEdit";
@@ -57,6 +62,7 @@ type Lot = {
   audience_hold?: boolean;
   audience_hunting?: boolean;
   audience_hunt_error?: string | null;
+  audience_hunt_phase?: string | null;
   audience?: {
     worthy?: boolean;
     skip_reason?: string;
@@ -1238,21 +1244,13 @@ export default function LotDetailPage() {
         </div>
       ) : null}
       {showAudienceHuntProgress ? (
-        <div
-          className="ct-banner"
-          role="status"
-          aria-live="polite"
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "0.5rem",
-            borderColor: "rgba(96, 165, 250, 0.45)",
-            background: "rgba(59, 130, 246, 0.12)"
-          }}
-        >
-          <Loader2 size={16} className="ct-spin" aria-hidden />
-          <span>Finding public collector groups…</span>
-        </div>
+        <AudienceHuntProgress
+          title="Audience hunt"
+          phaseLabel={audienceHuntPhaseLabel(lot?.audience_hunt_phase)}
+          done={lot?.audience_hunt_phase === "structuring" ? 1 : 0}
+          total={2}
+          percent={audienceHuntStepPercent(lot?.audience_hunt_phase)}
+        />
       ) : null}
       {audienceHuntError ? (
         <div className="ct-banner ct-banner--error" role="alert">

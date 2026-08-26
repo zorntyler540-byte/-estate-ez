@@ -25,6 +25,10 @@ import {
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { AppShell } from "../../components/AppShell";
+import {
+  AudienceHuntProgress,
+  audienceHuntPhaseLabel
+} from "../../components/AudienceHuntProgress";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import {
   clearStagingDraft,
@@ -1076,6 +1080,34 @@ type Lot = {
   audience_hold?: boolean;
 };
 
+type SaleAudienceHuntStatus = {
+  active: boolean;
+  total: number;
+  done: number;
+  current_lot_id?: string | null;
+  current_sku?: string | null;
+  current_phase?: string | null;
+  lots?: Array<{
+    lot_id: string;
+    sku?: string | null;
+    status: string;
+    phase?: string | null;
+  }>;
+};
+
+function saleHuntBarPercent(st: SaleAudienceHuntStatus): number {
+  if (st.total < 1) return 0;
+  const frac =
+    st.current_phase === "structuring"
+      ? 0.75
+      : st.current_phase === "searching"
+        ? 0.4
+        : st.active
+          ? 0.08
+          : 0;
+  return Math.min(100, ((st.done + (st.active ? frac : 0)) / st.total) * 100);
+}
+
 type CTSellerRemoteSale = {
   id: number;
   title: string;
@@ -1857,6 +1889,8 @@ export default function DashboardPage() {
   const [audienceHuntBusy, setAudienceHuntBusy] = useState(false);
   const [audienceHuntMsg, setAudienceHuntMsg] = useState("");
   const [audienceHuntErr, setAudienceHuntErr] = useState("");
+  const [audienceHuntStatus, setAudienceHuntStatus] = useState<SaleAudienceHuntStatus | null>(null);
+  const [audienceHuntKick, setAudienceHuntKick] = useState(0);
   const [pullingCtSellerSales, setPullingCtSellerSales] = useState(false);
   const [pullCtSellerSalesMsg, setPullCtSellerSalesMsg] = useState("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
@@ -2521,6 +2555,42 @@ export default function DashboardPage() {
         setPhotoHealthMissing({});
       });
   }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
+
+  useEffect(() => {
+    if (!token || !selectedSaleId) {
+      setAudienceHuntStatus(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pull = async () => {
+      try {
+        const st = (await apiFetch(
+          `/sales/${encodeURIComponent(selectedSaleId)}/audience-hunt`,
+          token
+        )) as SaleAudienceHuntStatus;
+        if (cancelled) return;
+        setAudienceHuntStatus(st);
+        if (st.active) {
+          setAudienceHuntMsg("");
+          timer = setTimeout(() => void pull(), 1500);
+        } else if (st.total > 0 && st.done >= st.total) {
+          setAudienceHuntMsg(
+            `Finished hunting ${st.done} lot${st.done === 1 ? "" : "s"}. Open Details → Audience for group links.`
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          timer = setTimeout(() => void pull(), 2500);
+        }
+      }
+    };
+    void pull();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [token, selectedSaleId, audienceHuntKick]);
 
   useEffect(() => {
     if (!token) {
@@ -5238,11 +5308,8 @@ export default function DashboardPage() {
           `Nothing queued — ${res.skipped} skipped (household, already hunted, or already running).`
         );
       } else {
-        setAudienceHuntMsg(
-          `Hunting ${res.queued} lot${res.queued === 1 ? "" : "s"} in the background` +
-            (res.skipped ? ` (${res.skipped} skipped)` : "") +
-            ". Open a lot’s Details → Audience to see groups when it finishes."
-        );
+        setAudienceHuntMsg("");
+        setAudienceHuntKick((n) => n + 1);
       }
       if (skipSamples.length && res.queued < 1) {
         setAudienceHuntErr(skipSamples.join(" · "));
@@ -6598,18 +6665,28 @@ export default function DashboardPage() {
             type="button"
             className="ct-btn"
             onClick={() => void bulkHuntSaleAudience()}
-            disabled={audienceHuntBusy || busyProcessing || !selectedSaleId || lots.length < 1}
+            disabled={
+              audienceHuntBusy ||
+              Boolean(audienceHuntStatus?.active) ||
+              busyProcessing ||
+              !selectedSaleId ||
+              lots.length < 1
+            }
             title={
-              ctSellerSelectedCount > 0
-                ? `Hunt public collector groups for ${ctSellerSelectedCount} selected lot(s)`
-                : "Hunt nicer lots already in this sale (skips everyday household and already-hunted lots)"
+              audienceHuntStatus?.active
+                ? "Audience hunt is running for this sale"
+                : ctSellerSelectedCount > 0
+                  ? `Hunt public collector groups for ${ctSellerSelectedCount} selected lot(s)`
+                  : "Hunt nicer lots already in this sale (skips everyday household and already-hunted lots)"
             }
           >
-            {audienceHuntBusy
+            {audienceHuntBusy && !audienceHuntStatus?.active
               ? "Queueing audience hunt…"
-              : ctSellerSelectedCount > 0
-                ? `Find audience for selected (${ctSellerSelectedCount})`
-                : "Find audience for this sale"}
+              : audienceHuntStatus?.active
+                ? `Hunting ${audienceHuntStatus.done}/${audienceHuntStatus.total}…`
+                : ctSellerSelectedCount > 0
+                  ? `Find audience for selected (${ctSellerSelectedCount})`
+                  : "Find audience for this sale"}
           </button>
           {ctSellerEligibleIds.length > 0 ? (
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
@@ -6640,6 +6717,24 @@ export default function DashboardPage() {
         {ctSellerBulkErr ? (
           <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
             {ctSellerBulkErr}
+          </div>
+        ) : null}
+        {audienceHuntStatus?.active ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <AudienceHuntProgress
+              title="Audience hunt"
+              done={audienceHuntStatus.done}
+              total={audienceHuntStatus.total}
+              percent={saleHuntBarPercent(audienceHuntStatus)}
+              phaseLabel={
+                audienceHuntStatus.current_sku
+                  ? `Lot ${audienceHuntStatus.current_sku}: ${audienceHuntPhaseLabel(
+                      audienceHuntStatus.current_phase
+                    )}`
+                  : audienceHuntPhaseLabel(audienceHuntStatus.current_phase)
+              }
+              lots={audienceHuntStatus.lots}
+            />
           </div>
         ) : null}
         {audienceHuntMsg ? (

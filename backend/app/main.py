@@ -97,6 +97,7 @@ from app.schemas import (
     SaleAudienceHuntIn,
     SaleAudienceHuntOut,
     SaleAudienceHuntLotResult,
+    SaleAudienceHuntStatusOut,
     LotPhotoOut,
     ReorderLotPhotosIn,
     CatalogedMobileDraftsOut,
@@ -291,18 +292,31 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
     regen = regeneration_tasks.lot_regenerate_is_active(row)
     err = regeneration_tasks.pop_regeneration_error(db, row) if not regen else None
+    return _lot_out_with_runtime(out, row, db=db, pop_hunt_error=True, ai_regenerating=regen, ai_regenerate_error=err)
+
+
+def _lot_out_with_runtime(
+    out: LotOut,
+    row: Lot,
+    *,
+    db: Session | None = None,
+    pop_hunt_error: bool = False,
+    ai_regenerating: bool | None = None,
+    ai_regenerate_error: str | None = None,
+) -> LotOut:
     hunting = audience_tasks.lot_hunt_is_active(row)
-    hunt_err = audience_tasks.pop_hunt_error(db, row) if not hunting else None
-    updates: dict = {}
-    if regen or err:
-        updates["ai_regenerating"] = regen
-        updates["ai_regenerate_error"] = err
-    if hunting or hunt_err:
-        updates["audience_hunting"] = hunting
-        updates["audience_hunt_error"] = hunt_err
-    if updates:
-        return out.model_copy(update=updates)
-    return out
+    hunt_err = None
+    if pop_hunt_error and db is not None and not hunting:
+        hunt_err = audience_tasks.pop_hunt_error(db, row)
+    updates: dict = {
+        "audience_hunting": hunting,
+        "audience_hunt_phase": audience_tasks.lot_hunt_phase(row.id) if hunting else None,
+        "audience_hunt_error": hunt_err,
+    }
+    if ai_regenerating or ai_regenerate_error:
+        updates["ai_regenerating"] = bool(ai_regenerating)
+        updates["ai_regenerate_error"] = ai_regenerate_error
+    return out.model_copy(update=updates)
 
 
 def _job_out(job: ProcessingJob) -> JobOut:
@@ -1923,10 +1937,13 @@ def list_lots(
     thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     counts = [r.photo_count for r in rows]
     return [
-        lot_to_schema(
+        _lot_out_with_runtime(
+            lot_to_schema(
+                r,
+                has_thumbnail=r.id in thumb_ids,
+                many_photos_review=photo_count_is_sale_outlier(r.photo_count, counts),
+            ),
             r,
-            has_thumbnail=r.id in thumb_ids,
-            many_photos_review=photo_count_is_sale_outlier(r.photo_count, counts),
         )
         for r in rows
     ]
@@ -2953,13 +2970,31 @@ def hunt_sale_audience(
         results.append(SaleAudienceHuntLotResult(lot_id=lot_id, sku=sku, queued=True))
 
     if started:
+        sku_map = {
+            lid: ((by_id[lid].sku or "").strip() or None) if lid in by_id else None
+            for lid in started
+        }
         audience_tasks.start_sequential_hunts_in_background(
             account_id=current.account_id,
+            sale_id=sale.id,
             lot_ids=started,
+            skus=sku_map,
             force=payload.force,
         )
     skipped_n = sum(1 for r in results if r.skipped)
     return SaleAudienceHuntOut(queued=len(started), skipped=skipped_n, results=results)
+
+
+@app.get("/sales/{sale_id}/audience-hunt", response_model=SaleAudienceHuntStatusOut)
+def sale_audience_hunt_status(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleAudienceHuntStatusOut:
+    """Progress for a sale-wide hunt running in this API process."""
+    _sale_for_user(sale_id, current, db)
+    snap = audience_tasks.sale_hunt_status(sale_id=sale_id, account_id=current.account_id)
+    return SaleAudienceHuntStatusOut.model_validate(snap)
 
 
 @app.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
