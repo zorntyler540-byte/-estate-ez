@@ -56,6 +56,11 @@ _job_accounts: dict[str, str] = {}
 _job_cancels_lock = threading.Lock()
 _kick_debounce_lock = threading.Lock()
 _last_kick_mono: dict[str, float] = {}
+# Dashboard + phones hit GET /jobs often during Sync. Reconcile at most this often per account
+# so leftover-job healing cannot stack QueuePool work on every poll.
+LIST_RECONCILE_DEBOUNCE_SECONDS = 20.0
+_list_reconcile_lock = threading.Lock()
+_last_list_reconcile_mono: dict[str, float] = {}
 
 
 def is_job_running(job_id: str) -> bool:
@@ -302,7 +307,40 @@ def _mark_job_superseded_complete(row: ProcessingJob) -> None:
     )
 
 
-def job_outcome_already_on_sale(db, job: ProcessingJob) -> bool:
+def _sale_outcome_index(
+    db, account_id: str, sale_id: str
+) -> tuple[set[str], set[str], set[str]]:
+    """One-shot SKU + cataloged-draft lookup for leftover-job healing (avoid N+1 on GET /jobs)."""
+    lot_keys: set[str] = set()
+    for (sku,) in (
+        db.query(Lot.sku)
+        .filter(
+            Lot.account_id == account_id,
+            Lot.sale_id == sale_id,
+            Lot.sku.isnot(None),
+        )
+        .all()
+    ):
+        lot_keys |= _sku_match_keys(sku)
+    completed_keys: set[str] = set()
+    for (sku,) in (
+        db.query(ProcessingJob.single_lot_manual_sku)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.sale_id == sale_id,
+            ProcessingJob.status == JobStatus.completed,
+            ProcessingJob.single_lot_manual_sku.isnot(None),
+        )
+        .all()
+    ):
+        completed_keys |= _sku_match_keys(sku)
+    drafts = set(cataloged_mobile_draft_ids(db, str(account_id), str(sale_id)))
+    return lot_keys, completed_keys, drafts
+
+
+def job_outcome_already_on_sale(
+    db, job: ProcessingJob, *, index_cache: dict[tuple[str, str], tuple[set[str], set[str], set[str]]] | None = None
+) -> bool:
     """True when this upload's SKU or phone draft already produced a catalog lot on the sale.
 
     Phone Sync often starts a new job after a mid-lot kill; the abandoned row must not keep
@@ -312,39 +350,23 @@ def job_outcome_already_on_sale(db, job: ProcessingJob) -> bool:
     account_id = getattr(job, "account_id", None)
     if not sale_id or not account_id:
         return False
+    cache_key = (str(account_id), str(sale_id))
+    if index_cache is not None and cache_key in index_cache:
+        lot_keys, completed_keys, cataloged_drafts = index_cache[cache_key]
+    else:
+        lot_keys, completed_keys, cataloged_drafts = _sale_outcome_index(
+            db, str(account_id), str(sale_id)
+        )
+        if index_cache is not None:
+            index_cache[cache_key] = (lot_keys, completed_keys, cataloged_drafts)
 
-    job_sku = getattr(job, "single_lot_manual_sku", None)
-    if _sku_match_keys(job_sku):
-        lot_skus = (
-            db.query(Lot.sku)
-            .filter(
-                Lot.account_id == account_id,
-                Lot.sale_id == sale_id,
-                Lot.sku.isnot(None),
-            )
-            .all()
-        )
-        if any(_skus_overlap(job_sku, sku) for (sku,) in lot_skus):
-            return True
-        completed_skus = (
-            db.query(ProcessingJob.single_lot_manual_sku)
-            .filter(
-                ProcessingJob.account_id == account_id,
-                ProcessingJob.sale_id == sale_id,
-                ProcessingJob.status == JobStatus.completed,
-                ProcessingJob.id != job.id,
-                ProcessingJob.single_lot_manual_sku.isnot(None),
-            )
-            .all()
-        )
-        if any(_skus_overlap(job_sku, sku) for (sku,) in completed_skus):
-            return True
+    job_sku_keys = _sku_match_keys(getattr(job, "single_lot_manual_sku", None))
+    if job_sku_keys and (job_sku_keys & lot_keys or job_sku_keys & completed_keys):
+        return True
 
     drafts = _job_folder_mobile_draft_ids(job)
-    if drafts:
-        cataloged = set(cataloged_mobile_draft_ids(db, str(account_id), str(sale_id)))
-        if drafts & cataloged:
-            return True
+    if drafts and drafts & cataloged_drafts:
+        return True
     return False
 
 
@@ -366,6 +388,7 @@ def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
     )
     now = datetime.now(timezone.utc)
     changed = False
+    index_cache: dict[tuple[str, str], tuple[set[str], set[str], set[str]]] = {}
     for row in rows:
         updated = row.updated_at or row.created_at
         if updated is not None:
@@ -374,7 +397,7 @@ def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
             age_sec = (now - updated).total_seconds()
             if age_sec < RECEIVING_STALE_SECONDS:
                 continue
-        if job_outcome_already_on_sale(db, row):
+        if job_outcome_already_on_sale(db, row, index_cache=index_cache):
             _mark_job_superseded_complete(row)
         else:
             row.status = JobStatus.failed
@@ -402,13 +425,33 @@ def reconcile_superseded_failed_jobs(db, account_id: str) -> bool:
         .all()
     )
     changed = False
+    index_cache: dict[tuple[str, str], tuple[set[str], set[str], set[str]]] = {}
     for row in rows:
         if not is_orphan_upload_error(row.error_message):
             continue
-        if not job_outcome_already_on_sale(db, row):
+        if not job_outcome_already_on_sale(db, row, index_cache=index_cache):
             continue
         _mark_job_superseded_complete(row)
         changed = True
+    return changed
+
+
+def maybe_reconcile_jobs_for_list(db, account_id: str) -> bool:
+    """Run stale/leftover job healing at most once per account per debounce window.
+
+    ``GET /jobs`` is polled by the dashboard and by phone Sync. Doing full reconcile
+    (including leftover FAILED SKU matching) on every poll exhausted QueuePool during
+    field uploads and froze the website on “Loading dashboard…”.
+    """
+    now = time.monotonic()
+    with _list_reconcile_lock:
+        last = _last_list_reconcile_mono.get(account_id, 0.0)
+        if now - last < LIST_RECONCILE_DEBOUNCE_SECONDS:
+            return False
+        _last_list_reconcile_mono[account_id] = now
+    changed = reconcile_stale_processing_jobs(db, account_id)
+    changed = reconcile_stale_receiving_jobs(db, account_id) or changed
+    changed = reconcile_superseded_failed_jobs(db, account_id) or changed
     return changed
 
 

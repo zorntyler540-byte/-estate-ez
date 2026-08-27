@@ -5,6 +5,7 @@ import csv
 import io
 import os
 import json
+import logging
 import queue
 import re
 import shutil
@@ -18,8 +19,9 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, nullslast, or_, select, update
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -121,8 +123,8 @@ from app.services.serialization import (
     lot_to_schema,
     photo_count_is_sale_outlier,
     photo_count_outlier_by_lot_id,
+    photo_health_from_loaded,
     sale_lot_photo_counts,
-    sale_lots_with_missing_photo_files,
     upload_folder_has_linked_photos,
 )
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
@@ -175,6 +177,19 @@ from app.catalog_limits import (
 )
 
 app = FastAPI(title=settings.app_name)
+_LOG = logging.getLogger("app.main")
+
+
+@app.exception_handler(SATimeoutError)
+async def _db_pool_timeout_handler(_request: Request, _exc: SATimeoutError) -> JSONResponse:
+    """QueuePool checkout timed out — do not dump a SQLAlchemy traceback per queued request."""
+    _LOG.warning("Database pool busy (QueuePool timeout) — returning 503")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Server is busy receiving photos. Wait a moment and refresh the dashboard."
+        },
+    )
 
 
 def _sale_out(row: Sale) -> SaleOut:
@@ -189,8 +204,14 @@ def _sale_out(row: Sale) -> SaleOut:
     )
 
 
-def _ctseller_client_for_account(account: Account, db: Session) -> CTSellerClient:
-    """Return an authenticated CT Seller client, refreshing or re-logging in as needed."""
+def _ctseller_client_for_account(
+    account: Account, db: Session, *, probe: bool = True
+) -> CTSellerClient:
+    """Return an authenticated CT Seller client, refreshing or re-logging in as needed.
+
+    ``probe=False`` skips the extra ``list_open_sales`` round-trip (dashboard sale picker
+    already lists sales next). Keeps a QueuePool connection from sitting on CT Seller HTTP.
+    """
     access = unseal_secret(getattr(account, "ctseller_access_token_enc", None))
     refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
     username = (getattr(account, "ctseller_username", None) or "").strip()
@@ -202,6 +223,8 @@ def _ctseller_client_for_account(account: Account, db: Session) -> CTSellerClien
         )
     client = CTSellerClient(access_token=access or None)
     if access:
+        if not probe:
+            return client
         try:
             client.list_open_sales()
             return client
@@ -1165,7 +1188,27 @@ def sale_photo_health(
     sale = db.query(Sale).filter(Sale.id == sale_id, Sale.account_id == current.account_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
-    return SalePhotoHealthOut(lots=sale_lots_with_missing_photo_files(db, current.account_id, sale_id))
+    lots = (
+        db.query(Lot)
+        .filter(Lot.sale_id == sale_id, Lot.account_id == current.account_id)
+        .order_by(Lot.created_at.asc(), Lot.id.asc())
+        .all()
+    )
+    lot_meta = [
+        (lot.id, lot.sku, lot.auction_title or "", int(lot.photo_count or 0)) for lot in lots
+    ]
+    photo_rows: list[tuple[str | None, str | None]] = []
+    if lot_meta:
+        photo_rows = list(
+            db.query(Photo.lot_id, Photo.storage_path)
+            .filter(
+                Photo.account_id == current.account_id,
+                Photo.lot_id.in_([row[0] for row in lot_meta]),
+            )
+            .all()
+        )
+    db.close()
+    return SalePhotoHealthOut(lots=photo_health_from_loaded(lot_meta, photo_rows))
 
 
 @app.get("/sales/{sale_id}/cataloged-mobile-drafts", response_model=CatalogedMobileDraftsOut)
@@ -1492,7 +1535,9 @@ def ctseller_list_sales(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        client = _ctseller_client_for_account(account, db)
+        # Auth/token refresh may briefly use this session; release it before listing sales over HTTP.
+        client = _ctseller_client_for_account(account, db, probe=False)
+        db.close()
         rows = client.list_open_sales()
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3050,8 +3095,7 @@ def purge_all_lots(
 
 @app.post("/jobs/upload", response_model=JobOut)
 async def create_job_from_upload(
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_sse),
     sale_id: str = Form(),
     files: list[UploadFile] = File(),
     inherit_sku_from_subfolder: bool = Form(False),
@@ -3060,31 +3104,32 @@ async def create_job_from_upload(
     listing_channel: str = Form("ctseller"),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
-    sale = _sale_for_user(sale_id, current, db)
-    _require_open_sale(sale)
-    channel = normalize_listing_channel(listing_channel)
-    if (
-        bool(single_lot_mode)
-        and channel != LISTING_CHANNEL_FACEBOOK
-        and CTBIDS_MAX_PHOTOS_PER_LOT is not None
-        and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
-                f"this upload has {len(files)} files."
-            ),
-        )
-    dest = new_batch_dir(current.account_id)
     account_id = current.account_id
     user_id = current.id
-    sale_pk = sale.id
-    _manual_sku = (single_lot_manual_sku or "").strip() or None
     inherit = bool(inherit_sku_from_subfolder)
     single = bool(single_lot_mode)
-    # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O.
-    db.close()
+    channel = normalize_listing_channel(listing_channel)
+    _manual_sku = (single_lot_manual_sku or "").strip() or None
+    with SessionLocal() as db:
+        sale = _sale_for_user(sale_id, current, db)
+        _require_open_sale(sale)
+        sale_pk = sale.id
+        if (
+            single
+            and channel != LISTING_CHANNEL_FACEBOOK
+            and CTBIDS_MAX_PHOTOS_PER_LOT is not None
+            and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
+                    f"this upload has {len(files)} files."
+                ),
+            )
+    dest = new_batch_dir(account_id)
+    # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O
+    # (auth used a short-lived session so multipart receive also does not hold a connection).
     await save_uploaded_files(dest, files)
     with SessionLocal() as db2:
         job = ProcessingJob(
@@ -3129,42 +3174,38 @@ def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
 @app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
 async def append_files_to_queued_job(
     job_id: str,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_sse),
     files: list[UploadFile] = File(),
 ) -> JobOut:
     """Append more images to a **receiving** (or legacy queued) upload job."""
-    job = (
-        db.query(ProcessingJob)
-        .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == current.account_id)
-        .first()
-    )
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in (JobStatus.receiving, JobStatus.queued):
-        raise HTTPException(
-            status_code=409,
-            detail="Job must still be receiving uploads to add files (wait if it is processing, or cancel first).",
-        )
-    if job.status == JobStatus.queued:
-        # Legacy: uploads created as queued; keep append working but do not kick catalog yet.
-        pass
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
-    dest = _queued_job_upload_folder(current.account_id, job)
-    if bool(getattr(job, "single_lot_mode", False)) and CTBIDS_MAX_PHOTOS_PER_LOT is not None:
-        existing = count_catalog_image_files(dest)
-        if existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. "
-                    f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
-                ),
-            )
     account_id = current.account_id
-    # Compress + R2 per photo while the phone is still shooting — release the pool first.
-    db.close()
+    with SessionLocal() as db:
+        job = (
+            db.query(ProcessingJob)
+            .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == current.account_id)
+            .first()
+        )
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status not in (JobStatus.receiving, JobStatus.queued):
+            raise HTTPException(
+                status_code=409,
+                detail="Job must still be receiving uploads to add files (wait if it is processing, or cancel first).",
+            )
+        dest = _queued_job_upload_folder(current.account_id, job)
+        if bool(getattr(job, "single_lot_mode", False)) and CTBIDS_MAX_PHOTOS_PER_LOT is not None:
+            existing = count_catalog_image_files(dest)
+            if existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. "
+                        f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
+                    ),
+                )
+    # Compress + R2 per photo while the phone is still shooting — no pool connection during body I/O.
     await save_uploaded_files(dest, files)
     with SessionLocal() as db2:
         job = _owned_processing_job(db2, job_id, account_id)
@@ -3209,11 +3250,9 @@ def list_jobs(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[JobOut]:
-    # If the API process restarted/OOM-killed, in-memory worker threads are gone while DB rows may still say
-    # "processing". Reconcile those stale rows so UI actions (delete/purge) do not remain blocked forever.
-    changed = job_tasks.reconcile_stale_processing_jobs(db, current.account_id)
-    changed = job_tasks.reconcile_stale_receiving_jobs(db, current.account_id) or changed
-    changed = job_tasks.reconcile_superseded_failed_jobs(db, current.account_id) or changed
+    # Leftover receiving/FAILED healing is debounced — this endpoint is polled every few seconds
+    # by the dashboard and phone Sync. Full reconcile on every poll exhausted QueuePool in the field.
+    changed = job_tasks.maybe_reconcile_jobs_for_list(db, current.account_id)
     if changed:
         db.commit()
     job_tasks.kick_queue_if_idle_async(current.account_id)

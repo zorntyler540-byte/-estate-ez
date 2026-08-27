@@ -2503,16 +2503,14 @@ export default function DashboardPage() {
         ? ""
         : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilter)}`;
     void withNetworkRetry(() =>
-      Promise.all([
-        apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}&listing_channel=ctseller${skuQ}`, t),
-        apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
-      ])
+      apiFetch(`/lots?sale_id=${encodeURIComponent(selectedSaleId)}&listing_channel=ctseller${skuQ}`, t)
     )
-      .then(([lotsData, jobsData]) => {
+      .then((lotsData) => {
         if (loadId !== inventoryLoadId.current) return;
         setError("");
         setLots(lotsData as Lot[]);
-        setJobs(jobsData as Job[]);
+        inventoryFirstLoad.current = false;
+        setLoading(false);
       })
       .catch((e) => {
         if (loadId !== inventoryLoadId.current) return;
@@ -2524,11 +2522,22 @@ export default function DashboardPage() {
           return;
         }
         setError(msg);
-      })
-      .finally(() => {
-        if (loadId !== inventoryLoadId.current) return;
         inventoryFirstLoad.current = false;
         setLoading(false);
+      });
+    void apiFetch(`/jobs?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
+      .then((jobsData) => {
+        if (loadId !== inventoryLoadId.current) return;
+        setJobs(jobsData as Job[]);
+      })
+      .catch((e) => {
+        if (loadId !== inventoryLoadId.current) return;
+        const msg = e instanceof Error ? e.message : "Load failed";
+        if (isAuthFailureMessage(msg)) {
+          localStorage.removeItem("token");
+          setToken("");
+          router.replace("/");
+        }
       });
     void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/photo-health`, t)
       .then((d) => {
@@ -2608,16 +2617,21 @@ export default function DashboardPage() {
       return;
     }
     let cancelled = false;
-    void apiFetch("/integrations/ctseller/sales", token)
-      .then((rows) => {
-        if (cancelled) return;
-        setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
-      })
-      .catch(() => {
-        if (!cancelled) setCtSellerRemoteSales([]);
-      });
+    // Defer so first-paint /sales + /lots are not competing with CT Seller HTTP for the API pool
+    // while the phone is uploading.
+    const timer = window.setTimeout(() => {
+      void apiFetch("/integrations/ctseller/sales", token)
+        .then((rows) => {
+          if (cancelled) return;
+          setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+        })
+        .catch(() => {
+          if (!cancelled) setCtSellerRemoteSales([]);
+        });
+    }, 2500);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [token, dataReloadNonce]);
 
@@ -2935,14 +2949,12 @@ export default function DashboardPage() {
         .catch(() => {
           /* ignore */
         });
-      void apiFetch(`/sales/${encodeURIComponent(sid)}/photo-health`, token)
-        .then((d) => setPhotoHealthMissing(photoHealthMapFromResponse(d)))
-        .catch(() => {
-          /* ignore */
-        });
     };
 
+    let jobsInFlight = false;
     const tick = async () => {
+      if (jobsInFlight) return;
+      jobsInFlight = true;
       try {
         const sid = selectedSaleIdRef.current;
         if (!sid) return;
@@ -2980,6 +2992,8 @@ export default function DashboardPage() {
         });
       } catch {
         /* ignore */
+      } finally {
+        jobsInFlight = false;
       }
     };
 

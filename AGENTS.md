@@ -83,6 +83,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   with the same SKU, or matching `mobile-<draft>-NN.jpg` names. Gemini / Cancelled failures stay
   failed. The dashboard also treats matching FAILED cards as completed so they leave the “active”
   list. Do not tell staff to Resend all — the lots are already on the website.
+  **`GET /jobs` reconcile is debounced (~20s per account).** Dashboard and phone Sync poll this
+  endpoint constantly during uploads; running leftover-job healing on every poll exhausted the
+  Postgres QueuePool and froze the website on “Loading dashboard…”. The worker sweep still heals
+  globally. Do not put R2 HEAD / CT Seller HTTP / Pillow on a `Depends(get_db)` session.
+  Photo ingest (`POST /jobs/upload` and `/jobs/{id}/upload-files`) authenticates with a
+  short-lived session so multipart receive does not pin a pool connection.
 - **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
   per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
   Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`

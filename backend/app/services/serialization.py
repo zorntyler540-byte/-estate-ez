@@ -78,16 +78,27 @@ def sale_lots_with_missing_photo_files(
     )
     if not lots:
         return []
-    lot_by_id = {lot.id: lot for lot in lots}
-    lot_ids = list(lot_by_id.keys())
-    rows = (
+    lot_meta = [
+        (lot.id, lot.sku, lot.auction_title or "", int(lot.photo_count or 0)) for lot in lots
+    ]
+    lot_ids = [row[0] for row in lot_meta]
+    photo_rows = (
         db.query(Photo.lot_id, Photo.storage_path)
         .filter(Photo.account_id == account_id, Photo.lot_id.in_(lot_ids))
         .all()
     )
+    return photo_health_from_loaded(lot_meta, list(photo_rows))
+
+
+def photo_health_from_loaded(
+    lot_meta: list[tuple[str, str | None, str, int]],
+    photo_rows: list[tuple[str | None, str | None]],
+) -> list[LotPhotoHealthRow]:
+    """Stat files after the DB session is closed (R2 HEAD must not pin QueuePool)."""
+    lot_by_id = {lot_id: (sku, title, photo_count) for lot_id, sku, title, photo_count in lot_meta}
     linked: dict[str, int] = defaultdict(int)
     missing: dict[str, int] = defaultdict(int)
-    for lid, path in rows:
+    for lid, path in photo_rows:
         if not lid:
             continue
         linked[lid] += 1
@@ -97,15 +108,16 @@ def sale_lots_with_missing_photo_files(
     for lid, miss in missing.items():
         if miss <= 0:
             continue
-        lot = lot_by_id.get(lid)
-        if not lot:
+        meta = lot_by_id.get(lid)
+        if not meta:
             continue
+        sku, title, photo_count = meta
         out.append(
             LotPhotoHealthRow(
                 lot_id=lid,
-                sku=lot.sku,
-                auction_title=lot.auction_title or "",
-                photo_count=int(lot.photo_count or 0),
+                sku=sku,
+                auction_title=title,
+                photo_count=photo_count,
                 linked_photo_count=linked.get(lid, 0),
                 missing_count=miss,
             )

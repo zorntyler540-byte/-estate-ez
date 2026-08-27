@@ -17,6 +17,8 @@ class JobTasksQueueTests(unittest.TestCase):
             job_tasks._job_accounts.clear()
         with job_tasks._kick_debounce_lock:
             job_tasks._last_kick_mono.clear()
+        with job_tasks._list_reconcile_lock:
+            job_tasks._last_list_reconcile_mono.clear()
 
     @patch.object(job_tasks, "reconcile_memory_threads_for_account")
     @patch.object(job_tasks, "try_start_next_queued_job")
@@ -356,6 +358,21 @@ class JobTasksQueueTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(row.status, JobStatus.completed)
         self.assertIsNone(row.error_message)
+
+    def test_maybe_reconcile_jobs_for_list_debounces(self) -> None:
+        db = MagicMock()
+        with (
+            patch.object(job_tasks, "reconcile_stale_processing_jobs", return_value=False) as mock_p,
+            patch.object(job_tasks, "reconcile_stale_receiving_jobs", return_value=False) as mock_r,
+            patch.object(job_tasks, "reconcile_superseded_failed_jobs", return_value=False) as mock_f,
+        ):
+            first = job_tasks.maybe_reconcile_jobs_for_list(db, "acct-debounce")
+            second = job_tasks.maybe_reconcile_jobs_for_list(db, "acct-debounce")
+        self.assertFalse(first)
+        self.assertFalse(second)
+        self.assertEqual(mock_p.call_count, 1)
+        self.assertEqual(mock_r.call_count, 1)
+        self.assertEqual(mock_f.call_count, 1)
 
 
 if __name__ == "__main__":
