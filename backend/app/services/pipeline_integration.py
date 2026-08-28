@@ -31,7 +31,10 @@ from pipeline.pipeline import (
     _manifest_to_brand_audit,
     _run_parallel_triage,
     aggregate_triage_ocr,
+    apply_gallery_plan_to_triage,
+    complete_listing_order,
     is_complex_lot_for_pro_author,
+    plan_listing_gallery,
     run_brand_audit_pro,
     select_analysis_photos,
 )
@@ -49,6 +52,9 @@ EST_PIPELINE_LISTING_INPUT = 1800
 EST_PIPELINE_LISTING_OUTPUT = 280
 EST_PIPELINE_PRO_INPUT = 3200
 EST_PIPELINE_PRO_OUTPUT = 600
+# One Flash gallery pass: ~512px thumbs × N photos (not a Pro call).
+EST_PIPELINE_GALLERY_INPUT_PER_PHOTO = 280
+EST_PIPELINE_GALLERY_OUTPUT = 450
 
 _PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
 
@@ -564,11 +570,16 @@ def _inject_measurement_specs_from_triage(
         lot.specification_lines = dedupe_specification_lines_preserve_order(specs)
 
 
-def _estimate_pipeline_tokens(photo_count: int, *, ran_pro: bool, listing_calls: int) -> tuple[int, int]:
+def _estimate_pipeline_tokens(
+    photo_count: int, *, ran_pro: bool, listing_calls: int, gallery_calls: int = 0
+) -> tuple[int, int]:
     est_in = photo_count * EST_PIPELINE_INPUT_TOKENS_PER_PHOTO
     est_out = photo_count * EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO
     est_in += listing_calls * EST_PIPELINE_LISTING_INPUT
     est_out += listing_calls * EST_PIPELINE_LISTING_OUTPUT
+    if gallery_calls:
+        est_in += gallery_calls * (EST_PIPELINE_GALLERY_INPUT_PER_PHOTO * max(photo_count, 1))
+        est_out += gallery_calls * EST_PIPELINE_GALLERY_OUTPUT
     if ran_pro:
         est_in += EST_PIPELINE_PRO_INPUT
         est_out += EST_PIPELINE_PRO_OUTPUT
@@ -635,6 +646,21 @@ def run_single_lot_pipeline(
         for key in path_by_key:
             if key not in have:
                 triage_rows.append(_default_unusable_triage_row(key))
+        gallery_plan = None
+        listing_order: list[str] = []
+        try:
+            if emit:
+                emit({"type": "batch_phase", "phase": "pipeline_gallery", "total_photos": total_photos})
+            gallery_plan = plan_listing_gallery(images, triage_rows, should_cancel=should_cancel)
+        except Exception as exc:
+            logger.warning("Listing gallery Flash pass failed (%s); using deterministic photo order.", exc)
+            gallery_plan = None
+        if gallery_plan:
+            triage_rows = apply_gallery_plan_to_triage(triage_rows, gallery_plan)
+            listing_order = complete_listing_order(
+                [str(p.get("filename") or "") for p in gallery_plan.get("photos") or []],
+                [str(r.get("filename") or "") for r in triage_rows],
+            )
         selected = select_analysis_photos(triage_rows)
         flash_draft_obj = _build_flash_draft(triage_rows, selected)
         pipeline_result = {
@@ -642,8 +668,12 @@ def run_single_lot_pipeline(
             "selected": selected,
             "flash_draft": flash_draft_obj.model_dump(),
             "catalog_only_count": len(selected.get("catalog_only") or []),
+            "listing_order": listing_order,
+            "listing_gallery_ai": bool(gallery_plan),
         }
     else:
+        if emit:
+            emit({"type": "batch_phase", "phase": "pipeline_gallery", "total_photos": total_photos})
         pipeline_result = triage_and_select_field_lot(
             images,
             on_triage_complete=_emit_triage_row,
@@ -799,7 +829,12 @@ def run_single_lot_pipeline(
 
     _inject_measurement_specs_from_triage(lot, triage_rows)
 
-    est_in, est_out = _estimate_pipeline_tokens(len(entries), ran_pro=ran_pro, listing_calls=listing_calls)
+    est_in, est_out = _estimate_pipeline_tokens(
+        len(entries),
+        ran_pro=ran_pro,
+        listing_calls=listing_calls,
+        gallery_calls=1 if pipeline_result.get("listing_gallery_ai") else 0,
+    )
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}
     pipeline_result["listing_filenames_used"] = listing_names
     return lot, pipeline_result

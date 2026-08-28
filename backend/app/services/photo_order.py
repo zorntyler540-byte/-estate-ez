@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
@@ -128,6 +129,44 @@ def reorder_photos_by_capture_name(db: Session, lot_id: str, account_id: str) ->
     for i, p in enumerate(ordered):
         if p.sort_order != i:
             p.sort_order = i
+            changed = True
+    return changed
+
+
+def reorder_photos_by_filenames(
+    db: Session, lot_id: str, account_id: str, filenames: list[str]
+) -> bool:
+    """Apply an explicit filename order (AI gallery plan). Unknown names are ignored; leftovers stay last."""
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == account_id)
+        .all()
+    )
+    if not photos or not filenames:
+        return False
+    by_key: dict[str, Photo] = {}
+    for photo in photos:
+        name = str(photo.original_name or "")
+        by_key.setdefault(name.lower(), photo)
+        by_key.setdefault(Path(name).name.lower(), photo)
+    ordered: list[Photo] = []
+    seen: set[str] = set()
+    for raw in filenames:
+        token = str(raw or "").strip().lower()
+        if not token:
+            continue
+        photo = by_key.get(token) or by_key.get(Path(token).name.lower())
+        if photo is None or photo.id in seen:
+            continue
+        ordered.append(photo)
+        seen.add(photo.id)
+    for photo in photos:
+        if photo.id not in seen:
+            ordered.append(photo)
+    changed = False
+    for i, photo in enumerate(ordered):
+        if photo.sort_order != i:
+            photo.sort_order = i
             changed = True
     return changed
 

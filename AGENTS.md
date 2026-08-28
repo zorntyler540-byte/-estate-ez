@@ -91,15 +91,14 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.
-- **Photo gallery order is not the same as capture order.** After catalog, `_finalize_open_lot`
-  sorts photos for a shopper listing: true group shots (`hero` / `shows_whole_lot`), then each
-  distinct item as a chapter (primary front + that item's angles), then label/sticker close-ups,
-  then measuring-tape frames, then SKU tape. Extra Flash `hero` tags on single objects are demoted
-  to `item_front` when `shows_whole_lot` is false. Lots cataloged before those columns keep the
-  older role-bucket sort (hero → item_front → angle_only → tape). Dashboard **Sort for listing**
-  reapplies this; **Fix photo order** restores capture order from `original_name`
-  (`mobile-<draft>-NN.jpg`). Do not bring back naive hero-first-only reordering — that scrambled
-  the rest of the gallery.
+- **Photo gallery order is not the same as capture order.** After per-photo triage, one extra
+  Flash call (`plan_listing_gallery`) sees all frames as 512px thumbs and returns shopper order
+  plus corrected Group/Item/Detail tags. Cost is on the order of half a cent per lot at current
+  Flash rates (not Pro). If that call fails or the lot has 1 or >40 photos, `_finalize_open_lot`
+  falls back to deterministic chapter sort: true group shots, then each item as a chapter, then
+  labels, then measuring-tape, then SKU tape. Dashboard **Sort for listing** reapplies the
+  deterministic sort (it does not re-call Gemini). **Fix photo order** restores capture order
+  from `original_name`. Do not bring back naive hero-first-only reordering.
 - **Audience hunt is public groups only.** `POST /lots/{id}/audience-hunt` uses Gemini Pro + Google
   Search, then a separate structured JSON call (schema + search tools 400 together). It stores
   group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,

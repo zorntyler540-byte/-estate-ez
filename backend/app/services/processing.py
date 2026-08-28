@@ -34,7 +34,7 @@ from app.services.pipeline_integration import (
     triage_ordered_photo_batch,
     triage_tape_marking_from_row,
 )
-from app.services.photo_order import reorder_photos_for_listing
+from app.services.photo_order import reorder_photos_by_filenames, reorder_photos_for_listing
 from app.services.photo_roles import (
     PhotoListingAttrs,
     listing_attrs_by_path,
@@ -370,6 +370,7 @@ def _finalize_open_lot(
     sale_id: str,
     *,
     listing_channel: str = "ctseller",
+    listing_order: list[str] | None = None,
 ) -> tuple[LotOutput | None, list[str], Lot | None]:
     """Persist current lot and attach pending photos; return cleared state and persisted row if any."""
     if current_lot is None:
@@ -379,9 +380,12 @@ def _finalize_open_lot(
     )
     db.flush()
     _assign_photos_to_lot(db, persisted.id, pending_photo_ids)
-    # Shopper gallery: group shots, then each item as a chapter, labels, measurements, tape.
-    # Staff can still drag or restore capture order.
-    reorder_photos_for_listing(db, persisted.id, account_id)
+    # Shopper gallery: prefer the cheap Flash gallery plan when present, else chapter sort.
+    names = [str(n).strip() for n in (listing_order or []) if str(n).strip()]
+    if names:
+        reorder_photos_by_filenames(db, persisted.id, account_id, names)
+    else:
+        reorder_photos_for_listing(db, persisted.id, account_id)
     pending_photo_ids.clear()
     return None, pending_photo_ids, persisted
 
@@ -655,6 +659,7 @@ def _process_job_batch_pipeline(
             pending_photo_ids,
             job.sale_id,
             listing_channel=getattr(job, "listing_channel", "ctseller"),
+            listing_order=list((pipeline_result or {}).get("listing_order") or []),
         )
         db.commit()
         if finalized is not None:
@@ -789,6 +794,7 @@ def _process_job_single_lot_pipeline(
         pending_photo_ids,
         job.sale_id,
         listing_channel=getattr(job, "listing_channel", "ctseller"),
+        listing_order=list((pipeline_result or {}).get("listing_order") or []),
     )
     db.commit()
     if finalized is not None:
