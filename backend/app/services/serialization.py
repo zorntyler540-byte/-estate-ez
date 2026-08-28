@@ -63,6 +63,15 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
         sort_order=int(photo.sort_order or 0),
         file_on_disk=catalog_photo_file_on_disk(photo.storage_path),
         photo_role=(str(photo.photo_role).strip() or None) if getattr(photo, "photo_role", None) else None,
+        distinct_item_id=(str(photo.distinct_item_id).strip() or None)
+        if getattr(photo, "distinct_item_id", None)
+        else None,
+        is_primary_front=bool(getattr(photo, "is_primary_front", False)),
+        shows_whole_lot=bool(getattr(photo, "shows_whole_lot", False)),
+        shows_measuring_scale=bool(getattr(photo, "shows_measuring_scale", False)),
+        label_legibility=(str(photo.label_legibility).strip() or None)
+        if getattr(photo, "label_legibility", None)
+        else None,
     )
 
 

@@ -4799,7 +4799,7 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         "Sort every lot in this sale for listings?\n\n" +
-          "Order becomes: group/hero shot, then each item, then details/measurements, then SKU tape.\n" +
+          "Order becomes: group shots of the whole lot, then each item with its angles, then labels/stickers, then measurements, then SKU tape.\n" +
           "Use Fix photo order if you want the order photos were taken instead. You can still drag photos on a lot afterward."
       )
     ) {
@@ -5748,7 +5748,7 @@ export default function DashboardPage() {
               type="button"
               className="ct-btn"
               disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
-              title="Sort every lot: group/hero, then items, then details (uses AI photo roles)"
+              title="Sort every lot: group shots, then each item with its angles, then labels, then measurements"
               onClick={() => void sortSalePhotosForListing()}
             >
               Sort for listing

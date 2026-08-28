@@ -80,3 +80,73 @@ def test_role_rank_covers_all_catalog_roles() -> None:
     assert LISTING_ROLE_RANK["angle_only"] < LISTING_ROLE_RANK[None]
     assert LISTING_ROLE_RANK[None] < LISTING_ROLE_RANK["unusable"]
     assert LISTING_ROLE_RANK["unusable"] < LISTING_ROLE_RANK["tape"]
+
+
+def _meta(
+    name: str,
+    *,
+    role: str | None,
+    sort_order: int,
+    item: str | None = None,
+    primary: bool = False,
+    whole: bool = False,
+    measure: bool = False,
+    label: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        original_name=name,
+        photo_role=role,
+        sort_order=sort_order,
+        distinct_item_id=item,
+        is_primary_front=primary,
+        shows_whole_lot=whole,
+        shows_measuring_scale=measure,
+        label_legibility=label,
+    )
+
+
+def test_listing_order_chapters_match_hand_sorted_figurine_lot() -> None:
+    """Capture order mixed; listing order is group → fish → eagle → seal → sticker → measure."""
+    photos = [
+        _meta("01-group.jpg", role="hero", sort_order=0, whole=True),
+        _meta("02-eagle-detail.jpg", role="angle_only", sort_order=1, item="EAGLE"),
+        _meta("03-sticker.jpg", role="angle_only", sort_order=2, item="SEAL", label="clear"),
+        _meta("04-fish-wrong-group.jpg", role="item_front", sort_order=3, item="FISH", primary=True),
+        _meta("05-group-b.jpg", role="hero", sort_order=4, whole=True),
+        _meta("06-fish-side.jpg", role="angle_only", sort_order=5, item="FISH"),
+        _meta("07-eagle-front.jpg", role="item_front", sort_order=6, item="EAGLE", primary=True),
+        _meta("08-seal-front.jpg", role="item_front", sort_order=7, item="SEAL", primary=True),
+        _meta("09-seal-angle.jpg", role="angle_only", sort_order=8, item="SEAL"),
+        _meta("10-measure-eagle.jpg", role="angle_only", sort_order=9, item="EAGLE", measure=True),
+        _meta("11-measure-fish.jpg", role="angle_only", sort_order=10, item="FISH", measure=True),
+        _meta("12-sku-tape.jpg", role="tape", sort_order=11),
+    ]
+    ordered = ordered_photos_for_listing(photos)
+    assert [p.original_name for p in ordered] == [
+        "01-group.jpg",
+        "05-group-b.jpg",
+        "04-fish-wrong-group.jpg",
+        "06-fish-side.jpg",
+        "07-eagle-front.jpg",
+        "02-eagle-detail.jpg",
+        "08-seal-front.jpg",
+        "09-seal-angle.jpg",
+        "03-sticker.jpg",
+        "10-measure-eagle.jpg",
+        "11-measure-fish.jpg",
+        "12-sku-tape.jpg",
+    ]
+
+
+def test_listing_order_without_meta_keeps_role_buckets() -> None:
+    photos = [
+        _p("mobile-draft-01.jpg", "item_front", 0),
+        _p("mobile-draft-02.jpg", "tape", 1),
+        _p("mobile-draft-03.jpg", "hero", 2),
+    ]
+    ordered = ordered_photos_for_listing(photos)
+    assert [p.original_name for p in ordered] == [
+        "mobile-draft-03.jpg",
+        "mobile-draft-01.jpg",
+        "mobile-draft-02.jpg",
+    ]

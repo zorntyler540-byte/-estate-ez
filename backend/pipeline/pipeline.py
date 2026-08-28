@@ -202,9 +202,14 @@ TRIAGE_SYSTEM_INSTRUCTION = (
 TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 
 Rules:
-- hero: single best wide shot showing most of the lot (only one file should win hero selection). Use hero even when lot tape with SKU is visible at the edge of the frame.
-- item_front: primary face of each distinct sellable item; brand/tag when visible.
-- angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
+- hero: a **group / establishing** wide shot. Use hero when two or more distinct sellable items appear together,
+  or when this is the single wide shot of a one-item lot. Use hero even when lot tape with SKU is visible at the edge.
+  A **single** figurine, dish, shoe, or object filling the frame is **item_front**, never hero — even if it is the first
+  photo or it sits on a seamless background.
+- shows_whole_lot: true only when most or all sellable items in the lot are visible in this frame (a true group shot).
+  False for a lone item even if the rest of the table is empty.
+- item_front: primary face of each distinct sellable item; brand/tag when visible on that object.
+- angle_only: side, back, detail, damage close-up, underside sticker, or **ruler/measuring-tape scale shots** — not used for hero listing.
   Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
   Set **shows_measuring_scale** true whenever a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly
   measuring the merchandise — even when photo_role is angle_only. When it is legible, copy the size into
@@ -214,10 +219,12 @@ Rules:
   **weight_text** verbatim with units (e.g. "2.4 lb", "540 g", "1.2 kg"); leave null if unreadable — never guess.
   A yellow **measuring** tape / ruler is a size scale (measurement_text), NOT estate lot tape (SKU); a **weight** scale
   display is weight_text, not a size.
-  Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
-  Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
-  are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
-  readable sticker text verbatim into brand_text (maker mark, material, tune — not just a guessed brand name).
+  Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only) but
+  **is_primary_front_for_item must be false** unless this is also the product's face.
+  Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", "Genuine Volcanic Ash",
+  store tags like Tillamook) are high-value label frames: always **angle_only**, never item_front, never is_primary_front_for_item;
+  set label_legibility clear/partial and copy **all** readable sticker text verbatim into brand_text
+  (maker mark, material, tune — not just a guessed brand name).
   **Engraved or stamped metal marks** (lock plates, barrels, undersides, silver/pewter hallmarks): use angle_only
   or item_front; set label_legibility clear/partial when any letters/numbers are readable; copy **all** engraved
   text verbatim into brand_text (e.g. PEDERSOLI, TOWER, GR, maker name + date).
