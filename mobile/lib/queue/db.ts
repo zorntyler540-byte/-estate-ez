@@ -44,6 +44,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "server_job_id")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_job_id TEXT");
       }
+      if (!cols.some((c) => c.name === "server_lot_id")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_lot_id TEXT");
+      }
       return db;
     })();
   }
@@ -62,6 +65,7 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
     server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
+    server_lot_id: row.server_lot_id != null ? String(row.server_lot_id) : null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
     photo_count: photoCount
@@ -190,6 +194,16 @@ export async function setDraftServerJobId(draftId: string, serverJobId: string |
   const db = await getDb();
   await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
     serverJobId,
+    Date.now(),
+    draftId
+  ]);
+}
+
+/** Remember the catalog lot so Queue can add forgotten photos without a new Sync job. */
+export async function setDraftServerLotId(draftId: string, serverLotId: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_drafts SET server_lot_id = ?, updated_at = ? WHERE id = ?", [
+    serverLotId,
     Date.now(),
     draftId
   ]);

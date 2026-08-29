@@ -377,10 +377,21 @@ class SalePhotoHealthOut(BaseModel):
     lots: list[LotPhotoHealthRow]
 
 
+class CatalogedMobileDraftLotOut(BaseModel):
+    """One phone draft that already became a catalog lot (filename ``mobile-<draft>-NN.jpg``)."""
+
+    draft_id: str
+    lot_id: str
+    sku: str | None = None
+    photo_count: int = 0
+    auction_title: str = ""
+
+
 class CatalogedMobileDraftsOut(BaseModel):
     """Phone draft ids that already have catalog photos on this sale (``mobile-<draft>-NN.jpg``)."""
 
     draft_ids: list[str]
+    lots: list[CatalogedMobileDraftLotOut] = []
 
 
 class ReorderLotPhotosIn(BaseModel):

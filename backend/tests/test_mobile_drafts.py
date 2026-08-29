@@ -5,7 +5,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import Lot, Photo
-from app.services.mobile_drafts import cataloged_mobile_draft_ids, mobile_draft_id_from_original_name
+from app.services.mobile_drafts import (
+    cataloged_mobile_draft_ids,
+    cataloged_mobile_draft_lots,
+    mobile_draft_id_from_original_name,
+)
 
 
 def test_extracts_uuid_draft_id() -> None:
@@ -37,6 +41,8 @@ def test_cataloged_mobile_draft_ids_dedupes_photos(tmp_path: Path) -> None:
             user_id="user-1",
             sale_id="sale-1",
             auction_title="Lamp",
+            sku="LV101",
+            photo_count=3,
         )
     )
     db.add(
@@ -93,3 +99,11 @@ def test_cataloged_mobile_draft_ids_dedupes_photos(tmp_path: Path) -> None:
     assert cataloged_mobile_draft_ids(db, "acct-1", "sale-1") == [draft_a]
     assert cataloged_mobile_draft_ids(db, "acct-1", "sale-other") == [draft_b]
     assert cataloged_mobile_draft_ids(db, "acct-other", "sale-1") == []
+
+    lots = cataloged_mobile_draft_lots(db, "acct-1", "sale-1")
+    assert len(lots) == 1
+    assert lots[0].draft_id == draft_a
+    assert lots[0].lot_id == "lot-1"
+    assert lots[0].sku == "LV101"
+    assert lots[0].photo_count == 3
+    assert lots[0].auction_title == "Lamp"

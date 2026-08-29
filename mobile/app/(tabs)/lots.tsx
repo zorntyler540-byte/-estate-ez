@@ -101,7 +101,7 @@ export default function LotsScreen() {
       <Text style={styles.saleName}>{selectedSaleName || "Selected sale"}</Text>
       <Text style={styles.lead}>
         {lots.length
-          ? `${lots.length} listing${lots.length === 1 ? "" : "s"} on the server`
+          ? `${lots.length} listing${lots.length === 1 ? "" : "s"} on the server. Add photos if you forgot a shot.`
           : "Listings appear here after capture uploads finish processing."}
       </Text>
 
@@ -141,44 +141,64 @@ export default function LotsScreen() {
             // Only R2 signed covers — do not fall back to /thumbnail (that path stalls the grid).
             const signed = coverUrls[item.id];
             return (
-              <Pressable style={styles.row} onPress={() => router.push(`/lot/${item.id}`)}>
-                <View style={styles.thumbWrap}>
-                  {signed ? (
-                    <Image
-                      source={{ uri: signed }}
-                      style={styles.thumb}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                      recyclingKey={item.id}
-                      transition={80}
-                    />
-                  ) : (
-                    <View style={styles.thumbEmpty}>
-                      <Text style={styles.thumbEmptyText}>
-                        {item.has_thumbnail ? "…" : "No\nphoto"}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.rowBody}>
-                  <Text style={styles.rowTitle} numberOfLines={2}>
-                    {item.auction_title?.trim() || "Untitled lot"}
-                  </Text>
-                  <Text style={styles.rowMeta} numberOfLines={1}>
-                    {lotSubtitle(item)}
-                  </Text>
-                  <View style={styles.badges}>
-                    {item.ctseller_item_id != null || item.ctseller_posted_at ? (
-                      <Text style={[styles.badge, styles.badgePosted]}>Posted</Text>
+              <View style={styles.row}>
+                <Pressable style={styles.rowMain} onPress={() => router.push(`/lot/${item.id}`)}>
+                  <View style={styles.thumbWrap}>
+                    {signed ? (
+                      <Image
+                        source={{ uri: signed }}
+                        style={styles.thumb}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                        recyclingKey={item.id}
+                        transition={80}
+                      />
                     ) : (
-                      <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
+                      <View style={styles.thumbEmpty}>
+                        <Text style={styles.thumbEmptyText}>
+                          {item.has_thumbnail ? "…" : "No\nphoto"}
+                        </Text>
+                      </View>
                     )}
-                    {item.sku_needs_review || item.sku_duplicate_in_sale || item.sku_text_mismatch ? (
-                      <Text style={[styles.badge, styles.badgeWarn]}>SKU review</Text>
-                    ) : null}
                   </View>
-                </View>
-              </Pressable>
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowTitle} numberOfLines={2}>
+                      {item.auction_title?.trim() || "Untitled lot"}
+                    </Text>
+                    <Text style={styles.rowMeta} numberOfLines={1}>
+                      {lotSubtitle(item)}
+                    </Text>
+                    <View style={styles.badges}>
+                      {item.ctseller_item_id != null || item.ctseller_posted_at ? (
+                        <Text style={[styles.badge, styles.badgePosted]}>Posted</Text>
+                      ) : (
+                        <Text style={[styles.badge, styles.badgeDraft]}>Not posted</Text>
+                      )}
+                      {item.sku_needs_review || item.sku_duplicate_in_sale || item.sku_text_mismatch ? (
+                        <Text style={[styles.badge, styles.badgeWarn]}>SKU review</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                </Pressable>
+                <Pressable
+                  style={styles.addBtn}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/capture-session",
+                      params: {
+                        appendLotId: item.id,
+                        appendExistingCount: String(item.photo_count || 0),
+                        ...(item.sku?.trim() ? { appendSku: item.sku.trim() } : {}),
+                        ...(item.auction_title?.trim()
+                          ? { appendTitle: item.auction_title.trim().slice(0, 80) }
+                          : {})
+                      }
+                    })
+                  }
+                >
+                  <Text style={styles.addBtnText}>Add{"\n"}photos</Text>
+                </Pressable>
+              </View>
             );
           }}
         />
@@ -214,7 +234,8 @@ const styles = StyleSheet.create({
   primaryText: { color: "#fff", fontWeight: "600" },
   row: {
     flexDirection: "row",
-    gap: 12,
+    alignItems: "center",
+    gap: 8,
     padding: 10,
     borderRadius: 10,
     backgroundColor: "#0e0e10",
@@ -222,6 +243,17 @@ const styles = StyleSheet.create({
     borderColor: "#141416",
     marginBottom: 8
   },
+  rowMain: { flex: 1, flexDirection: "row", gap: 12, alignItems: "center" },
+  addBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: "#ff4d1a",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 64
+  },
+  addBtnText: { color: "#fff", fontSize: 11, fontWeight: "700", textAlign: "center", lineHeight: 14 },
   thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: "#141416" },
   thumb: { width: "100%", height: "100%" },
   thumbEmpty: { flex: 1, alignItems: "center", justifyContent: "center" },
