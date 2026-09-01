@@ -48,6 +48,7 @@ def test_suggest_includes_brand_material_and_mcm() -> None:
     assert "herman miller" in blob
     assert "teak" in blob
     assert any(t.lower() in {"mcm", "mid century"} for t in tags)
+    assert any(t.lower() == "1960s" for t in tags)
 
 
 def test_merge_fills_when_model_returns_too_few() -> None:

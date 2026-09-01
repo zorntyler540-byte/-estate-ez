@@ -114,7 +114,8 @@ _SYNONYMS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
     (re.compile(r"\bdepression glass\b", re.I), ("depression glass",)),
 )
 
-_SKU_LIKE = re.compile(r"^(?:#?\d{2,}[a-z0-9]*|[a-z]{1,3}\d{3,}|\d{3,}[a-z]{1,3})$", re.I)
+_SKU_LIKE = re.compile(r"^(?:#?\d{3,}[a-z]{0,2}|[a-z]{1,3}\d{3,})$", re.I)
+_DECADE = re.compile(r"^(?:1[89]|20)\d{2}s$", re.I)
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9.&'/-]{0,38}")
 
 
@@ -175,7 +176,7 @@ def sanitize_search_tags(
             continue
         if t.lower() in _STOP:
             continue
-        if _SKU_LIKE.match(t.replace(" ", "")):
+        if not _DECADE.match(t) and _SKU_LIKE.match(t.replace(" ", "")):
             continue
         if _is_spam(t, ev):
             continue
