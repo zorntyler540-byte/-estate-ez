@@ -55,6 +55,8 @@ from app.schemas import (
     CreateJobRequest,
     CTSellerCredentialsIn,
     CTSellerConditionOut,
+    CTSellerInvoiceDetailOut,
+    CTSellerInvoiceOut,
     CTSellerRemoteSaleOut,
     CTSellerStatusOut,
     CatalogR2MigrateIn,
@@ -111,6 +113,7 @@ from app.services.ctseller import (
     CTSellerClient,
     CTSellerError,
     build_item_payload,
+    receipt_method_wants_shipping,
     seal_secret,
     unseal_secret,
 )
@@ -1506,6 +1509,117 @@ def ctseller_list_sales(
         )
         for r in rows
     ]
+
+
+@app.get("/integrations/ctseller/invoices", response_model=list[CTSellerInvoiceOut])
+def ctseller_list_invoices(
+    sale_id: int | None = Query(None, description="Optional CT Seller sale id filter."),
+    limit: int = Query(100, ge=1, le=200),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CTSellerInvoiceOut]:
+    """Pull invoice rows from CT Seller (read-only spike for post-sale shipping triage)."""
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        client = _ctseller_client_for_account(account, db)
+        rows = client.list_invoices(sale_id=sale_id, limit=limit)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [
+        CTSellerInvoiceOut(
+            id=r.id,
+            invoice_number=r.invoicenumber,
+            sale_title=r.saletitle,
+            sale_id=r.saleid,
+            location_title=r.locationtitle,
+            invoice_amount=r.invoiceamount,
+            invoice_status=r.invoicestatus,
+            type=r.type,
+            buyer_id=r.buyerid,
+            created_date=r.createddate,
+        )
+        for r in rows
+    ]
+
+
+@app.get("/integrations/ctseller/invoices/{invoice_id}", response_model=CTSellerInvoiceDetailOut)
+def ctseller_invoice_detail(
+    invoice_id: int,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerInvoiceDetailOut:
+    """Invoice detail + pending fulfillment count (Shipping Saint handoff visibility)."""
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        client = _ctseller_client_for_account(account, db)
+        detail = client.invoice_detail(invoice_id)
+        pending = client.list_fulfillment_pending(invoice_id)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    receipt_raw = detail.get("invoiceitemreceiptmethod")
+    if receipt_raw is None:
+        receipt_raw = detail.get("itemreceiptmethod")
+    receipt_str = None
+    if isinstance(receipt_raw, str) and receipt_raw.strip():
+        receipt_str = receipt_raw.strip()
+    elif receipt_raw is not None:
+        try:
+            receipt_str = json.dumps(receipt_raw)
+        except TypeError:
+            receipt_str = str(receipt_raw)
+
+    child = detail.get("child_invoice")
+    child_count = len(child) if isinstance(child, list) else 0
+    saint_flag = detail.get("saleshippingsaint")
+    sale_uses_saint: bool | None
+    if saint_flag is None:
+        sale_uses_saint = None
+    else:
+        sale_uses_saint = bool(saint_flag) and saint_flag not in (0, "0", "false", "False")
+
+    return CTSellerInvoiceDetailOut(
+        id=int(detail.get("id") or invoice_id),
+        invoice_number=str(detail.get("invoicenumber") or "").strip() or None,
+        invoice_amount=_safe_float(detail.get("invoiceamount")),
+        pending_amount=_safe_float(detail.get("pendingamount")),
+        invoice_status=str(detail.get("invoicestatus") or "").strip() or None,
+        type=str(detail.get("type") or "").strip() or None,
+        sale_id=_safe_int(detail.get("saleid")),
+        buyer_id=_safe_int(detail.get("buyerid")),
+        created_date=str(detail.get("createddate") or "").strip() or None,
+        receipt_method=receipt_str,
+        wants_shipping=receipt_method_wants_shipping(receipt_raw),
+        shipping_vendor=str(detail.get("shippingvendor") or "").strip() or None,
+        shipment_status=str(detail.get("shipmentstatus") or "").strip() or None,
+        sale_uses_shipping_saint=sale_uses_saint,
+        master_invoice_id=_safe_int(detail.get("masterinvoiceid")),
+        child_invoice_count=child_count,
+        pending_fulfillment_count=len(pending),
+        raw={k: detail.get(k) for k in detail.keys() if k != "invoicemessage"},
+    )
+
+
+def _safe_int(raw: object) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(raw: object) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _post_one_lot_to_ctseller(
