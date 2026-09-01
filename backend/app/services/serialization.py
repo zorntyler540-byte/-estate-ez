@@ -15,6 +15,16 @@ from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut
 from app.services.audience_hunt import audience_payload_for_lot
 
 
+def _json_str_list(raw: str | None) -> list[str]:
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(x).strip() for x in data if str(x).strip()]
+
+
 def sale_lot_photo_counts(db: Session, sale_id: str, account_id: str) -> list[int]:
     return [
         c[0]
@@ -168,6 +178,7 @@ def lot_to_schema(
         specification_lines=spec_lines,
         brands=json.loads(row.brands_json or "[]"),
         labels_and_tags=json.loads(row.labels_and_tags_json or "[]"),
+        search_tags=_json_str_list(getattr(row, "search_tags_json", None)),
         ct_category=row.ct_category,
         ct_subcategory=row.ct_subcategory,
         is_completed=bool(row.is_completed),

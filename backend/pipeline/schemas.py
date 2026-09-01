@@ -179,6 +179,14 @@ class FullyAuditedManifest(BaseModel):
     listing_correction_details: str | None = None
     total_items_processed: int = 0
     verified_inventory: list[VerifiedAndPricedItem] = Field(default_factory=list)
+    search_tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "6–12 CT Bids search tags a shopper would type for THIS lot only. Include brand, model, "
+            "material, era, and common nicknames (MCM, mid century, sterling). Never luxury brands, "
+            "cars, auction houses, or celebrity names that are not on this item. Not SKUs or sizes."
+        ),
+    )
 
 
 ListingChannel = Literal["ct_bids", "ebay", "either", "needs_review"]

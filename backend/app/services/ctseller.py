@@ -20,6 +20,7 @@ from app.services.ctseller_categories import (
     infer_ct_area,
 )
 from app.services.ctseller_conditions import canonicalize_ct_condition
+from app.services.search_tags import format_ctseller_tag_field
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +401,7 @@ def build_item_payload(
     tax: float | str | None = None,
     buyers_premium: float | str | None = None,
     material: str | None = None,
+    tag: str | list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the item/add ``data`` object from catalog fields."""
     irm: dict[str, bool]
@@ -436,6 +438,15 @@ def build_item_payload(
         except (TypeError, ValueError):
             return ""
 
+    tag_evidence = f"{title or ''} {description or ''}"
+    if isinstance(tag, (list, tuple)):
+        tag_out = format_ctseller_tag_field(tag, evidence=tag_evidence)
+    else:
+        tag_out = format_ctseller_tag_field(
+            [p.strip() for p in str(tag or "").split(",") if p.strip()],
+            evidence=tag_evidence,
+        )
+
     tax_out = _pct(tax)
     bp_out = _pct(buyers_premium)
     # SPA requires tax % when the item is taxable; copy sale-level tax when present.
@@ -463,7 +474,7 @@ def build_item_payload(
         "ispublic": True,
         "itemreceiptmethod": irm_out,
         "closingorder": 999,
-        "tag": "",
+        "tag": tag_out,
         "quantity": "",
         "tax": tax_out,
         "buyerspremium": bp_out,

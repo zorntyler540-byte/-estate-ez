@@ -491,6 +491,10 @@ def _apply_pro_manifest_to_lot(
                 lot.specification_lines + measurement_lines
             )
 
+    pro_search_tags = [str(t).strip() for t in (getattr(manifest, "search_tags", None) or []) if str(t).strip()]
+    if pro_search_tags:
+        lot.search_tags = pro_search_tags
+
     brand_audit = _manifest_to_brand_audit(manifest_json, [], flash_model)
     _apply_brand_audit(
         lot,

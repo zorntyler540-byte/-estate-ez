@@ -108,3 +108,38 @@ def test_build_item_payload_blank_tax_when_sale_has_none() -> None:
     assert item["tax"] == ""
     assert item["buyerspremium"] == ""
     assert item["istaxable"] is False
+    assert item["tag"] == ""
+
+
+def test_build_item_payload_joins_search_tags() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="T3",
+        title="Herman Miller desk",
+        description="d",
+        category="Desks",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+        tag=["Herman Miller", "MCM", "Rolex"],
+    )
+    assert "Herman Miller" in item["tag"]
+    assert "MCM" in item["tag"]
+    assert "Rolex" not in item["tag"]
+
+
+def test_build_item_payload_keeps_evidenced_luxury_tag() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="W1",
+        title="Rolex Oyster Datejust",
+        description="Steel Rolex watch",
+        category="Jewelry",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+        tag=["Rolex", "Oyster"],
+    )
+    assert "Rolex" in item["tag"]

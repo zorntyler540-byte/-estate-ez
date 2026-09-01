@@ -70,6 +70,7 @@ from app.schemas import (
     LotOut,
     LotPostToCTSellerIn,
     LotPostToCTSellerOut,
+    LotSearchTagsOut,
     LotUpdate,
     PasswordChangeIn,
     PasswordResetIn,
@@ -346,6 +347,7 @@ def startup() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sale_zip_kind_column()
     _ensure_lot_audience_columns()
+    _ensure_lot_search_tags_column()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -388,6 +390,20 @@ def _ensure_lot_audience_columns() -> None:
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+
+
+def _ensure_lot_search_tags_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing lots tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "lots" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("lots")}
+    if "search_tags_json" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE lots ADD COLUMN search_tags_json TEXT DEFAULT '[]' NOT NULL"))
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -1508,6 +1524,38 @@ def ctseller_list_sales(
     ]
 
 
+def _search_tags_for_lot_row(lot: Lot) -> list[str]:
+    from app.services.search_tags import parse_search_tags_json, search_tags_for_lot_fields
+
+    try:
+        specs = json.loads(lot.specification_lines_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        specs = []
+    try:
+        brands = json.loads(lot.brands_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        brands = []
+    try:
+        labels = json.loads(lot.labels_and_tags_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        labels = []
+    if not isinstance(specs, list):
+        specs = []
+    if not isinstance(brands, list):
+        brands = []
+    if not isinstance(labels, list):
+        labels = []
+    return search_tags_for_lot_fields(
+        stored=parse_search_tags_json(getattr(lot, "search_tags_json", None)),
+        title=lot.auction_title or "",
+        description=lot.professional_description or "",
+        brands=brands,
+        specification_lines=specs,
+        labels_and_tags=labels,
+        category=lot.ct_category,
+    )
+
+
 def _post_one_lot_to_ctseller(
     *,
     db: Session,
@@ -1601,7 +1649,11 @@ def _post_one_lot_to_ctseller(
         tax=tax if tax is not None else None,
         buyers_premium=buyers_premium if buyers_premium is not None else None,
         material=material,
+        tag=_search_tags_for_lot_row(lot),
     )
+    resolved_tags = _search_tags_for_lot_row(lot)
+    if resolved_tags:
+        lot.search_tags_json = json.dumps(resolved_tags, ensure_ascii=True)
     item_id = client.create_item(item)
     uploaded = 0
     for idx, (ph, path) in enumerate(photo_paths):
@@ -2766,6 +2818,22 @@ def update_lot(
         row.brands_json = json.dumps(patch.brands, ensure_ascii=True)
     if patch.labels_and_tags is not None:
         row.labels_and_tags_json = json.dumps(patch.labels_and_tags, ensure_ascii=True)
+    if patch.search_tags is not None:
+        from app.services.search_tags import sanitize_search_tags
+
+        evidence = " ".join(
+            [
+                row.auction_title or "",
+                row.professional_description or "",
+                row.specification_lines_json or "",
+                row.brands_json or "",
+                row.ct_category or "",
+            ]
+        )
+        row.search_tags_json = json.dumps(
+            sanitize_search_tags(patch.search_tags, evidence=evidence),
+            ensure_ascii=True,
+        )
     if patch.starting_price is not None:
         row.starting_price = patch.starting_price
     if patch.condition_text is not None:
@@ -2788,6 +2856,41 @@ def update_lot(
     db.commit()
     db.refresh(row)
     return _lot_out_for_id(db, current.account_id, lot_id)
+
+
+@app.post("/lots/{lot_id}/search-tags/suggest", response_model=LotSearchTagsOut)
+def suggest_lot_search_tags(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotSearchTagsOut:
+    """Fill CT Bids search tags from title, brands, material, and era — no extra Gemini call."""
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    from app.services.search_tags import suggest_search_tags
+
+    try:
+        specs = json.loads(row.specification_lines_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        specs = []
+    try:
+        brands = json.loads(row.brands_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        brands = []
+    try:
+        labels = json.loads(row.labels_and_tags_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        labels = []
+    tags = suggest_search_tags(
+        title=row.auction_title or "",
+        description=row.professional_description or "",
+        brands=brands if isinstance(brands, list) else [],
+        specification_lines=specs if isinstance(specs, list) else [],
+        labels_and_tags=labels if isinstance(labels, list) else [],
+        category=row.ct_category,
+    )
+    return LotSearchTagsOut(lot_id=row.id, search_tags=tags)
 
 
 @app.post("/lots/{lot_id}/ai-regenerate", response_model=LotOut)

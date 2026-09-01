@@ -3397,6 +3397,7 @@ class LotOutput:
     specification_lines: list[str] = field(default_factory=list)
     brands: list[str] = field(default_factory=list)
     labels_and_tags: list[str] = field(default_factory=list)
+    search_tags: list[str] = field(default_factory=list)
     condition: str = ""
     starting_price: float | None = None
     photo_count: int = 1
@@ -3504,8 +3505,18 @@ class LotOutput:
             self.professional_description, MERGED_PRO_DESCRIPTION_MAX_CHARS
         )
         from app.services.ctseller_conditions import canonicalize_ct_condition
+        from app.services.search_tags import merge_search_tags
 
         self.condition = canonicalize_ct_condition(self.condition)
+        self.search_tags = merge_search_tags(
+            self.search_tags,
+            title=self.auction_title,
+            description=self.professional_description,
+            brands=self.brands,
+            specification_lines=self.specification_lines,
+            labels_and_tags=self.labels_and_tags,
+            category=self.ct_category,
+        )
 
     @classmethod
     def from_model(cls, payload: dict[str, Any]) -> "LotOutput":
@@ -3542,6 +3553,7 @@ class LotOutput:
         )
         brands = normalize_brand_list(payload.get("Brands") or payload.get("brand") or payload.get("brands"))
         labels = normalize_listing_lines(payload.get("LabelsAndTags") or payload.get("labels_and_tags"))
+        search_tags = normalize_listing_lines(payload.get("search_tags") or payload.get("SearchTags"))
         condition = str(payload.get("Condition") or payload.get("condition_notes") or "").strip()
         from app.services.ctseller_conditions import canonicalize_ct_condition
 
@@ -3565,6 +3577,7 @@ class LotOutput:
             specification_lines=spec_lines,
             brands=brands,
             labels_and_tags=labels,
+            search_tags=search_tags,
             condition=condition,
             starting_price=price,
             sku_needs_review=payload_suggests_sku_review(payload),

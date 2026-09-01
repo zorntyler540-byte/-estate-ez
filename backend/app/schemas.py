@@ -174,6 +174,7 @@ class LotOut(BaseModel):
     specification_lines: list[str]
     brands: list[str]
     labels_and_tags: list[str]
+    search_tags: list[str] = []
     ct_category: str | None = None
     ct_subcategory: str | None = None
     is_completed: bool = False
@@ -208,11 +209,17 @@ class LotUpdate(BaseModel):
     specification_lines: list[str] | None = None
     brands: list[str] | None = None
     labels_and_tags: list[str] | None = None
+    search_tags: list[str] | None = None
     starting_price: float | None = None
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
     audience_hold: bool | None = None
+
+
+class LotSearchTagsOut(BaseModel):
+    lot_id: str
+    search_tags: list[str]
 
 
 class CTSellerCredentialsIn(BaseModel):
