@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.core.lotting import LotOutput
+from app.main import _search_tags_for_lot_row
 from app.services.search_tags import (
     format_ctseller_tag_field,
     merge_search_tags,
@@ -80,3 +83,32 @@ def test_lot_output_finalize_builds_search_tags() -> None:
 def test_fully_audited_manifest_includes_search_tags() -> None:
     schema = pydantic_model_to_gemini_schema(FullyAuditedManifest)
     assert "search_tags" in schema["properties"]
+
+
+def test_search_tags_for_lot_row_fills_empty_store() -> None:
+    lot = SimpleNamespace(
+        auction_title="Herman Miller teak desk",
+        professional_description="Mid-century Action Office desk.",
+        specification_lines_json='["Material: Teak"]',
+        brands_json='["Herman Miller"]',
+        labels_and_tags_json="[]",
+        search_tags_json="[]",
+        ct_category="Desks",
+    )
+    tags = _search_tags_for_lot_row(lot)
+    assert any("herman" in t.lower() for t in tags)
+    assert any("teak" in t.lower() for t in tags)
+
+
+def test_search_tags_for_lot_row_keeps_saved_tags() -> None:
+    lot = SimpleNamespace(
+        auction_title="Herman Miller teak desk",
+        professional_description="Desk",
+        specification_lines_json="[]",
+        brands_json='["Herman Miller"]',
+        labels_and_tags_json="[]",
+        search_tags_json='["Action Office", "MCM"]',
+        ct_category="Desks",
+    )
+    tags = _search_tags_for_lot_row(lot)
+    assert tags == ["Action Office", "MCM"]
