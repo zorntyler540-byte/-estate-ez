@@ -2831,6 +2831,15 @@ select.ct-input option {
   background: var(--ct-warning-bg);
 }
 
+.ct-photo-progress--audience {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.ct-photo-progress--audience .ct-photo-progress__title {
+  color: #bfdbfe;
+}
+
 .ct-photo-progress__head {
   display: flex;
   align-items: baseline;

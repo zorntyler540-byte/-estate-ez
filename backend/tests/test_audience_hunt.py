@@ -244,3 +244,108 @@ def test_summarize_hunt_events_and_cost() -> None:
     # $1.25/M in + $10/M out
     cost = hunt_pro_cost_usd(pro_in=2500, pro_out=8100, in_rate=1.25, out_rate=10.0)
     assert cost == round(2500 / 1_000_000 * 1.25 + 8100 / 1_000_000 * 10.0, 4)
+
+
+def test_sale_hunt_status_tracks_phases_and_counts() -> None:
+    from app import audience_tasks
+
+    audience_tasks.reset_hunt_runtime_state()
+    audience_tasks.register_sale_hunt(
+        sale_id="s1",
+        account_id="a1",
+        lot_ids=["l1", "l2", "l3"],
+        skus={"l1": "A-1", "l2": "A-2", "l3": "A-3"},
+    )
+    snap = audience_tasks.sale_hunt_status(sale_id="s1", account_id="a1")
+    assert snap["active"] is True
+    assert snap["total"] == 3
+    assert snap["done"] == 0
+    assert snap["current_lot_id"] == "l1"
+    assert snap["lots"][0]["status"] == "running"
+    assert snap["lots"][1]["status"] == "queued"
+
+    audience_tasks.set_lot_hunt_phase("l1", "searching")
+    snap = audience_tasks.sale_hunt_status(sale_id="s1", account_id="a1")
+    assert snap["current_phase"] == "searching"
+
+    audience_tasks.set_lot_hunt_phase("l1", "structuring")
+    snap = audience_tasks.sale_hunt_status(sale_id="s1", account_id="a1")
+    assert snap["current_phase"] == "structuring"
+    assert snap["lots"][0]["phase"] == "structuring"
+
+    audience_tasks.set_lot_hunt_phase("l1", None)
+    audience_tasks._mark_sale_lot_finished(sale_id="s1", lot_id="l1")
+    snap = audience_tasks.sale_hunt_status(sale_id="s1", account_id="a1")
+    assert snap["done"] == 1
+    assert snap["current_lot_id"] == "l2"
+    assert snap["lots"][0]["status"] == "done"
+    assert snap["active"] is True
+
+    audience_tasks._mark_sale_lot_finished(sale_id="s1", lot_id="l2")
+    audience_tasks._mark_sale_lot_finished(sale_id="s1", lot_id="l3")
+    snap = audience_tasks.sale_hunt_status(sale_id="s1", account_id="a1")
+    assert snap["active"] is False
+    assert snap["done"] == 3
+    assert snap["current_lot_id"] is None
+    assert all(row["status"] == "done" for row in snap["lots"])
+
+    empty = audience_tasks.sale_hunt_status(sale_id="s1", account_id="other")
+    assert empty["active"] is False
+    assert empty["total"] == 0
+
+    missing = audience_tasks.sale_hunt_status(sale_id="nope", account_id="a1")
+    assert missing["total"] == 0
+
+
+def test_run_audience_research_reports_phases(monkeypatch) -> None:
+    from app.services import audience_hunt as hunt_mod
+
+    phases: list[str] = []
+
+    class _Resp:
+        text = "Public Fenton glass group: https://www.facebook.com/groups/example"
+        parsed = None
+        usage_metadata = None
+
+    class _Models:
+        def generate_content(self, **_kwargs):
+            return _Resp()
+
+    class _Client:
+        models = _Models()
+
+    monkeypatch.setattr(hunt_mod, "_ensure_gemini_env", lambda: None)
+    monkeypatch.setattr("pipeline.pipeline._get_client", lambda: _Client())
+    monkeypatch.setattr(
+        "pipeline.gemini_schema.pydantic_model_to_gemini_schema",
+        lambda _model: {"type": "object"},
+    )
+
+    class _Parsed:
+        def model_dump(self):
+            return {
+                "worthy": True,
+                "groups": [{"name": "Fenton Glass Collectors", "url": "https://www.facebook.com/groups/example", "why": "brand"}],
+                "blurb_ctbids": "Come bid.",
+                "blurb_hold": "Hold this glass.",
+                "recommend_hold": False,
+            }
+
+        @classmethod
+        def model_validate(cls, _data):
+            return cls()
+
+    monkeypatch.setattr("pipeline.schemas.AudienceHuntResult", _Parsed)
+
+    lot = SimpleNamespace(
+        auction_title="Fenton vase",
+        sku="FN-1",
+        ct_category="Glass",
+        brands_json='["Fenton"]',
+        specification_lines_json="[]",
+        condition_text="good",
+        professional_description="hobnail",
+    )
+    _Resp.parsed = _Parsed()
+    hunt_mod.run_audience_research_and_structure(lot, on_phase=phases.append)
+    assert phases == ["searching", "structuring"]

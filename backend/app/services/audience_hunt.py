@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy.orm import Session, object_session
@@ -365,7 +366,9 @@ def _ensure_gemini_env() -> None:
 
 
 def run_audience_research_and_structure(
-    lot: Lot, usage: dict[str, int] | None = None
+    lot: Lot,
+    usage: dict[str, int] | None = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Two-step hunt: Google Search memo, then structured JSON (no tools on schema call)."""
     from google.genai import types
@@ -378,6 +381,8 @@ def run_audience_research_and_structure(
     _ensure_gemini_env()
     client = _get_client()
     listing = _lot_research_text(lot)
+    if on_phase:
+        on_phase("searching")
 
     research_parts = [
         "Find public collector communities for this estate lot.\n"
@@ -404,6 +409,8 @@ def run_audience_research_and_structure(
     memo = (research.text or "").strip()
     if not memo:
         raise RuntimeError("Audience research returned no text.")
+    if on_phase:
+        on_phase("structuring")
 
     structure_parts = [
         "Turn the research memo into structured JSON for staff. "
@@ -450,7 +457,13 @@ def apply_skip_without_model(lot: Lot, reason: str) -> dict[str, Any]:
     return parse_audience_payload(payload)
 
 
-def run_audience_hunt_for_lot(db: Session, lot: Lot, *, force: bool = False) -> dict[str, Any]:
+def run_audience_hunt_for_lot(
+    db: Session,
+    lot: Lot,
+    *,
+    force: bool = False,
+    on_phase: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Hunt (or skip) and persist on the lot. Caller owns commit."""
     brands = lot_brands(lot)
     hunt, reason = should_run_audience_hunt(
@@ -463,7 +476,7 @@ def run_audience_hunt_for_lot(db: Session, lot: Lot, *, force: bool = False) -> 
         return apply_skip_without_model(lot, reason)
     usage = empty_hunt_usage()
     try:
-        payload = run_audience_research_and_structure(lot, usage)
+        payload = run_audience_research_and_structure(lot, usage, on_phase=on_phase)
         save_audience_payload(lot, payload)
         if payload.get("recommend_hold") and not lot.audience_hold:
             lot.audience_hold = True
