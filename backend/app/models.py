@@ -79,6 +79,8 @@ class Lot(Base):
     specification_lines_json: Mapped[str] = mapped_column(Text, default="[]")
     brands_json: Mapped[str] = mapped_column(Text, default="[]")
     labels_and_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    # CT Seller item.tag search keywords (not apparel size tags in labels_and_tags_json).
+    search_tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     ct_category: Mapped[str | None] = mapped_column(String(120))
     ct_subcategory: Mapped[str | None] = mapped_column(String(120))
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

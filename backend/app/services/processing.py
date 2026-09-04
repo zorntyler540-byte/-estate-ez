@@ -468,6 +468,7 @@ def _save_lot(
         specification_lines_json=json.dumps(lot.specification_lines, ensure_ascii=True),
         brands_json=json.dumps(lot.brands, ensure_ascii=True),
         labels_and_tags_json=json.dumps(lot.labels_and_tags, ensure_ascii=True),
+        search_tags_json=json.dumps(getattr(lot, "search_tags", None) or [], ensure_ascii=True),
         ct_category=ct_category,
         ct_subcategory=ct_subcategory,
         is_completed=False,
@@ -1012,6 +1013,7 @@ def _regenerate_fallback_lot_output(row: Lot) -> LotOutput:
         specification_lines=_safe_json_list(row.specification_lines_json),
         brands=_safe_json_list(row.brands_json),
         labels_and_tags=_safe_json_list(row.labels_and_tags_json),
+        search_tags=_safe_json_list(getattr(row, "search_tags_json", None)),
         condition=(row.condition_text or "").strip(),
         starting_price=row.starting_price,
         sku_needs_review=True,
@@ -1101,6 +1103,7 @@ def run_lot_ai_regenerate_and_save(
     row.specification_lines_json = json.dumps(current.specification_lines, ensure_ascii=True)
     row.brands_json = json.dumps(current.brands, ensure_ascii=True)
     row.labels_and_tags_json = json.dumps(current.labels_and_tags, ensure_ascii=True)
+    row.search_tags_json = json.dumps(getattr(current, "search_tags", None) or [], ensure_ascii=True)
     row.ct_category = ct_cat
     row.ct_subcategory = ct_sub
     row.starting_price = current.starting_price

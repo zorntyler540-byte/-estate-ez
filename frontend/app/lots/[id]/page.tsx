@@ -57,6 +57,7 @@ type Lot = {
   specification_lines: string[];
   brands: string[];
   labels_and_tags: string[];
+  search_tags: string[];
   starting_price: number | null;
   condition_text: string;
   is_completed: boolean;
@@ -244,6 +245,7 @@ export default function LotDetailPage() {
   const dragPhotoIdRef = useRef<string | null>(null);
   const addPhotosInputRef = useRef<HTMLInputElement>(null);
   const [addPhotosBusy, setAddPhotosBusy] = useState(false);
+  const [searchTagsBusy, setSearchTagsBusy] = useState(false);
 
   useEffect(() => {
     try {
@@ -284,7 +286,7 @@ export default function LotDetailPage() {
         const d = await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, t);
         if (cancelled) return;
         const row = d as Lot;
-        setLot(row);
+        setLot({ ...row, search_tags: row.search_tags || [] });
         setListingDirty(false);
         setAiRegenerating(Boolean(row.ai_regenerating));
         if (row.ai_regenerating) {
@@ -719,6 +721,23 @@ export default function LotDetailPage() {
     }
   }
 
+  async function fillSearchTagsFromListing() {
+    if (!lot || !token) return;
+    setSearchTagsBusy(true);
+    setError("");
+    try {
+      const res = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/search-tags/suggest`, token, {
+        method: "POST",
+        body: JSON.stringify({})
+      })) as { search_tags?: string[] };
+      updateListingFields({ search_tags: res.search_tags || [] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not fill search tags");
+    } finally {
+      setSearchTagsBusy(false);
+    }
+  }
+
   async function copyAudienceText(label: string, text: string) {
     const t = text.trim();
     if (!t) return;
@@ -744,6 +763,7 @@ export default function LotDetailPage() {
           specification_lines: lot.specification_lines,
           brands: lot.brands,
           labels_and_tags: lot.labels_and_tags,
+          search_tags: lot.search_tags || [],
           starting_price: lot.starting_price,
           condition_text: lot.condition_text,
           is_completed: lot.is_completed
@@ -2344,6 +2364,38 @@ export default function LotDetailPage() {
                       })
                     }
                   />
+                </div>
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="search-tags">
+                    CT Bids search tags
+                  </label>
+                  <input
+                    id="search-tags"
+                    className="ct-input"
+                    placeholder="Brand, model, material, era — comma separated"
+                    value={(lot.search_tags || []).join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        search_tags: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    Posted to CT Seller tags so shoppers can find this lot. Use words they would type for this
+                    piece — not Rolex or Porsche unless that is actually on the item.
+                  </p>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost"
+                    style={{ marginTop: "0.45rem" }}
+                    disabled={searchTagsBusy}
+                    onClick={() => void fillSearchTagsFromListing()}
+                  >
+                    {searchTagsBusy ? "Filling…" : "Fill from listing"}
+                  </button>
                 </div>
                 <div>
                   <label className="ct-label" htmlFor="price">

@@ -1069,6 +1069,9 @@ def run_brand_audit_pro(
             f"(must be one of: {_ct_category_allowlist_text()}). "
             "Prefer Electronics for computer peripherals and consumer tech; never default to Household Goods Other "
             "when a clearer category fits.\n"
+            "19. Fill **search_tags** with 6–12 words a CT Bids shopper would type for THIS item "
+            "(brand, model, material, era, nicknames like MCM). Never Rolex/Porsche/Sotheby's/celebrity "
+            "bait unless that name is actually on the piece. No SKU codes, no clothing sizes.\n"
         )
     else:
         task_block = (
@@ -1088,6 +1091,8 @@ def run_brand_audit_pro(
             "10. Set **ct_category** to the best CT Seller category "
             f"(must be one of: {_ct_category_allowlist_text()}). "
             "Fix Household Goods Other when Electronics, Kitchen & Home, Books, etc. fit better.\n"
+            "11. Fill **search_tags** with 6–12 honest CT Bids search words for THIS item only "
+            "(brand, model, material, era, nicknames). No unaffiliated luxury-brand bait.\n"
         )
 
     parts: list[Any] = [
