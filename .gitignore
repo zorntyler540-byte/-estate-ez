@@ -22,7 +22,6 @@ ENV/
 
 # Node / Next
 node_modules/
-playwright-ct/browser-profile/
 .next/
 out/
 *.tsbuildinfo

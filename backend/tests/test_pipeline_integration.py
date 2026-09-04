@@ -62,6 +62,114 @@ def test_select_analysis_photos_picks_hero_and_fronts() -> None:
     assert selected["hero_triage_metadata"]["photo_role"] == "hero"
 
 
+def _triage_row(filename: str, **overrides: object) -> dict:
+    row: dict = {
+        "filename": filename,
+        "photo_role": "angle_only",
+        "label_legibility": "none",
+        "quality": "sharp",
+        "confidence": "high",
+        "shows_whole_lot": False,
+        "is_primary_front_for_item": False,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_select_analysis_photos_never_picks_tape_as_hero() -> None:
+    """A tape frame must not win hero even when Gemini also sets shows_whole_lot."""
+    triage = [
+        _triage_row(
+            "tape.jpg",
+            photo_role="tape",
+            shows_whole_lot=True,
+            lot_tape_marking="MS777",
+            label_legibility="clear",
+        ),
+        _triage_row("group.jpg", photo_role="hero", shows_whole_lot=True),
+        _triage_row(
+            "front.jpg",
+            photo_role="item_front",
+            distinct_item_id="ITEM_1",
+            is_primary_front_for_item=True,
+            label_legibility="clear",
+            brand_text="Levi's",
+        ),
+    ]
+    selected = select_analysis_photos(triage)
+    assert selected["hero_filename"] == "group.jpg"
+    assert "tape.jpg" in selected["tape_filenames"]
+    assert selected["hero_triage_metadata"]["filename"] == "group.jpg"
+    assert selected["hero_triage_metadata"]["photo_role"] == "hero"
+
+
+def test_select_analysis_photos_demotes_mis_tagged_tape_hero() -> None:
+    """Tape close-up labeled hero (no whole-lot) is persisted as tape; group shot becomes hero."""
+    triage = [
+        _triage_row(
+            "tape.jpg",
+            photo_role="hero",
+            shows_whole_lot=False,
+            lot_tape_marking="MS777",
+            label_legibility="clear",
+        ),
+        _triage_row(
+            "group.jpg",
+            photo_role="item_front",
+            shows_whole_lot=True,
+            distinct_item_id="ITEM_1",
+            is_primary_front_for_item=True,
+            label_legibility="clear",
+            brand_text="Levi's",
+        ),
+    ]
+    selected = select_analysis_photos(triage)
+    assert selected["hero_filename"] == "group.jpg"
+    by_name = {r["filename"]: r for r in triage}
+    assert by_name["tape.jpg"]["photo_role"] == "tape"
+    assert by_name["group.jpg"]["photo_role"] == "hero"
+    assert "tape.jpg" in selected["tape_filenames"]
+
+
+def test_select_analysis_photos_keeps_group_hero_with_tape_at_edge() -> None:
+    """A real group shot with SKU tape visible at the edge stays hero."""
+    triage = [
+        _triage_row(
+            "tape.jpg",
+            photo_role="tape",
+            lot_tape_marking="MS777",
+            label_legibility="clear",
+        ),
+        _triage_row(
+            "group.jpg",
+            photo_role="hero",
+            shows_whole_lot=True,
+            lot_tape_marking="MS777",
+        ),
+    ]
+    selected = select_analysis_photos(triage)
+    assert selected["hero_filename"] == "group.jpg"
+    by_name = {r["filename"]: r for r in triage}
+    assert by_name["group.jpg"]["photo_role"] == "hero"
+    assert by_name["tape.jpg"]["photo_role"] == "tape"
+
+
+def test_select_analysis_photos_tape_only_lot_has_no_hero() -> None:
+    triage = [
+        _triage_row(
+            "tape.jpg",
+            photo_role="tape",
+            shows_whole_lot=True,
+            lot_tape_marking="MS777",
+            label_legibility="clear",
+        ),
+    ]
+    selected = select_analysis_photos(triage)
+    assert selected["hero_filename"] == ""
+    assert selected["brand_needs_review"] is True
+    assert selected["tape_filenames"] == ["tape.jpg"]
+
+
 def test_select_analysis_photos_routes_measuring_scale_frames_to_listing_and_pro() -> None:
     triage = [
         {

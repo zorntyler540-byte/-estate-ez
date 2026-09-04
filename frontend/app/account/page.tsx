@@ -400,7 +400,7 @@ export default function AccountPage() {
           CT Seller
         </h2>
         <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
-          Connect seller.ctbids.com so the site can create lots for you (skip the Chrome extension). Credentials are
+          Connect seller.ctbids.com so the dashboard can create lots for you. Credentials are
           stored encrypted on your account. Owners only.
         </p>
         {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}

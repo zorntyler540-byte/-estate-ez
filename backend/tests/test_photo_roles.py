@@ -7,10 +7,12 @@ from types import SimpleNamespace
 
 from app.services.photo_roles import (
     filter_photos_excluding_sku_tape,
+    is_hero_eligible_photo_role,
     is_sku_tape_photo_role,
     listing_attrs_by_path,
     normalize_catalog_photo_role,
     photo_roles_by_path,
+    photos_for_ctbids_listing,
     repaired_listing_attrs,
 )
 
@@ -28,6 +30,10 @@ def test_is_sku_tape_photo_role() -> None:
     assert is_sku_tape_photo_role("tape") is True
     assert is_sku_tape_photo_role("hero") is False
     assert is_sku_tape_photo_role(None) is False
+    assert is_hero_eligible_photo_role("hero") is True
+    assert is_hero_eligible_photo_role("item_front") is True
+    assert is_hero_eligible_photo_role("tape") is False
+    assert is_hero_eligible_photo_role("unusable") is False
 
 
 def test_photo_roles_by_path_from_triage(tmp_path: Path) -> None:
@@ -74,6 +80,18 @@ def test_filter_only_tape_leaves_empty() -> None:
         SimpleNamespace(id="2", photo_role="TAPE"),
     ]
     assert filter_photos_excluding_sku_tape(photos) == []
+    assert photos_for_ctbids_listing(photos) == []
+
+
+def test_ctbids_listing_photos_drop_tape_keep_product_shots() -> None:
+    photos = [
+        SimpleNamespace(id="tape", photo_role="tape"),
+        SimpleNamespace(id="hero", photo_role="hero"),
+        SimpleNamespace(id="front", photo_role="item_front"),
+        SimpleNamespace(id="detail", photo_role="angle_only"),
+    ]
+    kept = photos_for_ctbids_listing(photos)
+    assert [p.id for p in kept] == ["hero", "front", "detail"]
 
 
 def test_repaired_listing_attrs_demotes_single_item_heroes() -> None:

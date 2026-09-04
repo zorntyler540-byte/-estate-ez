@@ -30,6 +30,12 @@ def test_pick_hero_skips_sku_tape_when_no_hero_role() -> None:
     assert pick_lot_hero_photo([tape, front]) is front
 
 
+def test_pick_hero_skips_unusable_when_better_frame_exists() -> None:
+    unusable = SimpleNamespace(photo_role="unusable", sort_order=0, original_name="blur.jpg")
+    front = SimpleNamespace(photo_role="item_front", sort_order=1, original_name="item.jpg")
+    assert pick_lot_hero_photo([unusable, front]) is front
+
+
 def test_pick_hero_empty() -> None:
     assert pick_lot_hero_photo([]) is None
 

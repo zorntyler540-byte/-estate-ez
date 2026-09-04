@@ -133,6 +133,12 @@ def is_sku_tape_photo_role(role: object | None) -> bool:
     return normalize_catalog_photo_role(role) == "tape"
 
 
+def is_hero_eligible_photo_role(role: object | None) -> bool:
+    """False for SKU-tape and unusable frames — they must never be the listing cover."""
+    normalized = normalize_catalog_photo_role(role)
+    return normalized not in ("tape", "unusable")
+
+
 def photo_roles_by_path(
     paths: list[Path],
     triage_rows: list[dict[str, Any]] | None,
@@ -166,5 +172,10 @@ def photo_roles_by_path(
 
 
 def filter_photos_excluding_sku_tape(photos: Iterable[Any]) -> list[Any]:
-    """Keep catalog photos for CT Seller (drop dedicated ``tape`` role frames)."""
+    """Keep catalog photos for CT Seller / CT Bids (drop dedicated ``tape`` role frames)."""
     return [p for p in photos if not is_sku_tape_photo_role(getattr(p, "photo_role", None))]
+
+
+def photos_for_ctbids_listing(photos: Iterable[Any]) -> list[Any]:
+    """Photos to upload to seller.ctbids.com — SKU-tape close-ups are never posted."""
+    return filter_photos_excluding_sku_tape(photos)

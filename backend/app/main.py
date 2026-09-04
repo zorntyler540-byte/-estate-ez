@@ -143,7 +143,7 @@ from app.services.photo_order import (
     reorder_photos_for_listing,
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
-from app.services.photo_roles import filter_photos_excluding_sku_tape
+from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
@@ -369,8 +369,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allow_origins(),
-    # Allow Chrome extension UIs to call API directly.
-    allow_origin_regex=r"^chrome-extension://[a-z]{32}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1696,7 +1694,7 @@ def _post_one_lot_to_ctseller(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
         .all()
     )
-    listing_photos = filter_photos_excluding_sku_tape(photos)
+    listing_photos = photos_for_ctbids_listing(photos)
     if photos and not listing_photos:
         raise HTTPException(
             status_code=400,
@@ -2183,7 +2181,13 @@ def get_lot(lot_id: str, current: User = Depends(get_current_user), db: Session 
 
 @app.get("/lots/{lot_id}/photos", response_model=list[LotPhotoOut])
 def list_lot_photos(
-    lot_id: str, current: User = Depends(get_current_user), db: Session = Depends(get_db)
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    for_listing: bool = Query(
+        False,
+        description="If true, omit dedicated SKU-tape frames (same filter as CT Bids posting).",
+    ),
 ) -> list[LotPhotoOut]:
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
@@ -2194,6 +2198,8 @@ def list_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
+    if for_listing:
+        photos = photos_for_ctbids_listing(photos)
     return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
@@ -2715,7 +2721,7 @@ def lot_photo_thumbnail(
     max_px: int = 320,
     token: str = Depends(oauth2_scheme),
 ) -> Response:
-    """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos`` and extension upload sequence."""
+    """One catalog photo as JPEG (downscaled). Order matches ``GET …/photos``."""
     # Cap high enough for CT Seller / marketplace re-uploads; still bounded to limit abuse.
     max_px = min(2048, max(64, int(max_px)))
     with SessionLocal() as db:
