@@ -10,6 +10,7 @@ from app.services.audience_hunt import (
     apply_skip_without_model,
     audience_usage_tokens,
     hunt_pro_cost_usd,
+    is_us_audience_group,
     lot_has_audience_research,
     lot_is_held_from_ctseller,
     parse_audience_payload,
@@ -87,6 +88,82 @@ def test_parse_audience_payload_drops_blank_groups_and_unsafe_urls() -> None:
     assert out["groups"][1]["url"] == "https://www.facebook.com/groups/example"
     assert out["worthy"] is True
     assert out["recommend_hold"] is True
+
+
+def test_parse_audience_payload_drops_international_groups() -> None:
+    out = parse_audience_payload(
+        {
+            "worthy": True,
+            "recommend_hold": True,
+            "groups": [
+                {
+                    "name": "UK Fenton Glass Collectors",
+                    "url": "https://www.facebook.com/groups/ukfenton",
+                    "why": "UK club",
+                },
+                {
+                    "name": "Canadian Depression Glass",
+                    "url": "https://www.facebook.com/groups/canadianglass",
+                    "why": "Canada",
+                },
+                {
+                    "name": "Worldwide Glass Collectors",
+                    "url": "https://www.facebook.com/groups/worldwideglass",
+                    "why": "international",
+                },
+                {
+                    "name": "British Glass Society",
+                    "url": "https://www.britishglass.co.uk/collectors",
+                    "why": "club site",
+                },
+                {
+                    "name": "Fenton Glass Collectors USA",
+                    "url": "https://www.facebook.com/groups/fentonglassusa",
+                    "why": "US buyers; English hobnail OK",
+                },
+                {
+                    "name": "Mid-Century Modern Collectors",
+                    "url": "https://www.facebook.com/groups/mcmusa",
+                    "why": "collects Japanese pottery and English china",
+                },
+            ],
+        }
+    )
+    names = {g["name"] for g in out["groups"]}
+    assert names == {"Fenton Glass Collectors USA", "Mid-Century Modern Collectors"}
+    assert out["worthy"] is True
+    assert out["recommend_hold"] is True
+
+
+def test_parse_audience_payload_all_foreign_clears_worthy() -> None:
+    out = parse_audience_payload(
+        {
+            "worthy": True,
+            "recommend_hold": True,
+            "groups": [{"name": "Australia Glass Club", "url": "https://glass.org.au/club", "why": "AU"}],
+        }
+    )
+    assert out["groups"] == []
+    assert out["worthy"] is False
+    assert out["recommend_hold"] is False
+
+
+def test_is_us_audience_group_keeps_object_origin_words() -> None:
+    assert is_us_audience_group(
+        name="English China Collectors",
+        url="https://www.facebook.com/groups/englishchina",
+        why="US group for English bone china",
+    )
+    assert not is_us_audience_group(
+        name="English China Collectors UK",
+        url="https://www.facebook.com/groups/englishchinauk",
+        why="based in the United Kingdom",
+    )
+    assert not is_us_audience_group(
+        name="Glass Club",
+        url="https://collectors.example.ca/forum",
+        why="forum",
+    )
 
 
 def test_parse_audience_payload_invalid_json() -> None:

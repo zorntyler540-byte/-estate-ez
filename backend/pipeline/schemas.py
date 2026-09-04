@@ -239,7 +239,7 @@ class AppraisalCheckResult(BaseModel):
 
 
 class AudienceGroupHit(BaseModel):
-    """One public collector community (group, club, or forum) — official URL only."""
+    """One public US collector community (group, club, or forum) — official URL only."""
 
     model_config = ConfigDict(extra="forbid")
 
