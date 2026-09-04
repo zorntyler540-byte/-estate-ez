@@ -34,8 +34,12 @@ from app.services.pipeline_integration import (
     triage_ordered_photo_batch,
     triage_tape_marking_from_row,
 )
-from app.services.photo_order import reorder_photos_for_listing
-from app.services.photo_roles import normalize_catalog_photo_role, photo_roles_by_path
+from app.services.photo_order import reorder_photos_by_filenames, reorder_photos_for_listing
+from app.services.photo_roles import (
+    PhotoListingAttrs,
+    listing_attrs_by_path,
+    normalize_catalog_photo_role,
+)
 from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
@@ -157,10 +161,16 @@ def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
 
 
 def _add_catalog_photo(
-    db: Session, job: ProcessingJob, photo_path: Path, *, photo_role: str | None = None
+    db: Session,
+    job: ProcessingJob,
+    photo_path: Path,
+    *,
+    photo_role: str | None = None,
+    attrs: PhotoListingAttrs | None = None,
 ) -> Photo:
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
     photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
+    listing = attrs or PhotoListingAttrs(photo_role=photo_role)
     row = Photo(
         id=photo_id,
         account_id=job.account_id,
@@ -168,7 +178,12 @@ def _add_catalog_photo(
         lot_id=None,
         original_name=photo_path.name,
         storage_path=storage_path,
-        photo_role=normalize_catalog_photo_role(photo_role),
+        photo_role=normalize_catalog_photo_role(listing.photo_role if listing.photo_role is not None else photo_role),
+        distinct_item_id=listing.distinct_item_id,
+        is_primary_front=listing.is_primary_front,
+        shows_whole_lot=listing.shows_whole_lot,
+        shows_measuring_scale=listing.shows_measuring_scale,
+        label_legibility=listing.label_legibility,
     )
     db.add(row)
     db.flush()
@@ -355,6 +370,7 @@ def _finalize_open_lot(
     sale_id: str,
     *,
     listing_channel: str = "ctseller",
+    listing_order: list[str] | None = None,
 ) -> tuple[LotOutput | None, list[str], Lot | None]:
     """Persist current lot and attach pending photos; return cleared state and persisted row if any."""
     if current_lot is None:
@@ -364,9 +380,12 @@ def _finalize_open_lot(
     )
     db.flush()
     _assign_photos_to_lot(db, persisted.id, pending_photo_ids)
-    # Group by triage role for a shopper-friendly gallery (hero → items → details → tape).
-    # Within each role, capture order is kept. Staff can still drag or restore capture order.
-    reorder_photos_for_listing(db, persisted.id, account_id)
+    # Shopper gallery: prefer the cheap Flash gallery plan when present, else chapter sort.
+    names = [str(n).strip() for n in (listing_order or []) if str(n).strip()]
+    if names:
+        reorder_photos_by_filenames(db, persisted.id, account_id, names)
+    else:
+        reorder_photos_for_listing(db, persisted.id, account_id)
     pending_photo_ids.clear()
     return None, pending_photo_ids, persisted
 
@@ -609,7 +628,7 @@ def _process_job_batch_pipeline(
 
         # Persist photos in capture order first; _finalize_open_lot then groups by listing role.
         catalog_paths = list(seg_paths)
-        role_by_path = photo_roles_by_path(
+        attrs_by_path = listing_attrs_by_path(
             catalog_paths,
             list((pipeline_result or {}).get("triage") or seg_triage or []),
             entries=seg_entries,
@@ -626,7 +645,7 @@ def _process_job_batch_pipeline(
                 },
             )
             row = _add_catalog_photo(
-                db, job, photo_path, photo_role=role_by_path.get(photo_path)
+                db, job, photo_path, attrs=attrs_by_path.get(photo_path)
             )
             pending_photo_ids.append(row.id)
             db.commit()
@@ -640,6 +659,7 @@ def _process_job_batch_pipeline(
             pending_photo_ids,
             job.sale_id,
             listing_channel=getattr(job, "listing_channel", "ctseller"),
+            listing_order=list((pipeline_result or {}).get("listing_order") or []),
         )
         db.commit()
         if finalized is not None:
@@ -725,10 +745,10 @@ def _process_job_single_lot_pipeline(
     _apply_single_lot_manual_sku(job, lot)
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
 
-    # Persist photos in capture order first; _finalize_open_lot then groups by listing role
-    # (hero → item fronts → details). Within a role, capture order is kept.
+    # Persist photos in capture order first; _finalize_open_lot then groups for listing
+    # (true group shots → per-item chapters → labels → measurements → tape).
     catalog_paths = list(photos)
-    role_by_path = photo_roles_by_path(
+    attrs_by_path = listing_attrs_by_path(
         catalog_paths, list((pipeline_result or {}).get("triage") or [])
     )
     for i, photo_path in enumerate(catalog_paths):
@@ -749,7 +769,7 @@ def _process_job_single_lot_pipeline(
             },
         )
         row = _add_catalog_photo(
-            db, job, photo_path, photo_role=role_by_path.get(photo_path)
+            db, job, photo_path, attrs=attrs_by_path.get(photo_path)
         )
         pending_photo_ids.append(row.id)
         db.commit()
@@ -774,6 +794,7 @@ def _process_job_single_lot_pipeline(
         pending_photo_ids,
         job.sale_id,
         listing_channel=getattr(job, "listing_channel", "ctseller"),
+        listing_order=list((pipeline_result or {}).get("listing_order") or []),
     )
     db.commit()
     if finalized is not None:

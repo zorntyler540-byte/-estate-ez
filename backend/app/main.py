@@ -370,6 +370,7 @@ def startup() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_sale_zip_kind_column()
     _ensure_lot_audience_columns()
+    _ensure_photo_listing_columns()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -407,6 +408,32 @@ def _ensure_lot_audience_columns() -> None:
         stmts.append("ALTER TABLE lots ADD COLUMN audience_hunt_error TEXT")
     if "audience_json" not in cols:
         stmts.append("ALTER TABLE lots ADD COLUMN audience_json TEXT DEFAULT '{}' NOT NULL")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
+def _ensure_photo_listing_columns() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing photos tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "photos" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("photos")}
+    stmts: list[str] = []
+    if "distinct_item_id" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN distinct_item_id VARCHAR(64)")
+    if "is_primary_front" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN is_primary_front BOOLEAN")
+    if "shows_whole_lot" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN shows_whole_lot BOOLEAN")
+    if "shows_measuring_scale" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN shows_measuring_scale BOOLEAN")
+    if "label_legibility" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN label_legibility VARCHAR(16)")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -1407,10 +1434,11 @@ def sort_sale_photos_for_listing(
     db: Session = Depends(get_db),
 ) -> dict[str, int]:
     """
-    Re-sort every lot's photos in this sale into listing order (hero → items → details → tape).
+    Re-sort every lot's photos in this sale into listing order.
 
-    Uses persisted triage ``photo_role``. Within a role, current/capture order is kept.
-    Lots without roles are left unchanged. Staff can still drag photos or restore capture order.
+    New lots: group shots, then each item as a chapter, then labels, then measurements, tape last.
+    Lots without listing-meta columns keep the older role-bucket sort.
+    Staff can still drag photos or restore capture order.
     """
     sale = _sale_for_user(sale_id, current, db)
     lots = (
@@ -1433,7 +1461,7 @@ def sort_lot_photos_for_listing(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[LotPhotoOut]:
-    """Re-sort this lot's photos into listing order (hero → items → details → tape)."""
+    """Re-sort this lot's photos into listing order (group shots, item chapters, labels, measurements)."""
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")

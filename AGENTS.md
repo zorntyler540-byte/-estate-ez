@@ -27,7 +27,9 @@ cloud-specific gotchas; do not duplicate standard docs.
   `app.main:app` and must be started from inside `backend/` (its package is `app`).
 - **DB defaults to SQLite in dev** (`backend/app.db`). No Postgres is required locally;
   tables auto-create on API startup (`Base.metadata.create_all`), so Alembic migrations are
-  optional in dev. `ENVIRONMENT=production` would reject SQLite — keep it `development`.
+  optional in dev. Existing SQLite files get additive ALTERs in `startup()` (sale zip `kind`,
+  lot audience columns, photo listing-sort fields). `ENVIRONMENT=production` would reject
+  SQLite — keep it `development`.
 - **`backend/.env` is required for local dev** and is git-ignored. If missing, recreate it
   (SQLite `DATABASE_URL`, `ENVIRONMENT=development`, empty `GOOGLE_API_KEY`). Pydantic loads
   the cwd `.env` first then `backend/.env`, so run the API from `backend/`.
@@ -102,11 +104,14 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.
-- **Photo gallery order is not the same as capture order.** After catalog, `_finalize_open_lot`
-  groups photos by triage `photo_role` (hero → item_front → angle_only → leftover → unusable → tape)
-  while keeping capture order *within* each role. Dashboard **Sort for listing** reapplies that;
-  **Fix photo order** restores capture order from `original_name` (`mobile-<draft>-NN.jpg`).
-  Do not bring back naive hero-first-only reordering — that scrambled the rest of the gallery.
+- **Photo gallery order is not the same as capture order.** After per-photo triage, one extra
+  Flash call (`plan_listing_gallery`) sees all frames as 512px thumbs and returns shopper order
+  plus corrected Group/Item/Detail tags. Cost is on the order of half a cent per lot at current
+  Flash rates (not Pro). If that call fails or the lot has 1 or >40 photos, `_finalize_open_lot`
+  falls back to deterministic chapter sort: true group shots, then each item as a chapter, then
+  labels, then measuring-tape, then SKU tape. Dashboard **Sort for listing** reapplies the
+  deterministic sort (it does not re-call Gemini). **Fix photo order** restores capture order
+  from `original_name`. Do not bring back naive hero-first-only reordering.
 - **Audience hunt is public groups only.** `POST /lots/{id}/audience-hunt` uses Gemini Pro + Google
   Search, then a separate structured JSON call (schema + search tools 400 together). It stores
   group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,

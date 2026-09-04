@@ -20,6 +20,11 @@ type LotPhoto = {
   sort_order?: number;
   file_on_disk?: boolean;
   photo_role?: string | null;
+  distinct_item_id?: string | null;
+  is_primary_front?: boolean;
+  shows_whole_lot?: boolean;
+  shows_measuring_scale?: boolean;
+  label_legibility?: string | null;
 };
 
 const LISTING_ROLE_LABEL: Record<string, string> = {
@@ -29,6 +34,14 @@ const LISTING_ROLE_LABEL: Record<string, string> = {
   tape: "SKU tape",
   unusable: "Skip"
 };
+
+function listingRoleBadge(photo: LotPhoto): string | null {
+  if (photo.shows_measuring_scale) return "Measure";
+  if (photo.photo_role && LISTING_ROLE_LABEL[photo.photo_role]) {
+    return LISTING_ROLE_LABEL[photo.photo_role];
+  }
+  return null;
+}
 
 type Lot = {
   id: string;
@@ -832,7 +845,7 @@ export default function LotDetailPage() {
     if (
       !window.confirm(
         "Sort this lot’s photos for a listing?\n\n" +
-          "Order becomes: group/hero shot, then each item, then details/measurements, then SKU tape.\n" +
+          "Order becomes: group shots of the whole lot, then each item with its angles, then labels/stickers, then measurements, then SKU tape.\n" +
           "You can still drag photos afterward, or use Fix photo order on the dashboard to restore capture order."
       )
     ) {
@@ -846,7 +859,7 @@ export default function LotDetailPage() {
         method: "POST"
       })) as LotPhoto[];
       setCatalogPhotos(Array.isArray(photos) ? photos : []);
-      setOrganizeMsg("Sorted photos for listing (group → items → details).");
+      setOrganizeMsg("Sorted photos for listing (group → each item → labels → measurements).");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sort photos for listing");
     } finally {
@@ -1633,8 +1646,8 @@ export default function LotDetailPage() {
             ) : null}
           </h2>
           <p className="ct-upload-intro">
-            Gallery order is export order. New lots are auto-sorted for listing (group → items →
-            details). Drag to fine-tune; tap a photo to crop.
+            Gallery order is export order. New lots are auto-sorted for listing (group shots, then
+            each item with its angles, then labels, then measurements). Drag to fine-tune; tap a photo to crop.
           </p>
           <input
             ref={addPhotosInputRef}
@@ -1685,7 +1698,7 @@ export default function LotDetailPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Sort for listing</span>
                   <span className="ct-upload-option__desc">
-                    Group/hero first, then each item, then details and measurements. SKU tape last.
+                    Group shots first, then each item with its angles, then labels, then measurements. SKU tape last.
                   </span>
                 </div>
                 <button
@@ -1729,9 +1742,9 @@ export default function LotDetailPage() {
                   then the next row.
                 </li>
                 <li>
-                  <strong>Sort for listing</strong> groups photos the way shoppers expect (wide shot, then
-                  individuals, then close-ups). Use dashboard <strong>Fix photo order</strong> to restore the
-                  order photos were taken.
+                  <strong>Sort for listing</strong> groups photos the way shoppers expect (wide group
+                  shot, then each item as a chapter, then labels, then measuring-tape shots). Use dashboard{" "}
+                  <strong>Fix photo order</strong> to restore the order photos were taken.
                 </li>
                 <li>Order is saved for ZIP downloads, extension upload, and AI.</li>
                 <li>
@@ -1816,11 +1829,14 @@ export default function LotDetailPage() {
                     }}
                   >
                     {index + 1}
-                    {p.photo_role && LISTING_ROLE_LABEL[p.photo_role] ? (
+                    {(() => {
+                      const badge = listingRoleBadge(p);
+                      return badge ? (
                       <span style={{ fontWeight: 600, marginLeft: "0.28rem", opacity: 0.9 }}>
-                        {LISTING_ROLE_LABEL[p.photo_role]}
+                        {badge}
                       </span>
-                    ) : null}
+                      ) : null;
+                    })()}
                   </span>
                   <span
                     draggable={!organizeBusy && !reorderBusy}

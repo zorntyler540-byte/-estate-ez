@@ -13,6 +13,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
+from pathlib import Path
 
 from google import genai
 from google.genai import types
@@ -22,6 +23,7 @@ from pipeline.schemas import (
     BrandAuditResult,
     FullyAuditedManifest,
     InventoryLotDraft,
+    ListingGalleryPlan,
     LowTierDraftItem,
     PhotoTriageResult,
     VerifiedAndPricedItem,
@@ -37,6 +39,9 @@ BRAND_PRO_MAX_LABEL_FRAMES = max(1, int(os.environ.get("BRAND_PRO_MAX_LABEL_FRAM
 BRAND_SKIP_PRO_IF_AGREEMENT = os.environ.get("BRAND_SKIP_PRO_IF_AGREEMENT", "1") == "1"
 ENABLE_GROUNDED_VALUATION = os.environ.get("ENABLE_GROUNDED_VALUATION", "0") == "1"
 TRIAGE_IMAGE_MAX_EDGE = max(256, int(os.environ.get("TRIAGE_IMAGE_MAX_EDGE", "2048")))
+# Cheap full-lot gallery pass: small thumbs in one Flash call (not Pro).
+GALLERY_IMAGE_MAX_EDGE = max(256, int(os.environ.get("GALLERY_IMAGE_MAX_EDGE", "512")))
+GALLERY_PLAN_MAX_PHOTOS = max(2, int(os.environ.get("GALLERY_PLAN_MAX_PHOTOS", "40")))
 
 # --- Actual Gemini token usage metering (per catalog job) ---------------------------------
 # Records real prompt/candidate token counts from ``response.usage_metadata`` split by model tier
@@ -153,26 +158,28 @@ def _detect_mime_type(img_bytes: bytes) -> str:
     return "image/jpeg"
 
 
-def _maybe_downscale(img_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
-    """Bound triage payload size without importing production image_preprocess."""
+def _maybe_downscale(img_bytes: bytes, mime_type: str, *, max_edge: int | None = None) -> tuple[bytes, str]:
+    """Bound payload size without importing production image_preprocess."""
     try:
         from PIL import Image
     except ImportError:
         return img_bytes, mime_type
 
+    limit = max_edge if max_edge is not None else TRIAGE_IMAGE_MAX_EDGE
     try:
         with Image.open(io.BytesIO(img_bytes)) as im:
             im = im.convert("RGB")
             w, h = im.size
             edge = max(w, h)
-            if edge <= TRIAGE_IMAGE_MAX_EDGE:
+            if edge <= limit:
                 return img_bytes, mime_type
-            scale = TRIAGE_IMAGE_MAX_EDGE / edge
+            scale = limit / edge
             nw = max(1, int(w * scale))
             nh = max(1, int(h * scale))
             im = im.resize((nw, nh), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=95, optimize=True)
+            quality = 80 if limit <= 768 else 95
+            im.save(buf, format="JPEG", quality=quality, optimize=True)
             return buf.getvalue(), "image/jpeg"
     except Exception:
         return img_bytes, mime_type
@@ -202,9 +209,14 @@ TRIAGE_SYSTEM_INSTRUCTION = (
 TRIAGE_USER_PROMPT = """Classify this estate-sale lot photo.
 
 Rules:
-- hero: single best wide shot showing most of the lot (only one file should win hero selection). Use hero even when lot tape with SKU is visible at the edge of the frame.
-- item_front: primary face of each distinct sellable item; brand/tag when visible.
-- angle_only: side, back, detail, damage close-up, or **ruler/measuring-tape scale shots** — not used for hero listing.
+- hero: a **group / establishing** wide shot. Use hero when two or more distinct sellable items appear together,
+  or when this is the single wide shot of a one-item lot. Use hero even when lot tape with SKU is visible at the edge.
+  A **single** figurine, dish, shoe, or object filling the frame is **item_front**, never hero — even if it is the first
+  photo or it sits on a seamless background.
+- shows_whole_lot: true only when most or all sellable items in the lot are visible in this frame (a true group shot).
+  False for a lone item even if the rest of the table is empty.
+- item_front: primary face of each distinct sellable item; brand/tag when visible on that object.
+- angle_only: side, back, detail, damage close-up, underside sticker, or **ruler/measuring-tape scale shots** — not used for hero listing.
   Frames whose main purpose is showing size with a ruler or yellow tape should still be tagged angle_only (not unusable).
   Set **shows_measuring_scale** true whenever a yellow measuring tape, metal ruler, yardstick, or similar scale is visibly
   measuring the merchandise — even when photo_role is angle_only. When it is legible, copy the size into
@@ -214,10 +226,12 @@ Rules:
   **weight_text** verbatim with units (e.g. "2.4 lb", "540 g", "1.2 kg"); leave null if unreadable — never guess.
   A yellow **measuring** tape / ruler is a size scale (measurement_text), NOT estate lot tape (SKU); a **weight** scale
   display is weight_text, not a size.
-  Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only).
-  Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", tune name)
-  are high-value label frames: use angle_only if needed but set label_legibility clear/partial and copy **all**
-  readable sticker text verbatim into brand_text (maker mark, material, tune — not just a guessed brand name).
+  Tag/label close-ups whose main subject is a sewn-in tag or hang tag should use item_front (not angle_only) but
+  **is_primary_front_for_item must be false** unless this is also the product's face.
+  Bottom/underside **maker foil stickers** (oval foil with logo, "Hand-Sculpted Glass", "22 KT GOLD", "Genuine Volcanic Ash",
+  store tags like Tillamook) are high-value label frames: always **angle_only**, never item_front, never is_primary_front_for_item;
+  set label_legibility clear/partial and copy **all** readable sticker text verbatim into brand_text
+  (maker mark, material, tune — not just a guessed brand name).
   **Engraved or stamped metal marks** (lock plates, barrels, undersides, silver/pewter hallmarks): use angle_only
   or item_front; set label_legibility clear/partial when any letters/numbers are readable; copy **all** engraved
   text verbatim into brand_text (e.g. PEDERSOLI, TOWER, GR, maker name + date).
@@ -280,6 +294,167 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
     if not row.filename or row.filename != filename:
         row = row.model_copy(update={"filename": filename})
     return row.model_dump()
+
+
+GALLERY_SYSTEM_INSTRUCTION = (
+    "You are a CTBids listing-photo editor. "
+    "Sort this estate lot the way staff hand-sort for a shopper gallery. "
+    "Output structured JSON only — no conversational text."
+)
+
+GALLERY_USER_PROMPT = """These small images are every photo in one estate lot. Stage-1 tags below are HINTS and are often wrong
+(single figurines tagged hero/Group). Trust the pictures.
+
+Return **every filename exactly once** in shopper listing order:
+1. True **group** shots — two or more distinct items together, or the one wide establishing shot of a one-item lot.
+   A single figurine/object filling the frame is never hero.
+2. Then each distinct object as a **chapter**: best front (item_front, is_primary_front_for_item true), then that
+   object's other angles (angle_only). Do not interleave different objects.
+3. Then label / underside sticker / hang-tag macros (angle_only, not primary front).
+4. Then measuring-tape / ruler scale shots (shows_measuring_scale true, angle_only).
+5. Dedicated SKU tape last (photo_role tape).
+
+Set shows_whole_lot true only on real group frames. Use a stable distinct_item_id per object (e.g. EAGLE, FISH).
+
+Stage-1 hint JSON:
+{hints}
+
+Filenames in capture order:
+{filenames}
+"""
+
+
+def complete_listing_order(wanted: list[str], known: list[str]) -> list[str]:
+    """Keep AI order when it names known files; append any leftovers in capture order."""
+    known_list = [str(k).strip() for k in known if str(k).strip()]
+    by_key: dict[str, str] = {}
+    for name in known_list:
+        by_key.setdefault(name.lower(), name)
+        by_key.setdefault(Path(name).name.lower(), name)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in wanted:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        match = by_key.get(token.lower()) or by_key.get(Path(token).name.lower())
+        if match and match not in seen:
+            out.append(match)
+            seen.add(match)
+    for name in known_list:
+        if name not in seen:
+            out.append(name)
+            seen.add(name)
+    return out
+
+
+def apply_gallery_plan_to_triage(
+    triage_results: list[dict[str, Any]],
+    plan: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Overlay listing roles/item ids from the gallery pass; keep OCR and measurements."""
+    if not plan:
+        return triage_results
+    rows = [dict(r) for r in triage_results]
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        fn = str(row.get("filename") or "").strip()
+        if not fn:
+            continue
+        by_key.setdefault(fn.lower(), row)
+        by_key.setdefault(Path(fn).name.lower(), row)
+    for slot in plan.get("photos") or []:
+        fn = str(slot.get("filename") or "").strip()
+        row = by_key.get(fn.lower()) or by_key.get(Path(fn).name.lower())
+        if row is None:
+            continue
+        role = str(slot.get("photo_role") or "").strip().lower()
+        if role in {"hero", "item_front", "angle_only", "tape", "unusable"}:
+            row["photo_role"] = role
+        item_id = slot.get("distinct_item_id")
+        if item_id is not None:
+            text = str(item_id).strip()
+            row["distinct_item_id"] = text or None
+        row["is_primary_front_for_item"] = bool(slot.get("is_primary_front_for_item"))
+        row["shows_whole_lot"] = bool(slot.get("shows_whole_lot"))
+        row["shows_measuring_scale"] = bool(slot.get("shows_measuring_scale")) or bool(
+            row.get("shows_measuring_scale")
+        )
+    return rows
+
+
+def plan_listing_gallery(
+    user_images_dict: dict[str, bytes],
+    triage_results: list[dict[str, Any]],
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any] | None:
+    """One cheap Flash call over small thumbs. Returns ListingGalleryPlan dump or None."""
+    names = [str(r.get("filename") or "").strip() for r in triage_results]
+    names = [n for n in names if n and n in user_images_dict]
+    if len(names) < 2 or len(names) > GALLERY_PLAN_MAX_PHOTOS:
+        return None
+    if should_cancel and should_cancel():
+        return None
+
+    hints = []
+    for row in triage_results:
+        fn = str(row.get("filename") or "").strip()
+        if fn not in user_images_dict:
+            continue
+        hints.append(
+            {
+                "filename": fn,
+                "photo_role": row.get("photo_role"),
+                "distinct_item_id": row.get("distinct_item_id"),
+                "shows_whole_lot": bool(row.get("shows_whole_lot")),
+                "shows_measuring_scale": bool(row.get("shows_measuring_scale")),
+                "is_primary_front_for_item": bool(row.get("is_primary_front_for_item")),
+            }
+        )
+
+    parts: list[Any] = [
+        GALLERY_USER_PROMPT.format(
+            hints=json.dumps(hints, indent=2),
+            filenames=json.dumps(names),
+        )
+    ]
+    for filename in names:
+        payload_bytes, mime_type = _maybe_downscale(
+            user_images_dict[filename],
+            _detect_mime_type(user_images_dict[filename]),
+            max_edge=GALLERY_IMAGE_MAX_EDGE,
+        )
+        parts.append(_image_part(payload_bytes, mime_type))
+        parts.append(f"The preceding image filename is: {filename}")
+
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=pydantic_model_to_gemini_schema(ListingGalleryPlan),
+        system_instruction=GALLERY_SYSTEM_INSTRUCTION,
+        temperature=0.1,
+    )
+    client = _get_client()
+    from app.core.gemini_slots import gemini_slot
+
+    with gemini_slot():
+        response = client.models.generate_content(
+            model=GEMINI_FLASH_MODEL,
+            contents=parts,
+            config=config,
+        )
+    _record_usage("flash", response)
+
+    if response.parsed is not None:
+        plan = ListingGalleryPlan.model_validate(response.parsed)
+    elif response.text:
+        plan = ListingGalleryPlan.model_validate(json.loads(response.text))
+    else:
+        return None
+    dump = plan.model_dump()
+    if not dump.get("photos"):
+        return None
+    return dump
 
 
 def _hero_score(row: PhotoTriageResult) -> tuple[int, int, int]:
@@ -1073,6 +1248,8 @@ def triage_and_select_field_lot(
             "selected": select_analysis_photos([]),
             "flash_draft": InventoryLotDraft().model_dump(),
             "catalog_only_count": 0,
+            "listing_order": [],
+            "listing_gallery_ai": False,
         }
 
     triage = _run_parallel_triage(
@@ -1082,6 +1259,20 @@ def triage_and_select_field_lot(
     )
     if should_cancel and should_cancel():
         raise PipelineCancelled()
+    gallery_plan = None
+    listing_order: list[str] = []
+    try:
+        gallery_plan = plan_listing_gallery(
+            user_images_dict, triage, should_cancel=should_cancel
+        )
+    except Exception:
+        gallery_plan = None
+    if gallery_plan:
+        triage = apply_gallery_plan_to_triage(triage, gallery_plan)
+        listing_order = complete_listing_order(
+            [str(p.get("filename") or "") for p in gallery_plan.get("photos") or []],
+            [str(r.get("filename") or "") for r in triage],
+        )
     selected = select_analysis_photos(triage)
     flash_draft = _build_flash_draft(triage, selected)
     return {
@@ -1089,6 +1280,8 @@ def triage_and_select_field_lot(
         "selected": selected,
         "flash_draft": flash_draft.model_dump(),
         "catalog_only_count": len(selected.get("catalog_only") or []),
+        "listing_order": listing_order,
+        "listing_gallery_ai": bool(gallery_plan),
     }
 
 

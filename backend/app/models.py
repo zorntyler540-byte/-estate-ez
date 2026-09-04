@@ -123,6 +123,12 @@ class Photo(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Triage role from pipeline: hero|item_front|angle_only|tape|unusable (nullable for legacy rows).
     photo_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Listing-sort extras from Stage-1 triage (nullable for lots cataloged before these columns).
+    distinct_item_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_primary_front: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    shows_whole_lot: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    shows_measuring_scale: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    label_legibility: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lot: Mapped["Lot"] = relationship(back_populates="photos")

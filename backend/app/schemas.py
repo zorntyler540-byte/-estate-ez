@@ -360,6 +360,11 @@ class LotPhotoOut(BaseModel):
     file_on_disk: bool = True
     """Pipeline triage role when known (e.g. ``tape`` for estate SKU-tape frames)."""
     photo_role: str | None = None
+    distinct_item_id: str | None = None
+    is_primary_front: bool = False
+    shows_whole_lot: bool = False
+    shows_measuring_scale: bool = False
+    label_legibility: str | None = None
 
 
 class LotPhotoHealthRow(BaseModel):

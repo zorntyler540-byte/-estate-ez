@@ -66,6 +66,27 @@ class PhotoTriageResult(BaseModel):
     )
 
 
+class ListingGallerySlot(BaseModel):
+    """One catalog photo in shopper listing order (cheap Flash gallery pass)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    photo_role: PhotoRole
+    distinct_item_id: str | None = None
+    is_primary_front_for_item: bool = False
+    shows_whole_lot: bool = False
+    shows_measuring_scale: bool = False
+
+
+class ListingGalleryPlan(BaseModel):
+    """Full-lot listing gallery: every filename once, in CTBids shopper order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    photos: list[ListingGallerySlot] = Field(default_factory=list)
+
+
 class LowTierDraftItem(BaseModel):
     """Flash-derived item row after triage merge (listing draft building block)."""
 
