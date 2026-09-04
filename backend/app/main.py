@@ -145,6 +145,13 @@ from app.services.photo_order import (
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.audience_hunt import lot_is_held_from_ctseller
+from app.services.roles import (
+    ALLOWED_ROLES,
+    can_delete_lot,
+    can_run_audience_hunt,
+    is_owner,
+    normalize_role,
+)
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
     LISTING_CHANNEL_FACEBOOK,
@@ -269,8 +276,24 @@ def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
 
 
 def _require_owner(current: User) -> None:
-    if (current.role or "").strip().lower() != "owner":
+    if not is_owner(current):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
+
+
+def _require_can_delete_lot(current: User) -> None:
+    if not can_delete_lot(current.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner access required to delete lots",
+        )
+
+
+def _require_can_run_audience_hunt(current: User) -> None:
+    if not can_run_audience_hunt(current.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner access required to run audience hunts",
+        )
 
 
 def _require_master_admin(current: User) -> None:
@@ -595,8 +618,8 @@ def create_team_member(
         pw_hash = hash_password(payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    role = payload.role.strip().lower()
-    if role not in ("owner", "catalogger"):
+    role = normalize_role(payload.role)
+    if role not in ALLOWED_ROLES:
         raise HTTPException(status_code=400, detail="Role must be owner or catalogger")
     row = User(
         account_id=current.account_id,
@@ -926,8 +949,7 @@ def r2_cors_apply(current: User = Depends(get_current_user)) -> CatalogR2CorsOut
     """
     if not catalog_r2_configured():
         raise HTTPException(status_code=400, detail="R2 is not configured on this API")
-    role = (current.role or "").strip().lower()
-    if role != "owner" and not is_master_admin_email(current.email):
+    if not is_owner(current) and not is_master_admin_email(current.email):
         raise HTTPException(status_code=403, detail="Owner required")
     origins = cors_allow_origins()
     try:
@@ -1213,8 +1235,7 @@ def list_saved_suggestions(
     current: User = Depends(get_current_user),
 ) -> list[SuggestionSavedOut]:
     """Owner-only view of local fallback suggestions for pilot workflow."""
-    if (current.role or "").strip().lower() != "owner":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
+    _require_owner(current)
     rows = read_recent_saved_suggestions(limit=limit)
     return [SuggestionSavedOut(**r) for r in rows]
 
@@ -3061,6 +3082,7 @@ def hunt_lot_audience(
     db: Session = Depends(get_db),
 ) -> LotOut:
     """Find public collector groups and draft outreach blurbs. Does not scrape or auto-post."""
+    _require_can_run_audience_hunt(current)
     from app.services.audience_hunt import apply_skip_without_model, should_run_audience_hunt
 
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
@@ -3117,6 +3139,7 @@ def hunt_sale_audience(
     db: Session = Depends(get_db),
 ) -> SaleAudienceHuntOut:
     """Queue collector-group hunts for existing lots. Does not recatalog photos or auto-post."""
+    _require_can_run_audience_hunt(current)
     from app.services.audience_hunt import plan_sale_audience_hunts
 
     payload = body or SaleAudienceHuntIn()
@@ -3197,6 +3220,7 @@ def delete_lot(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
+    _require_can_delete_lot(current)
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")

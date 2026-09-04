@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { apiFetch } from "../../lib/api";
+import { accountRoleLabel } from "../../lib/roles";
 
 type Me = {
   id: string;
@@ -330,7 +331,7 @@ export default function AccountPage() {
             </div>
             <div>
               <span className="ct-label">Role</span>
-              <p style={{ margin: "0.25rem 0 0" }}>{me.role}</p>
+              <p style={{ margin: "0.25rem 0 0" }}>{accountRoleLabel(me.role)}</p>
             </div>
             <div>
               <span className="ct-label">User ID</span>
@@ -533,8 +534,10 @@ export default function AccountPage() {
           <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
             <summary>Roles</summary>
             <div className="ct-help-details__body">
-              <strong>Catalogger</strong> — work on lots and photos. <strong>Owner</strong> — same, plus team
-              management and account-level actions. Choose a temporary password; they can change it after signing in.
+              <strong>Catalogger</strong> — catalog lots, edit listings, add photos, and post to CT Seller.
+              They cannot delete lots, clear a sale, close a sale, run audience hunts, manage teammates,
+              or connect CT Seller. <strong>Owner</strong> — full access. Choose a temporary password; they
+              can change it after signing in.
             </div>
           </details>
           {teamError ? <div className="ct-banner ct-banner--error">{teamError}</div> : null}

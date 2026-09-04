@@ -14,6 +14,7 @@ import {
   audienceHuntStepPercent
 } from "../../../components/AudienceHuntProgress";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
+import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
 import { rotateImageBlob } from "../../../lib/photoEdit";
@@ -194,6 +195,8 @@ export default function LotDetailPage() {
     router.replace("/");
   }
   const [token, setToken] = useState(readStoredToken);
+  const [accountRole, setAccountRole] = useState("");
+  const isAccountOwner = isOwnerRole(accountRole);
   const [lot, setLot] = useState<Lot | null>(null);
   const [catalogPhotos, setCatalogPhotos] = useState<LotPhoto[]>([]);
   const [photosError, setPhotosError] = useState("");
@@ -287,6 +290,24 @@ export default function LotDetailPage() {
     markListingDirty();
     setLot((prev) => (prev ? { ...prev, ...patch } : prev));
   }
+
+  useEffect(() => {
+    if (!token) {
+      setAccountRole("");
+      return;
+    }
+    let cancelled = false;
+    void apiFetch("/auth/me", token)
+      .then((data) => {
+        if (!cancelled) setAccountRole(String((data as { role?: string }).role || ""));
+      })
+      .catch(() => {
+        if (!cancelled) setAccountRole("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -1470,22 +1491,29 @@ export default function LotDetailPage() {
             </p>
           ) : null}
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
-            <button
-              type="button"
-              className="ct-btn ct-btn--primary"
-              onClick={() => void findAudience()}
-              disabled={showAudienceHuntProgress || saving}
-              aria-busy={showAudienceHuntProgress}
-            >
-              {showAudienceHuntProgress ? (
-                <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
-                  <Loader2 size={16} className="ct-spin" aria-hidden />
-                  Hunting…
-                </span>
-              ) : (
-                "Find audience"
-              )}
-            </button>
+            {isAccountOwner ? (
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => void findAudience()}
+                disabled={showAudienceHuntProgress || saving}
+                aria-busy={showAudienceHuntProgress}
+              >
+                {showAudienceHuntProgress ? (
+                  <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
+                    <Loader2 size={16} className="ct-spin" aria-hidden />
+                    Hunting…
+                  </span>
+                ) : (
+                  "Find audience"
+                )}
+              </button>
+            ) : (
+              <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+                Ask an owner to run a collector-group hunt. Existing results stay visible.
+              </p>
+            )}
+            {isAccountOwner ? (
             <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
               <input
                 type="checkbox"
@@ -1495,6 +1523,7 @@ export default function LotDetailPage() {
               />
               <span className="ct-muted">Force hunt (even everyday lots)</span>
             </label>
+            ) : null}
             <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
               <input
                 type="checkbox"
@@ -2452,9 +2481,11 @@ export default function LotDetailPage() {
             >
               {saving ? "Saving…" : "Save"}
             </button>
-            <button type="button" className="ct-btn ct-btn--danger-outline" onClick={() => void removeLot()}>
-              Delete lot
-            </button>
+            {isAccountOwner ? (
+              <button type="button" className="ct-btn ct-btn--danger-outline" onClick={() => void removeLot()}>
+                Delete lot
+              </button>
+            ) : null}
           </div>
           {error ? (
             <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>
