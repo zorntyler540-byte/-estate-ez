@@ -101,6 +101,7 @@ from app.schemas import (
     SaleAudienceHuntLotResult,
     LotPhotoOut,
     ReorderLotPhotosIn,
+    CatalogedMobileDraftLotOut,
     CatalogedMobileDraftsOut,
     SalePhotoHealthOut,
     SaleZipExportOut,
@@ -139,7 +140,7 @@ from app.services.photo_order import (
     reorder_photos_by_capture_name,
     reorder_photos_for_listing,
 )
-from app.services.mobile_drafts import cataloged_mobile_draft_ids
+from app.services.mobile_drafts import cataloged_mobile_draft_lots
 from app.services.photo_roles import filter_photos_excluding_sku_tape
 from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.listing_channels import (
@@ -1219,8 +1220,19 @@ def sale_cataloged_mobile_drafts(
 ) -> CatalogedMobileDraftsOut:
     """Draft ids whose ``mobile-<draft>-NN.jpg`` photos already exist as catalog rows on this sale."""
     _sale_for_user(sale_id, current, db)
+    mapped = cataloged_mobile_draft_lots(db, current.account_id, sale_id)
     return CatalogedMobileDraftsOut(
-        draft_ids=cataloged_mobile_draft_ids(db, current.account_id, sale_id)
+        draft_ids=[row.draft_id for row in mapped],
+        lots=[
+            CatalogedMobileDraftLotOut(
+                draft_id=row.draft_id,
+                lot_id=row.lot_id,
+                sku=row.sku,
+                photo_count=row.photo_count,
+                auction_title=row.auction_title,
+            )
+            for row in mapped
+        ],
     )
 
 

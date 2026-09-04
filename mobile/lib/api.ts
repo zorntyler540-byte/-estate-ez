@@ -346,13 +346,32 @@ export async function listJobsForSale(token: string, saleId: string): Promise<Jo
   return apiFetch<Job[]>(`/jobs?${params.toString()}`, token);
 }
 
-/** Phone draft ids that already have catalog photos on this sale. */
-export async function listCatalogedMobileDrafts(token: string, saleId: string): Promise<string[]> {
-  const res = await apiFetch<{ draft_ids?: string[] }>(
+export type CatalogedMobileDraftLot = {
+  draft_id: string;
+  lot_id: string;
+  sku?: string | null;
+  photo_count?: number;
+  auction_title?: string | null;
+};
+
+/** Phone drafts that already have catalog photos on this sale (ids + lot mapping). */
+export async function listCatalogedMobileDraftsDetailed(
+  token: string,
+  saleId: string
+): Promise<{ draftIds: string[]; lots: CatalogedMobileDraftLot[] }> {
+  const res = await apiFetch<{ draft_ids?: string[]; lots?: CatalogedMobileDraftLot[] }>(
     `/sales/${encodeURIComponent(saleId)}/cataloged-mobile-drafts`,
     token
   );
-  return (res.draft_ids || []).map((id) => id.toLowerCase());
+  const lots = Array.isArray(res.lots) ? res.lots : [];
+  const draftIds = (res.draft_ids || lots.map((row) => row.draft_id)).map((id) => id.toLowerCase());
+  return { draftIds, lots };
+}
+
+/** Phone draft ids that already have catalog photos on this sale. */
+export async function listCatalogedMobileDrafts(token: string, saleId: string): Promise<string[]> {
+  const res = await listCatalogedMobileDraftsDetailed(token, saleId);
+  return res.draftIds;
 }
 
 /** Remove a queued/failed job (and its upload folder when safe). */

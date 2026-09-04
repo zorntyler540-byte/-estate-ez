@@ -18,7 +18,9 @@ import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { useSync, type SyncResult } from "@/context/SyncContext";
-import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftStatus } from "@/lib/queue/db";
+import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
+import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
+import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
 
@@ -33,7 +35,7 @@ function formatQueueSyncMessage(result: SyncResult, online: boolean | null): str
 }
 
 export default function QueueScreen() {
-  const { selectedSaleId } = useAuth();
+  const { token, selectedSaleId } = useAuth();
   const { getSaleName, refreshSales } = useSales();
   const { syncing, lastMessage, refreshKey, syncNow } = useSync();
   const [rows, setRows] = useState<DraftRow[]>([]);
@@ -75,6 +77,91 @@ export default function QueueScreen() {
         ...(item.listing_channel === "facebook" ? { channel: "facebook" } : {})
       }
     });
+  }
+
+  function openAppendCamera(lotId: string, photoCount: number, sku?: string | null, title?: string | null) {
+    router.push({
+      pathname: "/capture-session",
+      params: {
+        appendLotId: lotId,
+        appendExistingCount: String(photoCount || 0),
+        ...(sku?.trim() ? { appendSku: sku.trim() } : {}),
+        ...(title?.trim() ? { appendTitle: title.trim().slice(0, 80) } : {})
+      }
+    });
+  }
+
+  async function addPhotosToLot(item: DraftRow) {
+    if (item.status === "uploading" || syncing) {
+      Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
+      return;
+    }
+    if (queueAddPhotosIsLocal(item.status)) {
+      continueDraft(item);
+      return;
+    }
+    if (!token) {
+      Alert.alert("Sign in", "Sign in again to add photos to a listing already on the website.");
+      return;
+    }
+    setMessage("Finding that listing…");
+    try {
+      const detailed = await listCatalogedMobileDraftsDetailed(token, item.sale_id);
+      const mapped = detailed.lots.map((row) => ({
+        draftId: row.draft_id,
+        lotId: row.lot_id,
+        sku: row.sku,
+        photoCount: row.photo_count ?? 0,
+        title: row.auction_title
+      }));
+      let picked = pickCatalogLotForDraft({
+        draftId: item.id,
+        manualSku: item.manual_sku,
+        cachedLotId: item.server_lot_id,
+        mapped
+      });
+      if (!picked && item.manual_sku?.trim()) {
+        const saleLots = await listLots(token, item.sale_id, {
+          sort: "sku_asc",
+          limit: 500,
+          listingChannel: item.listing_channel === "facebook" ? "facebook" : "ctseller"
+        });
+        picked = pickCatalogLotForDraft({
+          draftId: item.id,
+          manualSku: item.manual_sku,
+          cachedLotId: item.server_lot_id,
+          mapped,
+          lotsBySku: saleLots
+        });
+      }
+      if (!picked) {
+        setMessage("");
+        Alert.alert(
+          "Open Lots to add photos",
+          "This phone lot is sent, but I could not match it to a website listing. Open the Lots tab, tap the listing, then Add photos."
+        );
+        return;
+      }
+      if (item.server_lot_id !== picked.lotId) {
+        await setDraftServerLotId(item.id, picked.lotId);
+      }
+      let photoCount = picked.photoCount;
+      let sku = picked.sku;
+      let title = picked.title;
+      try {
+        const lot = await getLot(token, picked.lotId);
+        photoCount = lot.photo_count || photoCount;
+        sku = lot.sku || sku;
+        title = lot.auction_title || title;
+      } catch {
+        /* cached mapping is enough to open the camera */
+      }
+      setMessage("");
+      openAppendCamera(picked.lotId, photoCount, sku, title);
+    } catch (e) {
+      setMessage("");
+      Alert.alert("Could not add photos", e instanceof Error ? e.message : "Try the Lots tab.");
+    }
   }
 
   /** Re-queue a lot already marked uploaded so Sync sends photos again (e.g. server lost staging). */
@@ -206,7 +293,7 @@ export default function QueueScreen() {
       </Text>
       <Text style={styles.hint}>
         Each row shows photos saved on this phone. Unfinished lots stay here if you leave the app —
-        tap Continue to keep shooting, or Queue / Sync to upload. Review photos here in the order they
+        tap Add photos to keep shooting, or Queue / Sync to upload. Review photos here in the order they
         were taken. Catalog review is on the web dashboard.
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
@@ -308,24 +395,30 @@ export default function QueueScreen() {
                   {item.error_message}
                 </Text>
               ) : null}
-              {item.status === "draft" ? (
+              {item.status !== "uploading" ? (
                 <View style={styles.draftActions}>
-                  <Pressable style={styles.continueBtn} onPress={() => continueDraft(item)}>
-                    <Text style={styles.continueBtnText}>Continue</Text>
+                  <Pressable
+                    style={[styles.continueBtn, syncing && item.status === "uploaded" && styles.disabled]}
+                    disabled={syncing && item.status === "uploaded"}
+                    onPress={() => void addPhotosToLot(item)}
+                  >
+                    <Text style={styles.continueBtnText}>Add photos</Text>
                   </Pressable>
-                  <Pressable style={styles.secondary} onPress={() => void queueDraft(item.id)}>
-                    <Text style={styles.secondaryText}>Queue for upload</Text>
-                  </Pressable>
+                  {item.status === "draft" ? (
+                    <Pressable style={styles.secondary} onPress={() => void queueDraft(item.id)}>
+                      <Text style={styles.secondaryText}>Queue for upload</Text>
+                    </Pressable>
+                  ) : null}
+                  {item.status === "uploaded" ? (
+                    <Pressable
+                      style={[styles.secondary, syncing && styles.disabled]}
+                      disabled={syncing}
+                      onPress={() => confirmResendLot(item)}
+                    >
+                      <Text style={styles.secondaryText}>Resend to server</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
-              ) : null}
-              {item.status === "uploaded" ? (
-                <Pressable
-                  style={[styles.secondary, syncing && styles.disabled]}
-                  disabled={syncing}
-                  onPress={() => confirmResendLot(item)}
-                >
-                  <Text style={styles.secondaryText}>Resend to server</Text>
-                </Pressable>
               ) : null}
             </View>
           );

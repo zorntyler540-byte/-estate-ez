@@ -148,7 +148,7 @@ export function draftStatusDisplay(
     case "draft":
       return {
         label: "Saved on phone",
-        hint: "Photos are kept if you leave the app — tap Continue to add more, or Queue for upload"
+        hint: "Photos are kept if you leave the app — tap Add photos to keep shooting, or Queue for upload"
       };
     case "queued":
       if (opts?.syncing) {
@@ -166,7 +166,7 @@ export function draftStatusDisplay(
     case "uploaded":
       return {
         label: "Sent to server",
-        hint: "Review on the web dashboard. If the job failed or photos are missing online, tap Resend to server."
+        hint: "Forgot a shot? Tap Add photos. Only Resend if this listing is missing on the website."
       };
     case "failed":
       if (isTransientSyncError(opts?.errorMessage) || !opts?.errorMessage) {

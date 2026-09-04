@@ -3,7 +3,7 @@ import NetInfo from "@react-native-community/netinfo";
 import {
   appendFilesToQueuedJob,
   deleteJob,
-  listCatalogedMobileDrafts,
+  listCatalogedMobileDraftsDetailed,
   listJobsForSale,
   runJob,
   uploadSingleLotJob
@@ -15,7 +15,13 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
-import { listDraftPhotos, listLotDrafts, setDraftServerJobId, setDraftStatus } from "./db";
+import {
+  listDraftPhotos,
+  listLotDrafts,
+  setDraftServerJobId,
+  setDraftServerLotId,
+  setDraftStatus
+} from "./db";
 import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
@@ -60,12 +66,21 @@ async function fetchServerJobChecked(
   }
 }
 
-async function catalogedDraftIdSet(token: string, saleId: string): Promise<Set<string>> {
+async function catalogedDraftIndex(
+  token: string,
+  saleId: string
+): Promise<{ ids: Set<string>; lotByDraft: Map<string, string> }> {
   try {
-    const ids = await listCatalogedMobileDrafts(token, saleId);
-    return new Set(ids);
+    const res = await listCatalogedMobileDraftsDetailed(token, saleId);
+    const lotByDraft = new Map<string, string>();
+    for (const row of res.lots) {
+      const draftId = String(row.draft_id || "").trim().toLowerCase();
+      const lotId = String(row.lot_id || "").trim();
+      if (draftId && lotId) lotByDraft.set(draftId, lotId);
+    }
+    return { ids: new Set(res.draftIds), lotByDraft };
   } catch {
-    return new Set();
+    return { ids: new Set(), lotByDraft: new Map() };
   }
 }
 
@@ -96,13 +111,18 @@ export async function syncPendingLots(
 
   // Phase 0: if the website already has the lot, clear fake "failed / didn't finish" rows.
   // The phone often timed out on a full DB pool after /run while the worker still cataloged.
-  const catalogedBySale = new Map<string, Set<string>>();
+  const catalogedBySale = new Map<string, { ids: Set<string>; lotByDraft: Map<string, string> }>();
   for (const draft of drafts) {
     if (!catalogedBySale.has(draft.sale_id)) {
-      catalogedBySale.set(draft.sale_id, await catalogedDraftIdSet(authToken, draft.sale_id));
+      catalogedBySale.set(draft.sale_id, await catalogedDraftIndex(authToken, draft.sale_id));
     }
-    const cataloged = catalogedBySale.get(draft.sale_id) ?? new Set<string>();
-    if (cataloged.has(draft.id.toLowerCase())) {
+    const cataloged = catalogedBySale.get(draft.sale_id);
+    const draftKey = draft.id.toLowerCase();
+    if (cataloged?.ids.has(draftKey)) {
+      const lotId = cataloged.lotByDraft.get(draftKey);
+      if (lotId && draft.server_lot_id !== lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+      }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
         await setDraftStatus(draft.id, "uploaded", null);

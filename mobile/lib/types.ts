@@ -78,6 +78,8 @@ export type LotDraft = {
   error_message: string | null;
   /** Server ProcessingJob id while a multipart upload is in progress (cleared when done). */
   server_job_id: string | null;
+  /** Catalog lot id after this draft is on the website (used to add forgotten photos). */
+  server_lot_id: string | null;
   created_at: number;
   updated_at: number;
   photo_count: number;
