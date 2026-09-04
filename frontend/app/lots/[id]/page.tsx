@@ -14,6 +14,7 @@ import {
   audienceHuntStepPercent
 } from "../../../components/AudienceHuntProgress";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
+import { sortBySku } from "../../../lib/skuSort";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
 import { rotateImageBlob } from "../../../lib/photoEdit";
 
@@ -102,6 +103,18 @@ type SaleLotOption = {
   auction_title: string;
   photo_count: number;
 };
+
+function saleLotOptionsFromRows(rows: SaleLotOption[]): SaleLotOption[] {
+  return sortBySku(
+    rows.map((r) => ({
+      id: r.id,
+      sku: r.sku ?? null,
+      auction_title: r.auction_title || "",
+      photo_count: typeof r.photo_count === "number" ? r.photo_count : 0
+    })),
+    (r) => r.sku
+  );
+}
 
 /** Destination sentinel: create a new lot with the checked photos (same API as split). */
 const TRANSFER_DEST_NEW_LOT = "__create_new_lot__";
@@ -406,14 +419,7 @@ export default function LotDetailPage() {
         });
         const rows = (await apiFetch(`/lots?${qs.toString()}`, token)) as SaleLotOption[];
         if (!cancelled && Array.isArray(rows)) {
-          setSaleLots(
-            rows.map((r) => ({
-              id: r.id,
-              sku: r.sku ?? null,
-              auction_title: r.auction_title || "",
-              photo_count: typeof r.photo_count === "number" ? r.photo_count : 0
-            }))
-          );
+          setSaleLots(saleLotOptionsFromRows(rows));
         }
       } catch {
         if (!cancelled) setSaleLots([]);
@@ -1001,14 +1007,7 @@ export default function LotDetailPage() {
     try {
       const rows = (await apiFetch(`/lots?${qs.toString()}`, token)) as SaleLotOption[];
       if (Array.isArray(rows)) {
-        setSaleLots(
-          rows.map((r) => ({
-            id: r.id,
-            sku: r.sku ?? null,
-            auction_title: r.auction_title || "",
-            photo_count: typeof r.photo_count === "number" ? r.photo_count : 0
-          }))
-        );
+        setSaleLots(saleLotOptionsFromRows(rows));
       }
     } catch {
       setSaleLots([]);
