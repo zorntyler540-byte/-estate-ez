@@ -54,7 +54,17 @@ Sign in with your **Apple Developer** Apple ID when prompted. After Apple proces
 
 Use this when the change is only JavaScript/TypeScript (Queue screen, sync logic, copy). The phones already have the native app from TestFlight; this just swaps the JS bundle.
 
-You do **not** need Apple login for this. You do need your **Expo** login (the same account as `eas build`).
+You do **not** need Apple login for this. You do need your **Expo** login (the same account as `eas build`), **or** a Cursor/Cloud Agent with a valid `EXPO_TOKEN`.
+
+### Cursor Cloud: give the agent the Expo token
+
+The phone publish command is `eas update`. It authenticates with env var **`EXPO_TOKEN`**, not Apple, and not your Expo password.
+
+1. Sign in at [expo.dev](https://expo.dev) as **`vtz1900`** (that is `expo.owner` in `app.json`).
+2. Open [Access tokens](https://expo.dev/settings/access-tokens).
+3. **Create token** (personal access token). Copy it once.
+4. In Cursor, set / replace the secret named **`EXPO_TOKEN`** with that value (same name the agent already reads). Revoke the old token on Expo if Expo said it was invalid.
+5. Do not paste the token into chat or commit it. Tell the agent “token is updated” and it can run `eas whoami` then `eas update --channel production`.
 
 ```powershell
 cd C:\Users\User\Documents\CaringTransitions_AI\mobile

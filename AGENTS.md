@@ -93,8 +93,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
   Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`
   under “Push a JS-only fix”. Native/dep changes still need `eas build` + `eas submit`.
-  OTA only works on builds made **after** expo-updates was added. Do not run `eas update`
-  from Cloud Agents unless a valid Expo token is available (this environment’s token is not).
+  OTA only works on builds made **after** expo-updates was added.
+  Cloud Agents publish with the injected secret **`EXPO_TOKEN`** (Expo personal access token
+  for account `vtz1900`, created at https://expo.dev/settings/access-tokens). The secret
+  name is already wired; if `eas whoami` says the bearer token is invalid, replace the
+  Cursor secret with a freshly created token (do not put it in git or chat). Then:
+  `cd mobile && EXPO_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app eas update --channel production --non-interactive --message "…"`.
   **`eas.json` `build.env` is not applied to `eas update`.** SDK 54 reads local `mobile/.env`.
   Always set `EXPO_PUBLIC_API_BASE` to the Railway API in the same command. Release bundles
   (`__DEV__ === false`) also drop localhost in `mobile/lib/config.ts` so a leftover `.env`
