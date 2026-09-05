@@ -3344,14 +3344,32 @@ def _owned_processing_job(db: Session, job_id: str, account_id: str) -> Processi
 
 def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
     """Resolve ``job.input_folder`` under this account's upload root, or raise."""
+    return _resolve_account_upload_folder(
+        account_id,
+        job.input_folder,
+        missing_detail="Job upload folder is missing",
+    )
+
+
+def _resolve_account_upload_folder(
+    account_id: str,
+    input_folder: str,
+    *,
+    missing_detail: str = "Input folder is missing",
+) -> Path:
+    """Resolve a queued job folder and keep it inside this account's upload tree."""
     root = (UPLOAD_ROOT / account_id).resolve()
-    folder = Path(job.input_folder).resolve()
+    raw = (input_folder or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Invalid job upload path")
+    candidate = Path(raw)
+    folder = (candidate if candidate.is_absolute() else root / candidate).resolve()
     try:
         folder.relative_to(root)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid job upload path") from exc
     if not folder.is_dir():
-        raise HTTPException(status_code=400, detail="Job upload folder is missing")
+        raise HTTPException(status_code=400, detail=missing_detail)
     return folder
 
 
@@ -3411,12 +3429,13 @@ def create_job(
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
     _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
+    input_folder = _resolve_account_upload_folder(current.account_id, payload.input_folder)
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
         sale_id=sale.id,
         status=JobStatus.queued,
-        input_folder=payload.input_folder,
+        input_folder=str(input_folder),
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
         single_lot_mode=bool(payload.single_lot_mode),
         single_lot_manual_sku=_manual_sku,
