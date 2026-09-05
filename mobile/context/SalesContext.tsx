@@ -1,8 +1,8 @@
-import { useFocusEffect } from "expo-router";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode
@@ -54,11 +54,9 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     }
   }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void refreshSales();
-    }, [refreshSales])
-  );
+  useEffect(() => {
+    void refreshSales();
+  }, [refreshSales]);
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>();
