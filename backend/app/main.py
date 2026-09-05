@@ -88,6 +88,9 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    TeamActivityMemberOut,
+    TeamActivityOut,
+    TeamActivityTotalsOut,
     AdminAccountOut,
     AdminAccountUpdateIn,
     AdminUsageAccountOut,
@@ -151,6 +154,11 @@ from app.services.roles import (
     can_run_audience_hunt,
     is_owner,
     normalize_role,
+)
+from app.services.team_activity import (
+    ActivityWindowError,
+    resolve_activity_window,
+    summarize_team_activity,
 )
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
@@ -652,6 +660,44 @@ def reset_team_member_password(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/team/activity", response_model=TeamActivityOut)
+def team_activity(
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    since_days: int = Query(7, ge=1, le=366),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeamActivityOut:
+    """Photos / lots / catalog jobs per teammate in a time window. Owners only."""
+    _require_owner(current)
+    try:
+        start, end = resolve_activity_window(since=since, until=until, since_days=since_days)
+    except ActivityWindowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    summary = summarize_team_activity(db, current.account_id, start, end)
+    return TeamActivityOut(
+        since=summary.since,
+        until=summary.until,
+        members=[
+            TeamActivityMemberOut(
+                user_id=m.user_id,
+                email=m.email,
+                role=m.role,
+                photos_uploaded=m.photos_uploaded,
+                lots_created=m.lots_created,
+                jobs_started=m.jobs_started,
+            )
+            for m in summary.members
+        ],
+        totals=TeamActivityTotalsOut(
+            photos_uploaded=summary.photos_uploaded,
+            lots_created=summary.lots_created,
+            jobs_started=summary.jobs_started,
+            member_count=len(summary.members),
+        ),
+    )
 
 
 @app.get("/admin/accounts", response_model=list[AdminAccountOut])

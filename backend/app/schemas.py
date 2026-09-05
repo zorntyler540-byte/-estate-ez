@@ -52,6 +52,29 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class TeamActivityMemberOut(BaseModel):
+    user_id: str
+    email: EmailStr
+    role: str
+    photos_uploaded: int
+    lots_created: int
+    jobs_started: int
+
+
+class TeamActivityTotalsOut(BaseModel):
+    photos_uploaded: int
+    lots_created: int
+    jobs_started: int
+    member_count: int
+
+
+class TeamActivityOut(BaseModel):
+    since: datetime
+    until: datetime
+    members: list[TeamActivityMemberOut]
+    totals: TeamActivityTotalsOut
+
+
 class AdminAccountOut(BaseModel):
     id: str
     name: str
