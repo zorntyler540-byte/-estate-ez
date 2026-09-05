@@ -5,6 +5,7 @@ import threading
 import traceback
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_, update
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -37,14 +38,29 @@ def lot_regenerate_is_active(row: Lot | None) -> bool:
 
 
 def mark_lot_regenerate_started(db: Session, *, lot_id: str, account_id: str) -> None:
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
-    if not row:
-        raise ValueError("Lot not found")
-    if lot_regenerate_is_active(row):
+    now = _utcnow()
+    stale_before = now - STALE_REGENERATE
+    result = db.execute(
+        update(Lot)
+        .where(
+            Lot.id == lot_id,
+            Lot.account_id == account_id,
+            or_(
+                Lot.ai_regenerate_started_at.is_(None),
+                Lot.ai_regenerate_started_at <= stale_before,
+            ),
+        )
+        .values(ai_regenerate_started_at=now, ai_regenerate_error=None)
+        .execution_options(synchronize_session=False)
+    )
+    if (result.rowcount or 0) == 1:
+        db.commit()
+        return
+    db.rollback()
+    exists = db.query(Lot.id).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+    if exists:
         raise RuntimeError("regenerate_already_running")
-    row.ai_regenerate_started_at = _utcnow()
-    row.ai_regenerate_error = None
-    db.commit()
+    raise ValueError("Lot not found")
 
 
 def finish_lot_regenerate(
