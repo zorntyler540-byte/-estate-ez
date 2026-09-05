@@ -256,14 +256,10 @@ MAX_SKU_SCAN_FRAMES = 8
 
 def triage_tape_marking_from_row(row: dict[str, Any]) -> str | None:
     """Extract a normalized estate-tape lot code from triage OCR when present."""
-    for key in ("lot_tape_marking", "brand_text"):
-        raw = row.get(key)
-        if raw is None:
-            continue
-        mark = tape_marking_canonical(str(raw).strip() or None)
-        if mark:
-            return mark
-    return None
+    raw = row.get("lot_tape_marking")
+    if raw is None:
+        return None
+    return tape_marking_canonical(str(raw).strip() or None)
 
 
 def _triage_tape_marking(row: dict[str, Any]) -> str | None:
