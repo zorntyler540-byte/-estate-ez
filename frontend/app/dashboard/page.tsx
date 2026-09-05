@@ -4802,7 +4802,7 @@ export default function DashboardPage() {
         setError(
           e instanceof Error
             ? e.message
-            : "Could not load CT Seller auctions — connect CT Seller on Account first."
+            : "Could not load CT Seller auctions. If you already connected on Account, try Refresh — we re-sign in automatically. Update the saved password only if CT Seller changed it."
         );
         return;
       }
@@ -6680,7 +6680,7 @@ export default function DashboardPage() {
             }
             title={
               !ctSellerRemoteSales.length
-                ? "Connect CT Seller on Account first"
+                ? "No CT Seller auctions loaded — refresh, or connect on Account if you have not yet"
                 : ctSellerSelectedCount > 0
                   ? `Post ${ctSellerSelectedCount} selected lot(s)`
                   : ctSellerUnpostedEligible < 1

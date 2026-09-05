@@ -2,7 +2,31 @@
 
 from __future__ import annotations
 
-from app.services.ctseller import build_item_payload, seal_secret, unseal_secret
+import base64
+import json
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from app.services.ctseller import (
+    CTSellerClient,
+    CTSellerError,
+    CTSellerTokens,
+    access_token_should_refresh,
+    build_item_payload,
+    jwt_expiry_unix,
+    persist_ctseller_tokens,
+    seal_secret,
+    unseal_secret,
+)
+
+
+def _unsigned_jwt(*, exp: float) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode("ascii").rstrip("=")
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode("ascii")).decode("ascii").rstrip("=")
+    )
+    return f"{header}.{payload}.sig"
 
 
 def test_seal_roundtrip() -> None:
@@ -143,3 +167,127 @@ def test_build_item_payload_keeps_evidenced_luxury_tag() -> None:
         tag=["Rolex", "Oyster"],
     )
     assert "Rolex" in item["tag"]
+
+
+def test_jwt_expiry_and_refresh_decision() -> None:
+    now = 1_700_000_000.0
+    fresh = _unsigned_jwt(exp=now + 3600)
+    soon = _unsigned_jwt(exp=now + 60)
+    dead = _unsigned_jwt(exp=now - 10)
+    assert jwt_expiry_unix(fresh) == now + 3600
+    assert access_token_should_refresh(None) is True
+    assert access_token_should_refresh("", now=now) is True
+    assert access_token_should_refresh(fresh, now=now) is False
+    assert access_token_should_refresh(soon, now=now, skew_seconds=180) is True
+    assert access_token_should_refresh(dead, now=now) is True
+    assert access_token_should_refresh("not-a-jwt", now=now) is False
+
+
+def test_persist_tokens_keeps_old_refresh_when_blank() -> None:
+    account = SimpleNamespace(
+        ctseller_access_token_enc="old-a",
+        ctseller_refresh_token_enc="old-r",
+    )
+    persist_ctseller_tokens(account, CTSellerTokens(access_token="new-access", refresh_token=""))
+    assert unseal_secret(account.ctseller_access_token_enc) == "new-access"
+    assert account.ctseller_refresh_token_enc == "old-r"
+    persist_ctseller_tokens(account, CTSellerTokens(access_token="newer", refresh_token="new-refresh"))
+    assert unseal_secret(account.ctseller_refresh_token_enc) == "new-refresh"
+
+
+def test_refresh_tokens_reads_rotated_refresh() -> None:
+    client = CTSellerClient()
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        def json(self):
+            return {"newToken": "access-2", "refreshToken": "refresh-2"}
+
+    with patch.object(client.session, "get", return_value=_Resp()):
+        tokens = client.refresh_tokens("refresh-1")
+    assert tokens.access_token == "access-2"
+    assert tokens.refresh_token == "refresh-2"
+    assert client.access_token == "access-2"
+
+
+def test_client_uses_refresh_when_jwt_expired(tmp_path) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.main import _ctseller_client_for_account
+    from app.models import Account
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'ctseller-session.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
+    account = Account(
+        id="acct-ct",
+        name="CT",
+        ctseller_username="seller@example.com",
+        ctseller_password_enc=seal_secret("pw"),
+        ctseller_access_token_enc=seal_secret(_unsigned_jwt(exp=time.time() - 30)),
+        ctseller_refresh_token_enc=seal_secret("refresh-old"),
+    )
+    db.add(account)
+    db.commit()
+
+    def fake_refresh_tokens(self, refresh_token: str) -> CTSellerTokens:
+        assert refresh_token == "refresh-old"
+        self.set_token("access-fresh")
+        return CTSellerTokens(access_token="access-fresh", refresh_token="refresh-new")
+
+    with (
+        patch.object(CTSellerClient, "refresh_tokens", fake_refresh_tokens),
+        patch.object(CTSellerClient, "login", side_effect=AssertionError("should not login")),
+        patch.object(CTSellerClient, "list_open_sales", side_effect=AssertionError("should not probe")),
+    ):
+        client = _ctseller_client_for_account(account, db, probe=False)
+    assert client.access_token == "access-fresh"
+    db.refresh(account)
+    assert unseal_secret(account.ctseller_access_token_enc) == "access-fresh"
+    assert unseal_secret(account.ctseller_refresh_token_enc) == "refresh-new"
+
+
+def test_client_falls_back_to_password_when_refresh_fails(tmp_path) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.main import _ctseller_client_for_account
+    from app.models import Account
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'ctseller-login.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
+    account = Account(
+        id="acct-ct2",
+        name="CT",
+        ctseller_username="seller@example.com",
+        ctseller_password_enc=seal_secret("pw"),
+        ctseller_access_token_enc=seal_secret(_unsigned_jwt(exp=time.time() - 30)),
+        ctseller_refresh_token_enc=seal_secret("refresh-dead"),
+    )
+    db.add(account)
+    db.commit()
+
+    def fake_refresh_tokens(self, refresh_token: str) -> CTSellerTokens:
+        raise CTSellerError("expired refresh", status_code=401)
+
+    def fake_login(self, username: str, password: str, *, keep_logged_in: bool = True) -> CTSellerTokens:
+        assert username == "seller@example.com"
+        assert password == "pw"
+        assert keep_logged_in is True
+        self.set_token("access-login")
+        return CTSellerTokens(access_token="access-login", refresh_token="refresh-login")
+
+    with (
+        patch.object(CTSellerClient, "refresh_tokens", fake_refresh_tokens),
+        patch.object(CTSellerClient, "login", fake_login),
+    ):
+        client = _ctseller_client_for_account(account, db, probe=False)
+    assert client.access_token == "access-login"
+    db.refresh(account)
+    assert unseal_secret(account.ctseller_access_token_enc) == "access-login"
