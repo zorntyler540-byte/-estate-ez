@@ -541,6 +541,18 @@ a.ct-btn:hover {
   background: var(--ct-table-hover);
 }
 
+.ct-table th.ct-table__num,
+.ct-table td.ct-table__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-table tfoot th,
+.ct-table tfoot td {
+  border-bottom: none;
+  background: var(--ct-bg-elevated);
+}
+
 .ct-table-row--pending-queued {
   background: var(--ct-pending-queued-bg);
   font-size: 0.88rem;

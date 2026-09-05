@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { apiFetch } from "../../lib/api";
+import { accountRoleLabel } from "../../lib/roles";
 
 type Me = {
   id: string;
@@ -26,6 +27,71 @@ type TeamMember = {
   role: string;
   created_at: string;
 };
+
+type TeamActivityMember = {
+  user_id: string;
+  email: string;
+  role: string;
+  photos_uploaded: number;
+  lots_created: number;
+  jobs_started: number;
+};
+
+type TeamActivity = {
+  since: string;
+  until: string;
+  members: TeamActivityMember[];
+  totals: {
+    photos_uploaded: number;
+    lots_created: number;
+    jobs_started: number;
+    member_count: number;
+  };
+};
+
+type ActivityPreset = "today" | "7d" | "30d" | "custom";
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function localDateInputValue(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function startOfLocalDay(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+}
+
+function startOfNextLocalDay(dateStr: string): Date {
+  const start = startOfLocalDay(dateStr);
+  start.setDate(start.getDate() + 1);
+  return start;
+}
+
+function activityWindowIso(preset: ActivityPreset, customSince: string, customUntil: string): { since: string; until: string } {
+  const now = new Date();
+  if (preset === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return { since: start.toISOString(), until: now.toISOString() };
+  }
+  if (preset === "7d" || preset === "30d") {
+    const days = preset === "7d" ? 7 : 30;
+    return { since: new Date(now.getTime() - days * 86400000).toISOString(), until: now.toISOString() };
+  }
+  return {
+    since: startOfLocalDay(customSince).toISOString(),
+    until: startOfNextLocalDay(customUntil).toISOString()
+  };
+}
+
+function formatActivityWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
 
 function isAuthFailureMessage(message: string): boolean {
   const m = message.toLowerCase();
@@ -58,6 +124,12 @@ export default function AccountPage() {
   const [newMemberBusy, setNewMemberBusy] = useState(false);
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [resetBusyId, setResetBusyId] = useState("");
+  const [activityPreset, setActivityPreset] = useState<ActivityPreset>("today");
+  const [activitySinceDate, setActivitySinceDate] = useState(() => localDateInputValue(new Date()));
+  const [activityUntilDate, setActivityUntilDate] = useState(() => localDateInputValue(new Date()));
+  const [activity, setActivity] = useState<TeamActivity | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
   const [selfCurrentPassword, setSelfCurrentPassword] = useState("");
   const [selfNewPassword, setSelfNewPassword] = useState("");
   const [selfPasswordBusy, setSelfPasswordBusy] = useState(false);
@@ -272,10 +344,38 @@ export default function AccountPage() {
     }
   }
 
+  async function refreshTeamActivity() {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    const { since, until } = activityWindowIso(activityPreset, activitySinceDate, activityUntilDate);
+    if (new Date(since).getTime() >= new Date(until).getTime()) {
+      setActivityError("Start must be before end");
+      setActivity(null);
+      return;
+    }
+    setActivityLoading(true);
+    setActivityError("");
+    try {
+      const qs = new URLSearchParams({ since, until });
+      const row = (await apiFetch(`/team/activity?${qs.toString()}`, token)) as TeamActivity;
+      setActivity(row);
+    } catch (e) {
+      setActivityError(e instanceof Error ? e.message : "Could not load team activity");
+      setActivity(null);
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!token || !me || me.role.toLowerCase() !== "owner") return;
     void refreshTeamMembers();
   }, [token, me?.id]);
+
+  useEffect(() => {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    if (activityPreset === "custom") return;
+    void refreshTeamActivity();
+  }, [token, me?.id, activityPreset]);
 
   if (!token) {
     return (
@@ -303,14 +403,16 @@ export default function AccountPage() {
         </>
       }
     >
-      <div className="ct-dashboard" style={{ maxWidth: 640 }}>
+      <div className="ct-dashboard" style={{ maxWidth: 800 }}>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
             Account
           </h1>
           <p className="ct-subtitle" style={{ margin: 0 }}>
-            Who you are in the app, password, feedback, and (for owners) teammates.
+            {me?.role?.toLowerCase() === "owner"
+              ? "Who you are in the app, password, feedback, teammates, and their catalog counts."
+              : "Who you are in the app, password, and feedback."}
           </p>
         </div>
       </header>
@@ -330,7 +432,7 @@ export default function AccountPage() {
             </div>
             <div>
               <span className="ct-label">Role</span>
-              <p style={{ margin: "0.25rem 0 0" }}>{me.role}</p>
+              <p style={{ margin: "0.25rem 0 0" }}>{accountRoleLabel(me.role)}</p>
             </div>
             <div>
               <span className="ct-label">User ID</span>
@@ -526,6 +628,138 @@ export default function AccountPage() {
       {me?.role?.toLowerCase() === "owner" ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Team activity
+          </h2>
+          <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+            Photos, lots, and catalog jobs each login created in this window.
+          </p>
+          <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
+            <summary>How this is counted</summary>
+            <div className="ct-help-details__body">
+              Credit goes to the account that uploaded the photo or started the catalog job. Deleted
+              photos drop off. Shared logins look like one person. This is not hours worked — it is
+              surviving rows stamped with that person&apos;s user id and created time.
+            </div>
+          </details>
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
+            <div className="ct-seg" role="group" aria-label="Activity timeframe">
+              {(
+                [
+                  ["today", "Today"],
+                  ["7d", "Last 7 days"],
+                  ["30d", "Last 30 days"],
+                  ["custom", "Custom"]
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={activityPreset === id}
+                  onClick={() => setActivityPreset(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="ct-btn ct-btn--ghost"
+              onClick={() => void refreshTeamActivity()}
+              disabled={activityLoading}
+            >
+              {activityLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          {activityPreset === "custom" ? (
+            <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end", marginBottom: "0.75rem" }}>
+              <label style={{ margin: 0 }}>
+                <span className="ct-label">From</span>
+                <input
+                  className="ct-input"
+                  type="date"
+                  value={activitySinceDate}
+                  onChange={(e) => setActivitySinceDate(e.target.value)}
+                />
+              </label>
+              <label style={{ margin: 0 }}>
+                <span className="ct-label">Through</span>
+                <input
+                  className="ct-input"
+                  type="date"
+                  value={activityUntilDate}
+                  onChange={(e) => setActivityUntilDate(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => void refreshTeamActivity()}
+                disabled={activityLoading || !activitySinceDate || !activityUntilDate}
+              >
+                Apply dates
+              </button>
+            </div>
+          ) : null}
+          {activityError ? <div className="ct-banner ct-banner--error">{activityError}</div> : null}
+          {activity ? (
+            <>
+              <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
+                {formatActivityWhen(activity.since)} – {formatActivityWhen(activity.until)}
+              </p>
+              <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
+                <table className="ct-table">
+                  <thead>
+                    <tr>
+                      <th>Person</th>
+                      <th className="ct-table__num">Photos</th>
+                      <th className="ct-table__num">Lots</th>
+                      <th className="ct-table__num">Jobs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activity.members.map((m) => (
+                      <tr key={m.user_id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{m.email}</div>
+                          <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                            {accountRoleLabel(m.role)}
+                            {m.user_id === me?.id ? " · you" : ""}
+                          </div>
+                        </td>
+                        <td className="ct-table__num">{m.photos_uploaded}</td>
+                        <td className="ct-table__num">{m.lots_created}</td>
+                        <td className="ct-table__num">{m.jobs_started}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <th>
+                        Total · {activity.totals.member_count}{" "}
+                        {activity.totals.member_count === 1 ? "login" : "logins"}
+                      </th>
+                      <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
+                      <th className="ct-table__num">{activity.totals.lots_created}</th>
+                      <th className="ct-table__num">{activity.totals.jobs_started}</th>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          ) : activityLoading ? (
+            <p className="ct-muted" style={{ marginBottom: 0 }}>
+              Loading team activity…
+            </p>
+          ) : !activityError ? (
+            <p className="ct-muted" style={{ marginBottom: 0 }}>
+              {activityPreset === "custom" ? "Pick dates and apply to load counts." : "No activity data yet."}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+      {me?.role?.toLowerCase() === "owner" ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
             Team cataloggers
           </h2>
           <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
@@ -534,8 +768,10 @@ export default function AccountPage() {
           <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
             <summary>Roles</summary>
             <div className="ct-help-details__body">
-              <strong>Catalogger</strong> — work on lots and photos. <strong>Owner</strong> — same, plus team
-              management and account-level actions. Choose a temporary password; they can change it after signing in.
+              <strong>Catalogger</strong> — catalog lots, edit listings, add photos, and post to CT Seller.
+              They cannot delete lots, clear a sale, close a sale, run audience hunts, manage teammates,
+              or connect CT Seller. <strong>Owner</strong> — full access. Choose a temporary password; they
+              can change it after signing in.
             </div>
           </details>
           {teamError ? <div className="ct-banner ct-banner--error">{teamError}</div> : null}

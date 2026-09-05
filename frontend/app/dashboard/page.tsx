@@ -30,6 +30,7 @@ import {
   audienceHuntPhaseLabel
 } from "../../components/AudienceHuntProgress";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
+import { isOwnerRole } from "../../lib/roles";
 import {
   clearStagingDraft,
   loadStagingDraft,
@@ -1852,6 +1853,8 @@ export default function DashboardPage() {
   const salesLoadId = useRef(0);
   const inventoryLoadId = useRef(0);
   const [token, setToken] = useState<string>(readStoredToken);
+  const [accountRole, setAccountRole] = useState("");
+  const isAccountOwner = isOwnerRole(accountRole);
   const [sales, setSales] = useState<Sale[]>([]);
   const [selectedSaleId, setSelectedSaleId] = useState<string>(readStoredSaleId);
   /** Bumps after bfcache restore or return from lot detail so sales/lots/jobs refetch. */
@@ -2468,6 +2471,24 @@ export default function DashboardPage() {
       if (intervalId !== undefined) window.clearInterval(intervalId);
     };
   }, [token, saleHeroZipExport?.id]);
+
+  useEffect(() => {
+    if (!token) {
+      setAccountRole("");
+      return;
+    }
+    let cancelled = false;
+    void apiFetch("/auth/me", token)
+      .then((data) => {
+        if (!cancelled) setAccountRole(String((data as { role?: string }).role || ""));
+      })
+      .catch(() => {
+        if (!cancelled) setAccountRole("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -5861,14 +5882,16 @@ export default function DashboardPage() {
             >
               Fix photo order
             </button>
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
-              onClick={() => void endSelectedSale()}
-            >
-              {closingSale ? "Closing…" : "End sale"}
-            </button>
+            {isAccountOwner ? (
+              <button
+                type="button"
+                className="ct-btn"
+                disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
+                onClick={() => void endSelectedSale()}
+              >
+                {closingSale ? "Closing…" : "End sale"}
+              </button>
+            ) : null}
           </div>
           {pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
@@ -6612,30 +6635,32 @@ export default function DashboardPage() {
               </select>
             </label>
           </div>
-          <div className="ct-dash-lots__toolbar-actions">
-            <button
-              type="button"
-              className="ct-btn ct-btn--danger-outline"
-              onClick={() => void purgeCurrentSaleCatalog()}
-              disabled={busyProcessing || !selectedSaleId}
-              title={
-                selectedSaleId
-                  ? "Remove lots, photos, and jobs for the selected sale only"
-                  : "Select a sale first"
-              }
-            >
-              Clear lots &amp; jobs (this sale)
-            </button>
-            <button
-              type="button"
-              className="ct-btn ct-btn--ghost ct-dash-lots__danger-link"
-              onClick={() => void purgeEntireAccountCatalog()}
-              disabled={busyProcessing}
-              title="Removes catalog data for every sale on this account"
-            >
-              Clear entire account…
-            </button>
-          </div>
+          {isAccountOwner ? (
+            <div className="ct-dash-lots__toolbar-actions">
+              <button
+                type="button"
+                className="ct-btn ct-btn--danger-outline"
+                onClick={() => void purgeCurrentSaleCatalog()}
+                disabled={busyProcessing || !selectedSaleId}
+                title={
+                  selectedSaleId
+                    ? "Remove lots, photos, and jobs for the selected sale only"
+                    : "Select a sale first"
+                }
+              >
+                Clear lots &amp; jobs (this sale)
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost ct-dash-lots__danger-link"
+                onClick={() => void purgeEntireAccountCatalog()}
+                disabled={busyProcessing}
+                title="Removes catalog data for every sale on this account"
+              >
+                Clear entire account…
+              </button>
+            </div>
+          ) : null}
         </div>
         <div
           className="ct-row ct-row--gap-lg"
@@ -6694,36 +6719,38 @@ export default function DashboardPage() {
                 ? `Post selected to CT Seller (${ctSellerSelectedCount})`
                 : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
           </button>
-          <button
-            type="button"
-            className="ct-btn"
-            onClick={() => void bulkHuntSaleAudience()}
-            disabled={
-              audienceHuntBusy ||
-              Boolean(audienceHuntStatus?.active) ||
-              busyProcessing ||
-              !selectedSaleId ||
-              lots.length < 1
-            }
-            title={
-              audienceHuntStatus?.active
-                ? "Audience hunt is running for this sale"
-                : ctSellerSelectedCount > 0
-                  ? `Hunt United States collector groups for ${ctSellerSelectedCount} selected lot(s)`
-                  : "Hunt nicer lots already in this sale (US groups only; skips everyday household and already-hunted lots)"
-            }
-          >
-            {audienceHuntBusy && !audienceHuntStatus?.active
-              ? "Queueing audience hunt…"
-              : audienceHuntStatus?.active
-                ? `Hunting ${Math.min(
-                    audienceHuntStatus.total,
-                    audienceHuntStatus.done + 1
-                  )}/${audienceHuntStatus.total}…`
-                : ctSellerSelectedCount > 0
-                  ? `Find audience for selected (${ctSellerSelectedCount})`
-                  : "Find audience for this sale"}
-          </button>
+          {isAccountOwner ? (
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => void bulkHuntSaleAudience()}
+              disabled={
+                audienceHuntBusy ||
+                Boolean(audienceHuntStatus?.active) ||
+                busyProcessing ||
+                !selectedSaleId ||
+                lots.length < 1
+              }
+              title={
+                audienceHuntStatus?.active
+                  ? "Audience hunt is running for this sale"
+                  : ctSellerSelectedCount > 0
+                    ? `Hunt United States collector groups for ${ctSellerSelectedCount} selected lot(s)`
+                    : "Hunt nicer lots already in this sale (US groups only; skips everyday household and already-hunted lots)"
+              }
+            >
+              {audienceHuntBusy && !audienceHuntStatus?.active
+                ? "Queueing audience hunt…"
+                : audienceHuntStatus?.active
+                  ? `Hunting ${Math.min(
+                      audienceHuntStatus.total,
+                      audienceHuntStatus.done + 1
+                    )}/${audienceHuntStatus.total}…`
+                  : ctSellerSelectedCount > 0
+                    ? `Find audience for selected (${ctSellerSelectedCount})`
+                    : "Find audience for this sale"}
+            </button>
+          ) : null}
           {ctSellerEligibleIds.length > 0 ? (
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
               <button
@@ -6879,14 +6906,16 @@ export default function DashboardPage() {
               >
                 {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
               </span>
-              <button
-                type="button"
-                className="ct-btn ct-btn--danger-outline ct-lot-mobile-card__delete-btn"
-                onClick={() => void deleteLotRow(lot.id)}
-                disabled={busyProcessing}
-              >
-                Delete
-              </button>
+              {isAccountOwner ? (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--danger-outline ct-lot-mobile-card__delete-btn"
+                  onClick={() => void deleteLotRow(lot.id)}
+                  disabled={busyProcessing}
+                >
+                  Delete
+                </button>
+              ) : null}
             </div>
           </div>
         ))}
@@ -6920,7 +6949,7 @@ export default function DashboardPage() {
             <th scope="col">Status</th>
             <th scope="col">Photos</th>
             <th scope="col">Details</th>
-            <th scope="col">Delete</th>
+            {isAccountOwner ? <th scope="col">Delete</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -7023,16 +7052,18 @@ export default function DashboardPage() {
                   Details
                 </Link>
               </td>
-              <td>
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--danger-outline ct-lots-table__delete-btn"
-                  onClick={() => void deleteLotRow(lot.id)}
-                  disabled={busyProcessing}
-                >
-                  Delete
-                </button>
-              </td>
+              {isAccountOwner ? (
+                <td>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--danger-outline ct-lots-table__delete-btn"
+                    onClick={() => void deleteLotRow(lot.id)}
+                    disabled={busyProcessing}
+                  >
+                    Delete
+                  </button>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
