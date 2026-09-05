@@ -410,7 +410,9 @@ export default function AccountPage() {
             Account
           </h1>
           <p className="ct-subtitle" style={{ margin: 0 }}>
-            Who you are in the app, password, feedback, and (for owners) teammates and their catalog counts.
+            {me?.role?.toLowerCase() === "owner"
+              ? "Who you are in the app, password, feedback, teammates, and their catalog counts."
+              : "Who you are in the app, password, and feedback."}
           </p>
         </div>
       </header>
