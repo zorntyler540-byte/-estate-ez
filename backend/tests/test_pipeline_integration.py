@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.services.pipeline_integration import _brands_from_triage_and_draft, _lot_from_flash_draft
+from app.services.pipeline_integration import (
+    _brands_from_triage_and_draft,
+    _lot_from_flash_draft,
+    is_weak_pipeline_lot,
+)
 from pipeline.pipeline import (
     _build_pro_image_payload,
     aggregate_triage_ocr,
@@ -334,6 +338,16 @@ def test_lot_from_flash_draft_uses_brand_audit() -> None:
     lot = _lot_from_flash_draft(flash_draft, brand_audit)
     assert lot.brands == ["Levi's"]
     assert "Levi's" in lot.auction_title or "denim" in lot.auction_title.lower()
+
+
+def test_empty_flash_draft_is_weak_pipeline_output() -> None:
+    lot = _lot_from_flash_draft(
+        {"items": []},
+        {"brands": [], "brand_needs_review": True},
+    )
+
+    assert lot.auction_title == "Estate Grouping"
+    assert is_weak_pipeline_lot(lot) is True
 
 
 def test_aggregate_triage_ocr_dedupes_and_includes_tape() -> None:
