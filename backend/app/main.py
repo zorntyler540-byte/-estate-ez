@@ -115,7 +115,9 @@ from app.schemas import (
 from app.services.ctseller import (
     CTSellerClient,
     CTSellerError,
+    access_token_should_refresh,
     build_item_payload,
+    persist_ctseller_tokens,
     seal_secret,
     unseal_secret,
 )
@@ -208,12 +210,14 @@ def _sale_out(row: Sale) -> SaleOut:
 
 
 def _ctseller_client_for_account(
-    account: Account, db: Session, *, probe: bool = True
+    account: Account, db: Session, *, probe: bool = True, force: bool = False
 ) -> CTSellerClient:
     """Return an authenticated CT Seller client, refreshing or re-logging in as needed.
 
     ``probe=False`` skips the extra ``list_open_sales`` round-trip (dashboard sale picker
-    already lists sales next). Keeps a QueuePool connection from sitting on CT Seller HTTP.
+    already lists sales next). Still refreshes when the stored JWT is expired so the
+    dashboard does not tell the owner to reconnect. ``force=True`` skips the stored
+    access token (used after a 401).
     """
     access = unseal_secret(getattr(account, "ctseller_access_token_enc", None))
     refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
@@ -224,37 +228,46 @@ def _ctseller_client_for_account(
             status_code=400,
             detail="Connect your CT Seller account on Account → CT Seller first",
         )
-    client = CTSellerClient(access_token=access or None)
-    if access:
+    stale = force or access_token_should_refresh(access)
+    client = CTSellerClient(access_token=None if stale else (access or None))
+    if access and not stale:
         if not probe:
             return client
         try:
             client.list_open_sales()
             return client
         except CTSellerError:
-            pass
+            stale = True
+
     if refresh:
         try:
-            new_access = client.refresh(refresh)
-            account.ctseller_access_token_enc = seal_secret(new_access)
+            tokens = client.refresh_tokens(refresh)
+            persist_ctseller_tokens(account, tokens)
             db.add(account)
             db.commit()
             return client
         except CTSellerError:
             pass
     try:
-        tokens = client.login(username, password)
+        tokens = client.login(username, password, keep_logged_in=True)
     except CTSellerError as exc:
         raise HTTPException(
             status_code=400,
             detail=str(exc) or "CT Seller login failed — update credentials on Account",
         ) from exc
-    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
-    if tokens.refresh_token:
-        account.ctseller_refresh_token_enc = seal_secret(tokens.refresh_token)
+    persist_ctseller_tokens(account, tokens)
     db.add(account)
     db.commit()
     return client
+
+
+def _ctseller_after_expired_session(account_id: str) -> CTSellerClient:
+    """Re-open a short DB session and force refresh / password login after a 401."""
+    with SessionLocal() as db2:
+        account = db2.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return _ctseller_client_for_account(account, db2, force=True)
 
 
 def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
@@ -1605,8 +1618,15 @@ def ctseller_list_sales(
     try:
         # Auth/token refresh may briefly use this session; release it before listing sales over HTTP.
         client = _ctseller_client_for_account(account, db, probe=False)
+        account_id = account.id
         db.close()
-        rows = client.list_open_sales()
+        try:
+            rows = client.list_open_sales()
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_after_expired_session(account_id)
+            rows = client.list_open_sales()
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return [
@@ -1813,7 +1833,13 @@ def post_lot_to_ctseller(
 
     try:
         client = _ctseller_client_for_account(account, db)
-        detail = client.sale_detail(int(remote_sale_id))
+        try:
+            detail = client.sale_detail(int(remote_sale_id))
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_client_for_account(account, db, force=True)
+            detail = client.sale_detail(int(remote_sale_id))
         out = _post_one_lot_to_ctseller(
             db=db,
             lot=lot,
@@ -1879,7 +1905,13 @@ def post_sale_lots_to_ctseller(
 
     try:
         client = _ctseller_client_for_account(account, db)
-        detail = client.sale_detail(int(remote_sale_id))
+        try:
+            detail = client.sale_detail(int(remote_sale_id))
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_client_for_account(account, db, force=True)
+            detail = client.sale_detail(int(remote_sale_id))
         location_id = detail.get("locationid")
         irm = detail.get("saleitemreceiptmethod")
         try:

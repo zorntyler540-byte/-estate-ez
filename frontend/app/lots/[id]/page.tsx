@@ -1627,7 +1627,8 @@ export default function LotDetailPage() {
               </select>
               {!ctSellerRemoteSales.length ? (
                 <p className="ct-field-hint">
-                  No auctions loaded — connect CT Seller on Account, or refresh after signing in there.
+                  No auctions loaded — if CT Seller is already connected on Account, refresh this
+                  page. Only reconnect there if your CT Seller password changed.
                 </p>
               ) : null}
             </div>

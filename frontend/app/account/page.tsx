@@ -400,8 +400,9 @@ export default function AccountPage() {
           CT Seller
         </h2>
         <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
-          Connect seller.ctbids.com so the dashboard can create lots for you. Credentials are
-          stored encrypted on your account. Owners only.
+          Connect seller.ctbids.com once so the dashboard can post lots for you. We store the
+          password encrypted and refresh the CT Seller session automatically — you should not need
+          to reconnect unless they change your password. Owners only.
         </p>
         {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
         {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
@@ -433,7 +434,7 @@ export default function AccountPage() {
               className="ct-input"
               style={{ maxWidth: 240, width: "100%" }}
               type="password"
-              placeholder={ctSellerConnected ? "Password (to reconnect)" : "CT Seller password"}
+              placeholder={ctSellerConnected ? "Password (only if CT Seller changed it)" : "CT Seller password"}
               value={ctSellerPassword}
               onChange={(e) => {
                 setCtSellerPassword(e.target.value);
@@ -448,7 +449,7 @@ export default function AccountPage() {
               disabled={ctSellerBusy || !ctSellerUserInput.trim() || !ctSellerPassword}
               onClick={() => void connectCtSeller()}
             >
-              {ctSellerBusy ? "Connecting…" : ctSellerConnected ? "Reconnect" : "Connect"}
+              {ctSellerBusy ? "Connecting…" : ctSellerConnected ? "Update saved password" : "Connect"}
             </button>
             {ctSellerConnected ? (
               <button

@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,6 +83,52 @@ def _btoa(s: str) -> str:
     return base64.b64encode(s.encode("latin-1", errors="replace")).decode("ascii")
 
 
+def jwt_expiry_unix(token: str | None) -> float | None:
+    """Return ``exp`` from a JWT access token, or None if the token is opaque / unreadable."""
+    raw = (token or "").strip()
+    parts = raw.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        pad = "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+    except Exception:  # noqa: BLE001 — treat any decode failure as opaque
+        return None
+    if not isinstance(payload, dict):
+        return None
+    exp = payload.get("exp")
+    try:
+        return float(exp) if exp is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def access_token_should_refresh(
+    token: str | None,
+    *,
+    now: float | None = None,
+    skew_seconds: int = 180,
+) -> bool:
+    """True when we should refresh before calling CT Seller.
+
+    Missing token → refresh. Readable JWT past (or within ``skew_seconds`` of) ``exp``
+    → refresh. Opaque tokens are left alone until a 401 forces a retry.
+    """
+    if not (token or "").strip():
+        return True
+    exp = jwt_expiry_unix(token)
+    if exp is None:
+        return False
+    clock = time.time() if now is None else now
+    return clock >= exp - max(0, int(skew_seconds))
+
+
+def persist_ctseller_tokens(account: Any, tokens: CTSellerTokens) -> None:
+    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
+    if tokens.refresh_token:
+        account.ctseller_refresh_token_enc = seal_secret(tokens.refresh_token)
+
+
 @dataclass
 class CTSellerTokens:
     access_token: str
@@ -142,6 +189,10 @@ class CTSellerClient:
 
     def refresh(self, refresh_token: str) -> str:
         """Refresh access token; returns new access token."""
+        return self.refresh_tokens(refresh_token).access_token
+
+    def refresh_tokens(self, refresh_token: str) -> CTSellerTokens:
+        """Refresh the session. Persist a rotated refresh token when CT Seller sends one."""
         headers = {
             "Authorization": f"Bearer {(refresh_token or '').strip()}",
             "Content-Type": "application/json",
@@ -153,11 +204,19 @@ class CTSellerClient:
                 status_code=resp.status_code,
             )
         body = resp.json() if resp.content else {}
-        new_token = (body.get("newToken") or body.get("accessToken") or "").strip()
+        new_token = (
+            body.get("newToken") or body.get("accessToken") or body.get("access_token") or ""
+        ).strip()
         if not new_token:
             raise CTSellerError("CT Seller refresh did not return a token")
+        new_refresh = (
+            body.get("refreshToken")
+            or body.get("refresh_token")
+            or body.get("newRefreshToken")
+            or ""
+        ).strip()
         self.set_token(new_token)
-        return new_token
+        return CTSellerTokens(access_token=new_token, refresh_token=new_refresh)
 
     def list_open_sales(self) -> list[CTSellerSaleRow]:
         """
