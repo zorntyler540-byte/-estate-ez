@@ -117,6 +117,74 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["fragilityscore"] is None
 
 
+def test_build_item_payload_includes_reserve_price() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="R1",
+        title="Lamp",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+        reserve_price=25,
+    )
+    assert item["startingprice"] == 1.0
+    assert item["reserveprice"] == 25.0
+
+
+def test_build_item_payload_blank_reserve_when_missing() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="R2",
+        title="Lamp",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+    )
+    assert item["reserveprice"] == ""
+
+
+def test_format_and_resolve_reserve_price() -> None:
+    from app.services.ctseller import format_ctseller_reserve_price, resolve_lot_reserve_price
+
+    assert format_ctseller_reserve_price(None) == ""
+    assert format_ctseller_reserve_price(0) == ""
+    assert format_ctseller_reserve_price(-1) == ""
+    assert format_ctseller_reserve_price(5) == 5.0
+    lot = SimpleNamespace(reserve_price=None)
+    sale = SimpleNamespace(ctseller_reserve_price=10)
+    assert resolve_lot_reserve_price(lot, sale) == 10.0
+    lot.reserve_price = 3
+    assert resolve_lot_reserve_price(lot, sale) == 3.0
+
+
+def test_update_item_reserve_puts_merged_detail() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_detail(item_id: int) -> dict:
+        assert item_id == 88
+        return {"id": 88, "SKU": "001", "title": "Lamp", "reserveprice": ""}
+
+    putted: list[tuple[str, dict]] = []
+
+    def fake_put(path: str, payload: dict) -> dict:
+        putted.append((path, payload))
+        return {"status": "success"}
+
+    with patch.object(client, "item_detail", fake_detail), patch.object(client, "_put_raw", fake_put):
+        client.update_item_reserve(item_id=88, reserve_price=12)
+    assert putted[0][0] == "/item/update"
+    row = putted[0][1]["data"][0]
+    assert row["id"] == 88
+    assert row["SKU"] == "001"
+    assert row["reserveprice"] == 12.0
+
+
 def test_build_item_payload_blank_tax_when_sale_has_none() -> None:
     item = build_item_payload(
         sale_id=1,
@@ -249,6 +317,65 @@ def test_client_uses_refresh_when_jwt_expired(tmp_path) -> None:
     db.refresh(account)
     assert unseal_secret(account.ctseller_access_token_enc) == "access-fresh"
     assert unseal_secret(account.ctseller_refresh_token_enc) == "refresh-new"
+
+
+def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None:
+    from app.services.ctseller import sale_cover_data_url
+
+    client = CTSellerClient(access_token="tok")
+    posted: list[tuple[str, dict]] = []
+
+    def fake_post(path: str, payload: dict) -> dict:
+        posted.append((path, payload))
+        return {"status": "success", "data": [{"id": 77}]}
+
+    putted: list[tuple[str, dict]] = []
+
+    def fake_put(path: str, payload: dict) -> dict:
+        putted.append((path, payload))
+        return {"status": "success", "data": [{"id": 11}]}
+
+    tiny = (
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xdb\x00C\x00" + bytes([8] * 64) + b"\xff\xd9"
+    )
+    with patch.object(client, "_post_raw", fake_post), patch.object(client, "_put_raw", fake_put):
+        client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+        )
+        client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+            existing_id=11,
+        )
+    assert posted[0][0] == "/sale/image/add"
+    row = posted[0][1]["data"][0]
+    assert row["saleid"] == 321
+    assert row["name"] == "profile"
+    assert row["image"].startswith("data:image/jpeg;base64,")
+    assert len(row["itemimageurl"]) == 3
+    assert all(u.startswith("data:image/jpeg;base64,") for u in row["itemimageurl"])
+    assert putted[0][0] == "/sale/image/update"
+    assert putted[0][1]["data"][0]["id"] == 11
+    encoded = sale_cover_data_url(tiny)
+    assert encoded.startswith("data:image/jpeg;base64,")
+
+
+def test_list_sale_images_reads_data_list() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_post(path: str, payload: dict) -> dict:
+        assert path == "/sale/image/list"
+        assert payload["filter"][0]["field"] == "saleid"
+        assert payload["filter"][0]["value"] == 44
+        return {"data": [{"id": 1, "name": "profile"}]}
+
+    with patch.object(client, "_post_raw", fake_post):
+        rows = client.list_sale_images(sale_id=44)
+    assert rows[0]["id"] == 1
 
 
 def test_client_falls_back_to_password_when_refresh_fails(tmp_path) -> None:
