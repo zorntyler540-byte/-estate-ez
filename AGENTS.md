@@ -121,9 +121,13 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
   lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
 - **CT Bids / CT Seller posts omit SKU-tape frames.** Dashboard **Post to CT Seller** drops
-  `photo_role=tape`. Tape stays in the Estate-Ez gallery for SKU reference. Lots that were
-  already posted keep whatever photos are on CT Bids until someone edits that item there;
-  do not Resend all. Posting is dashboard-only — there is no browser extension.
+  `photo_role=tape` / `unusable`, obvious SKU/lot/estate-tape filenames, and untagged
+  purple/blue/neon-green tape close-ups (color coverage). A group shot with tape at the
+  edge (`shows_whole_lot`) stays unless the frame is almost entirely tape. Detected
+  close-ups are persisted as `tape`. Tape stays in the Estate-Ez gallery for SKU
+  reference. Lots that were already posted keep whatever photos are on CT Bids until
+  that lot is posted again or edited on CT Seller; do not Resend all. Posting is
+  dashboard-only — there is no browser extension.
 - **Audience hunt is public groups only.** `POST /lots/{id}/audience-hunt` uses Gemini Pro + Google
   Search, then a separate structured JSON call (schema + search tools 400 together). It stores
   group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,

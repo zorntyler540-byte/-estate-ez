@@ -171,8 +171,8 @@ _BEIGE = (200, 190, 170)
 _YELLOW_TAPE = (220, 200, 40)
 
 
-def _band_image(path: Path, tape_rows: int, total_rows: int = 20, color=_LAVENDER) -> Path:
-    rows = [([color] * 20 if i < tape_rows else [_BEIGE] * 20) for i in range(total_rows)]
+def _band_image(path: Path, tape_rows: int, total_rows: int = 200, width: int = 200, color=_LAVENDER) -> Path:
+    rows = [([color] * width if i < tape_rows else [_BEIGE] * width) for i in range(total_rows)]
     return _rgb_image(path, rows)
 
 
@@ -208,7 +208,7 @@ def test_omit_storage_path_filename_hint() -> None:
 
 
 def test_pixel_ratio_omits_untagged_tape_closeup(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "closeup.png", tape_rows=8)  # 40%
+    path = _band_image(tmp_path / "closeup.png", tape_rows=80)  # 40%
     photo = SimpleNamespace(
         id="tape",
         photo_role=None,
@@ -222,7 +222,7 @@ def test_pixel_ratio_omits_untagged_tape_closeup(tmp_path: Path) -> None:
 
 
 def test_pixel_ratio_keeps_item_with_edge_tape(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "item.png", tape_rows=2)  # 10%
+    path = _band_image(tmp_path / "item.png", tape_rows=20)  # 10%
     photo = SimpleNamespace(
         id="item",
         photo_role="item_front",
@@ -235,7 +235,7 @@ def test_pixel_ratio_keeps_item_with_edge_tape(tmp_path: Path) -> None:
 
 
 def test_mid_coverage_keeps_group_shot_omits_without_flag(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "mid.png", tape_rows=5)  # 25%
+    path = _band_image(tmp_path / "mid.png", tape_rows=50)  # 25%
     group = SimpleNamespace(
         id="group",
         photo_role="hero",
@@ -255,7 +255,7 @@ def test_mid_coverage_keeps_group_shot_omits_without_flag(tmp_path: Path) -> Non
 
 
 def test_high_coverage_omits_even_when_marked_whole_lot(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "full.png", tape_rows=10)  # 50%
+    path = _band_image(tmp_path / "full.png", tape_rows=100)  # 50%
     photo = SimpleNamespace(
         id="full",
         photo_role="hero",
@@ -267,7 +267,7 @@ def test_high_coverage_omits_even_when_marked_whole_lot(tmp_path: Path) -> None:
 
 
 def test_measuring_scale_stays_even_with_yellow_coverage(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "measure.png", tape_rows=12, color=_YELLOW_TAPE)
+    path = _band_image(tmp_path / "measure.png", tape_rows=120, color=_YELLOW_TAPE)
     photo = SimpleNamespace(
         id="m",
         photo_role="angle_only",
@@ -280,14 +280,27 @@ def test_measuring_scale_stays_even_with_yellow_coverage(tmp_path: Path) -> None
 
 
 def test_coerce_listing_attrs_marks_untagged_closeup(tmp_path: Path) -> None:
-    path = _band_image(tmp_path / "coerce.png", tape_rows=9)
+    path = _band_image(tmp_path / "coerce.png", tape_rows=90)
     out = coerce_sku_tape_listing_attrs(path, PhotoListingAttrs(photo_role="hero"))
     assert out.photo_role == "tape"
     keep = coerce_sku_tape_listing_attrs(
-        _band_image(tmp_path / "keep.png", tape_rows=1),
+        _band_image(tmp_path / "keep.png", tape_rows=10),
         PhotoListingAttrs(photo_role="item_front"),
     )
     assert keep.photo_role == "item_front"
+
+
+def test_beige_furniture_is_not_treated_as_sku_tape(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "beige.png", tape_rows=0)
+    photo = SimpleNamespace(
+        id="beige",
+        photo_role=None,
+        original_name="IMG_chair.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    kept = photos_for_ctbids_listing([photo], path_for=lambda _p: path)
+    assert [p.id for p in kept] == ["beige"]
 
 
 def test_assign_detected_sku_tape_roles_skips_unusable() -> None:

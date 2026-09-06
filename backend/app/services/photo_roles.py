@@ -191,7 +191,9 @@ def should_omit_from_ctbids_listing(photo: Any, *, path: Path | None = None) -> 
     try:
         from app.services.tape_focus import estate_tape_pixel_ratio
 
-        ratio = estate_tape_pixel_ratio(path, include_yellow=True)
+        # Yellow is used for measuring tape and also matches wood/beige — omit
+        # only purple / blue / neon-green estate lot tape.
+        ratio = estate_tape_pixel_ratio(path, include_yellow=False)
     except Exception:
         return False
     if ratio is None:
