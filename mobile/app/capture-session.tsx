@@ -29,9 +29,16 @@ import {
   maybeCropToAspect,
   type CameraAspectId
 } from "@/lib/cameraAspect";
-import { uploadLotPhotos } from "@/lib/api";
+import { uploadLotPhotos, uploadLotVideos } from "@/lib/api";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
+import {
+  MAX_VIDEO_DURATION_SEC,
+  MAX_VIDEOS_PER_LOT,
+  isVideoUri,
+  mediaKindFromName,
+  splitMediaUris
+} from "@/lib/mediaKind";
 import {
   addPhotoToDraft,
   createLotDraft,
@@ -147,6 +154,10 @@ export default function CaptureSessionScreen() {
   const [cameraLayout, setCameraLayout] = useState({ width: 0, height: 0 });
   const [sessionReady, setSessionReady] = useState(false);
   const [resumedNotice, setResumedNotice] = useState("");
+  const [captureMode, setCaptureMode] = useState<"photo" | "video">("photo");
+  const [recording, setRecording] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Camera controls: zoom (0–1 = % of device max), torch, and tap-to-refocus.
   const [zoom, setZoom] = useState(0);
@@ -284,6 +295,12 @@ export default function CaptureSessionScreen() {
     return () => {
       if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
       if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      try {
+        cameraRef.current?.stopRecording();
+      } catch {
+        /* ignore */
+      }
     };
   }, []);
 
@@ -341,7 +358,8 @@ export default function CaptureSessionScreen() {
 
   async function snap() {
     if (!cameraRef.current || busy || !cameraReady || !sessionReady) return;
-    const used = (isAppendMode ? appendExistingCount : 0) + thumbs.length;
+    const photoCount = thumbs.filter((u) => !isVideoUri(u)).length;
+    const used = (isAppendMode ? appendExistingCount : 0) + photoCount;
     if (used >= CTBIDS_MAX_PHOTOS_PER_LOT) {
       const room = Math.max(0, CTBIDS_MAX_PHOTOS_PER_LOT - (isAppendMode ? appendExistingCount : 0));
       setError(
@@ -384,6 +402,87 @@ export default function CaptureSessionScreen() {
       setError(e instanceof Error ? e.message : "Capture failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function startRecordClock() {
+    setRecordSecs(0);
+    if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+    recordTimerRef.current = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+  }
+
+  function stopRecordClock() {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+  }
+
+  async function saveCapturedVideo(uri: string) {
+    const match = uri.toLowerCase().match(/\.(mp4|mov|m4v|webm)/);
+    const ext = match?.[0] || (mediaKindFromName(uri) === "video" ? ".mp4" : ".mp4");
+    if (isAppendMode && appendLotId) {
+      const dir = appendDir();
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      const dest = `${dir}${Date.now()}${ext}`;
+      await FileSystem.copyAsync({ from: uri, to: dest });
+      setThumbs((prev) => [...prev, dest]);
+      return;
+    }
+    const id = await ensureDraft();
+    if (!id) return;
+    const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    const dest = `${dir}${Date.now()}${ext}`;
+    await FileSystem.copyAsync({ from: uri, to: dest });
+    await addPhotoToDraft(id, dest, "video");
+    const photos = await listDraftPhotos(id);
+    setThumbs(photos.map((p) => p.file_uri));
+    setResumedNotice("");
+  }
+
+  async function recordVideo() {
+    if (!cameraRef.current || busy || recording || !cameraReady || !sessionReady) return;
+    if (thumbs.filter(isVideoUri).length >= MAX_VIDEOS_PER_LOT) {
+      setError(`This lot can have at most ${MAX_VIDEOS_PER_LOT} videos.`);
+      return;
+    }
+    setError("");
+    setBusy(true);
+    setRecording(true);
+    startRecordClock();
+    try {
+      let clip: { uri?: string } | undefined;
+      try {
+        clip = await cameraRef.current.recordAsync({
+          maxDuration: MAX_VIDEO_DURATION_SEC,
+          mute: false
+        });
+      } catch {
+        clip = await cameraRef.current.recordAsync({
+          maxDuration: MAX_VIDEO_DURATION_SEC,
+          mute: true
+        });
+      }
+      if (!clip?.uri) {
+        setError("Camera returned no video.");
+        return;
+      }
+      await saveCapturedVideo(clip.uri);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Video capture failed");
+    } finally {
+      setRecording(false);
+      stopRecordClock();
+      setBusy(false);
+    }
+  }
+
+  function stopVideo() {
+    try {
+      cameraRef.current?.stopRecording();
+    } catch {
+      /* already stopping */
     }
   }
 
@@ -475,13 +574,18 @@ export default function CaptureSessionScreen() {
   function confirmFinish() {
     if (isAppendMode) {
       if (!thumbs.length) {
-        Alert.alert("No photos", "Snap at least one photo to add to this lot.");
+        Alert.alert("Nothing to add", "Snap a photo or record a video to add to this lot.");
         return;
       }
+      const { images, videos } = splitMediaUris(thumbs);
       const label = appendSku || appendTitle || "this lot";
+      const parts = [
+        images.length ? `${images.length} photo${images.length === 1 ? "" : "s"}` : "",
+        videos.length ? `${videos.length} video${videos.length === 1 ? "" : "s"}` : ""
+      ].filter(Boolean);
       Alert.alert(
-        "Add photos to lot?",
-        `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"} will be uploaded to ${label}. They attach to the existing listing (no new AI job).`,
+        "Add to lot?",
+        `${parts.join(" · ")} will be uploaded to ${label}. Photos attach to the listing; videos stay on Estate-EZ (not posted to CT Bids).`,
         [
           { text: "Keep editing", style: "cancel" },
           { text: "Upload", style: "default", onPress: () => void finishAppend() }
@@ -493,8 +597,12 @@ export default function CaptureSessionScreen() {
       router.back();
       return;
     }
-    if (!thumbs.length) {
-      Alert.alert("No photos", "Snap at least one photo before finishing this lot.");
+    const pending = splitMediaUris(thumbs);
+    if (!pending.images.length) {
+      Alert.alert(
+        "Need a photo",
+        "AI catalog needs at least one still photo. Videos attach after the lot is on the website."
+      );
       return;
     }
     const skuLabel = isFacebook
@@ -507,7 +615,11 @@ export default function CaptureSessionScreen() {
     const saleLabel = selectedSaleName ? `"${selectedSaleName}"` : "this sale";
     Alert.alert(
       isFacebook ? "Send Facebook item to pipeline?" : "Send lot to pipeline?",
-      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} · ${skuLabel}\n\nThis uploads to ${saleLabel} as ${
+      `${pending.images.length} photo${pending.images.length === 1 ? "" : "s"}${
+        pending.videos.length
+          ? ` · ${pending.videos.length} video${pending.videos.length === 1 ? "" : "s"}`
+          : ""
+      } · ${skuLabel}\n\nThis uploads to ${saleLabel} as ${
         isFacebook ? "Facebook Marketplace" : "CT Bids"
       } inventory and starts AI processing.`,
       [
@@ -526,20 +638,33 @@ export default function CaptureSessionScreen() {
     setBusy(true);
     setError("");
     try {
-      await uploadLotPhotos(
-        token,
-        appendLotId,
-        thumbs.map((uri, i) => ({
-          uri,
-          name: `append-${String(i + 1).padStart(2, "0")}.jpg`
-        }))
-      );
+      const { images, videos } = splitMediaUris(thumbs);
+      if (images.length) {
+        await uploadLotPhotos(
+          token,
+          appendLotId,
+          images.map((uri, i) => ({
+            uri,
+            name: `append-${String(i + 1).padStart(2, "0")}.jpg`
+          }))
+        );
+      }
+      if (videos.length) {
+        await uploadLotVideos(
+          token,
+          appendLotId,
+          videos.map((uri, i) => {
+            const ext = uri.toLowerCase().match(/\.(mp4|mov|m4v|webm)/)?.[0] || ".mp4";
+            return { uri, name: `append-vid-${String(i + 1).padStart(2, "0")}${ext}` };
+          })
+        );
+      }
       const uploaded = thumbs.slice();
       setThumbs([]);
       await cleanupAppendFiles(uploaded);
       Alert.alert(
-        "Photos added",
-        `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added to the listing.`,
+        "Added to lot",
+        `${uploaded.length} file${uploaded.length === 1 ? "" : "s"} added to the listing.`,
         [{ text: "OK", onPress: () => router.back() }]
       );
     } catch (e) {
@@ -556,7 +681,7 @@ export default function CaptureSessionScreen() {
     void syncNow();
     Alert.alert(
       "Lot queued",
-      `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}.\n\nThey'll upload automatically when you're online. Review the listing on the web dashboard after processing.`,
+      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}.\n\nPhotos catalog first; videos attach after the lot is on the website.`,
       [{ text: "OK", onPress: () => router.back() }]
     );
   }
@@ -613,12 +738,21 @@ export default function CaptureSessionScreen() {
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           facing="back"
+          mode={captureMode === "video" ? "video" : "picture"}
           zoom={zoom}
           enableTorch={torchOn}
           autofocus={autofocus}
           pictureSize={pictureSize}
           onCameraReady={() => void handleCameraReady()}
         />
+        {recording ? (
+          <View pointerEvents="none" style={styles.recBadge}>
+            <Text style={styles.recBadgeText}>
+              REC {String(Math.floor(recordSecs / 60)).padStart(2, "0")}:
+              {String(recordSecs % 60).padStart(2, "0")}
+            </Text>
+          </View>
+        ) : null}
         <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers} />
         {aspectId !== "full" && cameraLayout.width > 0 && cameraLayout.height > 0 ? (
           <AspectMask
@@ -709,14 +843,28 @@ export default function CaptureSessionScreen() {
           <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
             {isAppendMode
               ? thumbs.length
-                ? `${thumbs.length} new photo${thumbs.length === 1 ? "" : "s"}`
-                : "Add photos"
+                ? `${thumbs.filter((u) => !isVideoUri(u)).length} photo${
+                    thumbs.filter((u) => !isVideoUri(u)).length === 1 ? "" : "s"
+                  }${
+                    thumbs.some(isVideoUri)
+                      ? ` · ${thumbs.filter(isVideoUri).length} video${
+                          thumbs.filter(isVideoUri).length === 1 ? "" : "s"
+                        }`
+                      : ""
+                  }`
+                : "Add photos or video"
               : isFacebook
                 ? thumbs.length
                   ? `Facebook · ${thumbs.length}`
                   : "Facebook"
                 : thumbs.length
-                  ? `${thumbs.length} photo${thumbs.length === 1 ? "" : "s"}`
+                  ? `${thumbs.filter((u) => !isVideoUri(u)).length} photo${
+                      thumbs.filter((u) => !isVideoUri(u)).length === 1 ? "" : "s"
+                    }${
+                      thumbs.some(isVideoUri)
+                        ? ` · ${thumbs.filter(isVideoUri).length} video`
+                        : ""
+                    }`
                   : "New lot"}
           </Text>
           {resumedNotice ? (
@@ -736,9 +884,9 @@ export default function CaptureSessionScreen() {
         </View>
 
         {!landscape ? (
-          <Text style={styles.sectionTitle}>{isAppendMode ? "New photos" : "Photos"}</Text>
+          <Text style={styles.sectionTitle}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
         ) : (
-          <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New photos" : "Photos"}</Text>
+          <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
         )}
 
         <DraftPhotoStrip
@@ -760,6 +908,24 @@ export default function CaptureSessionScreen() {
           />
         ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        <View style={styles.modeRow}>
+          {(["photo", "video"] as const).map((mode) => {
+            const active = captureMode === mode;
+            return (
+              <Pressable
+                key={mode}
+                style={[styles.modeBtn, active && styles.modeBtnActive]}
+                disabled={recording}
+                onPress={() => setCaptureMode(mode)}
+              >
+                <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
+                  {mode === "photo" ? "Photo" : "Video"}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
 
         <View style={[styles.actions, landscape && styles.actionsLandscape]}>
           {!landscape ? (
@@ -783,15 +949,29 @@ export default function CaptureSessionScreen() {
             style={[
               styles.snap,
               landscape && styles.snapLandscape,
-              (busy || !cameraReady || !sessionReady) && styles.disabled
+              recording && styles.snapRecording,
+              (!recording && (busy || !cameraReady || !sessionReady)) && styles.disabled
             ]}
-            disabled={busy || !cameraReady || !sessionReady}
-            onPress={() => void snap()}
+            disabled={!recording && (busy || !cameraReady || !sessionReady)}
+            onPress={() => {
+              if (captureMode === "video") {
+                if (recording) stopVideo();
+                else void recordVideo();
+                return;
+              }
+              void snap();
+            }}
           >
-            {busy || !sessionReady ? (
+            {busy && !recording ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.primaryText}>Snap</Text>
+              <Text style={styles.primaryText}>
+                {captureMode === "video"
+                  ? recording
+                    ? "Stop"
+                    : `Record (${MAX_VIDEO_DURATION_SEC}s)`
+                  : "Snap"}
+              </Text>
             )}
           </Pressable>
           <Pressable
@@ -804,7 +984,7 @@ export default function CaptureSessionScreen() {
             onPress={confirmFinish}
           >
             <Text style={styles.primaryText}>
-              {isAppendMode ? (landscape ? "Upload" : "Upload photos") : landscape ? "Finish" : "Finish lot"}
+              {isAppendMode ? (landscape ? "Upload" : "Upload") : landscape ? "Finish" : "Finish lot"}
             </Text>
           </Pressable>
         </View>
@@ -1001,6 +1181,36 @@ const styles = StyleSheet.create({
   },
   actions: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 2 },
   actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
+  modeRow: {
+    flexDirection: "row",
+    gap: 6,
+    backgroundColor: "#141416",
+    borderRadius: 10,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "#1f1f22"
+  },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: "center"
+  },
+  modeBtnActive: { backgroundColor: "#ff4d1a" },
+  modeBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
+  modeBtnTextActive: { color: "#fff" },
+  recBadge: {
+    position: "absolute",
+    top: 12,
+    alignSelf: "center",
+    backgroundColor: "rgba(185, 28, 28, 0.92)",
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    zIndex: 6
+  },
+  recBadgeText: { color: "#fff", fontSize: 13, fontWeight: "800", letterSpacing: 0.4 },
+  snapRecording: { backgroundColor: "#b91c1c" },
   snap: {
     flex: 1,
     backgroundColor: "#ff4d1a",

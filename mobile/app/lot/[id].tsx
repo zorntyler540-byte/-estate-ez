@@ -11,8 +11,10 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { getLot, listLotPhotos, lotPhotoThumbnailSource, lotThumbnailSource } from "@/lib/api";
-import type { Lot, LotPhoto } from "@/lib/types";
+import * as WebBrowser from "expo-web-browser";
+
+import { getLot, getLotVideoPlayUrl, listLotPhotos, listLotVideos, lotPhotoThumbnailSource, lotThumbnailSource } from "@/lib/api";
+import type { Lot, LotPhoto, LotVideo } from "@/lib/types";
 
 function Field({ label, value }: { label: string; value: string }) {
   if (!value.trim()) return null;
@@ -29,6 +31,7 @@ export default function LotDetailScreen() {
   const { token } = useAuth();
   const [lot, setLot] = useState<Lot | null>(null);
   const [photos, setPhotos] = useState<LotPhoto[]>([]);
+  const [videos, setVideos] = useState<LotVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -37,9 +40,14 @@ export default function LotDetailScreen() {
     setLoading(true);
     setError("");
     try {
-      const [lotRow, photoRows] = await Promise.all([getLot(token, id), listLotPhotos(token, id)]);
+      const [lotRow, photoRows, videoRows] = await Promise.all([
+        getLot(token, id),
+        listLotPhotos(token, id),
+        listLotVideos(token, id).catch(() => [] as LotVideo[])
+      ]);
       setLot(lotRow);
       setPhotos(photoRows);
+      setVideos(videoRows);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load lot");
     } finally {
@@ -118,6 +126,31 @@ export default function LotDetailScreen() {
               {!photos.length ? <Text style={styles.muted}>No photos linked.</Text> : null}
             </ScrollView>
 
+            {videos.length ? (
+              <>
+                <Text style={styles.section}>Videos ({videos.length})</Text>
+                <View style={styles.videoList}>
+                  {videos.map((video, index) => (
+                    <Pressable
+                      key={video.id}
+                      style={styles.videoRow}
+                      onPress={() => {
+                        if (!token) return;
+                        void getLotVideoPlayUrl(token, lot.id, video.id)
+                          .then((url) => WebBrowser.openBrowserAsync(url))
+                          .catch((e) => setError(e instanceof Error ? e.message : "Could not play video"));
+                      }}
+                    >
+                      <Text style={styles.videoPlay}>▶</Text>
+                      <Text style={styles.videoName} numberOfLines={1}>
+                        {video.original_name || `Video ${index + 1}`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            ) : null}
+
             <Pressable
               style={styles.addPhotosBtn}
               onPress={() =>
@@ -134,10 +167,11 @@ export default function LotDetailScreen() {
                 })
               }
             >
-              <Text style={styles.addPhotosBtnText}>Add photos</Text>
+              <Text style={styles.addPhotosBtnText}>Add photos or video</Text>
             </Pressable>
             <Text style={styles.addPhotosHint}>
-              Opens the camera and uploads new shots onto this same listing (max 40 photos per lot).
+              Opens the camera. Still photos attach to the listing (max 40). Videos stay on Estate-EZ
+              and are not posted to CT Bids (max 8, 45 seconds).
             </Text>
           </>
         ) : null}
@@ -181,6 +215,18 @@ const styles = StyleSheet.create({
   photoRow: { gap: 8, paddingVertical: 4 },
   photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: "#141416" },
   muted: { color: "#78716c" },
+  videoList: { gap: 8 },
+  videoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#141416",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12
+  },
+  videoPlay: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  videoName: { color: "#e7e5e4", fontSize: 14, flex: 1 },
   addPhotosBtn: {
     marginTop: 12,
     backgroundColor: "#ff4d1a",

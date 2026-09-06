@@ -47,6 +47,7 @@ from app.models import (
     AudienceHuntEvent,
     JobStatus,
     Lot,
+    LotVideo,
     Photo,
     ProcessingJob,
     Sale,
@@ -105,6 +106,8 @@ from app.schemas import (
     SaleAudienceHuntLotResult,
     SaleAudienceHuntStatusOut,
     LotPhotoOut,
+    LotVideoOut,
+    DeleteLotVideosIn,
     ReorderLotPhotosIn,
     CatalogedMobileDraftLotOut,
     CatalogedMobileDraftsOut,
@@ -129,6 +132,7 @@ from app.services.serialization import (
     lot_ids_with_linked_photos,
     lot_photo_out,
     lot_to_schema,
+    lot_video_out,
     photo_count_is_sale_outlier,
     photo_count_outlier_by_lot_id,
     photo_health_from_loaded,
@@ -181,6 +185,7 @@ from app.catalog_storage import (
     delete_catalog_photo,
     migrate_local_photos_to_r2,
     persist_catalog_photo,
+    persist_catalog_video,
     resolve_catalog_storage_path,
     signed_catalog_url,
     upload_root,
@@ -193,7 +198,11 @@ from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
     count_catalog_image_files,
     ctbids_lot_photo_delta_error,
+    is_catalog_video_filename,
     list_catalog_image_files_sorted,
+    lot_video_delta_error,
+    lot_video_size_error,
+    video_content_type,
 )
 
 app = FastAPI(title=settings.app_name)
@@ -359,6 +368,13 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     peer = sale_lot_photo_counts(db, row.sale_id, account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
     out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    video_n = (
+        db.query(func.count())
+        .select_from(LotVideo)
+        .where(LotVideo.lot_id == lot_id, LotVideo.account_id == account_id)
+        .scalar()
+    )
+    out = out.model_copy(update={"video_count": int(video_n or 0)})
     regen = regeneration_tasks.lot_regenerate_is_active(row)
     err = regeneration_tasks.pop_regeneration_error(db, row) if not regen else None
     return _lot_out_with_runtime(out, row, db=db, pop_hunt_error=True, ai_regenerating=regen, ai_regenerate_error=err)
@@ -2381,6 +2397,206 @@ async def upload_lot_photos(
         .all()
     )
     return [lot_photo_out(p, lot_id=lot_id) for p in photos]
+
+
+@app.get("/lots/{lot_id}/videos", response_model=list[LotVideoOut])
+def list_lot_videos(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[LotVideoOut]:
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    videos = (
+        db.query(LotVideo)
+        .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+        .order_by(LotVideo.sort_order.asc(), LotVideo.created_at.asc(), LotVideo.id.asc())
+        .all()
+    )
+    return [lot_video_out(v, lot_id=lot_id) for v in videos]
+
+
+@app.post("/lots/{lot_id}/videos/upload", response_model=list[LotVideoOut])
+async def upload_lot_videos(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    files: list[UploadFile] = File(),
+) -> list[LotVideoOut]:
+    """Attach short clips to a catalog lot. Not sent through Gemini or posted to CT Bids."""
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    if not files:
+        raise HTTPException(status_code=400, detail="No videos uploaded")
+
+    payloads: list[tuple[str, bytes]] = []
+    for file in files:
+        name = Path(file.filename or "clip.mp4").name
+        if not is_catalog_video_filename(name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} is not a video (use MP4, MOV, M4V, or WebM).",
+            )
+        raw = await file.read()
+        if err := lot_video_size_error(len(raw)):
+            raise HTTPException(status_code=400, detail=f"{name}: {err}")
+        payloads.append((name, raw))
+
+    existing = (
+        db.query(func.count())
+        .select_from(LotVideo)
+        .where(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+        .scalar()
+    )
+    n_existing = int(existing or 0)
+    if err := lot_video_delta_error(current=n_existing, delta=len(payloads)):
+        raise HTTPException(status_code=400, detail=err)
+
+    mx = (
+        db.query(func.max(LotVideo.sort_order))
+        .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+        .scalar()
+    )
+    base = (int(mx) if mx is not None else -1) + 1
+    for i, (name, raw) in enumerate(payloads):
+        tmp_path = Path(tempfile.mkstemp(suffix=Path(name).suffix or ".mp4")[1])
+        try:
+            tmp_path.write_bytes(raw)
+            video_id, storage_path = persist_catalog_video(current.account_id, tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        db.add(
+            LotVideo(
+                id=video_id,
+                account_id=current.account_id,
+                user_id=current.id,
+                lot_id=lot_id,
+                original_name=name,
+                storage_path=storage_path,
+                content_type=video_content_type(name),
+                byte_size=len(raw),
+                sort_order=base + i,
+            )
+        )
+    db.commit()
+    videos = (
+        db.query(LotVideo)
+        .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+        .order_by(LotVideo.sort_order.asc(), LotVideo.created_at.asc(), LotVideo.id.asc())
+        .all()
+    )
+    return [lot_video_out(v, lot_id=lot_id) for v in videos]
+
+
+@app.post("/lots/{lot_id}/videos/delete", response_model=LotOut)
+def delete_lot_videos(
+    lot_id: str,
+    body: DeleteLotVideosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    ids = list(dict.fromkeys(body.video_ids))
+    to_delete = (
+        db.query(LotVideo)
+        .filter(
+            LotVideo.lot_id == lot_id,
+            LotVideo.account_id == current.account_id,
+            LotVideo.id.in_(ids),
+        )
+        .all()
+    )
+    found_ids = {v.id for v in to_delete}
+    if found_ids != set(ids):
+        missing = sorted(set(ids) - found_ids)
+        preview = ", ".join(missing[:5])
+        raise HTTPException(status_code=400, detail=f"Video id(s) not on this lot: {preview}")
+    storage_paths = [v.storage_path for v in to_delete]
+    for video in to_delete:
+        db.delete(video)
+    db.commit()
+    for sp in storage_paths:
+        delete_catalog_photo(sp)
+    return _lot_out_for_id(db, current.account_id, lot_id)
+
+
+@app.get("/lots/{lot_id}/videos/{video_id}/media-url", response_model=CatalogMediaUrlOut)
+def lot_video_media_url(
+    lot_id: str,
+    video_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogMediaUrlOut:
+    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    video = (
+        db.query(LotVideo)
+        .filter(
+            LotVideo.id == video_id,
+            LotVideo.lot_id == lot_id,
+            LotVideo.account_id == current.account_id,
+        )
+        .first()
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    expires = 3600
+    try:
+        url = signed_catalog_url(video.storage_path, max_px=None, expires_seconds=expires)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "Video file missing") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not sign video URL: {exc}") from exc
+    return CatalogMediaUrlOut(url=url, expires_in=expires, kind="original")
+
+
+@app.get("/lots/{lot_id}/videos/{video_id}/stream")
+def stream_lot_video(
+    lot_id: str,
+    video_id: str,
+    token: str = Depends(oauth2_scheme),
+) -> Response:
+    with SessionLocal() as db:
+        user = user_from_access_token(token, db)
+        row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lot not found")
+        video = (
+            db.query(LotVideo)
+            .filter(
+                LotVideo.id == video_id,
+                LotVideo.lot_id == lot_id,
+                LotVideo.account_id == user.account_id,
+            )
+            .first()
+        )
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        storage_path = video.storage_path
+        content_type = video.content_type or video_content_type(video.original_name)
+        filename = video.original_name
+
+    if catalog_r2_configured():
+        try:
+            url = signed_catalog_url(storage_path, max_px=None, expires_seconds=3600)
+            return RedirectResponse(url=url, status_code=302)
+        except Exception:
+            pass
+    src = resolve_catalog_storage_path(storage_path)
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail="Video file missing on disk")
+    return FileResponse(
+        str(src),
+        media_type=content_type or "video/mp4",
+        filename=filename,
+    )
 
 
 @app.post("/lots/{lot_id}/photos/delete", response_model=LotOut)

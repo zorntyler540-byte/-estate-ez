@@ -6,8 +6,10 @@ import {
   listCatalogedMobileDraftsDetailed,
   listJobsForSale,
   runJob,
+  uploadLotVideos,
   uploadSingleLotJob
 } from "../api";
+import { mediaKindFromName } from "../mediaKind";
 import { refreshSessionIfPossible } from "../sessionBridge";
 import type { Job } from "../types";
 import {
@@ -18,6 +20,7 @@ import {
 import {
   listDraftPhotos,
   listLotDrafts,
+  markDraftMediaUploaded,
   setDraftServerJobId,
   setDraftServerLotId,
   setDraftStatus
@@ -34,6 +37,29 @@ const SERVER_CONFIRM_INTERVAL_MS = 3_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function videoUploadName(draftId: string, fileUri: string, index: number): string {
+  const match = fileUri.toLowerCase().match(/\.(mp4|mov|m4v|webm)(?:\?|$)/);
+  const ext = match?.[1] ? `.${match[1]}` : ".mp4";
+  return `mobile-${draftId}-vid-${String(index + 1).padStart(2, "0")}${ext}`;
+}
+
+async function uploadPendingDraftVideos(
+  token: string,
+  draftId: string,
+  lotId: string
+): Promise<void> {
+  const rows = await listDraftPhotos(draftId);
+  const pending = rows.filter((p) => p.media_kind === "video" && !p.uploaded);
+  for (let i = 0; i < pending.length; i++) {
+    const row = pending[i]!;
+    if (mediaKindFromName(row.file_uri) !== "video") continue;
+    await uploadLotVideos(token, lotId, [
+      { uri: row.file_uri, name: videoUploadName(draftId, row.file_uri, i) }
+    ]);
+    await markDraftMediaUploaded(draftId, row.id);
+  }
 }
 
 function serverFailMessage(job: Job): string {
@@ -123,6 +149,13 @@ export async function syncPendingLots(
       if (lotId && draft.server_lot_id !== lotId) {
         await setDraftServerLotId(draft.id, lotId);
       }
+      if (lotId) {
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        } catch {
+          /* photos already cataloged — retry clips on the next sync */
+        }
+      }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
         await setDraftStatus(draft.id, "uploaded", null);
@@ -157,8 +190,8 @@ export async function syncPendingLots(
   onProgress?.();
 
   for (const draft of await listLotDrafts()) {
-    const cataloged = catalogedBySale.get(draft.sale_id) ?? new Set<string>();
-    if (cataloged.has(draft.id.toLowerCase())) {
+    const cataloged = catalogedBySale.get(draft.sale_id);
+    if (cataloged?.ids.has(draft.id.toLowerCase())) {
       continue;
     }
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
@@ -198,14 +231,35 @@ export async function syncPendingLots(
 
   for (const draft of pending) {
     const photos = await listDraftPhotos(draft.id);
-    if (!photos.length) {
-      await setDraftStatus(draft.id, "failed", "No photos in lot");
+    const images = photos.filter((p) => p.media_kind !== "video");
+    if (!images.length) {
+      if (draft.server_lot_id) {
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, draft.server_lot_id);
+          await setDraftStatus(draft.id, "uploaded", null);
+          uploaded += 1;
+        } catch (e) {
+          await setDraftStatus(
+            draft.id,
+            "failed",
+            e instanceof Error ? e.message : "Could not upload videos"
+          );
+          failed += 1;
+        }
+        onProgress?.();
+        continue;
+      }
+      await setDraftStatus(
+        draft.id,
+        "failed",
+        "Snap at least one photo — videos attach after the lot is cataloged."
+      );
       failed += 1;
       onProgress?.();
       continue;
     }
 
-    const total = photos.length;
+    const total = images.length;
     let jobId: string | null = null;
     let uploadedCount = 0;
 
@@ -213,7 +267,7 @@ export async function syncPendingLots(
       await setDraftStatus(draft.id, "uploading", `Preparing photos (0/${total})…`);
       onProgress?.();
 
-      const rows = photos.map((p, i) => ({
+      const rows = images.map((p, i) => ({
         id: p.id,
         uri: p.file_uri,
         name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
@@ -312,6 +366,16 @@ export async function syncPendingLots(
         failed += 1;
       } else if (outcome === "completed") {
         await setDraftServerJobId(draft.id, null);
+        const idx = await catalogedDraftIndex(authToken, draft.sale_id);
+        const lotId = idx.lotByDraft.get(draft.id.toLowerCase());
+        if (lotId) {
+          await setDraftServerLotId(draft.id, lotId);
+          try {
+            await uploadPendingDraftVideos(authToken, draft.id, lotId);
+          } catch {
+            /* clip upload retries on the next sync */
+          }
+        }
         await setDraftStatus(draft.id, "uploaded", null);
         uploaded += 1;
       } else {

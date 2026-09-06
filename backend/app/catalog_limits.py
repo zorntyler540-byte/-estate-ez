@@ -8,6 +8,11 @@ from pathlib import Path
 # Set to None to disable the per-listing cap.
 CTBIDS_MAX_PHOTOS_PER_LOT: int | None = 40
 
+# Estate-EZ hosted clips (not posted to CT Bids). Keep short for field uploads.
+MAX_VIDEOS_PER_LOT: int | None = 8
+MAX_VIDEO_BYTES = 80 * 1024 * 1024
+_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm"})
+
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 
 
@@ -54,3 +59,47 @@ def list_catalog_image_files_sorted(root: Path) -> list[Path]:
     paths = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in _CATALOG_SUFFIXES]
     paths.sort(key=lambda p: (str(p.relative_to(root)).lower(), p.name.lower()))
     return paths
+
+
+def is_catalog_video_filename(name: object | None) -> bool:
+    """True when ``name`` looks like an MP4/MOV/WebM clip (not a catalog still)."""
+    raw = str(name or "").strip().lower().replace("\\", "/")
+    if not raw:
+        return False
+    return Path(raw).suffix in _VIDEO_SUFFIXES
+
+
+def video_content_type(name: object | None) -> str:
+    suffix = Path(str(name or "").strip().lower()).suffix
+    return {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".m4v": "video/x-m4v",
+        ".webm": "video/webm",
+    }.get(suffix, "application/octet-stream")
+
+
+def lot_video_delta_error(*, current: int, delta: int) -> str | None:
+    """None if ``current + delta`` is within the per-lot video cap; else a 400 detail."""
+    if delta <= 0:
+        return None
+    cap = MAX_VIDEOS_PER_LOT
+    if cap is None:
+        return None
+    if current >= cap:
+        return f"This lot already has {current} video{'' if current == 1 else 's'} (max {cap})."
+    if current + delta > cap:
+        return (
+            f"This lot has {current} video{'' if current == 1 else 's'}; "
+            f"adding {delta} would exceed the limit of {cap}."
+        )
+    return None
+
+
+def lot_video_size_error(size: int) -> str | None:
+    if size <= 0:
+        return "Empty video file"
+    if size > MAX_VIDEO_BYTES:
+        mb = MAX_VIDEO_BYTES // (1024 * 1024)
+        return f"Videos must be {mb} MB or smaller (this file is {size / (1024 * 1024):.1f} MB)."
+    return None

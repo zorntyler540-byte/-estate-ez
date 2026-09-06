@@ -2,6 +2,7 @@ import { Image } from "expo-image";
 import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { isVideoUri } from "@/lib/mediaKind";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 
@@ -18,7 +19,7 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
   if (!uris.length) {
     return (
       <View style={styles.emptyBox}>
-        <Text style={styles.emptyText}>No photos yet</Text>
+        <Text style={styles.emptyText}>No photos or videos yet</Text>
       </View>
     );
   }
@@ -28,9 +29,15 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
       {uris.map((uri, index) => (
         <View key={uri} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
           <Pressable style={styles.thumbPress} onPress={() => onPressPhoto?.(uri, index)}>
-            <Image source={{ uri }} style={styles.thumbImage} contentFit="cover" />
+            {isVideoUri(uri) ? (
+              <View style={[styles.thumbImage, styles.videoThumb]}>
+                <Text style={styles.videoThumbMark}>▶</Text>
+              </View>
+            ) : (
+              <Image source={{ uri }} style={styles.thumbImage} contentFit="cover" />
+            )}
             <View style={styles.badge}>
-              <Text style={styles.badgeText}>{index + 1}</Text>
+              <Text style={styles.badgeText}>{isVideoUri(uri) ? "Vid" : String(index + 1)}</Text>
             </View>
           </Pressable>
           {onDeletePhoto ? (
@@ -83,7 +90,7 @@ export function PhotoPreviewModal({
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>
-            Photo {index + 1} of {total}
+            {isVideoUri(uri) ? "Video" : "Photo"} {index + 1} of {total}
             {total > 1 ? " · taken order" : ""}
           </Text>
           {uri ? (
@@ -101,7 +108,14 @@ export function PhotoPreviewModal({
                 else if (dx < -56) go(1);
               }}
             >
-              <Image source={{ uri }} style={styles.modalImage} contentFit="contain" />
+              {isVideoUri(uri) ? (
+                <View style={[styles.modalImage, styles.videoPreview]}>
+                  <Text style={styles.videoPreviewMark}>▶</Text>
+                  <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
+                </View>
+              ) : (
+                <Image source={{ uri }} style={styles.modalImage} contentFit="contain" />
+              )}
             </View>
           ) : null}
           {total > 1 ? (
@@ -127,7 +141,7 @@ export function PhotoPreviewModal({
           <View style={styles.modalActions}>
             {onDelete ? (
               <Pressable style={styles.modalDelete} onPress={onDelete}>
-                <Text style={styles.modalDeleteText}>Delete photo</Text>
+                <Text style={styles.modalDeleteText}>{isVideoUri(uri) ? "Delete video" : "Delete photo"}</Text>
               </Pressable>
             ) : null}
             <Pressable style={styles.modalClose} onPress={onClose}>
@@ -231,6 +245,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6
   },
   badgeText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" },
+  videoThumb: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
+  videoThumbMark: { color: "#fff", fontSize: 22, fontWeight: "700" },
+  videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
+  videoPreviewMark: { color: "#fff", fontSize: 48, fontWeight: "700" },
+  videoPreviewHint: { color: "#a8a29e", marginTop: 12, fontSize: 15, fontWeight: "600" },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",

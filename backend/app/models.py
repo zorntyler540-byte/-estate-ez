@@ -112,6 +112,7 @@ class Lot(Base):
     account: Mapped["Account"] = relationship(back_populates="lots")
     owner: Mapped["User"] = relationship()
     photos: Mapped[list["Photo"]] = relationship(back_populates="lot")
+    videos: Mapped[list["LotVideo"]] = relationship(back_populates="lot")
 
 
 class Photo(Base):
@@ -134,6 +135,25 @@ class Photo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lot: Mapped["Lot"] = relationship(back_populates="photos")
+    owner: Mapped["User"] = relationship()
+
+
+class LotVideo(Base):
+    """Phone/web clip attached to a catalog lot. Not sent through Gemini or CT Bids."""
+
+    __tablename__ = "lot_videos"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    lot_id: Mapped[str] = mapped_column(ForeignKey("lots.id"), index=True, nullable=False)
+    original_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(600), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(80), nullable=False, default="video/mp4")
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    lot: Mapped["Lot"] = relationship(back_populates="videos")
     owner: Mapped["User"] = relationship()
 
 

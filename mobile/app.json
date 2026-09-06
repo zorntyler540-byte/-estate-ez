@@ -19,7 +19,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Capture estate lot photos for catalog upload.",
+        "NSCameraUsageDescription": "Capture estate lot photos and short videos for catalog upload.",
+        "NSMicrophoneUsageDescription": "Record audio with lot videos.",
         "NSPhotoLibraryUsageDescription": "Optional access to save or pick reference photos.",
         "ITSAppUsesNonExemptEncryption": false
       },
@@ -51,7 +52,9 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Capture estate lot photos for catalog upload."
+          "cameraPermission": "Capture estate lot photos and short videos for catalog upload.",
+          "microphonePermission": "Record audio with lot videos.",
+          "recordAudioAndroid": true
         }
       ],
       [
