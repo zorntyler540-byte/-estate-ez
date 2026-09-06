@@ -24,6 +24,7 @@ import {
   X
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
+import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { AppShell } from "../../components/AppShell";
 import {
   AudienceHuntProgress,
@@ -6772,6 +6773,20 @@ export default function DashboardPage() {
             </div>
           ) : null}
         </div>
+        {selectedSaleId && token ? (
+          <SaleCoverPhotos
+            saleId={selectedSaleId}
+            token={token}
+            ctsellerSaleId={Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "") || null}
+            disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
+            onMapped={(id) => {
+              setCtSellerPickId(String(id));
+              setSales((prev) =>
+                prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: id } : s))
+              );
+            }}
+          />
+        ) : null}
         {ctSellerBulkMsg ? (
           <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
             {ctSellerBulkMsg}

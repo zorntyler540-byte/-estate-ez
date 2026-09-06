@@ -368,6 +368,56 @@ class CTSellerClient:
         }
         self._post_raw("/item/image/add", payload)
 
+    def list_sale_images(self, *, sale_id: int) -> list[dict[str, Any]]:
+        """Sale-level images (cover / profile) for one CT Seller auction."""
+        payload = {"filter": [{"field": "saleid", "value": int(sale_id), "op": "=", "join": "AND"}]}
+        body = self._post_raw("/sale/image/list", payload)
+        data = body.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            inner = data.get("data")
+            if isinstance(inner, list):
+                return [row for row in inner if isinstance(row, dict)]
+        return []
+
+    def upsert_sale_cover_photos(
+        self,
+        *,
+        sale_id: int,
+        primary_jpeg: bytes,
+        secondary_jpegs: list[bytes],
+        existing_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Write the 4 sale cover photos the SPA requires before items can move to Ready.
+
+        Matches seller.ctbids.com ``submitImage``: primary on ``image``, three secondaries on
+        ``itemimageurl``. New covers POST ``/sale/image/add``; existing profile rows PUT update.
+        """
+        if len(secondary_jpegs) != 3:
+            raise CTSellerError("CT Seller sale covers need exactly 3 secondary photos")
+        payload: dict[str, Any] = {
+            "saleid": int(sale_id),
+            "name": "profile",
+            "type": "image",
+            "image": sale_cover_data_url(primary_jpeg),
+            "itemimageurl": [sale_cover_data_url(raw) for raw in secondary_jpegs],
+        }
+        if existing_id is not None:
+            payload["id"] = int(existing_id)
+            return self._put_raw("/sale/image/update", {"data": [payload]})
+        return self._post_raw("/sale/image/add", {"data": [payload]})
+
+    def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.access_token:
+            raise CTSellerError("Not signed in to CT Seller", status_code=401)
+        resp = self.session.put(
+            f"{SELLER_API}{path}",
+            data=json.dumps(payload),
+            timeout=self.timeout,
+        )
+        return self._parse_seller_response(resp)
+
     def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
         body = self._post_raw(path, payload)
         return body.get("data")
@@ -380,6 +430,9 @@ class CTSellerClient:
             data=json.dumps(payload),
             timeout=self.timeout,
         )
+        return self._parse_seller_response(resp)
+
+    def _parse_seller_response(self, resp: requests.Response) -> dict[str, Any]:
         if resp.status_code in (401, 403):
             raise CTSellerError("CT Seller session expired — reconnect on Account", status_code=resp.status_code)
         if resp.status_code >= 400:
@@ -421,6 +474,45 @@ def _coerce_message(message: Any) -> str:
             return str(first.get("message") or first.get("msg") or first).strip()
         return str(first).strip()
     return str(message).strip()
+
+
+def sale_cover_data_url(raw: bytes) -> str:
+    """JPEG data URL — same encoding the CT Seller sale-cover crop editor submits."""
+    return f"data:image/jpeg;base64,{_image_to_base64(raw, mime='image/jpeg')}"
+
+
+def pick_profile_sale_image(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Prefer the ``profile`` sale-image row (primary + 3 secondaries)."""
+    items = [row for row in (rows or []) if isinstance(row, dict)]
+    for row in items:
+        if str(row.get("name") or "").strip().lower() == "profile":
+            return row
+    return items[0] if items else None
+
+
+def parse_sale_image_secondary_urls(raw: Any) -> list[str]:
+    """``itemimageurl`` arrives as a list, JSON string, or Python-repr list."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is None:
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
 
 
 def _image_to_base64(raw: bytes, *, mime: str = "image/jpeg") -> str:

@@ -35,6 +35,9 @@ class Sale(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Numeric sale id on seller.ctbids.com (maps this catalog sale → CT Seller auction).
     ctseller_sale_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # JSON list of up to 4 catalog Photo.id values used as CT Seller sale cover photos
+    # (slot 0 = primary landscape, slots 1–3 = secondary).
+    ctseller_cover_photo_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

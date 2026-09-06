@@ -314,6 +314,68 @@ class SalePostToCTSellerOut(BaseModel):
     results: list[SalePostToCTSellerLotResult]
 
 
+class SaleCoverPhotoSlotOut(BaseModel):
+    slot: int
+    label: str
+    photo_id: str | None = None
+    lot_id: str | None = None
+    sku: str | None = None
+    auction_title: str = ""
+    photo_role: str | None = None
+    thumb_url: str | None = None
+
+
+class SaleCoverCandidateOut(BaseModel):
+    photo_id: str
+    lot_id: str
+    sku: str | None = None
+    auction_title: str = ""
+    photo_role: str | None = None
+    is_hero: bool = False
+    suggested: bool = False
+    thumb_url: str | None = None
+
+
+class SaleCoverRemoteOut(BaseModel):
+    id: int | None = None
+    primary_url: str | None = None
+    secondary_urls: list[str] = []
+
+
+class SaleCoverPhotosOut(BaseModel):
+    sale_id: str
+    ctseller_sale_id: int | None = None
+    selected_photo_ids: list[str] = []
+    suggested_photo_ids: list[str] = []
+    slots: list[SaleCoverPhotoSlotOut]
+    remote: SaleCoverRemoteOut | None = None
+    remote_error: str | None = None
+
+
+class SaleCoverCandidatesOut(BaseModel):
+    sale_id: str
+    suggested_photo_ids: list[str] = []
+    candidates: list[SaleCoverCandidateOut]
+
+
+class SaleCoverPhotosSelectIn(BaseModel):
+    photo_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+class SaleCoverPhotosPushIn(BaseModel):
+    photo_ids: list[str] | None = Field(default=None, max_length=4)
+    ctseller_sale_id: int | None = None
+    save_sale_mapping: bool = True
+
+
+class SaleCoverPhotosPushOut(BaseModel):
+    sale_id: str
+    ctseller_sale_id: int
+    updated: bool
+    remote_id: int | None = None
+    selected_photo_ids: list[str]
+
+
 class CatalogR2MigrateIn(BaseModel):
     """Upload local catalog files to R2. Safe to re-run."""
 

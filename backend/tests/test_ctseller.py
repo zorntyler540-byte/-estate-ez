@@ -251,6 +251,65 @@ def test_client_uses_refresh_when_jwt_expired(tmp_path) -> None:
     assert unseal_secret(account.ctseller_refresh_token_enc) == "refresh-new"
 
 
+def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None:
+    from app.services.ctseller import sale_cover_data_url
+
+    client = CTSellerClient(access_token="tok")
+    posted: list[tuple[str, dict]] = []
+
+    def fake_post(path: str, payload: dict) -> dict:
+        posted.append((path, payload))
+        return {"status": "success", "data": [{"id": 77}]}
+
+    putted: list[tuple[str, dict]] = []
+
+    def fake_put(path: str, payload: dict) -> dict:
+        putted.append((path, payload))
+        return {"status": "success", "data": [{"id": 11}]}
+
+    tiny = (
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xdb\x00C\x00" + bytes([8] * 64) + b"\xff\xd9"
+    )
+    with patch.object(client, "_post_raw", fake_post), patch.object(client, "_put_raw", fake_put):
+        client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+        )
+        client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+            existing_id=11,
+        )
+    assert posted[0][0] == "/sale/image/add"
+    row = posted[0][1]["data"][0]
+    assert row["saleid"] == 321
+    assert row["name"] == "profile"
+    assert row["image"].startswith("data:image/jpeg;base64,")
+    assert len(row["itemimageurl"]) == 3
+    assert all(u.startswith("data:image/jpeg;base64,") for u in row["itemimageurl"])
+    assert putted[0][0] == "/sale/image/update"
+    assert putted[0][1]["data"][0]["id"] == 11
+    encoded = sale_cover_data_url(tiny)
+    assert encoded.startswith("data:image/jpeg;base64,")
+
+
+def test_list_sale_images_reads_data_list() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_post(path: str, payload: dict) -> dict:
+        assert path == "/sale/image/list"
+        assert payload["filter"][0]["field"] == "saleid"
+        assert payload["filter"][0]["value"] == 44
+        return {"data": [{"id": 1, "name": "profile"}]}
+
+    with patch.object(client, "_post_raw", fake_post):
+        rows = client.list_sale_images(sale_id=44)
+    assert rows[0]["id"] == 1
+
+
 def test_client_falls_back_to_password_when_refresh_fails(tmp_path) -> None:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

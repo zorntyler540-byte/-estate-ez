@@ -78,6 +78,14 @@ from app.schemas import (
     PasswordResetIn,
     RegisterRequest,
     SaleCreate,
+    SaleCoverCandidateOut,
+    SaleCoverCandidatesOut,
+    SaleCoverPhotoSlotOut,
+    SaleCoverPhotosOut,
+    SaleCoverPhotosPushIn,
+    SaleCoverPhotosPushOut,
+    SaleCoverPhotosSelectIn,
+    SaleCoverRemoteOut,
     SaleOut,
     SalePostToCTSellerIn,
     SalePostToCTSellerLotResult,
@@ -120,7 +128,9 @@ from app.services.ctseller import (
     CTSellerError,
     access_token_should_refresh,
     build_item_payload,
+    parse_sale_image_secondary_urls,
     persist_ctseller_tokens,
+    pick_profile_sale_image,
     seal_secret,
     unseal_secret,
 )
@@ -149,6 +159,20 @@ from app.services.photo_order import (
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
 from app.services.photo_roles import photos_for_ctbids_listing
+from app.services.sale_covers import (
+    SALE_COVER_SLOT_COUNT,
+    cover_candidate_photos,
+    load_sale_lots_and_photos,
+    parse_cover_photo_ids,
+    persist_cover_photo_ids,
+    photo_card_meta,
+    photos_by_lot_id,
+    photos_for_ids,
+    candidate_is_hero,
+    read_cover_image_bytes,
+    suggest_cover_photos,
+    validate_cover_photo_ids,
+)
 from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.roles import (
     ALLOWED_ROLES,
@@ -429,6 +453,7 @@ def startup() -> None:
     _ensure_lot_audience_columns()
     _ensure_photo_listing_columns()
     _ensure_lot_search_tags_column()
+    _ensure_sale_cover_photo_ids_column()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -511,6 +536,20 @@ def _ensure_lot_search_tags_column() -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE lots ADD COLUMN search_tags_json TEXT DEFAULT '[]' NOT NULL"))
+
+
+def _ensure_sale_cover_photo_ids_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing sales tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "sales" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("sales")}
+    if "ctseller_cover_photo_ids" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE sales ADD COLUMN ctseller_cover_photo_ids TEXT"))
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -1477,6 +1516,263 @@ def update_sale(
     db.commit()
     db.refresh(row)
     return _sale_out(row)
+
+
+_SALE_COVER_SLOT_LABELS = (
+    "Primary cover",
+    "Secondary 1",
+    "Secondary 2",
+    "Secondary 3",
+)
+
+
+def _sale_cover_remote(client: CTSellerClient, remote_sale_id: int) -> SaleCoverRemoteOut | None:
+    rows = client.list_sale_images(sale_id=int(remote_sale_id))
+    profile = pick_profile_sale_image(rows)
+    if not profile:
+        return None
+    remote_id = profile.get("id")
+    try:
+        parsed_id = int(remote_id) if remote_id is not None else None
+    except (TypeError, ValueError):
+        parsed_id = None
+    primary = str(profile.get("url") or profile.get("image") or "").strip() or None
+    if primary and primary.startswith("data:"):
+        primary = None
+    secondaries = [
+        url
+        for url in parse_sale_image_secondary_urls(profile.get("itemimageurl"))
+        if url and not url.startswith("data:")
+    ]
+    return SaleCoverRemoteOut(id=parsed_id, primary_url=primary, secondary_urls=secondaries)
+
+
+def _cover_slots_out(selected: list[Photo], lots_by_id: dict[str, Lot]) -> list[SaleCoverPhotoSlotOut]:
+    slots: list[SaleCoverPhotoSlotOut] = []
+    for idx in range(SALE_COVER_SLOT_COUNT):
+        photo = selected[idx] if idx < len(selected) else None
+        meta = photo_card_meta(photo, lots_by_id) if photo is not None else {}
+        slots.append(
+            SaleCoverPhotoSlotOut(
+                slot=idx + 1,
+                label=_SALE_COVER_SLOT_LABELS[idx],
+                photo_id=meta.get("photo_id") if photo is not None else None,
+                lot_id=meta.get("lot_id") if photo is not None else None,
+                sku=meta.get("sku") if photo is not None else None,
+                auction_title=str(meta.get("auction_title") or "") if photo is not None else "",
+                photo_role=meta.get("photo_role") if photo is not None else None,
+                thumb_url=meta.get("thumb_url") if photo is not None else None,
+            )
+        )
+    return slots
+
+
+def _sale_cover_photos_payload(
+    *,
+    sale: Sale,
+    lots: list[Lot],
+    photos: list[Photo],
+    remote: SaleCoverRemoteOut | None = None,
+    remote_error: str | None = None,
+) -> SaleCoverPhotosOut:
+    lots_by_id = {lot.id: lot for lot in lots}
+    saved = parse_cover_photo_ids(getattr(sale, "ctseller_cover_photo_ids", None))
+    suggested = suggest_cover_photos(lots, photos)
+    suggested_ids = [p.id for p in suggested]
+    selected_ids = saved or suggested_ids
+    selected = photos_for_ids(photos, selected_ids)
+    return SaleCoverPhotosOut(
+        sale_id=sale.id,
+        ctseller_sale_id=sale.ctseller_sale_id,
+        selected_photo_ids=saved,
+        suggested_photo_ids=suggested_ids,
+        slots=_cover_slots_out(selected, lots_by_id),
+        remote=remote,
+        remote_error=remote_error,
+    )
+
+
+@app.get("/sales/{sale_id}/cover-photos", response_model=SaleCoverPhotosOut)
+def get_sale_cover_photos(
+    sale_id: str,
+    include_remote: bool = Query(False, description="Also list covers already on CT Seller."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleCoverPhotosOut:
+    """Saved / suggested 4 sale covers plus what CT Seller already has."""
+    sale = _sale_for_user(sale_id, current, db)
+    lots, photos = load_sale_lots_and_photos(db, sale)
+    remote: SaleCoverRemoteOut | None = None
+    remote_error: str | None = None
+    if include_remote and sale.ctseller_sale_id:
+        account = db.query(Account).filter(Account.id == current.account_id).first()
+        if account:
+            try:
+                client = _ctseller_client_for_account(account, db, probe=False)
+                remote = _sale_cover_remote(client, int(sale.ctseller_sale_id))
+            except CTSellerError as exc:
+                remote_error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                remote_error = str(exc)
+    return _sale_cover_photos_payload(
+        sale=sale, lots=lots, photos=photos, remote=remote, remote_error=remote_error
+    )
+
+
+@app.get("/sales/{sale_id}/cover-candidates", response_model=SaleCoverCandidatesOut)
+def get_sale_cover_candidates(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleCoverCandidatesOut:
+    """Catalog photos staff can pick as the 4 CT Seller sale covers."""
+    sale = _sale_for_user(sale_id, current, db)
+    lots, photos = load_sale_lots_and_photos(db, sale)
+    lots_by_id = {lot.id: lot for lot in lots}
+    by_lot = photos_by_lot_id(photos)
+    suggested_ids = {p.id for p in suggest_cover_photos(lots, photos)}
+    cards: list[SaleCoverCandidateOut] = []
+    for photo in cover_candidate_photos(lots, photos):
+        lot = lots_by_id.get(photo.lot_id or "")
+        meta = photo_card_meta(photo, lots_by_id)
+        cards.append(
+            SaleCoverCandidateOut(
+                photo_id=photo.id,
+                lot_id=photo.lot_id or "",
+                sku=meta.get("sku") if lot else None,
+                auction_title=str(meta.get("auction_title") or ""),
+                photo_role=meta.get("photo_role"),
+                is_hero=candidate_is_hero(photo, by_lot.get(photo.lot_id or "", [])),
+                suggested=photo.id in suggested_ids,
+                thumb_url=meta.get("thumb_url"),
+            )
+        )
+    return SaleCoverCandidatesOut(
+        sale_id=sale.id,
+        suggested_photo_ids=[p.id for p in suggest_cover_photos(lots, photos)],
+        candidates=cards,
+    )
+
+
+@app.put("/sales/{sale_id}/cover-photos", response_model=SaleCoverPhotosOut)
+def select_sale_cover_photos(
+    sale_id: str,
+    payload: SaleCoverPhotosSelectIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleCoverPhotosOut:
+    """Remember up to 4 catalog photos as this sale's CT Seller covers."""
+    sale = _sale_for_user(sale_id, current, db)
+    lots, photos = load_sale_lots_and_photos(db, sale)
+    try:
+        selected = validate_cover_photo_ids(
+            photo_ids=payload.photo_ids, sale_photos=photos, require_four=False
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_cover_photo_ids(sale, selected)
+    db.add(sale)
+    db.commit()
+    db.refresh(sale)
+    return _sale_cover_photos_payload(sale=sale, lots=lots, photos=photos)
+
+
+@app.post("/sales/{sale_id}/cover-photos/push", response_model=SaleCoverPhotosPushOut)
+def push_sale_cover_photos(
+    sale_id: str,
+    payload: SaleCoverPhotosPushIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleCoverPhotosPushOut:
+    """Upload the 4 selected catalog photos as CT Seller sale covers."""
+    body = payload or SaleCoverPhotosPushIn()
+    sale = _sale_for_user(sale_id, current, db)
+    lots, photos = load_sale_lots_and_photos(db, sale)
+    remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
+    if remote_sale_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Pick a CT Seller auction first (same picker used to post lots)",
+        )
+    wanted = body.photo_ids if body.photo_ids is not None else parse_cover_photo_ids(
+        getattr(sale, "ctseller_cover_photo_ids", None)
+    )
+    if not wanted:
+        wanted = [p.id for p in suggest_cover_photos(lots, photos)]
+    try:
+        selected_ids = validate_cover_photo_ids(
+            photo_ids=wanted, sale_photos=photos, require_four=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    selected = photos_for_ids(photos, selected_ids)
+    if len(selected) != SALE_COVER_SLOT_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail="Need 4 listing photos from this sale — catalog more lots or pick extras from a lot",
+        )
+
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    try:
+        images = [read_cover_image_bytes(photo) for photo in selected]
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read cover photos: {exc}") from exc
+
+    try:
+        client = _ctseller_client_for_account(account, db, probe=False)
+        try:
+            existing = pick_profile_sale_image(client.list_sale_images(sale_id=int(remote_sale_id)))
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_client_for_account(account, db, force=True)
+            existing = pick_profile_sale_image(client.list_sale_images(sale_id=int(remote_sale_id)))
+        existing_id: int | None = None
+        if existing and existing.get("id") is not None:
+            try:
+                existing_id = int(existing["id"])
+            except (TypeError, ValueError):
+                existing_id = None
+        result = client.upsert_sale_cover_photos(
+            sale_id=int(remote_sale_id),
+            primary_jpeg=images[0],
+            secondary_jpegs=images[1:4],
+            existing_id=existing_id,
+        )
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    persist_cover_photo_ids(sale, selected_ids)
+    if body.save_sale_mapping and sale.ctseller_sale_id != int(remote_sale_id):
+        sale.ctseller_sale_id = int(remote_sale_id)
+    db.add(sale)
+    db.commit()
+
+    remote_id = existing_id
+    data = result.get("data") if isinstance(result, dict) else None
+    row = None
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        row = data[0]
+    elif isinstance(data, dict):
+        row = data
+    if row and row.get("id") is not None:
+        try:
+            remote_id = int(row["id"])
+        except (TypeError, ValueError):
+            pass
+
+    return SaleCoverPhotosPushOut(
+        sale_id=sale.id,
+        ctseller_sale_id=int(remote_sale_id),
+        updated=existing_id is not None,
+        remote_id=remote_id,
+        selected_photo_ids=selected_ids,
+    )
 
 
 @app.post("/sales/{sale_id}/fill-blank-conditions")
