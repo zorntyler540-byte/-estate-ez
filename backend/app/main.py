@@ -90,6 +90,9 @@ from app.schemas import (
     SalePostToCTSellerIn,
     SalePostToCTSellerLotResult,
     SalePostToCTSellerOut,
+    SaleReservePriceIn,
+    SaleReservePriceLotResult,
+    SaleReservePriceOut,
     SaleUpdate,
     SuggestionIn,
     SuggestionSavedOut,
@@ -131,6 +134,7 @@ from app.services.ctseller import (
     parse_sale_image_secondary_urls,
     persist_ctseller_tokens,
     pick_profile_sale_image,
+    resolve_lot_reserve_price,
     seal_secret,
     unseal_secret,
 )
@@ -244,6 +248,7 @@ def _sale_out(row: Sale) -> SaleOut:
         name=row.name,
         closed_at=row.closed_at,
         ctseller_sale_id=getattr(row, "ctseller_sale_id", None),
+        ctseller_reserve_price=getattr(row, "ctseller_reserve_price", None),
         created_at=row.created_at,
     )
 
@@ -454,6 +459,7 @@ def startup() -> None:
     _ensure_photo_listing_columns()
     _ensure_lot_search_tags_column()
     _ensure_sale_cover_photo_ids_column()
+    _ensure_reserve_price_columns()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -550,6 +556,23 @@ def _ensure_sale_cover_photo_ids_column() -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE sales ADD COLUMN ctseller_cover_photo_ids TEXT"))
+
+
+def _ensure_reserve_price_columns() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing sales/lots tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "sales" in insp.get_table_names():
+        sale_cols = {c["name"] for c in insp.get_columns("sales")}
+        if "ctseller_reserve_price" not in sale_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE sales ADD COLUMN ctseller_reserve_price FLOAT"))
+    if "lots" in insp.get_table_names():
+        lot_cols = {c["name"] for c in insp.get_columns("lots")}
+        if "reserve_price" not in lot_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE lots ADD COLUMN reserve_price FLOAT"))
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -1513,6 +1536,10 @@ def update_sale(
         row.ctseller_sale_id = None
     elif payload.ctseller_sale_id is not None:
         row.ctseller_sale_id = int(payload.ctseller_sale_id)
+    if payload.clear_ctseller_reserve_price:
+        row.ctseller_reserve_price = None
+    elif payload.ctseller_reserve_price is not None:
+        row.ctseller_reserve_price = float(payload.ctseller_reserve_price)
     db.commit()
     db.refresh(row)
     return _sale_out(row)
@@ -1800,6 +1827,114 @@ def fill_blank_lot_conditions(
     if updated:
         db.commit()
     return {"updated": updated, "total": len(rows)}
+
+
+@app.post("/sales/{sale_id}/reserve-price", response_model=SaleReservePriceOut)
+def set_sale_reserve_price(
+    sale_id: str,
+    payload: SaleReservePriceIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleReservePriceOut:
+    """Save a sale-wide reserve and optionally stamp every lot / update posted CT Seller items."""
+    sale = _sale_for_user(sale_id, current, db)
+    reserve = payload.reserve_price
+    if reserve is not None:
+        reserve = float(reserve)
+        if reserve <= 0:
+            reserve = None
+    sale.ctseller_reserve_price = reserve
+    db.add(sale)
+
+    lots = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .all()
+    )
+    wanted: set[str] | None = None
+    if payload.lot_ids:
+        wanted = {str(x).strip() for x in payload.lot_ids if str(x).strip()}
+        lots = [lot for lot in lots if lot.id in wanted]
+
+    lots_updated = 0
+    if payload.apply_to_lots:
+        for lot in lots:
+            if lot.reserve_price != reserve:
+                lot.reserve_price = reserve
+                db.add(lot)
+                lots_updated += 1
+    db.commit()
+
+    results: list[SaleReservePriceLotResult] = []
+    posted_updated = 0
+    posted_failed = 0
+    posted_skipped = 0
+    if payload.push_posted:
+        posted_lots = [lot for lot in lots if lot.ctseller_item_id]
+        if posted_lots:
+            account = db.query(Account).filter(Account.id == current.account_id).first()
+            if not account:
+                raise HTTPException(status_code=404, detail="Account not found")
+            try:
+                client = _ctseller_client_for_account(account, db, probe=False)
+            except CTSellerError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            for lot in posted_lots:
+                try:
+                    client.update_item_reserve(
+                        item_id=int(lot.ctseller_item_id),
+                        reserve_price=resolve_lot_reserve_price(lot, sale),
+                    )
+                    posted_updated += 1
+                    results.append(
+                        SaleReservePriceLotResult(
+                            lot_id=lot.id,
+                            sku=lot.sku,
+                            ok=True,
+                            ctseller_item_id=int(lot.ctseller_item_id),
+                        )
+                    )
+                except CTSellerError as exc:
+                    if exc.status_code in (401, 403):
+                        try:
+                            client = _ctseller_client_for_account(account, db, force=True)
+                            client.update_item_reserve(
+                                item_id=int(lot.ctseller_item_id),
+                                reserve_price=resolve_lot_reserve_price(lot, sale),
+                            )
+                            posted_updated += 1
+                            results.append(
+                                SaleReservePriceLotResult(
+                                    lot_id=lot.id,
+                                    sku=lot.sku,
+                                    ok=True,
+                                    ctseller_item_id=int(lot.ctseller_item_id),
+                                )
+                            )
+                            continue
+                        except CTSellerError as retry_exc:
+                            exc = retry_exc
+                    posted_failed += 1
+                    results.append(
+                        SaleReservePriceLotResult(
+                            lot_id=lot.id,
+                            sku=lot.sku,
+                            ok=False,
+                            error=str(exc),
+                            ctseller_item_id=int(lot.ctseller_item_id) if lot.ctseller_item_id else None,
+                        )
+                    )
+        posted_skipped = len(lots) - len(posted_lots)
+
+    return SaleReservePriceOut(
+        sale_id=sale.id,
+        reserve_price=reserve,
+        lots_updated=lots_updated,
+        posted_updated=posted_updated,
+        posted_failed=posted_failed,
+        posted_skipped=posted_skipped,
+        results=results,
+    )
 
 
 @app.post("/sales/{sale_id}/reset-photo-order")
@@ -2130,6 +2265,10 @@ def _post_one_lot_to_ctseller(
         buyers_premium=buyers_premium if buyers_premium is not None else None,
         material=material,
         tag=_search_tags_for_lot_row(lot),
+        reserve_price=resolve_lot_reserve_price(
+            lot,
+            db.query(Sale).filter(Sale.id == lot.sale_id, Sale.account_id == lot.account_id).first(),
+        ),
     )
     resolved_tags = _search_tags_for_lot_row(lot)
     if resolved_tags:
@@ -3339,6 +3478,13 @@ def update_lot(
         )
     if patch.starting_price is not None:
         row.starting_price = patch.starting_price
+    if "reserve_price" in patch.model_fields_set:
+        raw = patch.reserve_price
+        if raw is None:
+            row.reserve_price = None
+        else:
+            value = float(raw)
+            row.reserve_price = value if value > 0 else None
     if patch.condition_text is not None:
         from app.services.ctseller_conditions import canonicalize_ct_condition
 

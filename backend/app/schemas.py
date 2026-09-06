@@ -171,6 +171,7 @@ class SaleOut(BaseModel):
     name: str
     closed_at: datetime | None = None
     ctseller_sale_id: int | None = None
+    ctseller_reserve_price: float | None = None
     created_at: datetime
 
 
@@ -184,6 +185,8 @@ class SaleUpdate(BaseModel):
     is_closed: bool | None = None
     ctseller_sale_id: int | None = None
     clear_ctseller_sale_id: bool = False
+    ctseller_reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    clear_ctseller_reserve_price: bool = False
 
 
 class LotOut(BaseModel):
@@ -203,6 +206,7 @@ class LotOut(BaseModel):
     is_completed: bool = False
     completed_at: datetime | None = None
     starting_price: float | None
+    reserve_price: float | None = None
     condition_text: str
     photo_count: int
     has_thumbnail: bool = False
@@ -235,6 +239,7 @@ class LotUpdate(BaseModel):
     labels_and_tags: list[str] | None = None
     search_tags: list[str] | None = None
     starting_price: float | None = None
+    reserve_price: float | None = None
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
@@ -366,6 +371,32 @@ class SaleCoverPhotosPushIn(BaseModel):
     photo_ids: list[str] | None = Field(default=None, max_length=4)
     ctseller_sale_id: int | None = None
     save_sale_mapping: bool = True
+
+
+class SaleReservePriceIn(BaseModel):
+    reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    apply_to_lots: bool = True
+    push_posted: bool = False
+    lot_ids: list[str] | None = None
+
+
+class SaleReservePriceLotResult(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    ok: bool
+    skipped: bool = False
+    error: str | None = None
+    ctseller_item_id: int | None = None
+
+
+class SaleReservePriceOut(BaseModel):
+    sale_id: str
+    reserve_price: float | None
+    lots_updated: int
+    posted_updated: int = 0
+    posted_failed: int = 0
+    posted_skipped: int = 0
+    results: list[SaleReservePriceLotResult] = []
 
 
 class SaleCoverPhotosPushOut(BaseModel):

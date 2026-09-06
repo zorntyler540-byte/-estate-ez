@@ -2525,6 +2525,12 @@ select.ct-input option {
   color: var(--ct-text-muted);
 }
 
+.ct-lots-table__reserve {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--ct-text-subtle);
+}
+
 .ct-lots-table__photo-count {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -3819,4 +3825,47 @@ select.ct-input option {
   .ct-sale-covers__slots {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+.ct-sale-reserve {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+}
+
+.ct-sale-reserve__title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.ct-sale-reserve__hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+  color: var(--ct-text-muted);
+  max-width: 52rem;
+}
+
+.ct-sale-reserve__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.55rem 0.75rem;
+}
+
+.ct-sale-reserve__input {
+  min-width: 8.5rem;
+}
+
+.ct-sale-reserve__check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.65rem 0 0;
+  font-size: 0.84rem;
+}
+
+.ct-sale-reserve .ct-banner {
+  margin-top: 0.5rem;
 }

@@ -208,6 +208,84 @@ def test_cover_photos_api_save_and_push(tmp_path) -> None:
         db.close()
 
 
+def test_sale_reserve_price_applies_to_all_lots(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Sale, User
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'reserve.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-r", name="CT")
+    user = User(id="user-r", account_id=account.id, email="r@example.com", password_hash="x", role="owner")
+    sale = Sale(id="sale-r", account_id=account.id, user_id=user.id, name="Reserve sale")
+    lot_a = Lot(
+        id="lot-a",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="001",
+        auction_title="A",
+        ctseller_item_id=501,
+    )
+    lot_b = Lot(
+        id="lot-b",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="002",
+        auction_title="B",
+    )
+    db.add_all([account, user, sale, lot_a, lot_b])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        fake = MagicMock()
+        fake.update_item_reserve.return_value = {"status": "success"}
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            res = client.post(
+                "/sales/sale-r/reserve-price",
+                json={"reserve_price": 15, "apply_to_lots": True, "push_posted": True},
+            )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["reserve_price"] == 15
+        assert body["lots_updated"] == 2
+        assert body["posted_updated"] == 1
+        assert body["posted_skipped"] == 1
+        fake.update_item_reserve.assert_called_once()
+        assert fake.update_item_reserve.call_args.kwargs["item_id"] == 501
+        assert fake.update_item_reserve.call_args.kwargs["reserve_price"] == 15
+        inner = Session()
+        try:
+            saved_sale = inner.query(Sale).filter(Sale.id == "sale-r").one()
+            assert saved_sale.ctseller_reserve_price == 15
+            assert {row.reserve_price for row in inner.query(Lot).all()} == {15}
+        finally:
+            inner.close()
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
 def test_parse_sale_image_secondary_urls() -> None:
     assert parse_sale_image_secondary_urls(["a", "b"]) == ["a", "b"]
     assert parse_sale_image_secondary_urls('["https://cdn/a.jpg","https://cdn/b.jpg"]') == [

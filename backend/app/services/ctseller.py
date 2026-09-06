@@ -368,6 +368,45 @@ class CTSellerClient:
         }
         self._post_raw("/item/image/add", payload)
 
+    def item_detail(self, item_id: int) -> dict[str, Any]:
+        payload = {
+            "field": [
+                "id",
+                "saleid",
+                "SKU",
+                "title",
+                "description",
+                "startingprice",
+                "reserveprice",
+                "buynowprice",
+                "itemstatus",
+                "category",
+                "area",
+                "condition",
+                "locationid",
+            ]
+        }
+        data = self._post_json(f"/item/detail/{int(item_id)}", payload)
+        if isinstance(data, list) and data:
+            row = data[0]
+            if isinstance(row, dict):
+                return row
+        if isinstance(data, dict):
+            return data
+        raise CTSellerError(f"CT Seller item {item_id} not found")
+
+    def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
+        """Set ``reserveprice`` on an existing item without re-posting photos."""
+        try:
+            row = self.item_detail(int(item_id))
+        except CTSellerError:
+            row = {"id": int(item_id)}
+        if not isinstance(row, dict):
+            row = {}
+        row["id"] = int(item_id)
+        row["reserveprice"] = format_ctseller_reserve_price(reserve_price)
+        return self._put_raw("/item/update", {"data": [row]})
+
     def list_sale_images(self, *, sale_id: int) -> list[dict[str, Any]]:
         """Sale-level images (cover / profile) for one CT Seller auction."""
         payload = {"filter": [{"field": "saleid", "value": int(sale_id), "op": "=", "join": "AND"}]}
@@ -476,6 +515,40 @@ def _coerce_message(message: Any) -> str:
     return str(message).strip()
 
 
+def format_ctseller_reserve_price(raw: float | None) -> float | str:
+    """CT Seller ``reserveprice``: a positive number, or blank when there is no reserve."""
+    if raw is None or raw == "":
+        return ""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    return value
+
+
+def resolve_lot_reserve_price(lot: Any, sale: Any | None = None) -> float | None:
+    """Per-lot reserve wins; otherwise the sale-wide default."""
+    lot_val = getattr(lot, "reserve_price", None)
+    if lot_val is not None:
+        try:
+            parsed = float(lot_val)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None:
+            return parsed
+    if sale is None:
+        return None
+    sale_val = getattr(sale, "ctseller_reserve_price", None)
+    if sale_val is None:
+        return None
+    try:
+        return float(sale_val)
+    except (TypeError, ValueError):
+        return None
+
+
 def sale_cover_data_url(raw: bytes) -> str:
     """JPEG data URL — same encoding the CT Seller sale-cover crop editor submits."""
     return f"data:image/jpeg;base64,{_image_to_base64(raw, mime='image/jpeg')}"
@@ -553,6 +626,7 @@ def build_item_payload(
     buyers_premium: float | str | None = None,
     material: str | None = None,
     tag: str | list[str] | None = None,
+    reserve_price: float | None = None,
 ) -> dict[str, Any]:
     """Build the item/add ``data`` object from catalog fields."""
     irm: dict[str, bool]
@@ -629,7 +703,7 @@ def build_item_payload(
         "quantity": "",
         "tax": tax_out,
         "buyerspremium": bp_out,
-        "reserveprice": "",
+        "reserveprice": format_ctseller_reserve_price(reserve_price),
         "buynowprice": "",
         "width": "",
         "height": "",

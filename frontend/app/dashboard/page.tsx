@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
+import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { AppShell } from "../../components/AppShell";
 import {
   AudienceHuntProgress,
@@ -1004,6 +1005,7 @@ type Sale = {
   closed_at: string | null;
   created_at: string;
   ctseller_sale_id?: number | null;
+  ctseller_reserve_price?: number | null;
 };
 
 type AdminAccount = {
@@ -1066,6 +1068,7 @@ type Lot = {
   is_completed: boolean;
   completed_at: string | null;
   starting_price: number | null;
+  reserve_price?: number | null;
   condition_text: string;
   photo_count: number;
   has_thumbnail: boolean;
@@ -1167,6 +1170,10 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
     completed_at: row.completed_at ?? null,
     condition_text: row.condition_text ?? "",
     starting_price: row.starting_price ?? null,
+    reserve_price:
+      typeof (row as { reserve_price?: unknown }).reserve_price === "number"
+        ? (row as { reserve_price: number }).reserve_price
+        : null,
     photo_count: typeof row.photo_count === "number" ? row.photo_count : Number(row.photo_count) || 0,
     has_thumbnail: Boolean(row.has_thumbnail),
     created_at: row.created_at ?? "",
@@ -6787,6 +6794,25 @@ export default function DashboardPage() {
             }}
           />
         ) : null}
+        {selectedSaleId && token ? (
+          <SaleReservePrice
+            saleId={selectedSaleId}
+            token={token}
+            initialReserve={
+              typeof selectedSale?.ctseller_reserve_price === "number"
+                ? selectedSale.ctseller_reserve_price
+                : null
+            }
+            postedCount={lots.filter((lot) => lotIsPostedToCtSeller(lot)).length}
+            disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
+            onApplied={(reserve) => {
+              setSales((prev) =>
+                prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_reserve_price: reserve } : s))
+              );
+              setLots((prev) => prev.map((lot) => ({ ...lot, reserve_price: reserve })));
+            }}
+          />
+        ) : null}
         {ctSellerBulkMsg ? (
           <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
             {ctSellerBulkMsg}
@@ -6887,7 +6913,10 @@ export default function DashboardPage() {
                       {photoHealthMissing[lot.id]} missing
                     </span>
                   ) : null}
-                  <span className="ct-lot-mobile-card__meta-item">{formatLotPrice(lot.starting_price)}</span>
+                  <span className="ct-lot-mobile-card__meta-item">
+                    {formatLotPrice(lot.starting_price)}
+                    {lot.reserve_price != null ? ` · res ${formatLotPrice(lot.reserve_price)}` : ""}
+                  </span>
                   {lot.audience_hold ? (
                     <span className="ct-lot-mobile-card__meta-item" title="Held for collector groups — skipped on bulk CT Seller post">
                       Held
@@ -7018,7 +7047,14 @@ export default function DashboardPage() {
                   <div className="ct-lots-table__desc">{lotDescriptionPreview(lot.professional_description)}</div>
                 ) : null}
               </td>
-              <td className="ct-lots-table__price">{formatLotPrice(lot.starting_price)}</td>
+              <td className="ct-lots-table__price">
+                {formatLotPrice(lot.starting_price)}
+                {lot.reserve_price != null ? (
+                  <div className="ct-lots-table__reserve" title="CT Seller reserve">
+                    res {formatLotPrice(lot.reserve_price)}
+                  </div>
+                ) : null}
+              </td>
               <td>
                 {lot.condition_text ? (
                   <span className="ct-lot-condition-chip">{lot.condition_text}</span>

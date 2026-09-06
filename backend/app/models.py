@@ -38,6 +38,8 @@ class Sale(Base):
     # JSON list of up to 4 catalog Photo.id values used as CT Seller sale cover photos
     # (slot 0 = primary landscape, slots 1–3 = secondary).
     ctseller_cover_photo_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Hidden CT Seller reserve applied to lots in this sale when posting (and as the apply-all default).
+    ctseller_reserve_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -89,6 +91,8 @@ class Lot(Base):
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     starting_price: Mapped[float | None] = mapped_column(Float)
+    # Hidden CT Seller reserve. Sale apply-all stamps this; post uses lot then sale default.
+    reserve_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     condition_text: Mapped[str] = mapped_column(String(255), default="")
     sku_needs_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sku_duplicate_in_sale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

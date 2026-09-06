@@ -117,6 +117,74 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["fragilityscore"] is None
 
 
+def test_build_item_payload_includes_reserve_price() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="R1",
+        title="Lamp",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+        reserve_price=25,
+    )
+    assert item["startingprice"] == 1.0
+    assert item["reserveprice"] == 25.0
+
+
+def test_build_item_payload_blank_reserve_when_missing() -> None:
+    item = build_item_payload(
+        sale_id=1,
+        location_id=2,
+        sku="R2",
+        title="Lamp",
+        description="d",
+        category="Household Goods Other",
+        condition="Good",
+        starting_price=1.0,
+        item_receipt_method=None,
+    )
+    assert item["reserveprice"] == ""
+
+
+def test_format_and_resolve_reserve_price() -> None:
+    from app.services.ctseller import format_ctseller_reserve_price, resolve_lot_reserve_price
+
+    assert format_ctseller_reserve_price(None) == ""
+    assert format_ctseller_reserve_price(0) == ""
+    assert format_ctseller_reserve_price(-1) == ""
+    assert format_ctseller_reserve_price(5) == 5.0
+    lot = SimpleNamespace(reserve_price=None)
+    sale = SimpleNamespace(ctseller_reserve_price=10)
+    assert resolve_lot_reserve_price(lot, sale) == 10.0
+    lot.reserve_price = 3
+    assert resolve_lot_reserve_price(lot, sale) == 3.0
+
+
+def test_update_item_reserve_puts_merged_detail() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_detail(item_id: int) -> dict:
+        assert item_id == 88
+        return {"id": 88, "SKU": "001", "title": "Lamp", "reserveprice": ""}
+
+    putted: list[tuple[str, dict]] = []
+
+    def fake_put(path: str, payload: dict) -> dict:
+        putted.append((path, payload))
+        return {"status": "success"}
+
+    with patch.object(client, "item_detail", fake_detail), patch.object(client, "_put_raw", fake_put):
+        client.update_item_reserve(item_id=88, reserve_price=12)
+    assert putted[0][0] == "/item/update"
+    row = putted[0][1]["data"][0]
+    assert row["id"] == 88
+    assert row["SKU"] == "001"
+    assert row["reserveprice"] == 12.0
+
+
 def test_build_item_payload_blank_tax_when_sale_has_none() -> None:
     item = build_item_payload(
         sale_id=1,
