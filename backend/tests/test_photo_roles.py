@@ -6,6 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.photo_roles import (
+    PhotoListingAttrs,
+    assign_detected_sku_tape_roles,
+    coerce_sku_tape_listing_attrs,
+    detected_sku_tape_role_for_file,
+    filename_looks_like_sku_tape,
     filter_photos_excluding_sku_tape,
     is_hero_eligible_photo_role,
     is_sku_tape_photo_role,
@@ -14,6 +19,7 @@ from app.services.photo_roles import (
     photo_roles_by_path,
     photos_for_ctbids_listing,
     repaired_listing_attrs,
+    should_omit_from_ctbids_listing,
 )
 
 
@@ -147,3 +153,162 @@ def test_listing_attrs_by_path_uses_repaired_roles(tmp_path: Path) -> None:
     # Raw helper still reports Flash's original label.
     raw = photo_roles_by_path([group, single], triage)
     assert raw[single] == "hero"
+
+
+def _rgb_image(path: Path, pixels: list[list[tuple[int, int, int]]]) -> Path:
+    from PIL import Image
+
+    height = len(pixels)
+    width = len(pixels[0])
+    im = Image.new("RGB", (width, height))
+    im.putdata([rgb for row in pixels for rgb in row])
+    im.save(path)
+    return path
+
+
+_LAVENDER = (160, 100, 200)
+_BEIGE = (200, 190, 170)
+_YELLOW_TAPE = (220, 200, 40)
+
+
+def _band_image(path: Path, tape_rows: int, total_rows: int = 200, width: int = 200, color=_LAVENDER) -> Path:
+    rows = [([color] * width if i < tape_rows else [_BEIGE] * width) for i in range(total_rows)]
+    return _rgb_image(path, rows)
+
+
+def test_filename_looks_like_sku_tape() -> None:
+    assert filename_looks_like_sku_tape("IMG_sku-tape_01.jpg") is True
+    assert filename_looks_like_sku_tape("lot_tape.jpg") is True
+    assert filename_looks_like_sku_tape("estate tape closeup.jpg") is True
+    assert filename_looks_like_sku_tape("IMG_1234.jpg") is False
+    assert filename_looks_like_sku_tape("tapestry.jpg") is False
+
+
+def test_omit_unusable_and_filename_hints_without_path() -> None:
+    unusable = SimpleNamespace(id="u", photo_role="unusable", original_name="IMG_1.jpg")
+    named = SimpleNamespace(id="n", photo_role=None, original_name="sku-tape.jpg")
+    item = SimpleNamespace(id="i", photo_role="item_front", original_name="IMG_2.jpg")
+    kept = photos_for_ctbids_listing([unusable, named, item])
+    assert [p.id for p in kept] == ["i"]
+    assert should_omit_from_ctbids_listing(unusable) is True
+    assert should_omit_from_ctbids_listing(named) is True
+
+
+def test_omit_storage_path_filename_hint() -> None:
+    photo = SimpleNamespace(
+        id="s",
+        photo_role="hero",
+        original_name="IMG_999.jpg",
+        storage_path="catalog/acct/estate-tape.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    assert should_omit_from_ctbids_listing(photo) is True
+    assert photos_for_ctbids_listing([photo]) == []
+
+
+def test_pixel_ratio_omits_untagged_tape_closeup(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "closeup.png", tape_rows=80)  # 40%
+    photo = SimpleNamespace(
+        id="tape",
+        photo_role=None,
+        original_name="IMG_1234.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    kept = photos_for_ctbids_listing([photo], path_for=lambda _p: path)
+    assert kept == []
+    assert detected_sku_tape_role_for_file(path, "IMG_1234.jpg") == "tape"
+
+
+def test_pixel_ratio_keeps_item_with_edge_tape(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "item.png", tape_rows=20)  # 10%
+    photo = SimpleNamespace(
+        id="item",
+        photo_role="item_front",
+        original_name="IMG_1234.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    kept = photos_for_ctbids_listing([photo], path_for=lambda _p: path)
+    assert [p.id for p in kept] == ["item"]
+
+
+def test_mid_coverage_keeps_group_shot_omits_without_flag(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "mid.png", tape_rows=50)  # 25%
+    group = SimpleNamespace(
+        id="group",
+        photo_role="hero",
+        original_name="group.jpg",
+        shows_whole_lot=True,
+        shows_measuring_scale=False,
+    )
+    mistagged = SimpleNamespace(
+        id="mistag",
+        photo_role="hero",
+        original_name="IMG_9.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    kept = photos_for_ctbids_listing([group, mistagged], path_for=lambda _p: path)
+    assert [p.id for p in kept] == ["group"]
+
+
+def test_high_coverage_omits_even_when_marked_whole_lot(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "full.png", tape_rows=100)  # 50%
+    photo = SimpleNamespace(
+        id="full",
+        photo_role="hero",
+        original_name="IMG_1.jpg",
+        shows_whole_lot=True,
+        shows_measuring_scale=False,
+    )
+    assert photos_for_ctbids_listing([photo], path_for=lambda _p: path) == []
+
+
+def test_measuring_scale_stays_even_with_yellow_coverage(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "measure.png", tape_rows=120, color=_YELLOW_TAPE)
+    photo = SimpleNamespace(
+        id="m",
+        photo_role="angle_only",
+        original_name="scale.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=True,
+    )
+    kept = photos_for_ctbids_listing([photo], path_for=lambda _p: path)
+    assert [p.id for p in kept] == ["m"]
+
+
+def test_coerce_listing_attrs_marks_untagged_closeup(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "coerce.png", tape_rows=90)
+    out = coerce_sku_tape_listing_attrs(path, PhotoListingAttrs(photo_role="hero"))
+    assert out.photo_role == "tape"
+    keep = coerce_sku_tape_listing_attrs(
+        _band_image(tmp_path / "keep.png", tape_rows=10),
+        PhotoListingAttrs(photo_role="item_front"),
+    )
+    assert keep.photo_role == "item_front"
+
+
+def test_beige_furniture_is_not_treated_as_sku_tape(tmp_path: Path) -> None:
+    path = _band_image(tmp_path / "beige.png", tape_rows=0)
+    photo = SimpleNamespace(
+        id="beige",
+        photo_role=None,
+        original_name="IMG_chair.jpg",
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+    )
+    kept = photos_for_ctbids_listing([photo], path_for=lambda _p: path)
+    assert [p.id for p in kept] == ["beige"]
+
+
+def test_assign_detected_sku_tape_roles_skips_unusable() -> None:
+    tape = SimpleNamespace(id="1", photo_role=None)
+    unusable = SimpleNamespace(id="2", photo_role="unusable")
+    hero = SimpleNamespace(id="3", photo_role="hero")
+    changed = assign_detected_sku_tape_roles([tape, unusable, hero], listing=[hero])
+    assert changed == 1
+    assert tape.photo_role == "tape"
+    assert unusable.photo_role == "unusable"
+    assert hero.photo_role == "hero"

@@ -148,7 +148,11 @@ from app.services.photo_order import (
     reorder_photos_for_listing,
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
-from app.services.photo_roles import photos_for_ctbids_listing
+from app.services.photo_roles import (
+    assign_detected_sku_tape_roles,
+    detected_sku_tape_role_for_file,
+    photos_for_ctbids_listing,
+)
 from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.roles import (
     ALLOWED_ROLES,
@@ -1781,7 +1785,17 @@ def _post_one_lot_to_ctseller(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
         .all()
     )
-    listing_photos = photos_for_ctbids_listing(photos)
+    resolved_photo_paths: dict[str, Path] = {}
+    for ph in photos:
+        path = resolve_catalog_storage_path(ph.storage_path)
+        if path.is_file():
+            resolved_photo_paths[ph.id] = path
+    listing_photos = photos_for_ctbids_listing(
+        photos,
+        path_for=lambda photo: resolved_photo_paths.get(photo.id),
+    )
+    if assign_detected_sku_tape_roles(photos, listing_photos):
+        db.commit()
     if photos and not listing_photos:
         raise HTTPException(
             status_code=400,
@@ -1791,7 +1805,7 @@ def _post_one_lot_to_ctseller(
         )
     photo_paths: list[tuple[Photo, Path]] = []
     for ph in listing_photos:
-        path = resolve_catalog_storage_path(ph.storage_path)
+        path = resolved_photo_paths.get(ph.id)
         if path is not None and path.is_file():
             photo_paths.append((ph, path))
     if listing_photos and not photo_paths:
@@ -2298,7 +2312,15 @@ def list_lot_photos(
         .all()
     )
     if for_listing:
-        photos = photos_for_ctbids_listing(photos)
+        resolved_photo_paths: dict[str, Path] = {}
+        for photo in photos:
+            path = resolve_catalog_storage_path(photo.storage_path)
+            if path.is_file():
+                resolved_photo_paths[photo.id] = path
+        photos = photos_for_ctbids_listing(
+            photos,
+            path_for=lambda photo: resolved_photo_paths.get(photo.id),
+        )
     return [lot_photo_out(p, lot_id=lot_id) for p in photos]
 
 
@@ -2366,6 +2388,7 @@ async def upload_lot_photos(
                 original_name=path.name,
                 storage_path=storage_path,
                 sort_order=base + i,
+                photo_role=detected_sku_tape_role_for_file(path, path.name),
             )
         )
     renormalize_photo_sort_orders(db, lot_id, current.account_id)
