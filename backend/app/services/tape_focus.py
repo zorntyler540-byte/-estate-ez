@@ -207,6 +207,47 @@ def estate_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
     return buf.getvalue()
 
 
+def estate_tape_pixel_ratio(path: Path, *, include_yellow: bool = True) -> float | None:
+    """Share of downscaled pixels that look like colored estate lot tape, or None if unreadable.
+
+    Dedicated SKU-tape close-ups usually score high (0.2+). A group/item shot with tape at
+    the edge scores much lower. Yellow measuring tape can inflate the score — callers that
+    already know ``shows_measuring_scale`` should pass ``include_yellow=False``.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            rgb = im.convert("RGB")
+    except Exception:
+        return None
+    w, h = rgb.size
+    if w < 16 or h < 16:
+        return None
+    thumb = rgb.copy()
+    thumb.thumbnail((160, 160), Image.Resampling.LANCZOS)
+    tw, th = thumb.size
+    if tw < 1 or th < 1:
+        return None
+    px = thumb.load()
+    tape = 0
+    total = tw * th
+    for y in range(th):
+        for x in range(tw):
+            r, g, b = px[x, y]
+            if (
+                _is_lavender_purple_tape_pixel(r, g, b)
+                or _is_blue_masking_tape_pixel(r, g, b)
+                or _is_neon_green_tape_pixel(r, g, b)
+                or (include_yellow and _is_bright_yellow_masking_tape_pixel(r, g, b))
+            ):
+                tape += 1
+    return tape / total
+
+
 def purple_tape_focus_jpeg_from_path(path: Path) -> bytes | None:
     """Backward-compatible alias for :func:`estate_tape_focus_jpeg_from_path`."""
     return estate_tape_focus_jpeg_from_path(path)

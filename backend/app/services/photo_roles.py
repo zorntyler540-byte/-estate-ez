@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 # Matches pipeline PhotoRole literals.
@@ -133,6 +134,125 @@ def is_sku_tape_photo_role(role: object | None) -> bool:
     return normalize_catalog_photo_role(role) == "tape"
 
 
+_SKU_TAPE_NAME_HINTS = (
+    "skutape",
+    "lottape",
+    "estatetape",
+    "sku-tape",
+    "lot-tape",
+    "estate-tape",
+)
+
+
+def filename_looks_like_sku_tape(name: object | None) -> bool:
+    """True when the original filename is an obvious dedicated SKU-tape shot."""
+    raw = str(name or "").strip().lower()
+    if not raw:
+        return False
+    base = Path(raw.replace("\\", "/")).name
+    compact = base.replace(" ", "").replace("_", "").replace("-", "")
+    if any(h.replace("-", "") in compact for h in _SKU_TAPE_NAME_HINTS):
+        return True
+    return "sku tape" in base or "lot tape" in base or "estate tape" in base
+
+
+# Dedicated tape close-ups usually paint a large share of the frame this color.
+# Mid coverage + not a group shot: omit. High coverage: omit even if Gemini
+# marked shows_whole_lot (tape filling the frame is not a product photo).
+_CTBIDS_TAPE_COVERAGE_MIN = 0.20
+_CTBIDS_TAPE_COVERAGE_CLOSEUP = 0.35
+
+
+def _photo_name_looks_like_sku_tape(photo: Any) -> bool:
+    if filename_looks_like_sku_tape(getattr(photo, "original_name", None)):
+        return True
+    storage = getattr(photo, "storage_path", None)
+    return bool(storage) and filename_looks_like_sku_tape(Path(str(storage)).name)
+
+
+def should_omit_from_ctbids_listing(photo: Any, *, path: Path | None = None) -> bool:
+    """Drop dedicated SKU-tape / unusable frames from CT Bids posts.
+
+    Relies on stored ``photo_role`` first. Also catches add-on shots and mis-tagged
+    tape close-ups via filename and a cheap color-coverage check. Group/item shots
+    with tape at the edge (``shows_whole_lot``) stay in the listing unless the
+    frame is almost entirely tape.
+    """
+    role = normalize_catalog_photo_role(getattr(photo, "photo_role", None))
+    if role in {"tape", "unusable"}:
+        return True
+    if _photo_name_looks_like_sku_tape(photo):
+        return True
+    if bool(getattr(photo, "shows_measuring_scale", False)):
+        return False
+    whole = bool(getattr(photo, "shows_whole_lot", False))
+    if path is None:
+        return False
+    try:
+        from app.services.tape_focus import estate_tape_pixel_ratio
+
+        ratio = estate_tape_pixel_ratio(path, include_yellow=True)
+    except Exception:
+        return False
+    if ratio is None:
+        return False
+    if ratio >= _CTBIDS_TAPE_COVERAGE_CLOSEUP:
+        return True
+    return ratio >= _CTBIDS_TAPE_COVERAGE_MIN and not whole
+
+
+def detected_sku_tape_role_for_file(path: Path, original_name: object | None = None) -> str | None:
+    """Return ``tape`` when a newly saved file is a dedicated SKU-tape close-up."""
+    probe = SimpleNamespace(
+        photo_role=None,
+        original_name=original_name or path.name,
+        shows_whole_lot=False,
+        shows_measuring_scale=False,
+        storage_path=str(path),
+    )
+    if should_omit_from_ctbids_listing(probe, path=path):
+        return "tape"
+    return None
+
+
+def coerce_sku_tape_listing_attrs(path: Path, listing: PhotoListingAttrs) -> PhotoListingAttrs:
+    """Force dedicated SKU-tape close-ups to ``tape`` when persisting catalog photos."""
+    if listing.photo_role == "unusable":
+        return listing
+    probe = SimpleNamespace(
+        photo_role=listing.photo_role,
+        original_name=path.name,
+        shows_whole_lot=listing.shows_whole_lot,
+        shows_measuring_scale=listing.shows_measuring_scale,
+        storage_path=str(path),
+    )
+    if listing.photo_role == "tape" or not should_omit_from_ctbids_listing(probe, path=path):
+        return listing
+    return PhotoListingAttrs(
+        photo_role="tape",
+        distinct_item_id=listing.distinct_item_id,
+        is_primary_front=False,
+        shows_whole_lot=listing.shows_whole_lot,
+        shows_measuring_scale=listing.shows_measuring_scale,
+        label_legibility=listing.label_legibility,
+    )
+
+
+def assign_detected_sku_tape_roles(photos: Iterable[Any], listing: Iterable[Any]) -> int:
+    """Set ``photo_role='tape'`` on frames omitted from a CT Bids listing. Returns count changed."""
+    kept_ids = {getattr(photo, "id", id(photo)) for photo in listing}
+    changed = 0
+    for photo in photos:
+        if getattr(photo, "id", id(photo)) in kept_ids:
+            continue
+        role = normalize_catalog_photo_role(getattr(photo, "photo_role", None))
+        if role in {"tape", "unusable"}:
+            continue
+        photo.photo_role = "tape"
+        changed += 1
+    return changed
+
+
 def is_hero_eligible_photo_role(role: object | None) -> bool:
     """False for SKU-tape and unusable frames — they must never be the listing cover."""
     normalized = normalize_catalog_photo_role(role)
@@ -171,11 +291,24 @@ def photo_roles_by_path(
     return out
 
 
-def filter_photos_excluding_sku_tape(photos: Iterable[Any]) -> list[Any]:
-    """Keep catalog photos for CT Seller / CT Bids (drop dedicated ``tape`` role frames)."""
-    return [p for p in photos if not is_sku_tape_photo_role(getattr(p, "photo_role", None))]
+def filter_photos_excluding_sku_tape(
+    photos: Iterable[Any],
+    *,
+    path_for: Any | None = None,
+) -> list[Any]:
+    """Keep catalog photos for CT Seller / CT Bids (drop dedicated SKU-tape frames)."""
+    kept: list[Any] = []
+    for photo in photos:
+        path = path_for(photo) if path_for is not None else None
+        if not should_omit_from_ctbids_listing(photo, path=path):
+            kept.append(photo)
+    return kept
 
 
-def photos_for_ctbids_listing(photos: Iterable[Any]) -> list[Any]:
+def photos_for_ctbids_listing(
+    photos: Iterable[Any],
+    *,
+    path_for: Any | None = None,
+) -> list[Any]:
     """Photos to upload to seller.ctbids.com — SKU-tape close-ups are never posted."""
-    return filter_photos_excluding_sku_tape(photos)
+    return filter_photos_excluding_sku_tape(photos, path_for=path_for)

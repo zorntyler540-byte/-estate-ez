@@ -37,6 +37,7 @@ from app.services.pipeline_integration import (
 from app.services.photo_order import reorder_photos_by_filenames, reorder_photos_for_listing
 from app.services.photo_roles import (
     PhotoListingAttrs,
+    coerce_sku_tape_listing_attrs,
     listing_attrs_by_path,
     normalize_catalog_photo_role,
 )
@@ -170,7 +171,10 @@ def _add_catalog_photo(
 ) -> Photo:
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
     photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
-    listing = attrs or PhotoListingAttrs(photo_role=photo_role)
+    listing = coerce_sku_tape_listing_attrs(
+        photo_path,
+        attrs or PhotoListingAttrs(photo_role=photo_role),
+    )
     row = Photo(
         id=photo_id,
         account_id=job.account_id,
