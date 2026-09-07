@@ -175,17 +175,24 @@ def test_cover_photos_api_save_and_push(tmp_path) -> None:
         listed = client.get("/sales/sale-c/cover-photos")
         assert listed.status_code == 200, listed.text
         body = listed.json()
-        assert body["suggested_photo_ids"] == photo_ids
+        assert body["suggested_photo_ids"] == []
+        assert body["selected_photo_ids"] == []
         assert len(body["slots"]) == 4
-        assert body["slots"][0]["sku"] == "001"
+        assert body["slots"][0]["photo_id"] is None
+        assert body["slots"][0]["sku"] is None
 
         cands = client.get("/sales/sale-c/cover-candidates")
         assert cands.status_code == 200, cands.text
         assert len(cands.json()["candidates"]) == 4
 
+        empty_push = client.post("/sales/sale-c/cover-photos/push", json={"ctseller_sale_id": 99})
+        assert empty_push.status_code == 400
+        assert "Pick 4 cover photos" in empty_push.json()["detail"]
+
         saved = client.put("/sales/sale-c/cover-photos", json={"photo_ids": photo_ids})
         assert saved.status_code == 200, saved.text
         assert saved.json()["selected_photo_ids"] == photo_ids
+        assert saved.json()["slots"][0]["sku"] == "001"
 
         fake = MagicMock()
         fake.list_sale_images.return_value = []
