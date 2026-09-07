@@ -80,7 +80,6 @@ function slotFromCandidate(slot: number, candidate: CoverCandidate | undefined):
 
 export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMapped }: Props) {
   const [slots, setSlots] = useState<CoverSlot[]>(EMPTY_SLOTS);
-  const [suggestedIds, setSuggestedIds] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<CoverCandidate[]>([]);
   const [remoteReady, setRemoteReady] = useState(false);
   const [remoteError, setRemoteError] = useState("");
@@ -101,7 +100,6 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const applyCoverPayload = useCallback((data: CoverPhotosOut) => {
     const next = EMPTY_SLOTS.map((blank, idx) => data.slots[idx] || blank);
     setSlots(next);
-    setSuggestedIds(data.suggested_photo_ids || []);
     const remote = data.remote;
     const hasRemote =
       Boolean(remote?.primary_url) && Array.isArray(remote?.secondary_urls) && remote.secondary_urls.length >= 3;
@@ -140,17 +138,16 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
 
   const loadCandidates = useCallback(async (): Promise<CoverCandidatesOut | null> => {
     if (!token || !saleId) return null;
-    if (candidatesLoaded) return { sale_id: saleId, suggested_photo_ids: suggestedIds, candidates };
+    if (candidatesLoaded) return { sale_id: saleId, suggested_photo_ids: [], candidates };
     const raw = (await apiFetch(
       `/sales/${encodeURIComponent(saleId)}/cover-candidates`,
       token
     )) as CoverCandidatesOut;
     const rows = Array.isArray(raw.candidates) ? raw.candidates : [];
     setCandidates(rows);
-    if (raw.suggested_photo_ids?.length) setSuggestedIds(raw.suggested_photo_ids);
     setCandidatesLoaded(true);
     return { ...raw, candidates: rows };
-  }, [token, saleId, candidatesLoaded, candidates, suggestedIds]);
+  }, [token, saleId, candidatesLoaded, candidates]);
 
   const openPicker = (slot: number) => {
     if (disabled || busy) return;
@@ -184,29 +181,6 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
           : slot
       )
     );
-  };
-
-  const applySuggestedFrom = (rows: CoverCandidate[], ids: string[]) => {
-    const byId = new Map(rows.map((c) => [c.photo_id, c]));
-    const next = EMPTY_SLOTS.map((blank, idx) => slotFromCandidate(blank.slot, byId.get(ids[idx] || "")));
-    setSlots(next);
-    setMsg("Suggested lot heroes — review, then push to CT Seller.");
-    setErr("");
-  };
-
-  const applySuggested = () => {
-    if (!candidatesLoaded) {
-      void loadCandidates()
-        .then((raw) => {
-          if (!raw) return;
-          applySuggestedFrom(raw.candidates, raw.suggested_photo_ids || suggestedIds);
-        })
-        .catch((e) => {
-          setErr(e instanceof Error ? parseApiErrorMessage(e.message) : "Could not load photos");
-        });
-      return;
-    }
-    applySuggestedFrom(candidates, suggestedIds);
   };
 
   const savePicks = async () => {
@@ -267,8 +241,8 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         <div>
           <h3 className="ct-sale-covers__title">CT Seller sale covers</h3>
           <p className="ct-sale-covers__hint">
-            CT Seller needs 4 cover photos before lots can move to Ready. Pick them from this sale here
-            instead of hunting files on seller.ctbids.com.
+            CT Seller needs 4 cover photos before lots can move to Ready. Click each slot and pick a
+            photo from this sale — nothing is pre-filled.
           </p>
         </div>
         <div className="ct-sale-covers__status" aria-live="polite">
@@ -331,14 +305,6 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         ))}
       </div>
       <div className="ct-sale-covers__actions">
-        <button
-          type="button"
-          className="ct-btn ct-btn--ghost"
-          disabled={disabled || busy || loading}
-          onClick={() => applySuggested()}
-        >
-          Suggest from lot heroes
-        </button>
         <button type="button" className="ct-btn" disabled={disabled || busy || loading} onClick={() => void savePicks()}>
           Save picks
         </button>
@@ -398,7 +364,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
                     type="button"
                     className={`ct-sale-covers-grid__card${usedHere ? " is-current" : ""}${
                       usedOther ? " is-used" : ""
-                    }${candidate.suggested ? " is-suggested" : ""}`}
+                    }`}
                     onClick={() => pickCandidate(candidate)}
                   >
                     <CoverThumb

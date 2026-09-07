@@ -174,7 +174,6 @@ from app.services.sale_covers import (
     photos_for_ids,
     candidate_is_hero,
     read_cover_image_bytes,
-    suggest_cover_photos,
     validate_cover_photo_ids,
 )
 from app.services.audience_hunt import lot_is_held_from_ctseller
@@ -1604,15 +1603,12 @@ def _sale_cover_photos_payload(
 ) -> SaleCoverPhotosOut:
     lots_by_id = {lot.id: lot for lot in lots}
     saved = parse_cover_photo_ids(getattr(sale, "ctseller_cover_photo_ids", None))
-    suggested = suggest_cover_photos(lots, photos)
-    suggested_ids = [p.id for p in suggested]
-    selected_ids = saved or suggested_ids
-    selected = photos_for_ids(photos, selected_ids)
+    selected = photos_for_ids(photos, saved)
     return SaleCoverPhotosOut(
         sale_id=sale.id,
         ctseller_sale_id=sale.ctseller_sale_id,
         selected_photo_ids=saved,
-        suggested_photo_ids=suggested_ids,
+        suggested_photo_ids=[],
         slots=_cover_slots_out(selected, lots_by_id),
         remote=remote,
         remote_error=remote_error,
@@ -1626,7 +1622,7 @@ def get_sale_cover_photos(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverPhotosOut:
-    """Saved / suggested 4 sale covers plus what CT Seller already has."""
+    """Saved 4 sale covers plus what CT Seller already has. Slots stay empty until staff pick."""
     sale = _sale_for_user(sale_id, current, db)
     lots, photos = load_sale_lots_and_photos(db, sale)
     remote: SaleCoverRemoteOut | None = None
@@ -1657,7 +1653,6 @@ def get_sale_cover_candidates(
     lots, photos = load_sale_lots_and_photos(db, sale)
     lots_by_id = {lot.id: lot for lot in lots}
     by_lot = photos_by_lot_id(photos)
-    suggested_ids = {p.id for p in suggest_cover_photos(lots, photos)}
     cards: list[SaleCoverCandidateOut] = []
     for photo in cover_candidate_photos(lots, photos):
         lot = lots_by_id.get(photo.lot_id or "")
@@ -1670,13 +1665,13 @@ def get_sale_cover_candidates(
                 auction_title=str(meta.get("auction_title") or ""),
                 photo_role=meta.get("photo_role"),
                 is_hero=candidate_is_hero(photo, by_lot.get(photo.lot_id or "", [])),
-                suggested=photo.id in suggested_ids,
+                suggested=False,
                 thumb_url=meta.get("thumb_url"),
             )
         )
     return SaleCoverCandidatesOut(
         sale_id=sale.id,
-        suggested_photo_ids=[p.id for p in suggest_cover_photos(lots, photos)],
+        suggested_photo_ids=[],
         candidates=cards,
     )
 
@@ -1725,7 +1720,10 @@ def push_sale_cover_photos(
         getattr(sale, "ctseller_cover_photo_ids", None)
     )
     if not wanted:
-        wanted = [p.id for p in suggest_cover_photos(lots, photos)]
+        raise HTTPException(
+            status_code=400,
+            detail="Pick 4 cover photos on the dashboard first",
+        )
     try:
         selected_ids = validate_cover_photo_ids(
             photo_ids=wanted, sale_photos=photos, require_four=True
