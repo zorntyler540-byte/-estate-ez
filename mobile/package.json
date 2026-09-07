@@ -40,7 +40,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "eas:update:production": "bash scripts/publish-eas-update.sh"
   },
   "private": true
 }

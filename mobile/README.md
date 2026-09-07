@@ -64,7 +64,8 @@ The phone publish command is `eas update`. It authenticates with env var **`EXPO
 2. Open [Access tokens](https://expo.dev/settings/access-tokens).
 3. **Create token** (personal access token). Copy it once.
 4. In Cursor, set / replace the secret named **`EXPO_TOKEN`** with that value (same name the agent already reads). Revoke the old token on Expo if Expo said it was invalid.
-5. Do not paste the token into chat or commit it. Tell the agent “token is updated” and it can run `eas whoami` then `eas update --channel production`.
+5. Do not paste the token into chat or commit it. Tell the agent “token is updated”.
+6. A Cloud Agent that is **already running** keeps the token it started with. After you replace `EXPO_TOKEN`, start a **new** Cloud Agent so it boots with the new value. Then it can run `eas whoami` and `bash scripts/publish-eas-update.sh`.
 
 ```powershell
 cd C:\Users\User\Documents\CaringTransitions_AI\mobile
