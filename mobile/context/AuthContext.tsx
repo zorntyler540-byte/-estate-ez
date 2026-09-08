@@ -29,6 +29,8 @@ type StoredCredentials = {
 type AuthContextValue = {
   token: string | null;
   ready: boolean;
+  /** Email used to sign in — shown on Capture so staff know whose session this is. */
+  signedInEmail: string | null;
   selectedSaleId: string | null;
   /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
   selectedSaleName: string | null;
@@ -73,6 +75,7 @@ async function readStoredCredentials(): Promise<StoredCredentials | null> {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleIdState] = useState<string | null>(null);
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -98,6 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         JSON.stringify({ email: email.trim(), password } satisfies StoredCredentials)
       );
       await persistToken(res.access_token);
+      setSignedInEmail(email.trim());
       return res.access_token;
     },
     [persistToken]
@@ -131,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ]);
         setSelectedSaleIdState(storedSale);
         setSelectedSaleNameState(storedSaleName);
+        const creds = await readStoredCredentials();
+        if (creds?.email) setSignedInEmail(creds.email);
 
         if (storedToken) {
           tokenRef.current = storedToken;
@@ -182,6 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ]);
     tokenRef.current = null;
     setToken(null);
+    setSignedInEmail(null);
     setSelectedSaleIdState(null);
     setSelectedSaleNameState(null);
   }, []);
@@ -209,8 +216,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale }),
-    [token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
+    () => ({
+      token,
+      ready,
+      signedInEmail,
+      selectedSaleId,
+      selectedSaleName,
+      signIn,
+      signOut,
+      setSelectedSale
+    }),
+    [token, ready, signedInEmail, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
