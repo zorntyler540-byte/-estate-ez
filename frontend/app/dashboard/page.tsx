@@ -4932,7 +4932,7 @@ export default function DashboardPage() {
       !window.confirm(
         "Sort every lot in this sale for listings?\n\n" +
           "Order becomes: group shots of the whole lot, then each item with its angles, then labels/stickers, then measurements, then SKU tape.\n" +
-          "Use Fix photo order if you want the order photos were taken instead. You can still drag photos on a lot afterward."
+          "You can still drag photos on a lot afterward."
       )
     ) {
       return;
@@ -4954,36 +4954,6 @@ export default function DashboardPage() {
       setDataReloadNonce((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not sort photos for listing");
-    } finally {
-      setPullingCtSellerSales(false);
-    }
-  }
-
-  async function resetSalePhotoOrder() {
-    if (!token || !selectedSaleId) return;
-    if (
-      !window.confirm(
-        "Reset every lot in this sale to the order photos were taken (capture order)?\n\n" +
-          "Use this to fix lots cataloged before the ordering fix. You can still drag photos on a lot afterward."
-      )
-    ) {
-      return;
-    }
-    setPullingCtSellerSales(true);
-    setError("");
-    try {
-      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/reset-photo-order`, token, {
-        method: "POST"
-      })) as { lots_fixed?: number; lots_total?: number };
-      const fixed = res.lots_fixed || 0;
-      setPullCtSellerSalesMsg(
-        fixed > 0
-          ? `Reset photo order on ${fixed} lot${fixed === 1 ? "" : "s"} to capture order.`
-          : "All lots were already in capture order."
-      );
-      setDataReloadNonce((n) => n + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not reset photo order");
     } finally {
       setPullingCtSellerSales(false);
     }
@@ -5880,15 +5850,6 @@ export default function DashboardPage() {
               onClick={() => void sortSalePhotosForListing()}
             >
               Sort for listing
-            </button>
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
-              title="Reset every lot's photos to the order they were taken (fixes lots cataloged before the ordering fix)"
-              onClick={() => void resetSalePhotoOrder()}
-            >
-              Fix photo order
             </button>
             {isAccountOwner ? (
               <button

@@ -162,7 +162,6 @@ from app.services.suggestion_email import (
 )
 from app.services.photo_order import (
     renormalize_photo_sort_orders,
-    reorder_photos_by_capture_name,
     reorder_photos_for_listing,
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
@@ -1951,35 +1950,6 @@ def set_sale_reserve_price(
     )
 
 
-@app.post("/sales/{sale_id}/reset-photo-order")
-def reset_sale_photo_order(
-    sale_id: str,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, int]:
-    """
-    Re-sort every lot's photos in this sale back to capture order (by natural filename).
-
-    Repairs lots cataloged before the capture-order fix, whose stored order was scrambled by the
-    old hero-first pass. Capture order is recoverable because photo ``original_name`` keeps the
-    ``mobile-<draft>-NN.jpg`` index. Non-destructive: only ``sort_order`` changes, and staff can
-    still drag photos afterward.
-    """
-    sale = _sale_for_user(sale_id, current, db)
-    lots = (
-        db.query(Lot)
-        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
-        .all()
-    )
-    fixed = 0
-    for lot in lots:
-        if reorder_photos_by_capture_name(db, lot.id, current.account_id):
-            fixed += 1
-    if fixed:
-        db.commit()
-    return {"lots_total": len(lots), "lots_fixed": fixed}
-
-
 @app.post("/sales/{sale_id}/sort-photos-for-listing")
 def sort_sale_photos_for_listing(
     sale_id: str,
@@ -1991,7 +1961,7 @@ def sort_sale_photos_for_listing(
 
     New lots: group shots, then each item as a chapter, then labels, then measurements, tape last.
     Lots without listing-meta columns keep the older role-bucket sort.
-    Staff can still drag photos or restore capture order.
+    Staff can still drag photos afterward.
     """
     sale = _sale_for_user(sale_id, current, db)
     lots = (
