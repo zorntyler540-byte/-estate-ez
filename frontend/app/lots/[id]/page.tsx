@@ -71,6 +71,7 @@ type Lot = {
   labels_and_tags: string[];
   search_tags: string[];
   starting_price: number | null;
+  reserve_price?: number | null;
   condition_text: string;
   is_completed: boolean;
   photo_count: number;
@@ -814,6 +815,7 @@ export default function LotDetailPage() {
           labels_and_tags: lot.labels_and_tags,
           search_tags: lot.search_tags || [],
           starting_price: lot.starting_price,
+          reserve_price: lot.reserve_price ?? null,
           condition_text: lot.condition_text,
           is_completed: lot.is_completed
         })
@@ -2622,6 +2624,32 @@ export default function LotDetailPage() {
                       }
                     />
                   </div>
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="reserve">
+                    Reserve price
+                  </label>
+                  <div className="ct-input-prefix">
+                    <span className="ct-input-prefix__symbol" aria-hidden>
+                      $
+                    </span>
+                    <input
+                      id="reserve"
+                      className="ct-input"
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      placeholder="none"
+                      value={lot.reserve_price ?? ""}
+                      onChange={(e) =>
+                        updateListingFields({ reserve_price: e.target.value ? Number(e.target.value) : null })
+                      }
+                    />
+                  </div>
+                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    Hidden CT Seller reserve. Sale-wide apply on the dashboard overwrites this.
+                  </p>
                 </div>
                 <div>
                   <label className="ct-label" htmlFor="condition">

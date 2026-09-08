@@ -368,6 +368,95 @@ class CTSellerClient:
         }
         self._post_raw("/item/image/add", payload)
 
+    def item_detail(self, item_id: int) -> dict[str, Any]:
+        payload = {
+            "field": [
+                "id",
+                "saleid",
+                "SKU",
+                "title",
+                "description",
+                "startingprice",
+                "reserveprice",
+                "buynowprice",
+                "itemstatus",
+                "category",
+                "area",
+                "condition",
+                "locationid",
+            ]
+        }
+        data = self._post_json(f"/item/detail/{int(item_id)}", payload)
+        if isinstance(data, list) and data:
+            row = data[0]
+            if isinstance(row, dict):
+                return row
+        if isinstance(data, dict):
+            return data
+        raise CTSellerError(f"CT Seller item {item_id} not found")
+
+    def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
+        """Set ``reserveprice`` on an existing item without re-posting photos."""
+        try:
+            row = self.item_detail(int(item_id))
+        except CTSellerError:
+            row = {"id": int(item_id)}
+        if not isinstance(row, dict):
+            row = {}
+        row["id"] = int(item_id)
+        row["reserveprice"] = format_ctseller_reserve_price(reserve_price)
+        return self._put_raw("/item/update", {"data": [row]})
+
+    def list_sale_images(self, *, sale_id: int) -> list[dict[str, Any]]:
+        """Sale-level images (cover / profile) for one CT Seller auction."""
+        payload = {"filter": [{"field": "saleid", "value": int(sale_id), "op": "=", "join": "AND"}]}
+        body = self._post_raw("/sale/image/list", payload)
+        data = body.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            inner = data.get("data")
+            if isinstance(inner, list):
+                return [row for row in inner if isinstance(row, dict)]
+        return []
+
+    def upsert_sale_cover_photos(
+        self,
+        *,
+        sale_id: int,
+        primary_jpeg: bytes,
+        secondary_jpegs: list[bytes],
+        existing_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Write the 4 sale cover photos the SPA requires before items can move to Ready.
+
+        Matches seller.ctbids.com ``submitImage``: primary on ``image``, three secondaries on
+        ``itemimageurl``. New covers POST ``/sale/image/add``; existing profile rows PUT update.
+        """
+        if len(secondary_jpegs) != 3:
+            raise CTSellerError("CT Seller sale covers need exactly 3 secondary photos")
+        payload: dict[str, Any] = {
+            "saleid": int(sale_id),
+            "name": "profile",
+            "type": "image",
+            "image": sale_cover_data_url(primary_jpeg),
+            "itemimageurl": [sale_cover_data_url(raw) for raw in secondary_jpegs],
+        }
+        if existing_id is not None:
+            payload["id"] = int(existing_id)
+            return self._put_raw("/sale/image/update", {"data": [payload]})
+        return self._post_raw("/sale/image/add", {"data": [payload]})
+
+    def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.access_token:
+            raise CTSellerError("Not signed in to CT Seller", status_code=401)
+        resp = self.session.put(
+            f"{SELLER_API}{path}",
+            data=json.dumps(payload),
+            timeout=self.timeout,
+        )
+        return self._parse_seller_response(resp)
+
     def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
         body = self._post_raw(path, payload)
         return body.get("data")
@@ -380,6 +469,9 @@ class CTSellerClient:
             data=json.dumps(payload),
             timeout=self.timeout,
         )
+        return self._parse_seller_response(resp)
+
+    def _parse_seller_response(self, resp: requests.Response) -> dict[str, Any]:
         if resp.status_code in (401, 403):
             raise CTSellerError("CT Seller session expired — reconnect on Account", status_code=resp.status_code)
         if resp.status_code >= 400:
@@ -423,6 +515,79 @@ def _coerce_message(message: Any) -> str:
     return str(message).strip()
 
 
+def format_ctseller_reserve_price(raw: float | None) -> float | str:
+    """CT Seller ``reserveprice``: a positive number, or blank when there is no reserve."""
+    if raw is None or raw == "":
+        return ""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    return value
+
+
+def resolve_lot_reserve_price(lot: Any, sale: Any | None = None) -> float | None:
+    """Per-lot reserve wins; otherwise the sale-wide default."""
+    lot_val = getattr(lot, "reserve_price", None)
+    if lot_val is not None:
+        try:
+            parsed = float(lot_val)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None:
+            return parsed
+    if sale is None:
+        return None
+    sale_val = getattr(sale, "ctseller_reserve_price", None)
+    if sale_val is None:
+        return None
+    try:
+        return float(sale_val)
+    except (TypeError, ValueError):
+        return None
+
+
+def sale_cover_data_url(raw: bytes) -> str:
+    """JPEG data URL — same encoding the CT Seller sale-cover crop editor submits."""
+    return f"data:image/jpeg;base64,{_image_to_base64(raw, mime='image/jpeg')}"
+
+
+def pick_profile_sale_image(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Prefer the ``profile`` sale-image row (primary + 3 secondaries)."""
+    items = [row for row in (rows or []) if isinstance(row, dict)]
+    for row in items:
+        if str(row.get("name") or "").strip().lower() == "profile":
+            return row
+    return items[0] if items else None
+
+
+def parse_sale_image_secondary_urls(raw: Any) -> list[str]:
+    """``itemimageurl`` arrives as a list, JSON string, or Python-repr list."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is None:
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
 def _image_to_base64(raw: bytes, *, mime: str = "image/jpeg") -> str:
     """Return raw base64 (no data: prefix), matching CT Seller processAddImage."""
     try:
@@ -461,6 +626,7 @@ def build_item_payload(
     buyers_premium: float | str | None = None,
     material: str | None = None,
     tag: str | list[str] | None = None,
+    reserve_price: float | None = None,
 ) -> dict[str, Any]:
     """Build the item/add ``data`` object from catalog fields."""
     irm: dict[str, bool]
@@ -537,7 +703,7 @@ def build_item_payload(
         "quantity": "",
         "tax": tax_out,
         "buyerspremium": bp_out,
-        "reserveprice": "",
+        "reserveprice": format_ctseller_reserve_price(reserve_price),
         "buynowprice": "",
         "width": "",
         "height": "",

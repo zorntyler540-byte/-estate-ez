@@ -171,6 +171,7 @@ class SaleOut(BaseModel):
     name: str
     closed_at: datetime | None = None
     ctseller_sale_id: int | None = None
+    ctseller_reserve_price: float | None = None
     created_at: datetime
 
 
@@ -184,6 +185,8 @@ class SaleUpdate(BaseModel):
     is_closed: bool | None = None
     ctseller_sale_id: int | None = None
     clear_ctseller_sale_id: bool = False
+    ctseller_reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    clear_ctseller_reserve_price: bool = False
 
 
 class LotOut(BaseModel):
@@ -203,6 +206,7 @@ class LotOut(BaseModel):
     is_completed: bool = False
     completed_at: datetime | None = None
     starting_price: float | None
+    reserve_price: float | None = None
     condition_text: str
     photo_count: int
     video_count: int = 0
@@ -236,6 +240,7 @@ class LotUpdate(BaseModel):
     labels_and_tags: list[str] | None = None
     search_tags: list[str] | None = None
     starting_price: float | None = None
+    reserve_price: float | None = None
     condition_text: str | None = None
     is_completed: bool | None = None
     sku: str | None = None
@@ -313,6 +318,94 @@ class SalePostToCTSellerOut(BaseModel):
     failed: int
     skipped: int
     results: list[SalePostToCTSellerLotResult]
+
+
+class SaleCoverPhotoSlotOut(BaseModel):
+    slot: int
+    label: str
+    photo_id: str | None = None
+    lot_id: str | None = None
+    sku: str | None = None
+    auction_title: str = ""
+    photo_role: str | None = None
+    thumb_url: str | None = None
+
+
+class SaleCoverCandidateOut(BaseModel):
+    photo_id: str
+    lot_id: str
+    sku: str | None = None
+    auction_title: str = ""
+    photo_role: str | None = None
+    is_hero: bool = False
+    suggested: bool = False
+    thumb_url: str | None = None
+
+
+class SaleCoverRemoteOut(BaseModel):
+    id: int | None = None
+    primary_url: str | None = None
+    secondary_urls: list[str] = []
+
+
+class SaleCoverPhotosOut(BaseModel):
+    sale_id: str
+    ctseller_sale_id: int | None = None
+    selected_photo_ids: list[str] = []
+    suggested_photo_ids: list[str] = []
+    slots: list[SaleCoverPhotoSlotOut]
+    remote: SaleCoverRemoteOut | None = None
+    remote_error: str | None = None
+
+
+class SaleCoverCandidatesOut(BaseModel):
+    sale_id: str
+    suggested_photo_ids: list[str] = []
+    candidates: list[SaleCoverCandidateOut]
+
+
+class SaleCoverPhotosSelectIn(BaseModel):
+    photo_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+class SaleCoverPhotosPushIn(BaseModel):
+    photo_ids: list[str] | None = Field(default=None, max_length=4)
+    ctseller_sale_id: int | None = None
+    save_sale_mapping: bool = True
+
+
+class SaleReservePriceIn(BaseModel):
+    reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    apply_to_lots: bool = True
+    push_posted: bool = False
+    lot_ids: list[str] | None = None
+
+
+class SaleReservePriceLotResult(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    ok: bool
+    skipped: bool = False
+    error: str | None = None
+    ctseller_item_id: int | None = None
+
+
+class SaleReservePriceOut(BaseModel):
+    sale_id: str
+    reserve_price: float | None
+    lots_updated: int
+    posted_updated: int = 0
+    posted_failed: int = 0
+    posted_skipped: int = 0
+    results: list[SaleReservePriceLotResult] = []
+
+
+class SaleCoverPhotosPushOut(BaseModel):
+    sale_id: str
+    ctseller_sale_id: int
+    updated: bool
+    remote_id: int | None = None
+    selected_photo_ids: list[str]
 
 
 class CatalogR2MigrateIn(BaseModel):

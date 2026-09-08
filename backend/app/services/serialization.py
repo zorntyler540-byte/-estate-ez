@@ -219,6 +219,7 @@ def lot_to_schema(
         is_completed=bool(row.is_completed),
         completed_at=row.completed_at,
         starting_price=row.starting_price,
+        reserve_price=getattr(row, "reserve_price", None),
         condition_text=row.condition_text,
         photo_count=row.photo_count,
         has_thumbnail=has_thumbnail,
