@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-revision = "0029_lot_videos"
-down_revision = "0028_lot_search_tags"
+revision = "0031_lot_videos"
+down_revision = "0030_sale_lot_reserve_price"
 branch_labels = None
 depends_on = None
 
