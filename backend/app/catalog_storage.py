@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from app import object_storage
+from app.catalog_limits import is_catalog_video_filename, video_content_type
 
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 _CATALOG_SUBDIR = "catalog"
@@ -48,6 +49,28 @@ def persist_catalog_photo(account_id: str, source: Path, *, photo_id: str | None
             dest.unlink(missing_ok=True)
             raise
     return pid, key
+
+
+def persist_catalog_video(account_id: str, source: Path, *, video_id: str | None = None) -> tuple[str, str]:
+    """Store a lot clip at ``catalog/{account_id}/videos/{video_id}.ext`` (local + R2)."""
+    if not source.is_file():
+        raise FileNotFoundError(f"Catalog video source not found: {source}")
+    if not is_catalog_video_filename(source.name):
+        raise ValueError("Video must be MP4, MOV, M4V, or WebM")
+    vid = (video_id or "").strip() or str(uuid.uuid4())
+    suffix = source.suffix.lower()
+    dest_dir = (upload_root() / _CATALOG_SUBDIR / account_id / "videos").resolve()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{vid}{suffix}"
+    shutil.copy2(source, dest)
+    key = catalog_storage_key(dest)
+    if object_storage.r2_configured():
+        try:
+            object_storage.put_file(key, str(dest), content_type=video_content_type(dest.name))
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+    return vid, key
 
 
 def catalog_storage_key(path: Path) -> str:

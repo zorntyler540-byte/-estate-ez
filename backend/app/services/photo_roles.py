@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.catalog_limits import is_catalog_video_filename
+
 # Matches pipeline PhotoRole literals.
 CATALOG_PHOTO_ROLES = frozenset({"hero", "item_front", "angle_only", "tape", "unusable"})
 
@@ -173,7 +175,12 @@ def photo_roles_by_path(
 
 def filter_photos_excluding_sku_tape(photos: Iterable[Any]) -> list[Any]:
     """Keep catalog photos for CT Seller / CT Bids (drop dedicated ``tape`` role frames)."""
-    return [p for p in photos if not is_sku_tape_photo_role(getattr(p, "photo_role", None))]
+    return [
+        p
+        for p in photos
+        if not is_sku_tape_photo_role(getattr(p, "photo_role", None))
+        and not is_catalog_video_filename(getattr(p, "original_name", None))
+    ]
 
 
 def photos_for_ctbids_listing(photos: Iterable[Any]) -> list[Any]:

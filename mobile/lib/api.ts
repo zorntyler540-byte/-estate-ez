@@ -1,6 +1,7 @@
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
-import type { Job, Lot, LotPhoto, Sale, TokenResponse } from "./types";
+import { videoMimeType } from "./mediaKind";
+import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types";
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
   resolveUploadFileUri,
@@ -123,6 +124,10 @@ export async function listLotPhotos(token: string, lotId: string): Promise<LotPh
   return apiFetch<LotPhoto[]>(`/lots/${lotId}/photos`, token);
 }
 
+export async function listLotVideos(token: string, lotId: string): Promise<LotVideo[]> {
+  return apiFetch<LotVideo[]>(`/lots/${encodeURIComponent(lotId)}/videos`, token);
+}
+
 /** Batch presigned R2 cover URLs for a sale (one request for the whole grid). */
 export async function listSaleLotCoverUrls(
   token: string,
@@ -186,6 +191,7 @@ async function nativeMultipartUpload(opts: {
   token: string;
   fileUri: string;
   fileName: string;
+  mimeType?: string;
   parameters?: Record<string, string>;
   alreadyRetried?: boolean;
 }): Promise<string> {
@@ -207,7 +213,7 @@ async function nativeMultipartUpload(opts: {
         httpMethod: "POST",
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         fieldName: "files",
-        mimeType: "image/jpeg",
+        mimeType: opts.mimeType || "image/jpeg",
         sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
         headers: { Authorization: `Bearer ${opts.token}` },
         parameters: opts.parameters
@@ -226,7 +232,7 @@ async function nativeMultipartUpload(opts: {
             httpMethod: "POST",
             uploadType: FileSystem.FileSystemUploadType.MULTIPART,
             fieldName: "files",
-            mimeType: "image/jpeg",
+            mimeType: opts.mimeType || "image/jpeg",
             sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
             headers: { Authorization: `Bearer ${opts.token}` },
             parameters: opts.parameters
@@ -334,6 +340,56 @@ export async function uploadLotPhotos(
     }
   }
   return out;
+}
+
+/** Attach clips to an existing catalog lot (skips Gemini / CT Bids). */
+export async function uploadLotVideos(
+  token: string,
+  lotId: string,
+  videoUris: UploadPhotoUri[]
+): Promise<LotVideo[]> {
+  if (!videoUris.length) {
+    throw new Error("No videos to upload");
+  }
+  const out: LotVideo[] = [];
+  for (const video of videoUris) {
+    const text = await nativeMultipartUpload({
+      path: `/lots/${encodeURIComponent(lotId)}/videos/upload`,
+      token,
+      fileUri: video.uri,
+      fileName: video.name,
+      mimeType: videoMimeType(video.name)
+    });
+    const raw = text ? (JSON.parse(text) as unknown) : null;
+    if (Array.isArray(raw)) {
+      out.push(...(raw as LotVideo[]));
+    } else if (raw && typeof raw === "object") {
+      out.push(raw as LotVideo);
+    } else {
+      throw new Error("Upload response was not a video list");
+    }
+  }
+  return out;
+}
+
+export async function getLotVideoPlayUrl(
+  token: string,
+  lotId: string,
+  videoId: string
+): Promise<string> {
+  const res = await apiFetch<{ url?: string }>(
+    `/lots/${encodeURIComponent(lotId)}/videos/${encodeURIComponent(videoId)}/media-url`,
+    token
+  );
+  if (!res.url) throw new Error("Could not get a playable video URL");
+  return res.url;
+}
+
+export function lotVideoStreamSource(lotId: string, videoId: string, token: string) {
+  return {
+    uri: `${API_BASE}/lots/${encodeURIComponent(lotId)}/videos/${encodeURIComponent(videoId)}/stream`,
+    headers: { Authorization: `Bearer ${token}` }
+  };
 }
 
 export async function runJob(jobId: string, token: string): Promise<Job> {

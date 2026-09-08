@@ -209,6 +209,7 @@ class LotOut(BaseModel):
     reserve_price: float | None = None
     condition_text: str
     photo_count: int
+    video_count: int = 0
     has_thumbnail: bool = False
     created_at: datetime
     sku_needs_review: bool = False
@@ -472,6 +473,21 @@ class JobOut(BaseModel):
     progress_done: int = 0
     progress_total: int = 0
     progress_file_name: str | None = None
+
+
+class LotVideoOut(BaseModel):
+    id: str
+    lot_id: str
+    original_name: str
+    created_at: datetime
+    sort_order: int = 0
+    content_type: str = "video/mp4"
+    byte_size: int = 0
+    file_on_disk: bool = True
+
+
+class DeleteLotVideosIn(BaseModel):
+    video_ids: list[str] = Field(min_length=1, max_length=40)
 
 
 class LotPhotoOut(BaseModel):

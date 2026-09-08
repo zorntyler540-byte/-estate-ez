@@ -19,6 +19,16 @@ import { sortBySku } from "../../../lib/skuSort";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
 import { rotateImageBlob } from "../../../lib/photoEdit";
 
+type LotVideo = {
+  id: string;
+  lot_id: string;
+  original_name: string;
+  created_at: string;
+  sort_order?: number;
+  content_type?: string;
+  byte_size?: number;
+};
+
 type LotPhoto = {
   id: string;
   lot_id: string;
@@ -200,6 +210,11 @@ export default function LotDetailPage() {
   const isAccountOwner = isOwnerRole(accountRole);
   const [lot, setLot] = useState<Lot | null>(null);
   const [catalogPhotos, setCatalogPhotos] = useState<LotPhoto[]>([]);
+  const [catalogVideos, setCatalogVideos] = useState<LotVideo[]>([]);
+  const [videoError, setVideoError] = useState("");
+  const [videoBusy, setVideoBusy] = useState(false);
+  const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null);
+  const addVideosInputRef = useRef<HTMLInputElement>(null);
   const [photosError, setPhotosError] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -342,6 +357,13 @@ export default function LotDetailPage() {
             setCatalogPhotos([]);
             setPhotosError("Could not load the photo list for this lot.");
           }
+        }
+        try {
+          const videos = (await apiFetch(`/lots/${encodeURIComponent(routeLotId)}/videos`, t)) as LotVideo[];
+          if (cancelled) return;
+          setCatalogVideos(Array.isArray(videos) ? videos : []);
+        } catch {
+          if (!cancelled) setCatalogVideos([]);
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
@@ -1016,6 +1038,73 @@ export default function LotDetailPage() {
     } finally {
       setAddPhotosBusy(false);
       if (addPhotosInputRef.current) addPhotosInputRef.current.value = "";
+    }
+  }
+
+  async function refetchLotVideos() {
+    if (!token || !lot?.id) return;
+    try {
+      const videos = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/videos`, token)) as LotVideo[];
+      setCatalogVideos(Array.isArray(videos) ? videos : []);
+      setVideoError("");
+    } catch {
+      setVideoError("Could not load videos for this lot.");
+    }
+  }
+
+  async function uploadLotVideos(fileList: FileList | null) {
+    if (!lot || !token || !fileList || fileList.length === 0) return;
+    setVideoBusy(true);
+    setVideoError("");
+    try {
+      const fd = new FormData();
+      for (const f of Array.from(fileList)) {
+        fd.append("files", f);
+      }
+      const raw = await apiUploadFiles(`/lots/${encodeURIComponent(lot.id)}/videos/upload`, token, fd);
+      if (!Array.isArray(raw)) {
+        throw new Error("Upload response was not a video list — check API version.");
+      }
+      setCatalogVideos(raw as LotVideo[]);
+    } catch (e) {
+      setVideoError(e instanceof Error ? e.message : "Could not upload videos");
+    } finally {
+      setVideoBusy(false);
+      if (addVideosInputRef.current) addVideosInputRef.current.value = "";
+    }
+  }
+
+  async function playLotVideo(videoId: string) {
+    if (!lot || !token) return;
+    setVideoError("");
+    try {
+      const res = (await apiFetch(
+        `/lots/${encodeURIComponent(lot.id)}/videos/${encodeURIComponent(videoId)}/media-url`,
+        token
+      )) as { url?: string };
+      if (!res.url) throw new Error("No playable URL");
+      setPlayingVideoUrl(res.url);
+    } catch (e) {
+      setVideoError(e instanceof Error ? e.message : "Could not play video");
+    }
+  }
+
+  async function deleteLotVideo(videoId: string) {
+    if (!lot || !token) return;
+    if (!window.confirm("Remove this video from the lot?")) return;
+    setVideoBusy(true);
+    setVideoError("");
+    try {
+      await apiFetch(`/lots/${encodeURIComponent(lot.id)}/videos/delete`, token, {
+        method: "POST",
+        body: JSON.stringify({ video_ids: [videoId] })
+      });
+      if (playingVideoUrl) setPlayingVideoUrl(null);
+      await refetchLotVideos();
+    } catch (e) {
+      setVideoError(e instanceof Error ? e.message : "Could not delete video");
+    } finally {
+      setVideoBusy(false);
     }
   }
 
@@ -2053,6 +2142,90 @@ export default function LotDetailPage() {
           </div>
         )}
           </div>
+        </section>
+
+        <section className="ct-dash-panel">
+          <h2 className="ct-dash-panel__title">
+            Videos
+            {catalogVideos.length ? (
+              <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
+                ({catalogVideos.length})
+              </span>
+            ) : null}
+          </h2>
+          <p className="ct-upload-intro">
+            Short walk-around clips from the phone app. They stay on Estate-EZ and are not posted
+            to CT Bids or sent through AI catalog.
+          </p>
+          <input
+            ref={addVideosInputRef}
+            type="file"
+            multiple
+            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm"
+            style={{ display: "none" }}
+            onChange={(e) => void uploadLotVideos(e.target.files)}
+          />
+          <div className="ct-upload-options" role="group" aria-label="Video actions">
+            <div className="ct-upload-option">
+              <div className="ct-upload-option__text">
+                <span className="ct-upload-option__title">Add video</span>
+                <span className="ct-upload-option__desc">MP4 or MOV, up to 80 MB, max 8 per lot.</span>
+              </div>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary ct-upload-option__btn"
+                disabled={videoBusy}
+                onClick={() => addVideosInputRef.current?.click()}
+              >
+                {videoBusy ? "Uploading…" : "Add video…"}
+              </button>
+            </div>
+          </div>
+          {videoError ? (
+            <div className="ct-banner ct-banner--error" style={{ marginTop: "0.75rem" }}>
+              {videoError}
+            </div>
+          ) : null}
+          {playingVideoUrl ? (
+            <video
+              key={playingVideoUrl}
+              src={playingVideoUrl}
+              controls
+              playsInline
+              style={{ width: "100%", maxHeight: 420, marginTop: "0.85rem", background: "#111", borderRadius: 10 }}
+            />
+          ) : null}
+          {catalogVideos.length ? (
+            <ul style={{ listStyle: "none", padding: 0, margin: "0.85rem 0 0" }}>
+              {catalogVideos.map((video, index) => (
+                <li
+                  key={video.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    padding: "0.45rem 0",
+                    borderTop: "1px solid var(--ct-border, #2a2a2e)"
+                  }}
+                >
+                  <span className="ct-muted" style={{ minWidth: "1.5rem" }}>
+                    {index + 1}
+                  </span>
+                  <span style={{ flex: 1, wordBreak: "break-word" }}>{video.original_name}</span>
+                  <button type="button" className="ct-btn" disabled={videoBusy} onClick={() => void playLotVideo(video.id)}>
+                    Play
+                  </button>
+                  <button type="button" className="ct-btn" disabled={videoBusy} onClick={() => void deleteLotVideo(video.id)}>
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="ct-muted" style={{ marginTop: "0.75rem" }}>
+              No videos on this lot yet. Record one in the phone app (Photo / Video toggle).
+            </p>
+          )}
         </section>
 
         {showOrganizePanel ? (

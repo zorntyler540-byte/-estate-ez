@@ -89,7 +89,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   globally. Do not put R2 HEAD / CT Seller HTTP / Pillow on a `Depends(get_db)` session.
   Photo ingest (`POST /jobs/upload` and `/jobs/{id}/upload-files`) authenticates with a
   short-lived session so multipart receive does not pin a pool connection.
-- **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`, `runtimeVersion: appVersion`,
+- **Mobile OTA:** EAS Update is configured (`expo-updates`, `updates.url`). TestFlight
+  binaries before lot videos use runtime `1.0.0`. The video native build uses runtime
+  **`1.1.0`** (`mobile/app.json`) so the old production OTA cannot overwrite the new app.
   per-profile channels in `eas.json`). TestFlight builds listen to the **`production`** channel.
   Human steps (Expo login + `eas update --channel production`) are in `mobile/README.md`
   under “Push a JS-only fix”. Native/dep changes still need `eas build` + `eas submit`.
@@ -120,6 +122,14 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   when `shows_whole_lot` is true. Persisted roles feed listing sort, CT Seller cover, and the
   Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
   lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
+- **Lot videos are extra media, not catalog frames.** The phone capture session has a Photo /
+  Video toggle (`expo-camera` `recordAsync`, 45s / 80 MB / 8 per lot). Clips upload to
+  `POST /lots/{id}/videos/upload` after the lot exists (append immediately; new lots wait until
+  catalog finishes). They are **not** sent through Gemini and **not** posted to CT Bids.
+  Still photos are still required to catalog a lot. Playing uses a signed R2 URL
+  (`GET …/videos/{id}/media-url`). Microphone permission in `app.json` needs a **new native
+  build** (runtime `1.1.0`). Do not publish video JS to the `1.0.0` production channel.
+  Do not put videos in `/jobs/upload` folders.
 - **CT Bids / CT Seller posts omit SKU-tape frames.** Dashboard **Post to CT Seller** drops
   `photo_role=tape`. Tape stays in the Estate-Ez gallery for SKU reference. Lots that were
   already posted keep whatever photos are on CT Bids until someone edits that item there;

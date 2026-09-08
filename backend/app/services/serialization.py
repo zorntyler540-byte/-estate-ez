@@ -10,8 +10,8 @@ from collections import defaultdict
 
 from app.catalog_storage import catalog_photo_file_on_disk, resolve_catalog_storage_path
 from app.core.lotting import listing_quality_issue
-from app.models import Lot, Photo
-from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut
+from app.models import Lot, LotVideo, Photo
+from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut, LotVideoOut
 from app.services.audience_hunt import audience_payload_for_lot
 
 
@@ -61,6 +61,20 @@ def photo_count_is_sale_outlier(photo_count: int, all_counts: list[int]) -> bool
     if photo_count != top:
         return False
     return top >= second + 8
+
+
+def lot_video_out(video: LotVideo, *, lot_id: str | None = None) -> LotVideoOut:
+    lid = lot_id or video.lot_id or ""
+    return LotVideoOut(
+        id=video.id,
+        lot_id=lid,
+        original_name=video.original_name,
+        created_at=video.created_at,
+        sort_order=int(video.sort_order or 0),
+        content_type=(video.content_type or "video/mp4"),
+        byte_size=int(video.byte_size or 0),
+        file_on_disk=catalog_photo_file_on_disk(video.storage_path),
+    )
 
 
 def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:

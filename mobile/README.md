@@ -1,6 +1,6 @@
 # Caring Transitions — mobile (Expo)
 
-Field capture app: **native camera**, **offline lot storage**, and **upload queue** to the existing FastAPI backend (`/jobs/upload` single-lot mode).
+Field capture app: **native camera** (photos and short videos), **offline lot storage**, and **upload queue** to the existing FastAPI backend (`/jobs/upload` single-lot mode for stills; videos attach to the catalog lot after it exists).
 
 The web dashboard (`../frontend`) remains the catalog review and admin UI.
 

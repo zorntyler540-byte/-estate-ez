@@ -47,6 +47,13 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "server_lot_id")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_lot_id TEXT");
       }
+      const photoCols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_photos)");
+      if (!photoCols.some((c) => c.name === "media_kind")) {
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'image'");
+      }
+      if (!photoCols.some((c) => c.name === "uploaded")) {
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN uploaded INTEGER NOT NULL DEFAULT 0");
+      }
       return db;
     })();
   }
@@ -90,7 +97,11 @@ export async function createLotDraft(
   return id;
 }
 
-export async function addPhotoToDraft(draftId: string, fileUri: string): Promise<string> {
+export async function addPhotoToDraft(
+  draftId: string,
+  fileUri: string,
+  mediaKind: "image" | "video" = "image"
+): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
   const row = await db.getFirstAsync<{ c: number }>(
@@ -98,9 +109,10 @@ export async function addPhotoToDraft(draftId: string, fileUri: string): Promise
     [draftId]
   );
   const sortOrder = Number(row?.c ?? 0);
+  const kind = mediaKind === "video" ? "video" : "image";
   await db.runAsync(
-    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order) VALUES (?, ?, ?, ?)",
-    [id, draftId, fileUri, sortOrder]
+    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded) VALUES (?, ?, ?, ?, ?, 0)",
+    [id, draftId, fileUri, sortOrder, kind]
   );
   await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
   return id;
@@ -173,8 +185,18 @@ export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
     id: String(r.id),
     draft_id: String(r.draft_id),
     file_uri: String(r.file_uri),
-    sort_order: Number(r.sort_order)
+    sort_order: Number(r.sort_order),
+    media_kind: String(r.media_kind || "image") === "video" ? "video" : "image",
+    uploaded: Number(r.uploaded || 0) === 1
   }));
+}
+
+export async function markDraftMediaUploaded(draftId: string, photoId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_photos SET uploaded = 1 WHERE draft_id = ? AND id = ?", [
+    draftId,
+    photoId
+  ]);
 }
 
 export async function setDraftStatus(

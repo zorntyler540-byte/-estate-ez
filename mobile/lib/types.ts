@@ -31,6 +31,7 @@ export type Lot = {
   starting_price: number | null;
   condition_text: string;
   photo_count: number;
+  video_count?: number;
   has_thumbnail: boolean;
   created_at: string;
   sku_needs_review: boolean;
@@ -85,9 +86,23 @@ export type LotDraft = {
   photo_count: number;
 };
 
+export type LotMediaKind = "image" | "video";
+
 export type LotPhotoRow = {
   id: string;
   draft_id: string;
   file_uri: string;
   sort_order: number;
+  media_kind: LotMediaKind;
+  uploaded: boolean;
+};
+
+export type LotVideo = {
+  id: string;
+  lot_id: string;
+  original_name: string;
+  created_at: string;
+  sort_order: number;
+  content_type: string;
+  byte_size: number;
 };
