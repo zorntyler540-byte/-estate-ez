@@ -11,6 +11,7 @@ import {
 
 import { login as apiLogin } from "@/lib/api";
 import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
+import { normalizeSaleName, selectedSaleNeedsSync } from "@/lib/selectedSale";
 import { secureDelete, secureGet, secureSet } from "@/lib/secureStorage";
 import { registerSessionRefresher } from "@/lib/sessionBridge";
 
@@ -76,7 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const tokenRef = useRef<string | null>(null);
+  const selectedSaleIdRef = useRef<string | null>(null);
+  const selectedSaleNameRef = useRef<string | null>(null);
   const refreshInFlight = useRef<Promise<string | null> | null>(null);
+  selectedSaleIdRef.current = selectedSaleId;
+  selectedSaleNameRef.current = selectedSaleName;
 
   const persistToken = useCallback(async (next: string | null) => {
     tokenRef.current = next;
@@ -182,7 +187,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
-    const name = saleName?.trim() || null;
+    const name = saleId ? normalizeSaleName(saleName) : null;
+    if (!selectedSaleNeedsSync(selectedSaleIdRef.current, selectedSaleNameRef.current, saleId, saleName)) {
+      return;
+    }
     if (saleId) {
       await secureSet(SELECTED_SALE_KEY, saleId);
       if (name) {
@@ -194,8 +202,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await secureDelete(SELECTED_SALE_KEY);
       await secureDelete(SELECTED_SALE_NAME_KEY);
     }
+    selectedSaleIdRef.current = saleId;
+    selectedSaleNameRef.current = name;
     setSelectedSaleIdState(saleId);
-    setSelectedSaleNameState(saleId ? name : null);
+    setSelectedSaleNameState(name);
   }, []);
 
   const value = useMemo(

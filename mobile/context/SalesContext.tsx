@@ -1,9 +1,10 @@
-import { useFocusEffect } from "expo-router";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
@@ -11,6 +12,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { listSales } from "@/lib/api";
 import { backfillDraftSaleNames } from "@/lib/queue/db";
+import { selectedSaleNeedsSync } from "@/lib/selectedSale";
 import type { Sale } from "@/lib/types";
 
 type SalesContextValue = {
@@ -26,6 +28,10 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
+  const selectedSaleIdRef = useRef(selectedSaleId);
+  const selectedSaleNameRef = useRef(selectedSaleName);
+  selectedSaleIdRef.current = selectedSaleId;
+  selectedSaleNameRef.current = selectedSaleName;
 
   const refreshSales = useCallback(async () => {
     if (!token) {
@@ -41,9 +47,11 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       const nameById = new Map(open.map((s) => [s.id, s.name]));
       await backfillDraftSaleNames(nameById);
 
-      if (selectedSaleId) {
-        const current = open.find((s) => s.id === selectedSaleId);
-        if (current && current.name !== selectedSaleName) {
+      const sid = selectedSaleIdRef.current;
+      const sname = selectedSaleNameRef.current;
+      if (sid) {
+        const current = open.find((s) => s.id === sid);
+        if (current && selectedSaleNeedsSync(sid, sname, current.id, current.name)) {
           await setSelectedSale(current.id, current.name);
         }
       }
@@ -52,13 +60,11 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
+  }, [token, setSelectedSale]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void refreshSales();
-    }, [refreshSales])
-  );
+  useEffect(() => {
+    void refreshSales();
+  }, [refreshSales]);
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>();

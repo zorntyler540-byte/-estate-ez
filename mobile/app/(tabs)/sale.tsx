@@ -1,5 +1,5 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -11,53 +11,34 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { listSales } from "@/lib/api";
-import type { Sale } from "@/lib/types";
+import { useSales } from "@/context/SalesContext";
 
 export default function SaleScreen() {
-  const { token, selectedSaleId, setSelectedSale } = useAuth();
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    setError("");
-    try {
-      const rows = await listSales(token);
-      setSales(rows.filter((s) => !s.closed_at));
-      // Backfill/refresh the stored sale name for installs that saved only the id.
-      const current = selectedSaleId ? rows.find((s) => s.id === selectedSaleId) : undefined;
-      if (current) {
-        void setSelectedSale(current.id, current.name);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load sales");
-    } finally {
-      setLoading(false);
-    }
-  }, [token, selectedSaleId, setSelectedSale]);
+  const { selectedSaleId, setSelectedSale } = useAuth();
+  const { sales, loading, refreshSales } = useSales();
 
   useFocusEffect(
     useCallback(() => {
-      void load();
-    }, [load])
+      void refreshSales();
+    }, [refreshSales])
   );
+
+  const showInitialSpinner = loading && sales.length === 0;
 
   return (
     <View style={styles.root}>
       <Text style={styles.lead}>
         Open sales from your account. Capture uploads and the Lots tab use the selected sale.
       </Text>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {loading ? (
+      {showInitialSpinner ? (
         <ActivityIndicator style={{ marginTop: 24 }} />
       ) : (
         <FlatList
           data={sales}
           keyExtractor={(item) => item.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} />}
+          refreshControl={
+            <RefreshControl refreshing={loading} onRefresh={() => void refreshSales()} tintColor="#ff4d1a" />
+          }
           ListEmptyComponent={<Text style={styles.empty}>No open sales.</Text>}
           renderItem={({ item }) => {
             const active = item.id === selectedSaleId;
@@ -80,7 +61,6 @@ export default function SaleScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, padding: 16, backgroundColor: "#070708" },
   lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
-  error: { color: "#fca5a5", marginBottom: 8 },
   empty: { color: "#78716c", textAlign: "center", marginTop: 32 },
   row: {
     padding: 14,
