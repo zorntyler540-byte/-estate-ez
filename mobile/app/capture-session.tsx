@@ -8,7 +8,6 @@ import {
   AppState,
   PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -977,14 +976,11 @@ export default function CaptureSessionScreen() {
           {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
 
-        <ScrollView
-          style={styles.panelThumbs}
-          contentContainerStyle={[
-            styles.panelThumbsContent,
+        <View
+          style={[
+            styles.panelThumbs,
             !landscape && { paddingBottom: Math.max(insets.bottom, 14) }
           ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
         >
           {!landscape ? (
             <Text style={styles.sectionTitle}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
@@ -997,7 +993,7 @@ export default function CaptureSessionScreen() {
             onPressPhoto={openPreview}
             onDeletePhoto={deleteFromStrip}
           />
-        </ScrollView>
+        </View>
       </View>
 
       <PhotoPreviewModal
@@ -1017,7 +1013,7 @@ export default function CaptureSessionScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   rootLandscape: { flexDirection: "row", alignItems: "stretch" },
-  cameraWrap: { flex: 1, minHeight: 320, position: "relative" },
+  cameraWrap: { flex: 1, minHeight: 160, position: "relative" },
   cameraWrapLandscape: { flex: 1, minHeight: 0, minWidth: 0 },
   closeFab: {
     position: "absolute",
@@ -1127,7 +1123,6 @@ const styles = StyleSheet.create({
   panel: {
     flexGrow: 0,
     flexShrink: 0,
-    maxHeight: "40%",
     backgroundColor: "#0e0e10",
     borderTopWidth: 1,
     borderTopColor: "#141416"
@@ -1155,11 +1150,6 @@ const styles = StyleSheet.create({
     paddingRight: 6
   },
   panelThumbs: {
-    flexGrow: 1,
-    flexShrink: 1,
-    minHeight: 72
-  },
-  panelThumbsContent: {
     paddingHorizontal: 12,
     paddingTop: 4,
     paddingBottom: 8,
