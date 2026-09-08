@@ -59,6 +59,9 @@ class TeamActivityMemberOut(BaseModel):
     photos_uploaded: int
     lots_created: int
     jobs_started: int
+    active_hours: float = 0
+    photos_per_hour: float = 0
+    lots_per_hour: float = 0
 
 
 class TeamActivityTotalsOut(BaseModel):
@@ -66,6 +69,9 @@ class TeamActivityTotalsOut(BaseModel):
     lots_created: int
     jobs_started: int
     member_count: int
+    active_hours: float = 0
+    photos_per_hour: float = 0
+    lots_per_hour: float = 0
 
 
 class TeamActivityOut(BaseModel):

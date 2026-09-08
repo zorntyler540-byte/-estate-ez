@@ -778,6 +778,9 @@ def team_activity(
                 photos_uploaded=m.photos_uploaded,
                 lots_created=m.lots_created,
                 jobs_started=m.jobs_started,
+                active_hours=m.active_hours,
+                photos_per_hour=m.photos_per_hour,
+                lots_per_hour=m.lots_per_hour,
             )
             for m in summary.members
         ],
@@ -786,6 +789,9 @@ def team_activity(
             lots_created=summary.lots_created,
             jobs_started=summary.jobs_started,
             member_count=len(summary.members),
+            active_hours=summary.active_hours,
+            photos_per_hour=summary.photos_per_hour,
+            lots_per_hour=summary.lots_per_hour,
         ),
     )
 
