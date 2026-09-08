@@ -252,6 +252,23 @@ class LotSearchTagsOut(BaseModel):
     search_tags: list[str]
 
 
+class LotMoveIn(BaseModel):
+    sale_id: str = Field(min_length=1, max_length=36)
+
+
+class LotBulkMoveIn(BaseModel):
+    lot_ids: list[str] = Field(min_length=1, max_length=200)
+    sale_id: str = Field(min_length=1, max_length=36)
+
+
+class LotBulkMoveOut(BaseModel):
+    destination_sale_id: str
+    destination_sale_name: str
+    moved_count: int
+    skipped_already_there: list[str] = []
+    moved: list[LotOut]
+
+
 class CTSellerCredentialsIn(BaseModel):
     username: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=200)

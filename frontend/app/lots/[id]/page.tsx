@@ -7,6 +7,7 @@ import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, L
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
+import { MoveLotsToSale, type MoveSaleOption } from "../../../components/MoveLotsToSale";
 import { AppShell } from "../../../components/AppShell";
 import {
   AudienceHuntProgress,
@@ -225,6 +226,7 @@ export default function LotDetailPage() {
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
+  const [catalogSales, setCatalogSales] = useState<MoveSaleOption[]>([]);
   const [mappedCtSellerSaleId, setMappedCtSellerSaleId] = useState<number | null>(null);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerConditions, setCtSellerConditions] = useState<CTSellerCondition[]>([]);
@@ -477,6 +479,7 @@ export default function LotDetailPage() {
   useEffect(() => {
     if (!token || !lot?.sale_id) {
       setSaleName("");
+      setCatalogSales([]);
       setMappedCtSellerSaleId(null);
       return;
     }
@@ -486,9 +489,17 @@ export default function LotDetailPage() {
         const rows = (await apiFetch("/sales", token)) as {
           id: string;
           name?: string;
+          closed_at?: string | null;
           ctseller_sale_id?: number | null;
         }[];
         if (cancelled || !Array.isArray(rows)) return;
+        setCatalogSales(
+          rows.map((s) => ({
+            id: s.id,
+            name: (s.name || "").trim() || "Untitled sale",
+            closed_at: s.closed_at ?? null,
+          }))
+        );
         const hit = rows.find((s) => s.id === lot.sale_id);
         setSaleName((hit?.name || "").trim());
         const mapped =
@@ -500,6 +511,7 @@ export default function LotDetailPage() {
       } catch {
         if (!cancelled) {
           setSaleName("");
+          setCatalogSales([]);
           setMappedCtSellerSaleId(null);
         }
       }
@@ -1567,6 +1579,30 @@ export default function LotDetailPage() {
         </header>
 
         {showLotAlerts ? <div className="ct-lot-detail-alerts">{lotWarnings}</div> : null}
+
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">Sale</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            This lot is in <strong>{saleName || "an unnamed sale"}</strong>. Move it if it was
+            cataloged under the wrong sale.
+          </p>
+          <MoveLotsToSale
+            token={token}
+            lotIds={[lot.id]}
+            currentSaleId={lot.sale_id}
+            currentSaleName={saleName}
+            sales={catalogSales}
+            postedCount={lot.ctseller_item_id || lot.ctseller_posted_at ? 1 : 0}
+            disabled={saving || organizeBusy}
+            onMoved={(result) => {
+              setLot((prev) =>
+                prev ? { ...prev, sale_id: result.destination_sale_id } : prev
+              );
+              setSaleName(result.destination_sale_name);
+              setSaleLots([]);
+            }}
+          />
+        </section>
 
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">Audience</h2>

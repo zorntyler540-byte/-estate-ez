@@ -74,6 +74,9 @@ from app.schemas import (
     LotPostToCTSellerIn,
     LotPostToCTSellerOut,
     LotSearchTagsOut,
+    LotMoveIn,
+    LotBulkMoveIn,
+    LotBulkMoveOut,
     LotUpdate,
     PasswordChangeIn,
     PasswordResetIn,
@@ -142,6 +145,7 @@ from app.services.ctseller import (
     unseal_secret,
 )
 from app.services import job_events
+from app.services.lot_moves import move_lots_to_sale
 from app.services.serialization import (
     lot_ids_with_linked_photos,
     lot_photo_out,
@@ -2717,6 +2721,64 @@ def lot_thumbnail(
         media_type="image/jpeg",
         headers={"Cache-Control": "private, no-cache"},
     )
+
+
+@app.post("/lots/move-to-sale", response_model=LotBulkMoveOut)
+def move_lots_between_sales(
+    body: LotBulkMoveIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotBulkMoveOut:
+    """Move one or more lots to another open sale. Photos and videos stay on the lot."""
+    dest = _assert_sale_editable_for_lot_moves(db, body.sale_id, current)
+    try:
+        moved_rows, skipped = move_lots_to_sale(
+            db,
+            account_id=current.account_id,
+            lot_ids=body.lot_ids,
+            destination=dest,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not moved_rows:
+        raise HTTPException(
+            status_code=400,
+            detail="Those lots are already in that sale.",
+        )
+    return LotBulkMoveOut(
+        destination_sale_id=dest.id,
+        destination_sale_name=dest.name,
+        moved_count=len(moved_rows),
+        skipped_already_there=skipped,
+        moved=[_lot_out_for_id(db, current.account_id, row.id) for row in moved_rows],
+    )
+
+
+@app.post("/lots/{lot_id}/move", response_model=LotOut)
+def move_one_lot_between_sales(
+    lot_id: str,
+    body: LotMoveIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotOut:
+    dest = _assert_sale_editable_for_lot_moves(db, body.sale_id, current)
+    try:
+        moved_rows, skipped = move_lots_to_sale(
+            db,
+            account_id=current.account_id,
+            lot_ids=[lot_id],
+            destination=dest,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not moved_rows:
+        detail = (
+            "That lot is already in this sale."
+            if skipped
+            else "Lot could not be moved."
+        )
+        raise HTTPException(status_code=400, detail=detail)
+    return _lot_out_for_id(db, current.account_id, lot_id)
 
 
 @app.get("/lots/{lot_id}", response_model=LotOut)
