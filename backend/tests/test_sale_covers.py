@@ -210,7 +210,9 @@ def test_cover_photos_api_save_and_push(tmp_path) -> None:
 
         cands = client.get("/sales/sale-c/cover-candidates")
         assert cands.status_code == 200, cands.text
-        assert len(cands.json()["candidates"]) == 4
+        body = cands.json()["candidates"]
+        assert len(body) == 4
+        assert all(row.get("thumb_url") in (None, "") for row in body)
 
         empty_push = client.post("/sales/sale-c/cover-photos/push", json={"ctseller_sale_id": 99})
         assert empty_push.status_code == 400

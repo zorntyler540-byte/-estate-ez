@@ -442,10 +442,24 @@ class CTSellerClient:
             "image": sale_cover_data_url(primary_jpeg),
             "itemimageurl": [sale_cover_data_url(raw) for raw in secondary_jpegs],
         }
-        if existing_id is not None:
-            payload["id"] = int(existing_id)
-            return self._put_raw("/sale/image/update", {"data": [payload]})
-        return self._post_raw("/sale/image/add", {"data": [payload]})
+        last_exc: CTSellerError | None = None
+        for attempt in range(2):
+            try:
+                if existing_id is not None:
+                    payload["id"] = int(existing_id)
+                    return self._put_raw("/sale/image/update", {"data": [payload]})
+                return self._post_raw("/sale/image/add", {"data": [payload]})
+            except CTSellerError as exc:
+                last_exc = exc
+                if attempt == 0 and _is_retryable_seller_error(exc):
+                    logger.warning("CT Seller cover upload failed; retrying once: %s", exc)
+                    time.sleep(1.2)
+                    continue
+                raise CTSellerError(
+                    _friendly_cover_upload_error(exc),
+                    status_code=exc.status_code,
+                ) from exc
+        raise last_exc or CTSellerError("CT Seller cover upload failed")
 
     def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.access_token:
@@ -500,6 +514,24 @@ def _message_from_response(resp: requests.Response) -> str:
     if isinstance(body, dict):
         return _coerce_message(body.get("message")) or (resp.text or "")[:300]
     return (resp.text or "")[:300]
+
+
+def _is_retryable_seller_error(exc: CTSellerError) -> bool:
+    code = int(exc.status_code or 0)
+    if code >= 500 or code == 429:
+        return True
+    msg = str(exc).lower()
+    return "server problem" in msg or "uh oh" in msg or "timeout" in msg or "timed out" in msg
+
+
+def _friendly_cover_upload_error(exc: CTSellerError) -> str:
+    raw = str(exc).strip()
+    if _is_retryable_seller_error(exc) or "server problem" in raw.lower() or "uh oh" in raw.lower():
+        return (
+            "CT Seller hit a server error while saving the 4 sale covers. "
+            "Your picks are still saved here — click Push covers to CT Seller again."
+        )
+    return raw or "CT Seller cover upload failed"
 
 
 def _coerce_message(message: Any) -> str:
