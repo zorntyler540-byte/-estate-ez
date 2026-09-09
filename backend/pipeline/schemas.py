@@ -155,7 +155,9 @@ class FullyAuditedManifest(BaseModel):
         default="",
         description=(
             "Pro-corrected single-line auction title; lead with confirmed brand when readable. Put distinctive "
-            "material/handle/finish before the object name (hook-first), not trailing 'with …'. Compose a clean, "
+            "material/handle/finish before the object name (hook-first), not trailing 'with …'. Jewelry: Brand + "
+            "metal tone + form + type + (count) — no Collection/Statement/Fashion/Assorted/Ft. padding. Liz & Co is "
+            "not Tiffany & Co. Compose a clean, "
             "human-readable title — NEVER copy estate-tag field labels (No., STYLE, SIZE, PRICE, COLOR, QTY) or raw "
             "tag OCR into the title; those values belong in final_specification_lines."
         ),
@@ -165,7 +167,7 @@ class FullyAuditedManifest(BaseModel):
         description=(
             "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Open with a short flair "
             "clause, then immediately restate the title hook (material/handle/finish + object) in natural words. "
-            "Not 'This is a…' or feature checklists. Vary adjectives — do not overuse handsome; prefer specific "
+            "Not 'This is a…', a feature checklist, or a full repeat of the auction title. Vary adjectives — do not overuse handsome; prefer specific "
             "visual details. Exact sizes and marks belong in final_specification_lines; weave size casually in prose if needed."
         ),
     )
