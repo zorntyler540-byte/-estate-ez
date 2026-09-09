@@ -189,6 +189,24 @@ class SaleUpdate(BaseModel):
     clear_ctseller_reserve_price: bool = False
 
 
+class SaleMergeIn(BaseModel):
+    """Move every lot and job from ``source_sale_id`` into the path sale, then delete the source."""
+
+    source_sale_id: str = Field(min_length=1, max_length=36)
+
+
+class SaleMergeOut(BaseModel):
+    target_sale_id: str
+    target_sale_name: str
+    source_sale_id: str
+    source_sale_name: str
+    lots_moved: int
+    jobs_moved: int
+    appraisals_moved: int = 0
+    zip_exports_moved: int = 0
+    duplicate_sku_count: int = 0
+
+
 class LotOut(BaseModel):
     id: str
     account_id: str

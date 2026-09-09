@@ -79,6 +79,8 @@ from app.schemas import (
     PasswordResetIn,
     RegisterRequest,
     SaleCreate,
+    SaleMergeIn,
+    SaleMergeOut,
     SaleCoverCandidateOut,
     SaleCoverCandidatesOut,
     SaleCoverPhotoSlotOut,
@@ -154,6 +156,7 @@ from app.services.serialization import (
     upload_folder_has_linked_photos,
 )
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
+from app.services.sale_merge import SaleMergeError, merge_catalog_sales
 from app.services.suggestion_email import (
     read_recent_saved_suggestions,
     save_suggestion_local,
@@ -2048,6 +2051,37 @@ def delete_sale(
     db.delete(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/sales/{target_sale_id}/merge", response_model=SaleMergeOut)
+def merge_sales(
+    target_sale_id: str,
+    payload: SaleMergeIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleMergeOut:
+    """Move lots and jobs from ``source_sale_id`` into this sale, then delete the source catalog sale."""
+    _require_owner(current)
+    try:
+        result = merge_catalog_sales(
+            db,
+            account_id=current.account_id,
+            target_sale_id=target_sale_id,
+            source_sale_id=payload.source_sale_id,
+        )
+    except SaleMergeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return SaleMergeOut(
+        target_sale_id=result.target_sale_id,
+        target_sale_name=result.target_sale_name,
+        source_sale_id=result.source_sale_id,
+        source_sale_name=result.source_sale_name,
+        lots_moved=result.lots_moved,
+        jobs_moved=result.jobs_moved,
+        appraisals_moved=result.appraisals_moved,
+        zip_exports_moved=result.zip_exports_moved,
+        duplicate_sku_count=result.duplicate_sku_count,
+    )
 
 
 @app.get("/integrations/ctseller", response_model=CTSellerStatusOut)
