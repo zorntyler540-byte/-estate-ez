@@ -132,6 +132,46 @@ def test_validate_rejects_tape_and_requires_four() -> None:
         assert "tape" in str(exc).lower()
 
 
+def test_validate_accepts_photos_from_another_sale() -> None:
+    photos = [
+        _photo("here", "l1", "hero"),
+        _photo("other", "l2", "hero"),
+    ]
+    assert validate_cover_photo_ids(
+        photo_ids=["here", "other"], catalog_photos=photos, require_four=False
+    ) == ["here", "other"]
+    try:
+        validate_cover_photo_ids(
+            photo_ids=["here", "missing"], catalog_photos=photos, require_four=False
+        )
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "catalog" in str(exc).lower()
+
+
+def test_photo_card_meta_marks_other_sale() -> None:
+    from app.services.sale_covers import photo_card_meta
+
+    lot = SimpleNamespace(id="l1", sku="JZ500", auction_title="Mag", sale_id="sale-b")
+    sale = SimpleNamespace(id="sale-b", name="sams guns")
+    photo = _photo("p1", "l1", "hero")
+    other = photo_card_meta(
+        photo,  # type: ignore[arg-type]
+        {"l1": lot},  # type: ignore[arg-type]
+        sales_by_id={"sale-b": sale},  # type: ignore[arg-type]
+        current_sale_id="sale-a",
+    )
+    assert other["from_other_sale"] is True
+    assert other["sale_name"] == "sams guns"
+    same = photo_card_meta(
+        photo,  # type: ignore[arg-type]
+        {"l1": lot},  # type: ignore[arg-type]
+        sales_by_id={"sale-b": sale},  # type: ignore[arg-type]
+        current_sale_id="sale-b",
+    )
+    assert same["from_other_sale"] is False
+
+
 def test_cover_photos_api_save_and_push(tmp_path) -> None:
     from unittest.mock import MagicMock, patch
 
@@ -239,6 +279,265 @@ def test_cover_photos_api_save_and_push(tmp_path) -> None:
         assert kwargs["sale_id"] == 99
         assert len(kwargs["secondary_jpegs"]) == 3
         assert kwargs["existing_id"] is None
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_cover_picker_stays_on_this_sale_but_save_accepts_other_catalog(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Photo, Sale, User
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'covers-mixed.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-mix", name="CT")
+    user = User(
+        id="user-mix",
+        account_id=account.id,
+        email="mix@example.com",
+        password_hash="x",
+        role="owner",
+    )
+    sale_a = Sale(id="sale-a", account_id=account.id, user_id=user.id, name="zorn mags", ctseller_sale_id=47921)
+    sale_b = Sale(id="sale-b", account_id=account.id, user_id=user.id, name="sams guns")
+    db.add_all([account, user, sale_a, sale_b])
+    a_ids: list[str] = []
+    for i in range(3):
+        img_path = tmp_path / f"a{i}.jpg"
+        Image.new("RGB", (80, 60), color=(i * 40, 80, 120)).save(img_path, format="JPEG")
+        lot = Lot(
+            id=f"lot-a-{i}",
+            account_id=account.id,
+            user_id=user.id,
+            sale_id=sale_a.id,
+            sku=f"AA{i + 1:03d}",
+            auction_title=f"Mag {i + 1}",
+        )
+        photo = Photo(
+            id=f"photo-a-{i}",
+            account_id=account.id,
+            user_id=user.id,
+            lot_id=lot.id,
+            original_name=img_path.name,
+            storage_path=str(img_path),
+            photo_role="hero",
+            sort_order=0,
+        )
+        db.add_all([lot, photo])
+        a_ids.append(photo.id)
+    img_b = tmp_path / "b0.jpg"
+    Image.new("RGB", (80, 60), color=(10, 20, 30)).save(img_b, format="JPEG")
+    lot_b = Lot(
+        id="lot-b-0",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale_b.id,
+        sku="BB001",
+        auction_title="Rifle",
+    )
+    photo_b = Photo(
+        id="photo-b-0",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot_b.id,
+        original_name=img_b.name,
+        storage_path=str(img_b),
+        photo_role="hero",
+        sort_order=0,
+    )
+    db.add_all([lot_b, photo_b])
+    db.commit()
+    mixed_ids = [*a_ids, photo_b.id]
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        a_cands = client.get("/sales/sale-a/cover-candidates")
+        assert a_cands.status_code == 200, a_cands.text
+        a_rows = a_cands.json()["candidates"]
+        assert {row["photo_id"] for row in a_rows} == set(a_ids)
+        assert all(row.get("from_other_sale") is False for row in a_rows)
+
+        b_cands = client.get("/sales/sale-b/cover-candidates")
+        assert b_cands.status_code == 200, b_cands.text
+        b_rows = b_cands.json()["candidates"]
+        assert {row["photo_id"] for row in b_rows} == {photo_b.id}
+
+        blocked = client.put(
+            "/sales/sale-a/cover-photos",
+            json={"photo_ids": [*a_ids, "missing-photo"]},
+        )
+        assert blocked.status_code == 400
+        assert "catalog" in blocked.json()["detail"].lower()
+
+        saved = client.put("/sales/sale-a/cover-photos", json={"photo_ids": mixed_ids})
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["selected_photo_ids"] == mixed_ids
+        other = next(slot for slot in body["slots"] if slot["photo_id"] == photo_b.id)
+        assert other["from_other_sale"] is True
+        assert other["sale_name"] == "sams guns"
+        assert other["sku"] == "BB001"
+        local = next(slot for slot in body["slots"] if slot["photo_id"] == a_ids[0])
+        assert local["from_other_sale"] is False
+
+        listed = client.get("/sales/sale-a/cover-photos")
+        assert listed.status_code == 200, listed.text
+        listed_other = next(slot for slot in listed.json()["slots"] if slot["photo_id"] == photo_b.id)
+        assert listed_other["from_other_sale"] is True
+
+        after_save = client.get("/sales/sale-a/cover-candidates")
+        assert {row["photo_id"] for row in after_save.json()["candidates"]} == set(a_ids)
+
+        fake = MagicMock()
+        fake.list_sale_images.return_value = []
+        fake.upsert_sale_cover_photos.return_value = {"status": "success", "data": [{"id": 77}]}
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            pushed = client.post(
+                "/sales/sale-a/cover-photos/push",
+                json={"photo_ids": mixed_ids, "ctseller_sale_id": 47921},
+            )
+        assert pushed.status_code == 200, pushed.text
+        assert pushed.json()["remote_id"] == 77
+        fake.upsert_sale_cover_photos.assert_called_once()
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_cover_picker_follows_ctseller_auction_not_website_sale(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Photo, Sale, User
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'covers-ctseller.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-ct", name="CT")
+    user = User(
+        id="user-ct",
+        account_id=account.id,
+        email="ct@example.com",
+        password_hash="x",
+        role="owner",
+    )
+    sale_a = Sale(id="sale-a", account_id=account.id, user_id=user.id, name="zorn mags", ctseller_sale_id=47921)
+    sale_b = Sale(id="sale-b", account_id=account.id, user_id=user.id, name="sams guns")
+    db.add_all([account, user, sale_a, sale_b])
+    a_ids: list[str] = []
+    for i in range(2):
+        img_path = tmp_path / f"z{i}.jpg"
+        Image.new("RGB", (80, 60), color=(i * 40, 80, 120)).save(img_path, format="JPEG")
+        lot = Lot(
+            id=f"lot-z-{i}",
+            account_id=account.id,
+            user_id=user.id,
+            sale_id=sale_a.id,
+            sku=f"ZM{i + 1:03d}",
+            auction_title=f"Mag {i + 1}",
+        )
+        photo = Photo(
+            id=f"photo-z-{i}",
+            account_id=account.id,
+            user_id=user.id,
+            lot_id=lot.id,
+            original_name=img_path.name,
+            storage_path=str(img_path),
+            photo_role="hero",
+            sort_order=0,
+        )
+        db.add_all([lot, photo])
+        a_ids.append(photo.id)
+    img_b = tmp_path / "g0.jpg"
+    Image.new("RGB", (80, 60), color=(10, 20, 30)).save(img_b, format="JPEG")
+    lot_b = Lot(
+        id="lot-g-0",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale_b.id,
+        sku="SG001",
+        auction_title="Rifle",
+    )
+    photo_b = Photo(
+        id="photo-g-0",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot_b.id,
+        original_name=img_b.name,
+        storage_path=str(img_b),
+        photo_role="hero",
+        sort_order=0,
+    )
+    db.add_all([lot_b, photo_b])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        website_b = client.get("/sales/sale-b/cover-candidates")
+        assert website_b.status_code == 200, website_b.text
+        assert {row["photo_id"] for row in website_b.json()["candidates"]} == {photo_b.id}
+
+        auction = client.get("/sales/sale-b/cover-candidates?ctseller_sale_id=47921")
+        assert auction.status_code == 200, auction.text
+        body = auction.json()
+        assert {row["photo_id"] for row in body["candidates"]} == set(a_ids)
+        assert body["sale_id"] == "sale-a"
+        assert body["catalog_sale_name"] == "zorn mags"
+        assert body["ctseller_sale_id"] == 47921
+
+        saved = client.put(
+            "/sales/sale-b/cover-photos",
+            json={"photo_ids": a_ids, "ctseller_sale_id": 47921},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["sale_id"] == "sale-a"
+        assert saved.json()["selected_photo_ids"] == a_ids
+        assert saved.json()["catalog_sale_name"] == "zorn mags"
+
+        via_website_b = client.get("/sales/sale-b/cover-photos")
+        assert via_website_b.status_code == 200
+        assert via_website_b.json()["selected_photo_ids"] == []
+
+        via_auction = client.get("/sales/sale-b/cover-photos?ctseller_sale_id=47921")
+        assert via_auction.status_code == 200, via_auction.text
+        assert via_auction.json()["sale_id"] == "sale-a"
+        assert via_auction.json()["selected_photo_ids"] == a_ids
+        assert via_auction.json()["catalog_sale_name"] == "zorn mags"
     finally:
         app.dependency_overrides.clear()
         db.close()

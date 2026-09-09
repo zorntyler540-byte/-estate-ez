@@ -2739,7 +2739,8 @@ export default function DashboardPage() {
   useEffect(() => {
     const mapped = selectedSale?.ctseller_sale_id;
     if (typeof mapped === "number" && Number.isFinite(mapped) && mapped > 0) {
-      setCtSellerPickId(String(mapped));
+      // Seed only — do not overwrite the CT Seller auction dropdown when Change sale moves.
+      setCtSellerPickId((prev) => prev || String(mapped));
     }
   }, [selectedSale?.id, selectedSale?.ctseller_sale_id]);
 
@@ -6863,7 +6864,7 @@ export default function DashboardPage() {
           <SaleCoverPhotos
             saleId={selectedSaleId}
             token={token}
-            ctsellerSaleId={Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "") || null}
+            ctsellerSaleId={Number(ctSellerPickId || "") || null}
             disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
             onMapped={(id) => {
               setCtSellerPickId(String(id));

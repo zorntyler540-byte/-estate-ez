@@ -189,6 +189,33 @@ def load_sale_lots_and_photos(db: Session, sale: Sale) -> tuple[list[Lot], list[
     return lots, photos
 
 
+def load_cover_photos_by_ids(
+    db: Session, account_id: str, photo_ids: Iterable[str]
+) -> tuple[list[Lot], list[Photo], dict[str, Sale]]:
+    """Resolve selected cover ids from the account — including lots on other sales."""
+    wanted = parse_cover_photo_ids(json.dumps(list(photo_ids)))
+    if not wanted:
+        return [], [], {}
+    photos = (
+        db.query(Photo)
+        .filter(Photo.account_id == account_id, Photo.id.in_(wanted))
+        .all()
+    )
+    lot_ids = {photo.lot_id for photo in photos if photo.lot_id}
+    lots = (
+        db.query(Lot).filter(Lot.account_id == account_id, Lot.id.in_(lot_ids)).all()
+        if lot_ids
+        else []
+    )
+    sale_ids = {lot.sale_id for lot in lots if lot.sale_id}
+    sales = (
+        db.query(Sale).filter(Sale.account_id == account_id, Sale.id.in_(sale_ids)).all()
+        if sale_ids
+        else []
+    )
+    return lots, photos, {sale.id: sale for sale in sales}
+
+
 def photos_for_ids(photos: Iterable[Photo], photo_ids: list[str]) -> list[Photo]:
     by_id = {p.id: p for p in photos}
     return [by_id[pid] for pid in photo_ids if pid in by_id]
@@ -197,16 +224,18 @@ def photos_for_ids(photos: Iterable[Photo], photo_ids: list[str]) -> list[Photo]
 def validate_cover_photo_ids(
     *,
     photo_ids: list[str],
-    sale_photos: Iterable[Photo],
+    catalog_photos: Iterable[Photo] | None = None,
+    sale_photos: Iterable[Photo] | None = None,
     require_four: bool,
 ) -> list[str]:
+    photos = list(catalog_photos if catalog_photos is not None else (sale_photos or []))
     wanted = parse_cover_photo_ids(json.dumps(photo_ids))
     if require_four and len(wanted) != SALE_COVER_SLOT_COUNT:
         raise ValueError("Pick exactly 4 different catalog photos (1 primary + 3 secondary)")
-    by_id = {p.id: p for p in sale_photos}
+    by_id = {p.id: p for p in photos}
     missing = [pid for pid in wanted if pid not in by_id]
     if missing:
-        raise ValueError("One or more cover photos are not in this sale")
+        raise ValueError("One or more cover photos are not in your catalog")
     tape_or_bad = [
         pid
         for pid in wanted
@@ -257,8 +286,18 @@ def lot_title_map(lots: Iterable[Lot]) -> dict[str, Lot]:
     return {lot.id: lot for lot in lots}
 
 
-def photo_card_meta(photo: Photo, lots_by_id: dict[str, Lot]) -> dict[str, Any]:
+def photo_card_meta(
+    photo: Photo,
+    lots_by_id: dict[str, Lot],
+    *,
+    sales_by_id: dict[str, Sale] | None = None,
+    current_sale_id: str | None = None,
+) -> dict[str, Any]:
     lot = lots_by_id.get(photo.lot_id or "")
+    sale = None
+    if lot is not None and sales_by_id:
+        sale = sales_by_id.get(lot.sale_id)
+    from_other = bool(current_sale_id and lot is not None and lot.sale_id != current_sale_id)
     return {
         "photo_id": photo.id,
         "lot_id": photo.lot_id,
@@ -266,4 +305,7 @@ def photo_card_meta(photo: Photo, lots_by_id: dict[str, Lot]) -> dict[str, Any]:
         "auction_title": (lot.auction_title if lot else "") or "",
         "photo_role": normalize_catalog_photo_role(getattr(photo, "photo_role", None)),
         "thumb_url": cover_thumb_url(photo.storage_path),
+        "sale_id": (lot.sale_id if lot else None),
+        "sale_name": (sale.name if sale else "") or "",
+        "from_other_sale": from_other,
     }

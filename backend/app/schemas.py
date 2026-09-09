@@ -347,6 +347,9 @@ class SaleCoverPhotoSlotOut(BaseModel):
     auction_title: str = ""
     photo_role: str | None = None
     thumb_url: str | None = None
+    sale_id: str | None = None
+    sale_name: str = ""
+    from_other_sale: bool = False
 
 
 class SaleCoverCandidateOut(BaseModel):
@@ -358,6 +361,9 @@ class SaleCoverCandidateOut(BaseModel):
     is_hero: bool = False
     suggested: bool = False
     thumb_url: str | None = None
+    sale_id: str | None = None
+    sale_name: str = ""
+    from_other_sale: bool = False
 
 
 class SaleCoverRemoteOut(BaseModel):
@@ -369,6 +375,7 @@ class SaleCoverRemoteOut(BaseModel):
 class SaleCoverPhotosOut(BaseModel):
     sale_id: str
     ctseller_sale_id: int | None = None
+    catalog_sale_name: str = ""
     selected_photo_ids: list[str] = []
     suggested_photo_ids: list[str] = []
     slots: list[SaleCoverPhotoSlotOut]
@@ -378,12 +385,15 @@ class SaleCoverPhotosOut(BaseModel):
 
 class SaleCoverCandidatesOut(BaseModel):
     sale_id: str
+    ctseller_sale_id: int | None = None
+    catalog_sale_name: str = ""
     suggested_photo_ids: list[str] = []
     candidates: list[SaleCoverCandidateOut]
 
 
 class SaleCoverPhotosSelectIn(BaseModel):
     photo_ids: list[str] = Field(default_factory=list, max_length=4)
+    ctseller_sale_id: int | None = None
 
 
 class SaleCoverPhotosPushIn(BaseModel):

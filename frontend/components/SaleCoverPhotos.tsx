@@ -13,6 +13,9 @@ type CoverSlot = {
   auction_title: string;
   photo_role: string | null;
   thumb_url: string | null;
+  sale_id?: string | null;
+  sale_name?: string | null;
+  from_other_sale?: boolean;
 };
 
 type CoverCandidate = {
@@ -24,11 +27,15 @@ type CoverCandidate = {
   is_hero: boolean;
   suggested: boolean;
   thumb_url: string | null;
+  sale_id?: string | null;
+  sale_name?: string | null;
+  from_other_sale?: boolean;
 };
 
 type CoverPhotosOut = {
   sale_id: string;
   ctseller_sale_id: number | null;
+  catalog_sale_name?: string;
   selected_photo_ids: string[];
   suggested_photo_ids: string[];
   slots: CoverSlot[];
@@ -38,6 +45,8 @@ type CoverPhotosOut = {
 
 type CoverCandidatesOut = {
   sale_id: string;
+  ctseller_sale_id?: number | null;
+  catalog_sale_name?: string;
   suggested_photo_ids: string[];
   candidates: CoverCandidate[];
 };
@@ -50,16 +59,27 @@ type Props = {
   onMapped?: (ctsellerSaleId: number) => void;
 };
 
-const EMPTY_SLOTS: CoverSlot[] = [1, 2, 3, 4].map((slot) => ({
-  slot,
-  label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
-  photo_id: null,
-  lot_id: null,
-  sku: null,
-  auction_title: "",
-  photo_role: null,
-  thumb_url: null
-}));
+function blankSlot(slot: number): CoverSlot {
+  return {
+    slot,
+    label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
+    photo_id: null,
+    lot_id: null,
+    sku: null,
+    auction_title: "",
+    photo_role: null,
+    thumb_url: null,
+    sale_id: null,
+    sale_name: "",
+    from_other_sale: false
+  };
+}
+
+const EMPTY_SLOTS: CoverSlot[] = [1, 2, 3, 4].map((slot) => blankSlot(slot));
+
+function ctsellerCoverQuery(ctsellerSaleId: number | null): string {
+  return ctsellerSaleId ? `?ctseller_sale_id=${encodeURIComponent(String(ctsellerSaleId))}` : "";
+}
 
 function skuMatchesQuery(sku: string | null, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -75,26 +95,41 @@ function skuMatchesQuery(sku: string | null, query: string): boolean {
   return false;
 }
 
-function slotFromCandidate(slot: number, candidate: CoverCandidate | undefined): CoverSlot {
-  const label = slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`;
-  if (!candidate) {
-    return { slot, label, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null };
-  }
+function candidateMatchesQuery(candidate: CoverCandidate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (skuMatchesQuery(candidate.sku, query)) return true;
+  if ((candidate.auction_title || "").toLowerCase().includes(q)) return true;
+  return false;
+}
+
+function slotFromCandidate(
+  slot: number,
+  candidate: CoverCandidate | undefined,
+  currentSaleId: string
+): CoverSlot {
+  if (!candidate) return blankSlot(slot);
+  const saleId = candidate.sale_id || currentSaleId || null;
   return {
     slot,
-    label,
+    label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
     photo_id: candidate.photo_id,
     lot_id: candidate.lot_id,
     sku: candidate.sku,
     auction_title: candidate.auction_title,
     photo_role: candidate.photo_role,
-    thumb_url: candidate.thumb_url
+    thumb_url: candidate.thumb_url,
+    sale_id: saleId,
+    sale_name: candidate.sale_name || "",
+    from_other_sale: Boolean(saleId && saleId !== currentSaleId)
   };
 }
 
 export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMapped }: Props) {
   const [slots, setSlots] = useState<CoverSlot[]>(EMPTY_SLOTS);
   const [candidates, setCandidates] = useState<CoverCandidate[]>([]);
+  const [catalogSaleName, setCatalogSaleName] = useState("");
+  const [catalogSaleId, setCatalogSaleId] = useState(saleId);
   const [remoteReady, setRemoteReady] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -105,6 +140,8 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const [pickerSkuQuery, setPickerSkuQuery] = useState("");
   const [candidatesLoaded, setCandidatesLoaded] = useState(false);
   const skuSearchRef = useRef<HTMLInputElement | null>(null);
+  const saleIdRef = useRef(saleId);
+  saleIdRef.current = saleId;
 
   const selectedIds = useMemo(
     () => slots.map((s) => s.photo_id).filter((id): id is string => Boolean(id)),
@@ -112,10 +149,13 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   );
   const filled = selectedIds.length;
   const canPush = filled === 4 && Boolean(ctsellerSaleId) && !disabled && !busy;
+  const pickerDisabled = disabled || busy || loading || !ctsellerSaleId;
 
   const applyCoverPayload = useCallback((data: CoverPhotosOut) => {
     const next = EMPTY_SLOTS.map((blank, idx) => data.slots[idx] || blank);
     setSlots(next);
+    setCatalogSaleName((data.catalog_sale_name || "").trim());
+    if (data.sale_id) setCatalogSaleId(data.sale_id);
     const remote = data.remote;
     const hasRemote =
       Boolean(remote?.primary_url) && Array.isArray(remote?.secondary_urls) && remote.secondary_urls.length >= 3;
@@ -124,19 +164,36 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   }, []);
 
   useEffect(() => {
-    if (!token || !saleId) {
+    const fallbackSaleId = saleIdRef.current;
+    if (!token || !fallbackSaleId) {
       setSlots(EMPTY_SLOTS);
       setCandidates([]);
       setCandidatesLoaded(false);
+      setPickerSlot(null);
+      setPickerSkuQuery("");
+      setCatalogSaleName("");
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    setErr("");
-    setMsg("");
     setCandidatesLoaded(false);
     setCandidates([]);
-    void apiFetch(`/sales/${encodeURIComponent(saleId)}/cover-photos`, token)
+    setPickerSlot(null);
+    setPickerSkuQuery("");
+    setErr("");
+    setMsg("");
+    if (!ctsellerSaleId) {
+      setSlots(EMPTY_SLOTS);
+      setCatalogSaleName("");
+      setRemoteReady(false);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    void apiFetch(
+      `/sales/${encodeURIComponent(fallbackSaleId)}/cover-photos${ctsellerCoverQuery(ctsellerSaleId)}`,
+      token
+    )
       .then((raw) => {
         if (cancelled) return;
         applyCoverPayload(raw as CoverPhotosOut);
@@ -150,20 +207,22 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     return () => {
       cancelled = true;
     };
-  }, [token, saleId, applyCoverPayload]);
+  }, [token, ctsellerSaleId, applyCoverPayload]);
 
   const loadCandidates = useCallback(async (): Promise<CoverCandidatesOut | null> => {
-    if (!token || !saleId) return null;
-    if (candidatesLoaded) return { sale_id: saleId, suggested_photo_ids: [], candidates };
+    if (!token || !saleId || !ctsellerSaleId) return null;
+    if (candidatesLoaded) return { sale_id: catalogSaleId || saleId, suggested_photo_ids: [], candidates };
     const raw = (await apiFetch(
-      `/sales/${encodeURIComponent(saleId)}/cover-candidates`,
+      `/sales/${encodeURIComponent(saleId)}/cover-candidates${ctsellerCoverQuery(ctsellerSaleId)}`,
       token
     )) as CoverCandidatesOut;
     const rows = Array.isArray(raw.candidates) ? raw.candidates : [];
     setCandidates(rows);
     setCandidatesLoaded(true);
+    if ((raw.catalog_sale_name || "").trim()) setCatalogSaleName(raw.catalog_sale_name.trim());
+    if (raw.sale_id) setCatalogSaleId(raw.sale_id);
     return { ...raw, candidates: rows };
-  }, [token, saleId, candidatesLoaded, candidates]);
+  }, [token, saleId, ctsellerSaleId, candidatesLoaded, candidates, catalogSaleId]);
 
   const closePicker = () => {
     setPickerSlot(null);
@@ -171,7 +230,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   };
 
   const openPicker = (slot: number) => {
-    if (disabled || busy) return;
+    if (pickerDisabled) return;
     setPickerSkuQuery("");
     setPickerSlot(slot);
     setErr("");
@@ -193,7 +252,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     [candidates]
   );
   const visibleCandidates = useMemo(
-    () => coverCandidates.filter((candidate) => skuMatchesQuery(candidate.sku, pickerSkuQuery)),
+    () => coverCandidates.filter((candidate) => candidateMatchesQuery(candidate, pickerSkuQuery)),
     [coverCandidates, pickerSkuQuery]
   );
 
@@ -202,10 +261,10 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     setSlots((prev) =>
       prev.map((slot) => {
         if (slot.photo_id === candidate.photo_id && slot.slot !== pickerSlot) {
-          return { ...slot, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null };
+          return blankSlot(slot.slot);
         }
         if (slot.slot !== pickerSlot) return slot;
-        return slotFromCandidate(slot.slot, candidate);
+        return slotFromCandidate(slot.slot, candidate, catalogSaleId || saleId);
       })
     );
     closePicker();
@@ -215,21 +274,23 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const clearSlot = (slotNo: number) => {
     setSlots((prev) =>
       prev.map((slot) =>
-        slot.slot === slotNo
-          ? { ...slot, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null }
-          : slot
+        slot.slot === slotNo ? blankSlot(slot.slot) : slot
       )
     );
   };
 
   const savePicks = async () => {
     if (!token || !saleId) return;
+    if (!ctsellerSaleId) {
+      setErr("Pick a CT Seller auction first.");
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       const raw = (await apiFetch(`/sales/${encodeURIComponent(saleId)}/cover-photos`, token, {
         method: "PUT",
-        body: JSON.stringify({ photo_ids: selectedIds })
+        body: JSON.stringify({ photo_ids: selectedIds, ctseller_sale_id: ctsellerSaleId })
       })) as CoverPhotosOut;
       applyCoverPayload(raw);
       setMsg(selectedIds.length ? `Saved ${selectedIds.length} cover pick${selectedIds.length === 1 ? "" : "s"}.` : "Cleared cover picks.");
@@ -280,8 +341,11 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         <div>
           <h3 className="ct-sale-covers__title">CT Seller sale covers</h3>
           <p className="ct-sale-covers__hint">
-            CT Seller needs 4 cover photos before lots can move to Ready. Click each slot and pick a
-            photo from this sale — nothing is pre-filled.
+            {ctsellerSaleId
+              ? `CT Seller needs 4 cover photos on auction #${ctsellerSaleId} before lots can move to Ready. Photos come from ${
+                  catalogSaleName || "the catalog linked to that auction"
+                } — not from Change sale. Nothing is pre-filled.`
+              : "Pick a CT Seller auction above. Cover photos follow that auction, not the website catalog in Change sale."}
           </p>
         </div>
         <div className="ct-sale-covers__status" aria-live="polite">
@@ -298,7 +362,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
               slot.photo_id ? " is-filled" : ""
             }`}
             onClick={() => openPicker(slot.slot)}
-            disabled={disabled || busy || loading}
+            disabled={pickerDisabled}
             title={slot.photo_id ? `${slot.label}: ${slot.sku || "lot"} — click to change` : `Choose ${slot.label}`}
           >
             {slot.photo_id ? (
@@ -318,6 +382,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
             <span className="ct-sale-covers__slot-label">
               {slot.label}
               {slot.sku ? ` · ${slot.sku}` : ""}
+              {slot.from_other_sale && slot.sale_name ? ` · ${slot.sale_name}` : ""}
             </span>
             {slot.photo_id ? (
               <span
@@ -344,7 +409,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         ))}
       </div>
       <div className="ct-sale-covers__actions">
-        <button type="button" className="ct-btn" disabled={disabled || busy || loading} onClick={() => void savePicks()}>
+        <button type="button" className="ct-btn" disabled={pickerDisabled} onClick={() => void savePicks()}>
           Save picks
         </button>
         <button
@@ -388,8 +453,8 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
               </button>
             </div>
             <p className="ct-sale-covers__hint">
-              One photo from every lot, plus extra listing shots when a lot has them. Photos
-              already used in another slot move here. SKU-tape frames are not shown.
+              Photos from {catalogSaleName || "the catalog linked to the CT Seller auction above"}.
+              Changing Change sale does not change this list. SKU-tape frames are not shown.
             </p>
             <label className="ct-sale-covers-modal__search">
               <span className="ct-sale-covers-modal__search-label">Search SKU</span>
