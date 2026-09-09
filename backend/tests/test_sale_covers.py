@@ -429,3 +429,80 @@ def test_cover_thumb_url_signs_original_without_generating(monkeypatch) -> None:
     assert url == "https://cdn.example/orig.jpg"
     assert calls[0]["max_px"] is None
     assert calls[0]["generate_if_missing"] is False
+
+
+def test_lot_media_url_signs_without_generating_thumbs(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Photo, Sale, User
+
+    signed_calls: list[dict] = []
+
+    monkeypatch.setattr("app.main.catalog_r2_configured", lambda: True)
+
+    def fake_signed(storage_path, **kwargs):
+        signed_calls.append({"storage_path": storage_path, **kwargs})
+        return "https://cdn.example/orig.jpg"
+
+    monkeypatch.setattr("app.main.signed_catalog_url", fake_signed)
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lot-media.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-mu", name="CT")
+    user = User(
+        id="user-mu",
+        account_id=account.id,
+        email="media@example.com",
+        password_hash="x",
+        role="owner",
+    )
+    sale = Sale(id="sale-mu", account_id=account.id, user_id=user.id, name="Yard")
+    lot = Lot(
+        id="lot-mu",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="TG001SK",
+        auction_title="Necklace",
+    )
+    img_path = tmp_path / "hero.jpg"
+    Image.new("RGB", (80, 60), color=(12, 80, 140)).save(img_path, format="JPEG")
+    photo = Photo(
+        id="photo-mu",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot.id,
+        original_name=img_path.name,
+        storage_path=str(img_path),
+        photo_role="hero",
+        sort_order=0,
+    )
+    db.add_all([account, user, sale, lot, photo])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.get("/lots/lot-mu/media-url?max_px=220")
+        assert res.status_code == 200, res.text
+        assert res.json()["url"] == "https://cdn.example/orig.jpg"
+        assert signed_calls[0]["generate_if_missing"] is False
+    finally:
+        app.dependency_overrides.clear()
+        db.close()

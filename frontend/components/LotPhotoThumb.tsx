@@ -65,7 +65,7 @@ function LotPhotoThumbInner({
       }
       try {
         const mediaRes = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?max_px=${maxPx}&generate_if_missing=false&v=${encodeURIComponent(String(cacheBust))}`,
           {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",

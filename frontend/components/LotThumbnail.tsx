@@ -93,7 +93,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
       }
       try {
         const mediaRes = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/media-url?max_px=${maxPx}`,
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/media-url?max_px=${maxPx}&generate_if_missing=false`,
           {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",

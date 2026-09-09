@@ -2670,6 +2670,10 @@ def list_lots(
 def lot_media_url(
     lot_id: str,
     max_px: int = Query(220, description="Long edge for cached JPEG thumb (required for lot cover)."),
+    generate_if_missing: bool = Query(
+        False,
+        description="When true, build a missing thumb on Railway. Grids must leave this false.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CatalogMediaUrlOut:
@@ -2692,8 +2696,14 @@ def lot_media_url(
     last_err: Exception | None = None
     for ph in photos:
         try:
-            url = signed_catalog_url(ph.storage_path, max_px=px, expires_seconds=expires)
-            return CatalogMediaUrlOut(url=url, expires_in=expires, kind="thumb")
+            # Sign only — generating missing thumbs here stalls lot/dashboard loads.
+            url = signed_catalog_url(
+                ph.storage_path,
+                max_px=px,
+                expires_seconds=expires,
+                generate_if_missing=generate_if_missing,
+            )
+            return CatalogMediaUrlOut(url=url, expires_in=expires, kind="original")
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             continue
@@ -3459,8 +3469,8 @@ def lot_photo_media_url(
         description="When set, return a signed URL for a cached JPEG thumbnail at this long edge.",
     ),
     generate_if_missing: bool = Query(
-        True,
-        description="When false, skip R2 HEAD/Pillow and sign the original (fast for grids).",
+        False,
+        description="When true, build a missing 220px thumb on Railway. Grids must leave this false.",
     ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
