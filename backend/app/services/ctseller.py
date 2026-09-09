@@ -14,6 +14,13 @@ from typing import Any
 import requests
 from PIL import Image, ImageOps
 
+try:
+    from pillow_heif import register_heif_opener  # type: ignore[import-untyped]
+
+    register_heif_opener()
+except ImportError:
+    pass
+
 from app.config import settings
 from app.services.ctseller_categories import (
     CT_SELLER_CATEGORY_DEFAULT,
@@ -29,6 +36,10 @@ SELLER_API = "https://seller.ctbids.com/services/api/v1"
 DEFAULT_TIMEOUT = 60.0
 IMAGE_MAX_EDGE = 1600
 IMAGE_JPEG_QUALITY = 85
+# Sale covers post 4 data-URLs in one JSON body — keep them smaller than lot photos.
+COVER_MAX_EDGE = 1200
+COVER_RETRY_EDGE = 880
+COVER_JPEG_QUALITY = 78
 
 
 class CTSellerError(Exception):
@@ -435,31 +446,54 @@ class CTSellerClient:
         """
         if len(secondary_jpegs) != 3:
             raise CTSellerError("CT Seller sale covers need exactly 3 secondary photos")
-        payload: dict[str, Any] = {
-            "saleid": int(sale_id),
-            "name": "profile",
-            "type": "image",
-            "image": sale_cover_data_url(primary_jpeg),
-            "itemimageurl": [sale_cover_data_url(raw) for raw in secondary_jpegs],
-        }
+
+        def _row(edge: int, eid: int | None) -> dict[str, Any]:
+            row: dict[str, Any] = {
+                "saleid": int(sale_id),
+                "name": "profile",
+                "type": "image",
+                "image": sale_cover_data_url(primary_jpeg, max_edge=edge),
+                "itemimageurl": [sale_cover_data_url(raw, max_edge=edge) for raw in secondary_jpegs],
+            }
+            if eid is not None:
+                row["id"] = int(eid)
+            return row
+
+        def _send(edge: int, eid: int | None) -> dict[str, Any]:
+            row = _row(edge, eid)
+            if eid is not None:
+                return self._put_raw("/sale/image/update", {"data": [row]})
+            return self._post_raw("/sale/image/add", {"data": [row]})
+
+        eid = int(existing_id) if existing_id is not None else None
         last_exc: CTSellerError | None = None
-        for attempt in range(2):
+        for edge in (COVER_MAX_EDGE, COVER_RETRY_EDGE):
             try:
-                if existing_id is not None:
-                    payload["id"] = int(existing_id)
-                    return self._put_raw("/sale/image/update", {"data": [payload]})
-                return self._post_raw("/sale/image/add", {"data": [payload]})
+                return _send(edge, eid)
             except CTSellerError as exc:
                 last_exc = exc
-                if attempt == 0 and _is_retryable_seller_error(exc):
-                    logger.warning("CT Seller cover upload failed; retrying once: %s", exc)
-                    time.sleep(1.2)
-                    continue
-                raise CTSellerError(
-                    _friendly_cover_upload_error(exc),
-                    status_code=exc.status_code,
-                ) from exc
-        raise last_exc or CTSellerError("CT Seller cover upload failed")
+                if not _is_retryable_seller_error(exc):
+                    break
+                logger.warning(
+                    "CT Seller cover upload failed (sale=%s edge=%s id=%s): %s",
+                    sale_id,
+                    edge,
+                    eid,
+                    exc,
+                )
+                try:
+                    profile = pick_profile_sale_image(self.list_sale_images(sale_id=int(sale_id)))
+                    if profile and profile.get("id") is not None:
+                        eid = int(profile["id"])
+                    else:
+                        eid = None
+                except CTSellerError:
+                    eid = None if eid is not None else eid
+                time.sleep(1.0)
+        raise CTSellerError(
+            _friendly_cover_upload_error(last_exc or CTSellerError("CT Seller cover upload failed")),
+            status_code=getattr(last_exc, "status_code", None),
+        ) from last_exc
 
     def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.access_token:
@@ -581,9 +615,38 @@ def resolve_lot_reserve_price(lot: Any, sale: Any | None = None) -> float | None
         return None
 
 
-def sale_cover_data_url(raw: bytes) -> str:
+def encode_sale_cover_jpeg(
+    raw: bytes,
+    *,
+    max_edge: int = COVER_MAX_EDGE,
+    quality: int = COVER_JPEG_QUALITY,
+) -> bytes:
+    """Decode any catalog still (including HEIC) to a small JPEG. Never send raw originals."""
+    img = Image.open(io.BytesIO(raw))
+    img = ImageOps.exif_transpose(img)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    width, height = img.size
+    edge = max(width, height)
+    cap = max(320, int(max_edge))
+    if edge > cap:
+        scale = cap / float(edge)
+        img = img.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=max(40, min(int(quality), 92)), optimize=True)
+    return buf.getvalue()
+
+
+def sale_cover_data_url(raw: bytes, *, max_edge: int = COVER_MAX_EDGE) -> str:
     """JPEG data URL — same encoding the CT Seller sale-cover crop editor submits."""
-    return f"data:image/jpeg;base64,{_image_to_base64(raw, mime='image/jpeg')}"
+    try:
+        jpeg = encode_sale_cover_jpeg(raw, max_edge=max_edge)
+    except Exception as exc:  # noqa: BLE001
+        raise CTSellerError("One cover photo could not be read as an image") from exc
+    return f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
 
 
 def pick_profile_sale_image(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
