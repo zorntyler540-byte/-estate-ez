@@ -10,12 +10,23 @@ import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 type DraftPhotoStripProps = {
   uris: string[];
   size?: "md" | "lg";
+  /** Decode at most this many thumbs (Queue). Remaining URIs still open in Review. */
+  maxVisible?: number;
+  cachePolicy?: "none" | "disk" | "memory" | "memory-disk";
   onPressPhoto?: (uri: string, index: number) => void;
   onDeletePhoto?: (uri: string, index: number) => void;
 };
 
-export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto }: DraftPhotoStripProps) {
+export function DraftPhotoStrip({
+  uris,
+  size = "md",
+  maxVisible,
+  cachePolicy,
+  onPressPhoto,
+  onDeletePhoto
+}: DraftPhotoStripProps) {
   const thumbSize = size === "lg" ? 96 : 72;
+  const shown = maxVisible != null && maxVisible >= 0 ? uris.slice(0, maxVisible) : uris;
 
   if (!uris.length) {
     return (
@@ -27,15 +38,20 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
 
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-      {uris.map((uri, index) => (
-        <View key={uri} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
+      {shown.map((uri, index) => (
+        <View key={`${index}:${uri}`} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
           <Pressable style={styles.thumbPress} onPress={() => onPressPhoto?.(uri, index)}>
             {isVideoUri(uri) ? (
               <View style={[styles.thumbImage, styles.videoThumb]}>
                 <Text style={styles.videoThumbMark}>▶</Text>
               </View>
             ) : (
-              <StableUriImage uri={uri} style={styles.thumbImage} recyclingKey={uri} />
+              <StableUriImage
+                uri={uri}
+                style={styles.thumbImage}
+                recyclingKey={uri}
+                cachePolicy={cachePolicy}
+              />
             )}
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{isVideoUri(uri) ? "Vid" : String(index + 1)}</Text>

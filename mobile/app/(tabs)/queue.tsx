@@ -22,6 +22,7 @@ import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
 import { queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
+import { mapInBatches, QUEUE_PHOTO_LOAD_BATCH, QUEUE_VISIBLE_THUMBS } from "@/lib/queue/loadQueueRows";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
 
@@ -72,16 +73,20 @@ export default function QueueScreen() {
   const focusedRef = useRef(false);
 
   const refresh = useCallback(async (opts?: { sales?: boolean }) => {
-    if (opts?.sales !== false) await refreshSales();
-    const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
-    const enriched = await Promise.all(
-      drafts.map(async (draft) => {
+    try {
+      if (opts?.sales !== false) await refreshSales();
+      const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
+      // Small batches — Promise.all on every draft opened SQLite + decoded every
+      // JPEG at once and killed a field phone when Queue was opened.
+      const enriched = await mapInBatches(drafts, QUEUE_PHOTO_LOAD_BATCH, async (draft) => {
         const photos = await listDraftPhotos(draft.id);
-        return { ...draft, photoUris: photos.map((p) => p.file_uri) };
-      })
-    );
-    setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
-    setOnline(net.isConnected ?? false);
+        return { ...draft, photoUris: photos.map((p) => p.file_uri).filter(Boolean) };
+      });
+      setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
+      setOnline(net.isConnected ?? false);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not load Queue");
+    }
   }, [refreshSales]);
 
   useFocusEffect(
@@ -374,7 +379,12 @@ export default function QueueScreen() {
               <View style={styles.cardTop}>
                 {hero ? (
                   <Pressable onPress={() => openPreview(item.photoUris, 0)}>
-                    <StableUriImage uri={hero} style={styles.hero} recyclingKey={item.id} />
+                    <StableUriImage
+                      uri={hero}
+                      style={styles.hero}
+                      recyclingKey={item.id}
+                      cachePolicy="disk"
+                    />
                   </Pressable>
                 ) : (
                   <View style={[styles.hero, styles.heroEmpty]}>
@@ -409,6 +419,8 @@ export default function QueueScreen() {
                   <DraftPhotoStrip
                     uris={item.photoUris}
                     size="md"
+                    maxVisible={QUEUE_VISIBLE_THUMBS}
+                    cachePolicy="disk"
                     onPressPhoto={(_uri, index) => openPreview(item.photoUris, index)}
                   />
                   {item.photoUris.length > 1 ? (
