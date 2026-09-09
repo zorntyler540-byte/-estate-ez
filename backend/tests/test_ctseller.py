@@ -329,8 +329,17 @@ def _cover_jpeg() -> bytes:
     return buf.getvalue()
 
 
-def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None:
-    from app.services.ctseller import sale_cover_data_url
+def _assert_raw_jpeg_b64(value: str) -> None:
+    import base64
+
+    assert isinstance(value, str)
+    assert not value.startswith("data:")
+    raw = base64.b64decode(value, validate=True)
+    assert raw[:2] == b"\xff\xd8"
+
+
+def test_upsert_sale_cover_photos_posts_raw_base64_and_updates_existing() -> None:
+    from app.services.ctseller import sale_cover_base64
 
     client = CTSellerClient(access_token="tok")
     posted: list[tuple[str, dict]] = []
@@ -362,13 +371,14 @@ def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None
     row = posted[0][1]["data"][0]
     assert row["saleid"] == 321
     assert row["name"] == "profile"
-    assert row["image"].startswith("data:image/jpeg;base64,")
+    _assert_raw_jpeg_b64(row["image"])
     assert len(row["itemimageurl"]) == 3
-    assert all(u.startswith("data:image/jpeg;base64,") for u in row["itemimageurl"])
+    for url in row["itemimageurl"]:
+        _assert_raw_jpeg_b64(url)
     assert putted[0][0] == "/sale/image/update"
     assert putted[0][1]["data"][0]["id"] == 11
-    encoded = sale_cover_data_url(tiny)
-    assert encoded.startswith("data:image/jpeg;base64,")
+    encoded = sale_cover_base64(tiny)
+    _assert_raw_jpeg_b64(encoded)
 
 
 def test_upsert_sale_cover_photos_retries_seller_server_problem() -> None:
@@ -429,14 +439,29 @@ def test_upsert_sale_cover_photos_refreshes_stale_profile_id() -> None:
     assert result["data"][0]["id"] == 22
 
 
-def test_sale_cover_data_url_rejects_garbage() -> None:
-    from app.services.ctseller import CTSellerError, sale_cover_data_url
+def test_sale_cover_base64_rejects_garbage() -> None:
+    from app.services.ctseller import CTSellerError, sale_cover_base64
 
     try:
-        sale_cover_data_url(b"not-an-image")
+        sale_cover_base64(b"not-an-image")
         raise AssertionError("expected CTSellerError")
     except CTSellerError as exc:
         assert "could not be read" in str(exc).lower()
+
+
+def test_encode_sale_cover_jpeg_center_crops_to_square() -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.ctseller import encode_sale_cover_jpeg
+
+    buf = BytesIO()
+    Image.new("RGB", (200, 100), color=(10, 20, 30)).save(buf, format="JPEG", quality=85)
+    jpeg = encode_sale_cover_jpeg(buf.getvalue(), max_edge=80)
+    out = Image.open(BytesIO(jpeg))
+    assert out.size[0] == out.size[1]
+    assert max(out.size) <= 80
 
 
 def test_list_sale_images_reads_data_list() -> None:

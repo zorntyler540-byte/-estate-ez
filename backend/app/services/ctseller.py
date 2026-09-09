@@ -36,7 +36,7 @@ SELLER_API = "https://seller.ctbids.com/services/api/v1"
 DEFAULT_TIMEOUT = 60.0
 IMAGE_MAX_EDGE = 1600
 IMAGE_JPEG_QUALITY = 85
-# Sale covers post 4 data-URLs in one JSON body — keep them smaller than lot photos.
+# Sale covers post 4 raw-base64 JPEGs in one JSON body — keep them smaller than lot photos.
 COVER_MAX_EDGE = 1200
 COVER_RETRY_EDGE = 880
 COVER_JPEG_QUALITY = 78
@@ -441,8 +441,10 @@ class CTSellerClient:
     ) -> dict[str, Any]:
         """Write the 4 sale cover photos the SPA requires before items can move to Ready.
 
-        Matches seller.ctbids.com ``submitImage``: primary on ``image``, three secondaries on
-        ``itemimageurl``. New covers POST ``/sale/image/add``; existing profile rows PUT update.
+        Matches seller.ctbids.com ``submitImage`` / ``setImage``: primary on ``image``,
+        three secondaries on ``itemimageurl``, each raw JPEG base64 with no ``data:``
+        prefix (the crop editor FileReader strips ``data:...;base64,``). New covers
+        POST ``/sale/image/add``; existing profile rows PUT update.
         """
         if len(secondary_jpegs) != 3:
             raise CTSellerError("CT Seller sale covers need exactly 3 secondary photos")
@@ -452,8 +454,8 @@ class CTSellerClient:
                 "saleid": int(sale_id),
                 "name": "profile",
                 "type": "image",
-                "image": sale_cover_data_url(primary_jpeg, max_edge=edge),
-                "itemimageurl": [sale_cover_data_url(raw, max_edge=edge) for raw in secondary_jpegs],
+                "image": sale_cover_base64(primary_jpeg, max_edge=edge),
+                "itemimageurl": [sale_cover_base64(raw, max_edge=edge) for raw in secondary_jpegs],
             }
             if eid is not None:
                 row["id"] = int(eid)
@@ -620,12 +622,25 @@ def encode_sale_cover_jpeg(
     *,
     max_edge: int = COVER_MAX_EDGE,
     quality: int = COVER_JPEG_QUALITY,
+    square: bool = True,
 ) -> bytes:
-    """Decode any catalog still (including HEIC) to a small JPEG. Never send raw originals."""
+    """Decode any catalog still (including HEIC) to a small JPEG. Never send raw originals.
+
+    The seller.ctbids.com crop editor is 1:1 for the profile cover and the three
+    secondary slots, so we center-crop to square unless ``square`` is false.
+    """
     img = Image.open(io.BytesIO(raw))
     img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
         img = img.convert("RGB")
+    if square:
+        width, height = img.size
+        side = min(width, height)
+        if side < 1:
+            raise ValueError("cover photo has no pixels")
+        left = (width - side) // 2
+        top = (height - side) // 2
+        img = img.crop((left, top, left + side, top + side))
     width, height = img.size
     edge = max(width, height)
     cap = max(320, int(max_edge))
@@ -640,13 +655,13 @@ def encode_sale_cover_jpeg(
     return buf.getvalue()
 
 
-def sale_cover_data_url(raw: bytes, *, max_edge: int = COVER_MAX_EDGE) -> str:
-    """JPEG data URL — same encoding the CT Seller sale-cover crop editor submits."""
+def sale_cover_base64(raw: bytes, *, max_edge: int = COVER_MAX_EDGE) -> str:
+    """Raw JPEG base64 — same encoding seller.ctbids.com ``setImage`` submits."""
     try:
         jpeg = encode_sale_cover_jpeg(raw, max_edge=max_edge)
     except Exception as exc:  # noqa: BLE001
         raise CTSellerError("One cover photo could not be read as an image") from exc
-    return f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+    return base64.b64encode(jpeg).decode("ascii")
 
 
 def pick_profile_sale_image(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
