@@ -30,6 +30,7 @@ const transientCases: Array<{ msg: string; want: boolean }> = [
   { msg: "Website was busy — tap Sync to confirm. Do not Resend if the lot is already online.", want: true },
   { msg: "Request timed out — check Wi‑Fi and try Sync again.", want: true },
   { msg: "QueuePool overflow", want: true },
+  { msg: "upstream error", want: true },
   { msg: "On server — check the website", want: true },
   { msg: "Photo file is missing on this phone.", want: false },
   { msg: "No photos in lot", want: false }

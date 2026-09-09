@@ -91,16 +91,21 @@ export default function LotDetailScreen() {
     // Keep the details page on screen. A full spinner swap is the ~1s flicker.
     if (!hadLot) setLoading(true);
     try {
-      const [lotRow, photoRows, videoRows] = await Promise.all([
-        getLot(token, id),
-        listLotPhotos(token, id),
-        listLotVideos(token, id).catch(() => [] as LotVideo[])
-      ]);
+      // Lot JSON first — photos used to ride in Promise.all, so one Railway
+      // ``upstream error`` on /photos blanked the whole page.
+      const lotRow = await getLot(token, id);
       lastLoadAtRef.current = Date.now();
       setLot((prev) => (prev && lotDetailSnapshot(prev) === lotDetailSnapshot(lotRow) ? prev : lotRow));
-      setPhotos((prev) => (mediaIdsKey(prev) === mediaIdsKey(photoRows) ? prev : photoRows));
-      setVideos((prev) => (mediaIdsKey(prev) === mediaIdsKey(videoRows) ? prev : videoRows));
       setError("");
+      setLoading(false);
+      const [photoRows, videoRows] = await Promise.all([
+        listLotPhotos(token, id).catch(() => null),
+        listLotVideos(token, id).catch(() => [] as LotVideo[])
+      ]);
+      if (photoRows) {
+        setPhotos((prev) => (mediaIdsKey(prev) === mediaIdsKey(photoRows) ? prev : photoRows));
+      }
+      setVideos((prev) => (mediaIdsKey(prev) === mediaIdsKey(videoRows) ? prev : videoRows));
     } catch (e) {
       if (!lotRef.current) {
         setError(e instanceof Error ? e.message : "Could not load lot");
@@ -132,7 +137,12 @@ export default function LotDetailScreen() {
         {loading && !lot ? (
           <ActivityIndicator style={{ marginTop: 32 }} color="#ff4d1a" />
         ) : error && !lot ? (
-          <Text style={styles.error}>{error}</Text>
+          <>
+            <Text style={styles.error}>{error}</Text>
+            <Pressable style={styles.addPhotosBtn} onPress={() => void load()}>
+              <Text style={styles.addPhotosBtnText}>Try again</Text>
+            </Pressable>
+          </>
         ) : lot ? (
           <>
             <View style={styles.heroWrap}>
