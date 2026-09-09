@@ -512,22 +512,26 @@ def test_cover_picker_follows_ctseller_auction_not_website_sale(tmp_path) -> Non
         assert website_b.status_code == 200, website_b.text
         assert {row["photo_id"] for row in website_b.json()["candidates"]} == {photo_b.id}
 
+        # Picker stays on the open website catalog even if a CT Seller auction is selected.
         auction = client.get("/sales/sale-b/cover-candidates?ctseller_sale_id=47921")
         assert auction.status_code == 200, auction.text
         body = auction.json()
-        assert {row["photo_id"] for row in body["candidates"]} == set(a_ids)
-        assert body["sale_id"] == "sale-a"
-        assert body["catalog_sale_name"] == "zorn mags"
-        assert body["ctseller_sale_id"] == 47921
+        assert {row["photo_id"] for row in body["candidates"]} == {photo_b.id}
+        assert body["sale_id"] == "sale-b"
+        assert body["catalog_sale_name"] == "sams guns"
 
+        mixed_ids = [*a_ids, photo_b.id]
         saved = client.put(
             "/sales/sale-b/cover-photos",
-            json={"photo_ids": a_ids, "ctseller_sale_id": 47921},
+            json={"photo_ids": mixed_ids, "ctseller_sale_id": 47921},
         )
         assert saved.status_code == 200, saved.text
         assert saved.json()["sale_id"] == "sale-a"
-        assert saved.json()["selected_photo_ids"] == a_ids
+        assert saved.json()["selected_photo_ids"] == mixed_ids
         assert saved.json()["catalog_sale_name"] == "zorn mags"
+        other = next(slot for slot in saved.json()["slots"] if slot["photo_id"] == photo_b.id)
+        assert other["from_other_sale"] is True
+        assert other["sale_name"] == "sams guns"
 
         via_website_b = client.get("/sales/sale-b/cover-photos")
         assert via_website_b.status_code == 200
@@ -536,7 +540,7 @@ def test_cover_picker_follows_ctseller_auction_not_website_sale(tmp_path) -> Non
         via_auction = client.get("/sales/sale-b/cover-photos?ctseller_sale_id=47921")
         assert via_auction.status_code == 200, via_auction.text
         assert via_auction.json()["sale_id"] == "sale-a"
-        assert via_auction.json()["selected_photo_ids"] == a_ids
+        assert via_auction.json()["selected_photo_ids"] == mixed_ids
         assert via_auction.json()["catalog_sale_name"] == "zorn mags"
     finally:
         app.dependency_overrides.clear()

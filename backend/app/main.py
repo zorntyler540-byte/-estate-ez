@@ -354,7 +354,7 @@ def _cover_catalog_sale(
     current: User,
     db: Session,
 ) -> Sale:
-    """Covers follow the CT Seller auction dropdown, not the open website catalog."""
+    """Where the 4 covers are stored/pushed — the catalog linked to the CT Seller auction."""
     if ctseller_sale_id is not None:
         mapped = _sale_mapped_to_ctseller(db, current.account_id, int(ctseller_sale_id))
         if mapped:
@@ -1727,16 +1727,11 @@ def get_sale_cover_photos(
 @app.get("/sales/{sale_id}/cover-candidates", response_model=SaleCoverCandidatesOut)
 def get_sale_cover_candidates(
     sale_id: str,
-    ctseller_sale_id: int | None = Query(
-        None, description="CT Seller auction from the dashboard dropdown — picker follows this."
-    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverCandidatesOut:
-    """Photos from the catalog linked to the CT Seller auction, not the open website sale."""
-    sale = _cover_catalog_sale(
-        sale_id=sale_id, ctseller_sale_id=ctseller_sale_id, current=current, db=db
-    )
+    """Photos from the open website catalog. Saved covers still follow the CT Seller auction."""
+    sale = _sale_for_user(sale_id, current, db)
     lots, photos = load_sale_lots_and_photos(db, sale)
     lots_by_id = {lot.id: lot for lot in lots}
     sales_by_id = {sale.id: sale}
