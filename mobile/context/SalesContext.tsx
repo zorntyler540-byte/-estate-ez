@@ -1,15 +1,17 @@
-import { useFocusEffect } from "expo-router";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
 
 import { useAuth } from "@/context/AuthContext";
 import { listSales } from "@/lib/api";
+import { saleNameNeedsUpdate } from "@/lib/lotsReload";
 import { backfillDraftSaleNames } from "@/lib/queue/db";
 import type { Sale } from "@/lib/types";
 
@@ -26,6 +28,8 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
+  const selectedSaleNameRef = useRef(selectedSaleName);
+  selectedSaleNameRef.current = selectedSaleName;
 
   const refreshSales = useCallback(async () => {
     if (!token) {
@@ -43,7 +47,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
 
       if (selectedSaleId) {
         const current = open.find((s) => s.id === selectedSaleId);
-        if (current && current.name !== selectedSaleName) {
+        if (current && saleNameNeedsUpdate(selectedSaleNameRef.current, current.name)) {
           await setSelectedSale(current.id, current.name);
         }
       }
@@ -52,13 +56,14 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
+  }, [token, selectedSaleId, setSelectedSale]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void refreshSales();
-    }, [refreshSales])
-  );
+  // Load once per token/sale — do not use useFocusEffect here. That hook re-ran on every
+  // screen focus (including the add-photos camera) and, when the stored sale name differed
+  // from the API, retriggered itself about once per fetch (~1s flicker on some phones).
+  useEffect(() => {
+    void refreshSales();
+  }, [refreshSales]);
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>();

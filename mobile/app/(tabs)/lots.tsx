@@ -1,6 +1,6 @@
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -14,6 +14,12 @@ import {
 
 import { useAuth } from "@/context/AuthContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import {
+  coverUrlsEqual,
+  lotListSignature,
+  shouldRefreshCoverUrls,
+  shouldSkipLotsFocusReload
+} from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
 
 function lotSubtitle(lot: Lot): string {
@@ -32,6 +38,12 @@ export default function LotsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const lastLoadAtRef = useRef(0);
+  const lastSignatureRef = useRef("");
+  const lotsLenRef = useRef(0);
+  const coverCountRef = useRef(0);
+  lotsLenRef.current = lots.length;
+  coverCountRef.current = Object.keys(coverUrls).length;
 
   const load = useCallback(
     async (mode: "full" | "pull" = "full") => {
@@ -40,10 +52,13 @@ export default function LotsScreen() {
         setCoverUrls({});
         setLoading(false);
         setRefreshing(false);
+        lastSignatureRef.current = "";
+        lastLoadAtRef.current = 0;
         return;
       }
-      if (mode === "full") setLoading(true);
-      else setRefreshing(true);
+      // Keep the existing grid on screen — a full spinner flash is what looks like a refresh bug.
+      if (mode === "full" && lotsLenRef.current === 0) setLoading(true);
+      else if (mode === "pull") setRefreshing(true);
       setError("");
       try {
         // Show the list immediately — do not wait on cover signing.
@@ -52,11 +67,23 @@ export default function LotsScreen() {
           limit: 500,
           listingChannel: "ctseller"
         });
+        const nextSig = lotListSignature(rows);
+        const refreshCovers = shouldRefreshCoverUrls(
+          lastSignatureRef.current,
+          nextSig,
+          coverCountRef.current
+        );
+        lastSignatureRef.current = nextSig;
+        lastLoadAtRef.current = Date.now();
         setLots(rows);
         setLoading(false);
         setRefreshing(false);
+        if (!refreshCovers) return;
         void listSaleLotCoverUrls(token, selectedSaleId, 160)
-          .then((covers) => setCoverUrls(covers.urls ?? {}))
+          .then((covers) => {
+            const next = covers.urls ?? {};
+            setCoverUrls((prev) => (coverUrlsEqual(prev, next) ? prev : next));
+          })
           .catch(() => setCoverUrls({}));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load lots");
@@ -69,6 +96,9 @@ export default function LotsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), lotsLenRef.current > 0)) {
+        return;
+      }
       void load("full");
     }, [load])
   );
@@ -151,7 +181,7 @@ export default function LotsScreen() {
                         contentFit="cover"
                         cachePolicy="memory-disk"
                         recyclingKey={item.id}
-                        transition={80}
+                        transition={0}
                       />
                     ) : (
                       <View style={styles.thumbEmpty}>

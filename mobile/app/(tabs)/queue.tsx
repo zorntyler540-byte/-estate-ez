@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from "expo-router";
 import { Image } from "expo-image";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -43,6 +43,7 @@ export default function QueueScreen() {
   const [message, setMessage] = useState("");
   const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const focusedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     await refreshSales();
@@ -59,9 +60,23 @@ export default function QueueScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      focusedRef.current = true;
       void refresh();
-    }, [refresh, refreshKey])
+      return () => {
+        focusedRef.current = false;
+      };
+    }, [refresh])
   );
+
+  // Debounce list refresh while this tab is visible. Do not remount Queue (or the
+  // camera sitting over Lots) on every sync progress tick.
+  useEffect(() => {
+    if (!focusedRef.current || refreshKey === 0) return;
+    const timer = setTimeout(() => {
+      if (focusedRef.current) void refresh();
+    }, 750);
+    return () => clearTimeout(timer);
+  }, [refreshKey, refresh]);
 
   async function queueDraft(id: string) {
     await setDraftStatus(id, "queued", null);

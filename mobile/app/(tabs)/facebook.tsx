@@ -1,6 +1,6 @@
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +17,12 @@ import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import {
+  coverUrlsEqual,
+  lotListSignature,
+  shouldRefreshCoverUrls,
+  shouldSkipLotsFocusReload
+} from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
 
 function facebookListingText(lot: Lot): string {
@@ -48,6 +54,12 @@ export default function FacebookScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const lastLoadAtRef = useRef(0);
+  const lastSignatureRef = useRef("");
+  const lotsLenRef = useRef(0);
+  const coverCountRef = useRef(0);
+  lotsLenRef.current = lots.length;
+  coverCountRef.current = Object.keys(coverUrls).length;
 
   const load = useCallback(
     async (mode: "full" | "pull" = "full") => {
@@ -56,10 +68,12 @@ export default function FacebookScreen() {
         setCoverUrls({});
         setLoading(false);
         setRefreshing(false);
+        lastSignatureRef.current = "";
+        lastLoadAtRef.current = 0;
         return;
       }
-      if (mode === "full") setLoading(true);
-      else setRefreshing(true);
+      if (mode === "full" && lotsLenRef.current === 0) setLoading(true);
+      else if (mode === "pull") setRefreshing(true);
       setError("");
       try {
         const rows = await listLots(token, selectedSaleId, {
@@ -67,12 +81,23 @@ export default function FacebookScreen() {
           limit: 500,
           listingChannel: "facebook"
         });
+        const nextSig = lotListSignature(rows);
+        const refreshCovers = shouldRefreshCoverUrls(
+          lastSignatureRef.current,
+          nextSig,
+          coverCountRef.current
+        );
+        lastSignatureRef.current = nextSig;
+        lastLoadAtRef.current = Date.now();
         setLots(rows);
-        try {
-          const covers = await listSaleLotCoverUrls(token, selectedSaleId, 160);
-          setCoverUrls(covers.urls || {});
-        } catch {
-          setCoverUrls({});
+        if (refreshCovers) {
+          try {
+            const covers = await listSaleLotCoverUrls(token, selectedSaleId, 160);
+            const next = covers.urls || {};
+            setCoverUrls((prev) => (coverUrlsEqual(prev, next) ? prev : next));
+          } catch {
+            setCoverUrls({});
+          }
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load Facebook items");
@@ -86,6 +111,9 @@ export default function FacebookScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), lotsLenRef.current > 0)) {
+        return;
+      }
       void load("full");
     }, [load])
   );

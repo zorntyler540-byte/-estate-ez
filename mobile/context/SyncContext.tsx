@@ -21,14 +21,21 @@ export type SyncResult = {
   reconciled: number;
 };
 
-type SyncContextValue = {
+type SyncStateValue = {
   syncing: boolean;
   lastMessage: string | null;
   refreshKey: number;
-  syncNow: () => Promise<SyncResult | null>;
 };
 
-const SyncContext = createContext<SyncContextValue | null>(null);
+type SyncActionsValue = {
+  syncNow: () => Promise<SyncResult | null>;
+  setSyncPaused: (paused: boolean) => void;
+};
+
+type SyncContextValue = SyncStateValue & SyncActionsValue;
+
+const SyncStateContext = createContext<SyncStateValue | null>(null);
+const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
   if (result.uploaded === 0 && result.failed === 0) {
@@ -51,8 +58,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   const syncInProgressRef = useRef(false);
   const syncAgainRef = useRef(false);
+  const syncPausedRef = useRef(false);
   const wasConnectedRef = useRef<boolean | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+  const setSyncPaused = useCallback((paused: boolean) => {
+    syncPausedRef.current = paused;
+  }, []);
 
   const syncNow = useCallback(async (): Promise<SyncResult | null> => {
     if (!token) return null;
@@ -98,13 +110,18 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, [token]);
 
+  const tryAutoSync = useCallback(() => {
+    if (syncPausedRef.current) return;
+    void syncNow();
+  }, [syncNow]);
+
   useEffect(() => {
     if (!token) return;
 
     void NetInfo.fetch().then((state) => {
       wasConnectedRef.current = state.isConnected ?? false;
       if (wasConnectedRef.current) {
-        void syncNow();
+        tryAutoSync();
       }
     });
 
@@ -114,7 +131,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       wasConnectedRef.current = connected;
 
       if (connected && wasConnected === false) {
-        void syncNow();
+        tryAutoSync();
       }
     });
 
@@ -122,7 +139,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
       if (prev.match(/inactive|background/) && nextState === "active") {
-        void syncNow();
+        tryAutoSync();
       }
     });
 
@@ -130,18 +147,33 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       netSub();
       appSub.remove();
     };
-  }, [token, syncNow]);
+  }, [token, tryAutoSync]);
 
-  const value = useMemo(
-    () => ({ syncing, lastMessage, refreshKey, syncNow }),
-    [syncing, lastMessage, refreshKey, syncNow]
+  const stateValue = useMemo(
+    () => ({ syncing, lastMessage, refreshKey }),
+    [syncing, lastMessage, refreshKey]
+  );
+  const actionsValue = useMemo(
+    () => ({ syncNow, setSyncPaused }),
+    [syncNow, setSyncPaused]
   );
 
-  return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
+  return (
+    <SyncActionsContext.Provider value={actionsValue}>
+      <SyncStateContext.Provider value={stateValue}>{children}</SyncStateContext.Provider>
+    </SyncActionsContext.Provider>
+  );
+}
+
+export function useSyncActions(): SyncActionsValue {
+  const ctx = useContext(SyncActionsContext);
+  if (!ctx) throw new Error("useSyncActions must be used within SyncProvider");
+  return ctx;
 }
 
 export function useSync(): SyncContextValue {
-  const ctx = useContext(SyncContext);
-  if (!ctx) throw new Error("useSync must be used within SyncProvider");
-  return ctx;
+  const actions = useContext(SyncActionsContext);
+  const state = useContext(SyncStateContext);
+  if (!actions || !state) throw new Error("useSync must be used within SyncProvider");
+  return { ...state, ...actions };
 }

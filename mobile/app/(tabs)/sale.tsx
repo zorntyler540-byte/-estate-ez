@@ -12,10 +12,11 @@ import {
 
 import { useAuth } from "@/context/AuthContext";
 import { listSales } from "@/lib/api";
+import { saleNameNeedsUpdate } from "@/lib/lotsReload";
 import type { Sale } from "@/lib/types";
 
 export default function SaleScreen() {
-  const { token, selectedSaleId, setSelectedSale } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,7 +30,7 @@ export default function SaleScreen() {
       setSales(rows.filter((s) => !s.closed_at));
       // Backfill/refresh the stored sale name for installs that saved only the id.
       const current = selectedSaleId ? rows.find((s) => s.id === selectedSaleId) : undefined;
-      if (current) {
+      if (current && saleNameNeedsUpdate(selectedSaleName, current.name)) {
         void setSelectedSale(current.id, current.name);
       }
     } catch (e) {
@@ -37,7 +38,7 @@ export default function SaleScreen() {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, setSelectedSale]);
+  }, [token, selectedSaleId, selectedSaleName, setSelectedSale]);
 
   useFocusEffect(
     useCallback(() => {

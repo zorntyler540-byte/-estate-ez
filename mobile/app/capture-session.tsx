@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions, type FocusMode } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,7 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { useAuth } from "@/context/AuthContext";
-import { useSync } from "@/context/SyncContext";
+import { useSyncActions } from "@/context/SyncContext";
 import {
   CAMERA_ASPECT_PRESETS,
   aspectPresetById,
@@ -135,7 +135,7 @@ export default function CaptureSessionScreen() {
   );
   const isAppendMode = Boolean(appendLotId);
   const { token, selectedSaleId, selectedSaleName } = useAuth();
-  const { syncNow } = useSync();
+  const { syncNow, setSyncPaused } = useSyncActions();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const landscape = windowWidth > windowHeight;
@@ -177,6 +177,14 @@ export default function CaptureSessionScreen() {
     zoomRef.current = clamped;
     setZoom(clamped);
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      // Background sync progress used to re-render this screen (~1s) and restart CameraView.
+      setSyncPaused(true);
+      return () => setSyncPaused(false);
+    }, [setSyncPaused])
+  );
 
   function handleFocusTap(e: GestureResponderEvent) {
     const { locationX, locationY } = e.nativeEvent;
