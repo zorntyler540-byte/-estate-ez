@@ -1,6 +1,5 @@
-import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -12,8 +11,17 @@ import {
   View
 } from "react-native";
 
+import { StableUriImage } from "@/components/StableUriImage";
 import { useAuth } from "@/context/AuthContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import {
+  lotIdsWithChangedPhotoCount,
+  lotListSignature,
+  lotRowsUnchanged,
+  mergeCoverUrls,
+  shouldRefreshCoverUrls,
+  shouldSkipLotsFocusReload
+} from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
 
 function lotSubtitle(lot: Lot): string {
@@ -32,6 +40,12 @@ export default function LotsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const lastLoadAtRef = useRef(0);
+  const lastSignatureRef = useRef("");
+  const lotsLenRef = useRef(0);
+  const coverCountRef = useRef(0);
+  lotsLenRef.current = lots.length;
+  coverCountRef.current = Object.keys(coverUrls).length;
 
   const load = useCallback(
     async (mode: "full" | "pull" = "full") => {
@@ -40,10 +54,13 @@ export default function LotsScreen() {
         setCoverUrls({});
         setLoading(false);
         setRefreshing(false);
+        lastSignatureRef.current = "";
+        lastLoadAtRef.current = 0;
         return;
       }
-      if (mode === "full") setLoading(true);
-      else setRefreshing(true);
+      // Keep the existing grid on screen — a full spinner flash is what looks like a refresh bug.
+      if (mode === "full" && lotsLenRef.current === 0) setLoading(true);
+      else if (mode === "pull") setRefreshing(true);
       setError("");
       try {
         // Show the list immediately — do not wait on cover signing.
@@ -52,12 +69,24 @@ export default function LotsScreen() {
           limit: 500,
           listingChannel: "ctseller"
         });
-        setLots(rows);
+        const prevSig = lastSignatureRef.current;
+        const nextSig = lotListSignature(rows);
+        const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
+        const replaceCoverIds = lotIdsWithChangedPhotoCount(prevSig, nextSig);
+        lastSignatureRef.current = nextSig;
+        lastLoadAtRef.current = Date.now();
+        setLots((prev) => (lotRowsUnchanged(prev, rows) ? prev : rows));
         setLoading(false);
         setRefreshing(false);
+        if (!refreshCovers) return;
         void listSaleLotCoverUrls(token, selectedSaleId, 160)
-          .then((covers) => setCoverUrls(covers.urls ?? {}))
-          .catch(() => setCoverUrls({}));
+          .then((covers) => {
+            const next = covers.urls ?? {};
+            setCoverUrls((prev) => mergeCoverUrls(prev, next, replaceCoverIds));
+          })
+          .catch(() => {
+            /* keep last thumbs — wiping them is the flash */
+          });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load lots");
         setLoading(false);
@@ -69,6 +98,9 @@ export default function LotsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), lotsLenRef.current > 0)) {
+        return;
+      }
       void load("full");
     }, [load])
   );
@@ -127,7 +159,7 @@ export default function LotsScreen() {
           initialNumToRender={10}
           maxToRenderPerBatch={6}
           windowSize={5}
-          removeClippedSubviews
+          removeClippedSubviews={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#ff4d1a" />
           }
@@ -145,14 +177,7 @@ export default function LotsScreen() {
                 <Pressable style={styles.rowMain} onPress={() => router.push(`/lot/${item.id}`)}>
                   <View style={styles.thumbWrap}>
                     {signed ? (
-                      <Image
-                        source={{ uri: signed }}
-                        style={styles.thumb}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
-                        recyclingKey={item.id}
-                        transition={80}
-                      />
+                      <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
                     ) : (
                       <View style={styles.thumbEmpty}>
                         <Text style={styles.thumbEmptyText}>

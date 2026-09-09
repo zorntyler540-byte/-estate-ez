@@ -1,6 +1,5 @@
-import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,10 +12,19 @@ import {
   View
 } from "react-native";
 
+import { StableUriImage } from "@/components/StableUriImage";
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import {
+  lotIdsWithChangedPhotoCount,
+  lotListSignature,
+  lotRowsUnchanged,
+  mergeCoverUrls,
+  shouldRefreshCoverUrls,
+  shouldSkipLotsFocusReload
+} from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
 
 function facebookListingText(lot: Lot): string {
@@ -48,6 +56,12 @@ export default function FacebookScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const lastLoadAtRef = useRef(0);
+  const lastSignatureRef = useRef("");
+  const lotsLenRef = useRef(0);
+  const coverCountRef = useRef(0);
+  lotsLenRef.current = lots.length;
+  coverCountRef.current = Object.keys(coverUrls).length;
 
   const load = useCallback(
     async (mode: "full" | "pull" = "full") => {
@@ -56,10 +70,12 @@ export default function FacebookScreen() {
         setCoverUrls({});
         setLoading(false);
         setRefreshing(false);
+        lastSignatureRef.current = "";
+        lastLoadAtRef.current = 0;
         return;
       }
-      if (mode === "full") setLoading(true);
-      else setRefreshing(true);
+      if (mode === "full" && lotsLenRef.current === 0) setLoading(true);
+      else if (mode === "pull") setRefreshing(true);
       setError("");
       try {
         const rows = await listLots(token, selectedSaleId, {
@@ -67,12 +83,21 @@ export default function FacebookScreen() {
           limit: 500,
           listingChannel: "facebook"
         });
-        setLots(rows);
-        try {
-          const covers = await listSaleLotCoverUrls(token, selectedSaleId, 160);
-          setCoverUrls(covers.urls || {});
-        } catch {
-          setCoverUrls({});
+        const prevSig = lastSignatureRef.current;
+        const nextSig = lotListSignature(rows);
+        const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
+        const replaceCoverIds = lotIdsWithChangedPhotoCount(prevSig, nextSig);
+        lastSignatureRef.current = nextSig;
+        lastLoadAtRef.current = Date.now();
+        setLots((prev) => (lotRowsUnchanged(prev, rows) ? prev : rows));
+        if (refreshCovers) {
+          try {
+            const covers = await listSaleLotCoverUrls(token, selectedSaleId, 160);
+            const next = covers.urls || {};
+            setCoverUrls((prev) => mergeCoverUrls(prev, next, replaceCoverIds));
+          } catch {
+            /* keep last thumbs */
+          }
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load Facebook items");
@@ -86,6 +111,9 @@ export default function FacebookScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), lotsLenRef.current > 0)) {
+        return;
+      }
       void load("full");
     }, [load])
   );
@@ -149,7 +177,7 @@ export default function FacebookScreen() {
                 <View style={styles.cardTop}>
                   <View style={styles.thumbWrap}>
                     {signed ? (
-                      <Image source={{ uri: signed }} style={styles.thumb} contentFit="cover" />
+                      <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
                     ) : (
                       <View style={styles.thumbEmpty}>
                         <Text style={styles.thumbEmptyText}>No{"\n"}photo</Text>

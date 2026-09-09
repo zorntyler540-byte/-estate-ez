@@ -1,19 +1,29 @@
 import { Image } from "expo-image";
-import { Stack, router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { Stack, router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  View
+  View,
+  type StyleProp,
+  type ImageStyle
 } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
 import * as WebBrowser from "expo-web-browser";
 
-import { getLot, getLotVideoPlayUrl, listLotPhotos, listLotVideos, lotPhotoThumbnailSource, lotThumbnailSource } from "@/lib/api";
+import {
+  getLot,
+  getLotVideoPlayUrl,
+  listLotPhotos,
+  listLotVideos,
+  lotPhotoThumbnailSource,
+  lotThumbnailSource
+} from "@/lib/api";
+import { lotDetailSnapshot, mediaIdsKey, shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 import type { Lot, LotPhoto, LotVideo } from "@/lib/types";
 
 function Field({ label, value }: { label: string; value: string }) {
@@ -26,6 +36,43 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
+const StableThumb = memo(function StableThumb({
+  source,
+  style,
+  recyclingKey
+}: {
+  source: { uri: string; headers?: Record<string, string> };
+  style: StyleProp<ImageStyle>;
+  recyclingKey: string;
+}) {
+  return (
+    <Image
+      source={source}
+      style={style}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      recyclingKey={recyclingKey}
+      transition={0}
+    />
+  );
+});
+
+const LotPhotoThumb = memo(function LotPhotoThumb({
+  lotId,
+  photoId,
+  token
+}: {
+  lotId: string;
+  photoId: string;
+  token: string;
+}) {
+  const source = useMemo(
+    () => lotPhotoThumbnailSource(lotId, photoId, token),
+    [lotId, photoId, token]
+  );
+  return <StableThumb source={source} style={styles.photo} recyclingKey={photoId} />;
+});
+
 export default function LotDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { token } = useAuth();
@@ -34,51 +81,63 @@ export default function LotDetailScreen() {
   const [videos, setVideos] = useState<LotVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const lotRef = useRef<Lot | null>(null);
+  const lastLoadAtRef = useRef(0);
+  lotRef.current = lot;
 
   const load = useCallback(async () => {
     if (!token || !id) return;
-    setLoading(true);
-    setError("");
+    const hadLot = Boolean(lotRef.current);
+    // Keep the details page on screen. A full spinner swap is the ~1s flicker.
+    if (!hadLot) setLoading(true);
     try {
       const [lotRow, photoRows, videoRows] = await Promise.all([
         getLot(token, id),
         listLotPhotos(token, id),
         listLotVideos(token, id).catch(() => [] as LotVideo[])
       ]);
-      setLot(lotRow);
-      setPhotos(photoRows);
-      setVideos(videoRows);
+      lastLoadAtRef.current = Date.now();
+      setLot((prev) => (prev && lotDetailSnapshot(prev) === lotDetailSnapshot(lotRow) ? prev : lotRow));
+      setPhotos((prev) => (mediaIdsKey(prev) === mediaIdsKey(photoRows) ? prev : photoRows));
+      setVideos((prev) => (mediaIdsKey(prev) === mediaIdsKey(videoRows) ? prev : videoRows));
+      setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load lot");
+      if (!lotRef.current) {
+        setError(e instanceof Error ? e.message : "Could not load lot");
+      }
     } finally {
       setLoading(false);
     }
   }, [token, id]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), Boolean(lotRef.current))) {
+        return;
+      }
+      void load();
+    }, [load])
+  );
 
   const title = lot?.auction_title?.trim() || lot?.sku?.trim() || "Lot";
+  const heroSource = useMemo(
+    () => (lot && token ? lotThumbnailSource(lot.id, token, 800) : null),
+    [lot?.id, token]
+  );
 
   return (
     <>
       <Stack.Screen options={{ title: lot?.sku?.trim() || "Lot" }} />
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-        {loading ? (
+        {loading && !lot ? (
           <ActivityIndicator style={{ marginTop: 32 }} color="#ff4d1a" />
-        ) : error ? (
+        ) : error && !lot ? (
           <Text style={styles.error}>{error}</Text>
         ) : lot ? (
           <>
             <View style={styles.heroWrap}>
-              {lot.has_thumbnail && token ? (
-                <Image
-                  source={lotThumbnailSource(lot.id, token, 800)}
-                  style={styles.hero}
-                  contentFit="cover"
-                  transition={200}
-                />
+              {lot.has_thumbnail && heroSource ? (
+                <StableThumb source={heroSource} style={styles.hero} recyclingKey={lot.id} />
               ) : (
                 <View style={[styles.hero, styles.heroEmpty]}>
                   <Text style={styles.heroEmptyText}>No photo</Text>
@@ -115,12 +174,7 @@ export default function LotDetailScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
               {photos.length && token
                 ? photos.map((photo) => (
-                    <Image
-                      key={photo.id}
-                      source={lotPhotoThumbnailSource(lot.id, photo.id, token)}
-                      style={styles.photo}
-                      contentFit="cover"
-                    />
+                    <LotPhotoThumb key={photo.id} lotId={lot.id} photoId={photo.id} token={token} />
                   ))
                 : null}
               {!photos.length ? <Text style={styles.muted}>No photos linked.</Text> : null}
@@ -187,10 +241,10 @@ const styles = StyleSheet.create({
   heroWrap: {
     width: "100%",
     aspectRatio: 4 / 3,
-    borderRadius: 12,
     overflow: "hidden",
     backgroundColor: "#141416",
-    marginBottom: 4
+    marginBottom: 4,
+    borderRadius: 12
   },
   hero: { width: "100%", height: "100%" },
   heroEmpty: { alignItems: "center", justifyContent: "center" },

@@ -1,5 +1,5 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -12,36 +12,52 @@ import {
 
 import { useAuth } from "@/context/AuthContext";
 import { listSales } from "@/lib/api";
+import { saleNameNeedsUpdate, saleRowsUnchanged, shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 import type { Sale } from "@/lib/types";
 
 export default function SaleScreen() {
-  const { token, selectedSaleId, setSelectedSale } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const lastLoadAtRef = useRef(0);
+  const salesLenRef = useRef(0);
+  const selectedSaleNameRef = useRef(selectedSaleName);
+  salesLenRef.current = sales.length;
+  selectedSaleNameRef.current = selectedSaleName;
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    setError("");
-    try {
-      const rows = await listSales(token);
-      setSales(rows.filter((s) => !s.closed_at));
-      // Backfill/refresh the stored sale name for installs that saved only the id.
-      const current = selectedSaleId ? rows.find((s) => s.id === selectedSaleId) : undefined;
-      if (current) {
-        void setSelectedSale(current.id, current.name);
+  const load = useCallback(
+    async (mode: "full" | "pull" = "full") => {
+      if (!token) return;
+      if (mode === "full" && salesLenRef.current === 0) setLoading(true);
+      else if (mode === "pull") setRefreshing(true);
+      setError("");
+      try {
+        const rows = await listSales(token);
+        const open = rows.filter((s) => !s.closed_at);
+        lastLoadAtRef.current = Date.now();
+        setSales((prev) => (saleRowsUnchanged(prev, open) ? prev : open));
+        const current = selectedSaleId ? open.find((s) => s.id === selectedSaleId) : undefined;
+        if (current && saleNameNeedsUpdate(selectedSaleNameRef.current, current.name)) {
+          void setSelectedSale(current.id, current.name);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not load sales");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load sales");
-    } finally {
-      setLoading(false);
-    }
-  }, [token, selectedSaleId, setSelectedSale]);
+    },
+    [token, selectedSaleId, setSelectedSale]
+  );
 
   useFocusEffect(
     useCallback(() => {
-      void load();
+      if (shouldSkipLotsFocusReload(lastLoadAtRef.current, Date.now(), salesLenRef.current > 0)) {
+        return;
+      }
+      void load("full");
     }, [load])
   );
 
@@ -51,13 +67,13 @@ export default function SaleScreen() {
         Open sales from your account. Capture uploads and the Lots tab use the selected sale.
       </Text>
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      {loading ? (
+      {loading && !sales.length ? (
         <ActivityIndicator style={{ marginTop: 24 }} />
       ) : (
         <FlatList
           data={sales}
           keyExtractor={(item) => item.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} />}
           ListEmptyComponent={<Text style={styles.empty}>No open sales.</Text>}
           renderItem={({ item }) => {
             const active = item.id === selectedSaleId;
