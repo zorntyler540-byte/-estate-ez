@@ -130,6 +130,12 @@ export function ZoomablePreview({
   return (
     <div
       ref={wrapRef}
+      data-zoomable-preview="1"
+      data-zoom-scale={zoom.scale.toFixed(2)}
+      onWheel={(e) => {
+        if (disabled) return;
+        apply(scaleFromWheel(scaleRef.current, e.deltaY), xRef.current, yRef.current);
+      }}
       style={{
         width: "100%",
         height: "100%",
