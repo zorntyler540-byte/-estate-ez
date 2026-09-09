@@ -375,6 +375,7 @@ class SaleCoverRemoteOut(BaseModel):
 class SaleCoverPhotosOut(BaseModel):
     sale_id: str
     ctseller_sale_id: int | None = None
+    catalog_sale_name: str = ""
     selected_photo_ids: list[str] = []
     suggested_photo_ids: list[str] = []
     slots: list[SaleCoverPhotoSlotOut]
@@ -384,12 +385,15 @@ class SaleCoverPhotosOut(BaseModel):
 
 class SaleCoverCandidatesOut(BaseModel):
     sale_id: str
+    ctseller_sale_id: int | None = None
+    catalog_sale_name: str = ""
     suggested_photo_ids: list[str] = []
     candidates: list[SaleCoverCandidateOut]
 
 
 class SaleCoverPhotosSelectIn(BaseModel):
     photo_ids: list[str] = Field(default_factory=list, max_length=4)
+    ctseller_sale_id: int | None = None
 
 
 class SaleCoverPhotosPushIn(BaseModel):

@@ -337,6 +337,31 @@ def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
     return row
 
 
+def _sale_mapped_to_ctseller(db: Session, account_id: str, ctseller_sale_id: int) -> Sale | None:
+    if ctseller_sale_id <= 0:
+        return None
+    return (
+        db.query(Sale)
+        .filter(Sale.account_id == account_id, Sale.ctseller_sale_id == int(ctseller_sale_id))
+        .first()
+    )
+
+
+def _cover_catalog_sale(
+    *,
+    sale_id: str,
+    ctseller_sale_id: int | None,
+    current: User,
+    db: Session,
+) -> Sale:
+    """Covers follow the CT Seller auction dropdown, not the open website catalog."""
+    if ctseller_sale_id is not None:
+        mapped = _sale_mapped_to_ctseller(db, current.account_id, int(ctseller_sale_id))
+        if mapped:
+            return mapped
+    return _sale_for_user(sale_id, current, db)
+
+
 def _require_owner(current: User) -> None:
     if not is_owner(current):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner access required")
@@ -1646,6 +1671,7 @@ def _sale_cover_photos_payload(
     return SaleCoverPhotosOut(
         sale_id=sale.id,
         ctseller_sale_id=sale.ctseller_sale_id,
+        catalog_sale_name=(sale.name or "").strip(),
         selected_photo_ids=saved,
         suggested_photo_ids=[],
         slots=_cover_slots_out(
@@ -1663,21 +1689,27 @@ def _sale_cover_photos_payload(
 def get_sale_cover_photos(
     sale_id: str,
     include_remote: bool = Query(False, description="Also list covers already on CT Seller."),
+    ctseller_sale_id: int | None = Query(
+        None, description="CT Seller auction from the dashboard dropdown — covers follow this, not Change sale."
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverPhotosOut:
     """Saved 4 sale covers plus what CT Seller already has. Slots stay empty until staff pick."""
-    sale = _sale_for_user(sale_id, current, db)
+    sale = _cover_catalog_sale(
+        sale_id=sale_id, ctseller_sale_id=ctseller_sale_id, current=current, db=db
+    )
     saved = parse_cover_photo_ids(getattr(sale, "ctseller_cover_photo_ids", None))
     lots, photos, sales_by_id = load_cover_photos_by_ids(db, current.account_id, saved)
     remote: SaleCoverRemoteOut | None = None
     remote_error: str | None = None
-    if include_remote and sale.ctseller_sale_id:
+    remote_lookup = ctseller_sale_id if ctseller_sale_id is not None else sale.ctseller_sale_id
+    if include_remote and remote_lookup:
         account = db.query(Account).filter(Account.id == current.account_id).first()
         if account:
             try:
                 client = _ctseller_client_for_account(account, db, probe=False)
-                remote = _sale_cover_remote(client, int(sale.ctseller_sale_id))
+                remote = _sale_cover_remote(client, int(remote_lookup))
             except CTSellerError as exc:
                 remote_error = str(exc)
             except Exception as exc:  # noqa: BLE001
@@ -1695,11 +1727,16 @@ def get_sale_cover_photos(
 @app.get("/sales/{sale_id}/cover-candidates", response_model=SaleCoverCandidatesOut)
 def get_sale_cover_candidates(
     sale_id: str,
+    ctseller_sale_id: int | None = Query(
+        None, description="CT Seller auction from the dashboard dropdown — picker follows this."
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverCandidatesOut:
-    """Catalog photos from this sale only. Other catalogs stay out of the picker."""
-    sale = _sale_for_user(sale_id, current, db)
+    """Photos from the catalog linked to the CT Seller auction, not the open website sale."""
+    sale = _cover_catalog_sale(
+        sale_id=sale_id, ctseller_sale_id=ctseller_sale_id, current=current, db=db
+    )
     lots, photos = load_sale_lots_and_photos(db, sale)
     lots_by_id = {lot.id: lot for lot in lots}
     sales_by_id = {sale.id: sale}
@@ -1730,6 +1767,8 @@ def get_sale_cover_candidates(
         )
     return SaleCoverCandidatesOut(
         sale_id=sale.id,
+        ctseller_sale_id=sale.ctseller_sale_id,
+        catalog_sale_name=(sale.name or "").strip(),
         suggested_photo_ids=[],
         candidates=cards,
     )
@@ -1743,7 +1782,12 @@ def select_sale_cover_photos(
     db: Session = Depends(get_db),
 ) -> SaleCoverPhotosOut:
     """Remember up to 4 catalog photos as this sale's CT Seller covers."""
-    sale = _sale_for_user(sale_id, current, db)
+    sale = _cover_catalog_sale(
+        sale_id=sale_id,
+        ctseller_sale_id=payload.ctseller_sale_id,
+        current=current,
+        db=db,
+    )
     lots, photos, sales_by_id = load_cover_photos_by_ids(
         db, current.account_id, payload.photo_ids
     )
@@ -1771,8 +1815,11 @@ def push_sale_cover_photos(
 ) -> SaleCoverPhotosPushOut:
     """Upload the 4 selected catalog photos as CT Seller sale covers."""
     body = payload or SaleCoverPhotosPushIn()
-    sale = _sale_for_user(sale_id, current, db)
-    remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
+    remote_hint = body.ctseller_sale_id
+    sale = _cover_catalog_sale(
+        sale_id=sale_id, ctseller_sale_id=remote_hint, current=current, db=db
+    )
+    remote_sale_id = remote_hint if remote_hint is not None else sale.ctseller_sale_id
     if remote_sale_id is None:
         raise HTTPException(
             status_code=400,
