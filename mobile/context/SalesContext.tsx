@@ -30,13 +30,15 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const selectedSaleNameRef = useRef(selectedSaleName);
   selectedSaleNameRef.current = selectedSaleName;
+  const salesLenRef = useRef(0);
+  salesLenRef.current = sales.length;
 
   const refreshSales = useCallback(async () => {
     if (!token) {
       setSales([]);
       return;
     }
-    setLoading(true);
+    if (salesLenRef.current === 0) setLoading(true);
     try {
       const rows = await listSales(token);
       const open = rows.filter((s) => !s.closed_at);

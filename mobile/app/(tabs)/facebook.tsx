@@ -18,8 +18,10 @@ import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
 import {
-  coverUrlsEqual,
+  lotIdsWithChangedPhotoCount,
   lotListSignature,
+  lotRowsUnchanged,
+  mergeCoverUrls,
   shouldRefreshCoverUrls,
   shouldSkipLotsFocusReload
 } from "@/lib/lotsReload";
@@ -81,22 +83,20 @@ export default function FacebookScreen() {
           limit: 500,
           listingChannel: "facebook"
         });
+        const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
-        const refreshCovers = shouldRefreshCoverUrls(
-          lastSignatureRef.current,
-          nextSig,
-          coverCountRef.current
-        );
+        const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
+        const replaceCoverIds = lotIdsWithChangedPhotoCount(prevSig, nextSig);
         lastSignatureRef.current = nextSig;
         lastLoadAtRef.current = Date.now();
-        setLots(rows);
+        setLots((prev) => (lotRowsUnchanged(prev, rows) ? prev : rows));
         if (refreshCovers) {
           try {
             const covers = await listSaleLotCoverUrls(token, selectedSaleId, 160);
             const next = covers.urls || {};
-            setCoverUrls((prev) => (coverUrlsEqual(prev, next) ? prev : next));
+            setCoverUrls((prev) => mergeCoverUrls(prev, next, replaceCoverIds));
           } catch {
-            setCoverUrls({});
+            /* keep last thumbs */
           }
         }
       } catch (e) {

@@ -45,8 +45,8 @@ export default function QueueScreen() {
   const [previewIndex, setPreviewIndex] = useState(0);
   const focusedRef = useRef(false);
 
-  const refresh = useCallback(async () => {
-    await refreshSales();
+  const refresh = useCallback(async (opts?: { sales?: boolean }) => {
+    if (opts?.sales !== false) await refreshSales();
     const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
     const enriched = await Promise.all(
       drafts.map(async (draft) => {
@@ -61,20 +61,20 @@ export default function QueueScreen() {
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
-      void refresh();
+      void refresh({ sales: true });
       return () => {
         focusedRef.current = false;
       };
     }, [refresh])
   );
 
-  // Debounce list refresh while this tab is visible. Do not remount Queue (or the
-  // camera sitting over Lots) on every sync progress tick.
+  // Debounce local queue rows while this tab is visible. Skip refreshSales here —
+  // that used to rewrite the selected sale name and flicker Lots/details underneath.
   useEffect(() => {
     if (!focusedRef.current || refreshKey === 0) return;
     const timer = setTimeout(() => {
-      if (focusedRef.current) void refresh();
-    }, 750);
+      if (focusedRef.current) void refresh({ sales: false });
+    }, 1500);
     return () => clearTimeout(timer);
   }, [refreshKey, refresh]);
 

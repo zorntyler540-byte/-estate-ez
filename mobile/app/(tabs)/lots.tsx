@@ -15,8 +15,10 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
 import {
-  coverUrlsEqual,
+  lotIdsWithChangedPhotoCount,
   lotListSignature,
+  lotRowsUnchanged,
+  mergeCoverUrls,
   shouldRefreshCoverUrls,
   shouldSkipLotsFocusReload
 } from "@/lib/lotsReload";
@@ -67,24 +69,24 @@ export default function LotsScreen() {
           limit: 500,
           listingChannel: "ctseller"
         });
+        const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
-        const refreshCovers = shouldRefreshCoverUrls(
-          lastSignatureRef.current,
-          nextSig,
-          coverCountRef.current
-        );
+        const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
+        const replaceCoverIds = lotIdsWithChangedPhotoCount(prevSig, nextSig);
         lastSignatureRef.current = nextSig;
         lastLoadAtRef.current = Date.now();
-        setLots(rows);
+        setLots((prev) => (lotRowsUnchanged(prev, rows) ? prev : rows));
         setLoading(false);
         setRefreshing(false);
         if (!refreshCovers) return;
         void listSaleLotCoverUrls(token, selectedSaleId, 160)
           .then((covers) => {
             const next = covers.urls ?? {};
-            setCoverUrls((prev) => (coverUrlsEqual(prev, next) ? prev : next));
+            setCoverUrls((prev) => mergeCoverUrls(prev, next, replaceCoverIds));
           })
-          .catch(() => setCoverUrls({}));
+          .catch(() => {
+            /* keep last thumbs — wiping them is the flash */
+          });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load lots");
         setLoading(false);
@@ -157,7 +159,7 @@ export default function LotsScreen() {
           initialNumToRender={10}
           maxToRenderPerBatch={6}
           windowSize={5}
-          removeClippedSubviews
+          removeClippedSubviews={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#ff4d1a" />
           }

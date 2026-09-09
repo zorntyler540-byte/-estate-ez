@@ -1,6 +1,11 @@
 import {
   coverUrlsEqual,
+  lotDetailSnapshot,
+  lotIdsWithChangedPhotoCount,
   lotListSignature,
+  lotRowsUnchanged,
+  mediaIdsKey,
+  mergeCoverUrls,
   saleNameNeedsUpdate,
   shouldRefreshCoverUrls,
   shouldSkipLotsFocusReload
@@ -31,5 +36,43 @@ assert(saleNameNeedsUpdate("Saturday Sale", "Saturday Sale") === false, "same na
 assert(saleNameNeedsUpdate(" Saturday Sale ", "Saturday Sale") === false, "trim match");
 assert(saleNameNeedsUpdate("Saturday Sale", "Saturday Sale #2") === true, "name changed");
 assert(saleNameNeedsUpdate(null, "Saturday Sale") === true, "missing stored name");
+
+assert(
+  lotRowsUnchanged(
+    [{ id: "a", photo_count: 2, auction_title: "Lamp" }],
+    [{ id: "a", photo_count: 2, auction_title: "Lamp" }]
+  ) === true,
+  "same painted row"
+);
+assert(
+  lotRowsUnchanged(
+    [{ id: "a", photo_count: 2, auction_title: "Lamp" }],
+    [{ id: "a", photo_count: 3, auction_title: "Lamp" }]
+  ) === false,
+  "photo count change is a real update"
+);
+
+const changed = lotIdsWithChangedPhotoCount("a:2,b:1", "a:3,b:1");
+assert(changed.has("a") && !changed.has("b"), "only the lot that gained photos");
+
+const merged = mergeCoverUrls({ a: "old-a", b: "old-b" }, { a: "new-a", b: "new-b" }, new Set(["a"]));
+assert(merged.a === "new-a" && merged.b === "old-b", "keep stable thumbs after add photos");
+{
+  const prev = { a: "old-a", b: "old-b" };
+  assert(mergeCoverUrls(prev, { a: "new-a", b: "new-b" }, new Set()) === prev, "reuse prev map when all kept");
+}
+
+assert(
+  lotDetailSnapshot({ id: "a", photo_count: 2, auction_title: "Lamp", condition_text: "Good" }) ===
+    lotDetailSnapshot({ id: "a", photo_count: 2, auction_title: "Lamp", condition_text: "Good" }),
+  "same lot details snapshot"
+);
+assert(
+  lotDetailSnapshot({ id: "a", photo_count: 2, auction_title: "Lamp" }) !==
+    lotDetailSnapshot({ id: "a", photo_count: 3, auction_title: "Lamp" }),
+  "details snapshot changes with photo count"
+);
+assert(mediaIdsKey([{ id: "p1" }, { id: "p2" }]) === "p1,p2", "photo ids key");
+assert(mediaIdsKey([{ id: "p1" }]) !== mediaIdsKey([{ id: "p1" }, { id: "p2" }]), "new photo is a change");
 
 console.log("lotsReload.selftest ok");
