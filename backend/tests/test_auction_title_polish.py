@@ -74,3 +74,36 @@ def test_polish_and_finalize_on_jewelry_examples() -> None:
     assert "Liz & Co" in lot.brands
     assert "Collection" not in lot.auction_title
     assert "Statement" not in lot.auction_title
+
+
+def test_scrub_second_batch_jewelry_and_mixed_titles() -> None:
+    assert scrub_padded_auction_title(
+        "Silver-Tone Fashion Jewelry Collection, Including Jessica Simpson"
+    ) == "Jessica Simpson Silver-Tone Jewelry"
+    assert scrub_padded_auction_title(
+        "Colorful Chunky Beaded Statement Necklaces (5 Pcs)"
+    ) == "Colorful Chunky Beaded Necklaces (5)"
+    assert scrub_padded_auction_title(
+        "Wood, Resin, and Beaded Fashion Bracelets (5 Pcs.)"
+    ) == "Wood, Resin, and Beaded Bracelets (5)"
+    assert scrub_padded_auction_title(
+        "Collection of Fashion Bracelets with Stamped Cuffs and Cabochon Stones"
+    ) == "Bracelets with Stamped Cuffs and Cabochon Stones"
+    assert scrub_padded_auction_title("Three Colorful Beaded Statement Necklaces") == (
+        "Colorful Beaded Necklaces (3)"
+    )
+    assert scrub_padded_auction_title(
+        "Fossil, Elgin, and Ashley Women's Watches, Including Betty Boop"
+    ) == "Betty Boop Fossil, Elgin, and Ashley Women's Watches"
+
+
+def test_scrub_keeps_named_series_and_stamp_collections() -> None:
+    assert "Stamp Collections" in scrub_padded_auction_title(
+        "Bradford Exchange 'Forever, Diana' Plate with Princess Diana and WWII Stamp Collections"
+    )
+    titled, _ = polish_auction_title(
+        "Bradford Exchange 'Forever, Diana' Plate with Princess Diana and WWII Stamp Collections"
+    )
+    assert "'Forever, Diana'" in titled
+    titled_avon, _ = polish_auction_title("Avon 1876 Cape Cod Ruby Red Glassware Collection")
+    assert titled_avon == "Avon 1876 Cape Cod Ruby Red Glassware"

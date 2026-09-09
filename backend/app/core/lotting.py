@@ -2188,6 +2188,8 @@ def _split_title_word_parts(word: str) -> tuple[str, str, str]:
 def _capitalize_title_core(core: str, *, force_lower: bool) -> str:
     if not core:
         return core
+    if core[:1] in {"'", "‘", "’"} and len(core) > 1:
+        return core[0] + _capitalize_title_core(core[1:], force_lower=force_lower)
     if core.isdigit():
         return core
     if core.isupper() and 1 < len(core) <= 5:
@@ -2221,12 +2223,28 @@ _LEADING_COUNT_RE = re.compile(
     r"^(two|three|four|five|six|seven|eight|nine|ten)\s+(?!tone\b|piece\b)(.+)$",
     re.I,
 )
+_PCS_COUNT_RE = re.compile(r"\((\d+)\s*pcs?\.?\)", re.I)
+_INCLUDING_TAIL_RE = re.compile(r",\s*including\s+(.+)$", re.I)
 
 
 def _collapse_title_spaces(title: str) -> str:
     t = re.sub(r"\s{2,}", " ", title or "").strip(" ,-–—")
     t = re.sub(r"(?i)\band\s+and\b", "and", t)
     return re.sub(r"\s{2,}", " ", t).strip(" ,-–—")
+
+
+def _promote_including_clause(title: str) -> str:
+    """Turn ', including Jessica Simpson' into a leading search brand when it is a short name."""
+    matched = _INCLUDING_TAIL_RE.search(title)
+    if not matched:
+        return title
+    included = matched.group(1).strip(" .")
+    rest = title[: matched.start()].strip(" ,")
+    if not included or not rest:
+        return title
+    if len(included.split()) > 4 or re.match(r"(?i)^(a|an|the|various|assorted|multiple)\b", included):
+        return _collapse_title_spaces(f"{rest} + {included}")
+    return _collapse_title_spaces(f"{included} {rest}")
 
 
 def scrub_padded_auction_title(title: str) -> str:
@@ -2238,11 +2256,14 @@ def scrub_padded_auction_title(title: str) -> str:
     t = re.sub(r"\bfeaturing\b", "with", t, flags=re.I)
     t = re.sub(r"(?i)^(?:a|an|the)\s+collection\s+of\s+", "", t)
     t = re.sub(r"(?i)\bcollection\s+of\s+", "", t)
-    t = re.sub(r"(?i)\s+\b(?:collection|assortment)\b\.?\s*$", "", t)
+    t = re.sub(r"(?i)\s+\bcollection\b(?=\s*,|\s*$)", "", t)
+    t = re.sub(r"(?i)\s+\bassortment\b\.?\s*$", "", t)
     t = re.sub(r"(?i)\bstatement\s+", "", t)
     t = _FASHION_FILLER_RE.sub("", t)
     t = re.sub(r"(?i)\band\s+assorted\b", " and", t)
+    t = _PCS_COUNT_RE.sub(r"(\1)", t)
     t = _collapse_title_spaces(t)
+    t = _promote_including_clause(t)
     if t and not re.search(r"\(\d+\)\s*$", t):
         counted = _LEADING_COUNT_RE.match(t)
         if counted:
