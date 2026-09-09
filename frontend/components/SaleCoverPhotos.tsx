@@ -467,10 +467,31 @@ function CoverThumb({
   thumbUrl: string | null;
   label: string;
 }) {
-  const [src, setSrc] = useState<string | null>(thumbUrl);
-  const blobRef = useRef<string | null>(null);
+  const hostRef = useRef<HTMLSpanElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+        }
+      },
+      { rootMargin: "280px", threshold: 0.01 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
     if (thumbUrl) {
       setSrc(thumbUrl);
       return;
@@ -483,28 +504,14 @@ function CoverThumb({
     const ac = new AbortController();
     void (async () => {
       try {
+        // Sign the original only — generating 220px thumbs here stalls Railway on large sales.
         const mediaRes = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?max_px=220`,
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?generate_if_missing=false`,
           { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: ac.signal }
         );
-        if (mediaRes.ok) {
-          const data = (await mediaRes.json()) as { url?: string };
-          if (!cancelled && data?.url) {
-            setSrc(data.url);
-            return;
-          }
-        }
-        const res = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=220`,
-          { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: ac.signal }
-        );
-        if (!res.ok || cancelled) return;
-        const blob = await res.blob();
-        if (cancelled) return;
-        if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-        const u = URL.createObjectURL(blob);
-        blobRef.current = u;
-        setSrc(u);
+        if (!mediaRes.ok) return;
+        const data = (await mediaRes.json()) as { url?: string };
+        if (!cancelled && data?.url) setSrc(data.url);
       } catch {
         if (!cancelled) setSrc(null);
       }
@@ -512,16 +519,13 @@ function CoverThumb({
     return () => {
       cancelled = true;
       ac.abort();
-      if (blobRef.current) {
-        URL.revokeObjectURL(blobRef.current);
-        blobRef.current = null;
-      }
     };
-  }, [token, lotId, photoId, thumbUrl]);
+  }, [visible, token, lotId, photoId, thumbUrl]);
 
   const box: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
-  if (!src) {
-    return <span className="ct-sale-covers__ph" aria-label={label} />;
-  }
-  return <img src={src} alt={label} style={box} />;
+  return (
+    <span ref={hostRef} className="ct-sale-covers__ph" aria-label={label}>
+      {src ? <img src={src} alt={label} style={box} loading="lazy" decoding="async" /> : null}
+    </span>
+  );
 }

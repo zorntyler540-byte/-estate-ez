@@ -236,6 +236,7 @@ def candidate_is_hero(photo: Photo, lot_photos: list[Photo]) -> bool:
 
 
 def cover_thumb_url(storage_path: str | None) -> str | None:
+    """Presign the original. Never HEAD/generate thumbs on the picker request path."""
     try:
         from app import object_storage
         from app.catalog_storage import signed_catalog_url
@@ -244,7 +245,7 @@ def cover_thumb_url(storage_path: str | None) -> str | None:
             return None
         return signed_catalog_url(
             storage_path,
-            max_px=220,
+            max_px=None,
             expires_seconds=3600,
             generate_if_missing=False,
         )

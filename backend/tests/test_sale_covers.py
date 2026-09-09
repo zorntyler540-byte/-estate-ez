@@ -337,3 +337,95 @@ def test_parse_sale_image_secondary_urls() -> None:
     )
     assert profile is not None
     assert profile["id"] == 9
+
+
+def test_cover_candidates_include_signed_thumbs_without_generating(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Photo, Sale, User
+
+    monkeypatch.setattr(
+        "app.services.sale_covers.cover_thumb_url",
+        lambda storage_path: f"https://cdn.example/{storage_path}",
+    )
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'cover-thumbs.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-th", name="CT")
+    user = User(
+        id="user-th",
+        account_id=account.id,
+        email="thumbs@example.com",
+        password_hash="x",
+        role="owner",
+    )
+    sale = Sale(id="sale-th", account_id=account.id, user_id=user.id, name="Yard")
+    db.add_all([account, user, sale])
+    img_path = tmp_path / "hero.jpg"
+    Image.new("RGB", (80, 60), color=(12, 80, 140)).save(img_path, format="JPEG")
+    lot = Lot(
+        id="lot-th",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="TG001SK",
+        auction_title="Bead necklace",
+    )
+    photo = Photo(
+        id="photo-th",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot.id,
+        original_name=img_path.name,
+        storage_path=str(img_path),
+        photo_role="hero",
+        sort_order=0,
+    )
+    db.add_all([lot, photo])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.get("/sales/sale-th/cover-candidates")
+        assert res.status_code == 200, res.text
+        rows = res.json()["candidates"]
+        assert len(rows) == 1
+        assert rows[0]["thumb_url"] == f"https://cdn.example/{img_path}"
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_cover_thumb_url_signs_original_without_generating(monkeypatch) -> None:
+    from app.services import sale_covers
+
+    calls: list[dict] = []
+
+    monkeypatch.setattr("app.object_storage.r2_configured", lambda: True)
+
+    def fake_signed(storage_path, **kwargs):
+        calls.append({"storage_path": storage_path, **kwargs})
+        return "https://cdn.example/orig.jpg"
+
+    monkeypatch.setattr("app.catalog_storage.signed_catalog_url", fake_signed)
+    url = sale_covers.cover_thumb_url("catalog/a.jpg")
+    assert url == "https://cdn.example/orig.jpg"
+    assert calls[0]["max_px"] is None
+    assert calls[0]["generate_if_missing"] is False
