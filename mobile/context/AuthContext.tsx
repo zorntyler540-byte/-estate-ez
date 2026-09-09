@@ -12,6 +12,7 @@ import {
 import { login as apiLogin } from "@/lib/api";
 import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
 import { selectedSaleUnchanged } from "@/lib/lotsReload";
+import { normalizeSaleName } from "@/lib/selectedSale";
 import { secureDelete, secureGet, secureSet } from "@/lib/secureStorage";
 import { registerSessionRefresher } from "@/lib/sessionBridge";
 
@@ -29,6 +30,8 @@ type StoredCredentials = {
 type AuthContextValue = {
   token: string | null;
   ready: boolean;
+  /** Email used to sign in — shown on Capture so staff know whose session this is. */
+  signedInEmail: string | null;
   selectedSaleId: string | null;
   /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
   selectedSaleName: string | null;
@@ -73,6 +76,7 @@ async function readStoredCredentials(): Promise<StoredCredentials | null> {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleIdState] = useState<string | null>(null);
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -98,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         JSON.stringify({ email: email.trim(), password } satisfies StoredCredentials)
       );
       await persistToken(res.access_token);
+      setSignedInEmail(email.trim());
       return res.access_token;
     },
     [persistToken]
@@ -131,6 +136,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ]);
         setSelectedSaleIdState(storedSale);
         setSelectedSaleNameState(storedSaleName);
+        const creds = await readStoredCredentials();
+        if (creds?.email) setSignedInEmail(creds.email);
 
         if (storedToken) {
           tokenRef.current = storedToken;
@@ -182,12 +189,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ]);
     tokenRef.current = null;
     setToken(null);
+    setSignedInEmail(null);
     setSelectedSaleIdState(null);
     setSelectedSaleNameState(null);
   }, []);
 
   const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
-    const name = saleName?.trim() || null;
+    const name = saleId ? normalizeSaleName(saleName) : null;
     // Same sale + same name must not broadcast a new auth value — that re-rendered every screen
     // and looked like a 1s refresh loop on lot details / Lots.
     if (selectedSaleUnchanged(selectedSaleIdRef.current, selectedSaleNameRef.current, saleId, name)) {
@@ -204,13 +212,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await secureDelete(SELECTED_SALE_KEY);
       await secureDelete(SELECTED_SALE_NAME_KEY);
     }
+    selectedSaleIdRef.current = saleId;
+    selectedSaleNameRef.current = name;
     setSelectedSaleIdState(saleId);
-    setSelectedSaleNameState(saleId ? name : null);
+    setSelectedSaleNameState(name);
   }, []);
 
   const value = useMemo(
-    () => ({ token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale }),
-    [token, ready, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
+    () => ({
+      token,
+      ready,
+      signedInEmail,
+      selectedSaleId,
+      selectedSaleName,
+      signIn,
+      signOut,
+      setSelectedSale
+    }),
+    [token, ready, signedInEmail, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

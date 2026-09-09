@@ -9,7 +9,7 @@ import { useSales } from "@/context/SalesContext";
 import { countPendingDrafts } from "@/lib/queue/db";
 
 export default function CaptureScreen() {
-  const { selectedSaleId, selectedSaleName, signOut } = useAuth();
+  const { selectedSaleId, selectedSaleName, signedInEmail, signOut } = useAuth();
   const { getSaleName } = useSales();
   const [pending, setPending] = useState(0);
   const [signingOut, setSigningOut] = useState(false);
@@ -64,6 +64,13 @@ export default function CaptureScreen() {
         Native camera capture with offline storage. Queued lots upload automatically when you're online.
       </Text>
 
+      <View style={styles.signedInBox}>
+        <Text style={styles.signedInLabel}>SIGNED IN AS</Text>
+        <Text style={styles.signedInEmail} selectable>
+          {signedInEmail ?? "Email not stored on this phone"}
+        </Text>
+      </View>
+
       {!selectedSaleId ? (
         <Text style={styles.warn}>Choose a sale on the Sale tab before capturing.</Text>
       ) : (
@@ -97,6 +104,28 @@ const styles = StyleSheet.create({
   root: { flex: 1, padding: 20, gap: 16, backgroundColor: theme.bg },
   brand: { alignItems: "center", marginBottom: 4 },
   lead: { fontSize: 15, lineHeight: 22, color: theme.textMuted },
+  signedInBox: {
+    borderWidth: 2,
+    borderColor: theme.primary,
+    backgroundColor: theme.primaryMuted,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 4
+  },
+  signedInLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    color: theme.primary,
+    textAlign: "center"
+  },
+  signedInEmail: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: theme.text,
+    textAlign: "center"
+  },
   warn: { color: theme.warning, fontSize: 14 },
   meta: { color: theme.textMuted, fontSize: 14 },
   saleBanner: { color: theme.textMuted, fontSize: 15, lineHeight: 22 },
