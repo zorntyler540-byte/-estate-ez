@@ -457,11 +457,10 @@ def test_encode_sale_cover_jpeg_center_crops_to_square() -> None:
     from app.services.ctseller import encode_sale_cover_jpeg
 
     buf = BytesIO()
-    Image.new("RGB", (200, 100), color=(10, 20, 30)).save(buf, format="JPEG", quality=85)
-    jpeg = encode_sale_cover_jpeg(buf.getvalue(), max_edge=80)
+    Image.new("RGB", (800, 400), color=(10, 20, 30)).save(buf, format="JPEG", quality=85)
+    jpeg = encode_sale_cover_jpeg(buf.getvalue(), max_edge=400)
     out = Image.open(BytesIO(jpeg))
-    assert out.size[0] == out.size[1]
-    assert max(out.size) <= 80
+    assert out.size == (400, 400)
 
 
 def test_list_sale_images_reads_data_list() -> None:
