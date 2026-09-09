@@ -13,7 +13,11 @@ from app.catalog_storage import resolve_catalog_storage_path
 from app.core.lotting import sku_digits
 from app.models import Lot, Photo, Sale
 from app.services.photo_order import listing_photo_sort_key
-from app.services.photo_roles import is_hero_eligible_photo_role, normalize_catalog_photo_role
+from app.services.photo_roles import (
+    is_hero_eligible_photo_role,
+    is_sku_tape_photo_role,
+    normalize_catalog_photo_role,
+)
 from app.services.sale_zip_export import pick_lot_hero_photo
 
 logger = logging.getLogger(__name__)
@@ -62,9 +66,21 @@ def lot_cover_sort_key(lot: Lot) -> tuple:
 
 
 def listing_cover_photos(photos: Iterable[Photo]) -> list[Photo]:
-    eligible = [p for p in photos if is_hero_eligible_photo_role(getattr(p, "photo_role", None))]
-    pool = eligible or list(photos)
-    return sorted(pool, key=listing_photo_sort_key)
+    eligible = [
+        p
+        for p in photos
+        if is_hero_eligible_photo_role(getattr(p, "photo_role", None))
+        and not is_sku_tape_photo_role(getattr(p, "photo_role", None))
+    ]
+    return sorted(eligible, key=listing_photo_sort_key)
+
+
+def pick_lot_cover_photo(lot_photos: list[Photo]) -> Photo | None:
+    """Listing hero from cover-eligible frames only — never SKU tape or unusable."""
+    eligible = listing_cover_photos(lot_photos)
+    if not eligible:
+        return None
+    return pick_lot_hero_photo(eligible)
 
 
 def photos_by_lot_id(photos: Iterable[Photo]) -> dict[str, list[Photo]]:
@@ -91,7 +107,7 @@ def suggest_cover_photos(lots: list[Lot], photos: list[Photo]) -> list[Photo]:
         picked.append(photo)
 
     for lot in ordered_lots:
-        _add(pick_lot_hero_photo(by_lot.get(lot.id, [])))
+        _add(pick_lot_cover_photo(by_lot.get(lot.id, [])))
         if len(picked) >= SALE_COVER_SLOT_COUNT:
             return picked[:SALE_COVER_SLOT_COUNT]
 
@@ -124,7 +140,7 @@ def cover_candidate_photos(
     ordered_lots = sorted(lots, key=lot_cover_sort_key)
 
     for lot in ordered_lots:
-        first = pick_lot_hero_photo(by_lot.get(lot.id, []))
+        first = pick_lot_cover_photo(by_lot.get(lot.id, []))
         if first is None or first.id in seen:
             continue
         seen.add(first.id)
@@ -135,7 +151,7 @@ def cover_candidate_photos(
         extras = [
             p
             for p in listing_cover_photos(lot_photos)
-            if p.id not in seen and is_hero_eligible_photo_role(getattr(p, "photo_role", None))
+            if p.id not in seen
         ]
         extra_cap = max(0, extras_per_lot)
         chosen_extras = extras[:extra_cap]

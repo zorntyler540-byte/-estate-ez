@@ -80,6 +80,20 @@ def test_candidates_include_hero_and_cap_extras() -> None:
     assert len(cards) == 4  # hero + 3 extras
 
 
+def test_candidates_never_include_sku_tape() -> None:
+    lots = [_lot("l1", "001"), _lot("l2", "002")]
+    photos = [
+        _photo("tape1", "l1", "tape"),
+        _photo("h1", "l1", "hero"),
+        _photo("extra", "l1", "item_front", sort_order=2),
+        _photo("tape2", "l2", "tape"),
+        _photo("bad", "l2", "unusable"),
+    ]
+    cards = cover_candidate_photos(lots, photos, extras_per_lot=3)  # type: ignore[arg-type]
+    assert [p.id for p in cards] == ["h1", "extra"]
+    assert {p.photo_role for p in cards}.isdisjoint({"tape", "unusable"})
+
+
 def test_candidates_keep_one_photo_per_lot_past_old_cap() -> None:
     lots = [_lot(f"l{i}", f"{i:03d}") for i in range(1, 51)]
     photos = [_photo(f"h{i}", f"l{i}", "hero") for i in range(1, 51)]

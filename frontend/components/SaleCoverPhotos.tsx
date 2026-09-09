@@ -182,9 +182,16 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     skuSearchRef.current?.focus();
   }, [pickerSlot]);
 
+  const coverCandidates = useMemo(
+    () =>
+      candidates.filter(
+        (candidate) => candidate.photo_role !== "tape" && candidate.photo_role !== "unusable"
+      ),
+    [candidates]
+  );
   const visibleCandidates = useMemo(
-    () => candidates.filter((candidate) => skuMatchesQuery(candidate.sku, pickerSkuQuery)),
-    [candidates, pickerSkuQuery]
+    () => coverCandidates.filter((candidate) => skuMatchesQuery(candidate.sku, pickerSkuQuery)),
+    [coverCandidates, pickerSkuQuery]
   );
 
   const pickCandidate = (candidate: CoverCandidate) => {
@@ -379,8 +386,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
             </div>
             <p className="ct-sale-covers__hint">
               One photo from every lot, plus extra listing shots when a lot has them. Photos
-              already used in another slot move here. SKU-tape frames are hidden when the lot
-              has another shot.
+              already used in another slot move here. SKU-tape frames are not shown.
             </p>
             <label className="ct-sale-covers-modal__search">
               <span className="ct-sale-covers-modal__search-label">Search SKU</span>
@@ -403,8 +409,6 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
               {visibleCandidates.map((candidate) => {
                 const usedHere = slots.some((s) => s.photo_id === candidate.photo_id && s.slot === pickerSlot);
                 const usedOther = slots.some((s) => s.photo_id === candidate.photo_id && s.slot !== pickerSlot);
-                const blocked =
-                  candidate.photo_role === "tape" || candidate.photo_role === "unusable";
                 return (
                   <button
                     key={candidate.photo_id}
@@ -412,10 +416,6 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
                     className={`ct-sale-covers-grid__card${usedHere ? " is-current" : ""}${
                       usedOther ? " is-used" : ""
                     }`}
-                    disabled={blocked}
-                    title={
-                      blocked ? "SKU-tape and unusable frames cannot be sale covers" : undefined
-                    }
                     onClick={() => pickCandidate(candidate)}
                   >
                     <CoverThumb
@@ -436,10 +436,10 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
                 );
               })}
             </div>
-            {candidatesLoaded && !candidates.length ? (
+            {candidatesLoaded && !coverCandidates.length ? (
               <p className="ct-sale-covers__hint">No listing photos in this sale yet.</p>
             ) : null}
-            {candidatesLoaded && candidates.length && !visibleCandidates.length ? (
+            {candidatesLoaded && coverCandidates.length && !visibleCandidates.length ? (
               <p className="ct-sale-covers__hint">
                 No lots match SKU “{pickerSkuQuery.trim()}”.
               </p>
