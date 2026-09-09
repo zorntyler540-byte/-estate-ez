@@ -80,6 +80,19 @@ def test_candidates_include_hero_and_cap_extras() -> None:
     assert len(cards) == 4  # hero + 3 extras
 
 
+def test_candidates_keep_one_photo_per_lot_past_old_cap() -> None:
+    lots = [_lot(f"l{i}", f"{i:03d}") for i in range(1, 51)]
+    photos = [_photo(f"h{i}", f"l{i}", "hero") for i in range(1, 51)]
+    for i in range(1, 51):
+        photos.extend(
+            _photo(f"e{i}-{n}", f"l{i}", "item_front", sort_order=n + 1) for n in range(3)
+        )
+    cards = cover_candidate_photos(lots, photos, extras_per_lot=3, max_extras=10)  # type: ignore[arg-type]
+    lot_ids = {p.lot_id for p in cards}
+    assert lot_ids == {lot.id for lot in lots}
+    assert len(cards) == 60  # 50 heroes + 10 extras
+
+
 def test_validate_rejects_tape_and_requires_four() -> None:
     photos = [
         _photo("h1", "l1", "hero"),

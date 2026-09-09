@@ -61,6 +61,17 @@ const EMPTY_SLOTS: CoverSlot[] = [1, 2, 3, 4].map((slot) => ({
   thumb_url: null
 }));
 
+function skuMatchesQuery(sku: string | null, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const raw = (sku || "").trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.includes(q)) return true;
+  const qDigits = q.replace(/\D/g, "");
+  const skuDigits = raw.replace(/\D/g, "");
+  return Boolean(qDigits && skuDigits.includes(qDigits));
+}
+
 function slotFromCandidate(slot: number, candidate: CoverCandidate | undefined): CoverSlot {
   const label = slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`;
   if (!candidate) {
@@ -88,7 +99,9 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [pickerSlot, setPickerSlot] = useState<number | null>(null);
+  const [pickerSkuQuery, setPickerSkuQuery] = useState("");
   const [candidatesLoaded, setCandidatesLoaded] = useState(false);
+  const skuSearchRef = useRef<HTMLInputElement | null>(null);
 
   const selectedIds = useMemo(
     () => slots.map((s) => s.photo_id).filter((id): id is string => Boolean(id)),
@@ -149,14 +162,30 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     return { ...raw, candidates: rows };
   }, [token, saleId, candidatesLoaded, candidates]);
 
+  const closePicker = () => {
+    setPickerSlot(null);
+    setPickerSkuQuery("");
+  };
+
   const openPicker = (slot: number) => {
     if (disabled || busy) return;
+    setPickerSkuQuery("");
     setPickerSlot(slot);
     setErr("");
     void loadCandidates().catch((e) => {
       setErr(e instanceof Error ? parseApiErrorMessage(e.message) : "Could not load photos");
     });
   };
+
+  useEffect(() => {
+    if (pickerSlot == null) return;
+    skuSearchRef.current?.focus();
+  }, [pickerSlot]);
+
+  const visibleCandidates = useMemo(
+    () => candidates.filter((candidate) => skuMatchesQuery(candidate.sku, pickerSkuQuery)),
+    [candidates, pickerSkuQuery]
+  );
 
   const pickCandidate = (candidate: CoverCandidate) => {
     if (pickerSlot == null) return;
@@ -169,7 +198,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         return slotFromCandidate(slot.slot, candidate);
       })
     );
-    setPickerSlot(null);
+    closePicker();
     setMsg("");
   };
 
@@ -336,7 +365,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
           role="dialog"
           aria-modal="true"
           aria-label={`Choose ${EMPTY_SLOTS[pickerSlot - 1]?.label || "cover photo"}`}
-          onClick={() => setPickerSlot(null)}
+          onClick={closePicker}
         >
           <div className="ct-sale-covers-modal__panel" onClick={(e) => e.stopPropagation()}>
             <div className="ct-sale-covers-modal__head">
@@ -344,20 +373,38 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
                 Choose {EMPTY_SLOTS[pickerSlot - 1]?.label || "cover"}
                 {pickerSlot === 1 ? " (landscape works best)" : " (square / portrait)"}
               </h3>
-              <button type="button" className="ct-btn ct-btn--ghost" onClick={() => setPickerSlot(null)}>
+              <button type="button" className="ct-btn ct-btn--ghost" onClick={closePicker}>
                 Close
               </button>
             </div>
             <p className="ct-sale-covers__hint">
-              Photos already used in another slot move here. SKU-tape frames are hidden.
+              One photo from every lot, plus extra listing shots when a lot has them. Photos
+              already used in another slot move here. SKU-tape frames are hidden when the lot
+              has another shot.
             </p>
+            <label className="ct-sale-covers-modal__search">
+              <span className="ct-sale-covers-modal__search-label">Search SKU</span>
+              <input
+                ref={skuSearchRef}
+                className="ct-input"
+                type="search"
+                value={pickerSkuQuery}
+                onChange={(e) => setPickerSkuQuery(e.target.value)}
+                placeholder="TG001 or 001"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Search cover photos by SKU"
+              />
+            </label>
             {!candidatesLoaded && !candidates.length ? (
               <p className="ct-sale-covers__hint">Loading catalog photos…</p>
             ) : null}
             <div className="ct-sale-covers-grid">
-              {candidates.map((candidate) => {
+              {visibleCandidates.map((candidate) => {
                 const usedHere = slots.some((s) => s.photo_id === candidate.photo_id && s.slot === pickerSlot);
                 const usedOther = slots.some((s) => s.photo_id === candidate.photo_id && s.slot !== pickerSlot);
+                const blocked =
+                  candidate.photo_role === "tape" || candidate.photo_role === "unusable";
                 return (
                   <button
                     key={candidate.photo_id}
@@ -365,6 +412,10 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
                     className={`ct-sale-covers-grid__card${usedHere ? " is-current" : ""}${
                       usedOther ? " is-used" : ""
                     }`}
+                    disabled={blocked}
+                    title={
+                      blocked ? "SKU-tape and unusable frames cannot be sale covers" : undefined
+                    }
                     onClick={() => pickCandidate(candidate)}
                   >
                     <CoverThumb
@@ -387,6 +438,11 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
             </div>
             {candidatesLoaded && !candidates.length ? (
               <p className="ct-sale-covers__hint">No listing photos in this sale yet.</p>
+            ) : null}
+            {candidatesLoaded && candidates.length && !visibleCandidates.length ? (
+              <p className="ct-sale-covers__hint">
+                No lots match SKU “{pickerSkuQuery.trim()}”.
+              </p>
             ) : null}
           </div>
         </div>

@@ -3768,6 +3768,19 @@ select.ct-input option {
   font-size: 1rem;
 }
 
+.ct-sale-covers-modal__search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.65rem 0 0.75rem;
+  max-width: 280px;
+}
+
+.ct-sale-covers-modal__search-label {
+  font-size: 0.78rem;
+  color: var(--ct-text-muted);
+}
+
 .ct-sale-covers-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
