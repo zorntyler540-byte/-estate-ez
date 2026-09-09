@@ -67,9 +67,12 @@ function skuMatchesQuery(sku: string | null, query: string): boolean {
   const raw = (sku || "").trim().toLowerCase();
   if (!raw) return false;
   if (raw.includes(q)) return true;
-  const qDigits = q.replace(/\D/g, "");
-  const skuDigits = raw.replace(/\D/g, "");
-  return Boolean(qDigits && skuDigits.includes(qDigits));
+  // Digits-only queries match the numeric part (001 finds TG001SK).
+  if (/^\d+$/.test(q)) {
+    const skuDigits = raw.replace(/\D/g, "");
+    return skuDigits.includes(q);
+  }
+  return false;
 }
 
 function slotFromCandidate(slot: number, candidate: CoverCandidate | undefined): CoverSlot {
