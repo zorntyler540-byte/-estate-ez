@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../lib/lotPhotoReplace";
+import { ZoomablePreview } from "./ZoomablePreview";
 import {
   cropImageBlob,
   displayPointToNatural,
@@ -269,7 +270,8 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
           </p>
         ) : (
           <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-            Rotate or crop, then <strong>Save to catalog</strong> to replace the stored file.
+            Pinch or scroll to zoom. Rotate or crop, then <strong>Save to catalog</strong> to replace
+            the stored file.
           </p>
         )}
 
@@ -284,7 +286,7 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
             justifyContent: "center",
             overflow: "hidden",
             position: "relative",
-            touchAction: cropMode ? "none" : "auto"
+            touchAction: "none"
           }}
         >
           {loading ? (
@@ -294,28 +296,30 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
               {error}
             </div>
           ) : previewUrl ? (
-            <div style={{ position: "relative", maxWidth: "100%", maxHeight: "78vh" }}>
-              <img
-                ref={imgRef}
-                src={previewUrl}
-                alt={photo?.original_name || "Lot photo"}
-                draggable={false}
-                onPointerDown={handleImagePointerDown}
-                onPointerMove={handleImagePointerMove}
-                onPointerUp={handleImagePointerUp}
-                onPointerLeave={handleImagePointerUp}
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: "78vh",
-                  objectFit: "contain",
-                  display: "block",
-                  cursor: cropMode ? "crosshair" : "default"
-                }}
-              />
-              {cropOverlay && imgRef.current ? (
-                <CropBoxOverlay img={imgRef.current} rect={cropOverlay} />
-              ) : null}
-            </div>
+            <ZoomablePreview resetKey={`${photo?.id ?? "photo"}:${cropMode ? "crop" : "view"}`} disabled={cropMode}>
+              <div style={{ position: "relative", maxWidth: "100%", maxHeight: "78vh" }}>
+                <img
+                  ref={imgRef}
+                  src={previewUrl}
+                  alt={photo?.original_name || "Lot photo"}
+                  draggable={false}
+                  onPointerDown={handleImagePointerDown}
+                  onPointerMove={handleImagePointerMove}
+                  onPointerUp={handleImagePointerUp}
+                  onPointerLeave={handleImagePointerUp}
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "78vh",
+                    objectFit: "contain",
+                    display: "block",
+                    cursor: cropMode ? "crosshair" : "zoom-in"
+                  }}
+                />
+                {cropOverlay && imgRef.current ? (
+                  <CropBoxOverlay img={imgRef.current} rect={cropOverlay} />
+                ) : null}
+              </div>
+            </ZoomablePreview>
           ) : null}
         </div>
 
