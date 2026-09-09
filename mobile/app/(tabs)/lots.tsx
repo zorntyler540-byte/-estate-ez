@@ -1,4 +1,3 @@
-import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -12,6 +11,7 @@ import {
   View
 } from "react-native";
 
+import { StableUriImage } from "@/components/StableUriImage";
 import { useAuth } from "@/context/AuthContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
 import {
@@ -177,14 +177,7 @@ export default function LotsScreen() {
                 <Pressable style={styles.rowMain} onPress={() => router.push(`/lot/${item.id}`)}>
                   <View style={styles.thumbWrap}>
                     {signed ? (
-                      <Image
-                        source={{ uri: signed }}
-                        style={styles.thumb}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
-                        recyclingKey={item.id}
-                        transition={0}
-                      />
+                      <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
                     ) : (
                       <View style={styles.thumbEmpty}>
                         <Text style={styles.thumbEmptyText}>

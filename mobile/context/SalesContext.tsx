@@ -11,7 +11,7 @@ import {
 
 import { useAuth } from "@/context/AuthContext";
 import { listSales } from "@/lib/api";
-import { saleNameNeedsUpdate } from "@/lib/lotsReload";
+import { saleNameNeedsUpdate, saleRowsUnchanged } from "@/lib/lotsReload";
 import { backfillDraftSaleNames } from "@/lib/queue/db";
 import type { Sale } from "@/lib/types";
 
@@ -42,7 +42,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     try {
       const rows = await listSales(token);
       const open = rows.filter((s) => !s.closed_at);
-      setSales(open);
+      setSales((prev) => (saleRowsUnchanged(prev, open) ? prev : open));
 
       const nameById = new Map(open.map((s) => [s.id, s.name]));
       await backfillDraftSaleNames(nameById);

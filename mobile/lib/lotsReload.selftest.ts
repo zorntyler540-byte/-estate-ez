@@ -6,7 +6,10 @@ import {
   lotRowsUnchanged,
   mediaIdsKey,
   mergeCoverUrls,
+  queueRowsUnchanged,
   saleNameNeedsUpdate,
+  saleRowsUnchanged,
+  selectedSaleUnchanged,
   shouldRefreshCoverUrls,
   shouldSkipLotsFocusReload
 } from "./lotsReload";
@@ -74,5 +77,40 @@ assert(
 );
 assert(mediaIdsKey([{ id: "p1" }, { id: "p2" }]) === "p1,p2", "photo ids key");
 assert(mediaIdsKey([{ id: "p1" }]) !== mediaIdsKey([{ id: "p1" }, { id: "p2" }]), "new photo is a change");
+
+assert(selectedSaleUnchanged("s1", "Saturday", "s1", "Saturday") === true, "same selected sale");
+assert(selectedSaleUnchanged("s1", " Saturday ", "s1", "Saturday") === true, "trim selected sale");
+assert(selectedSaleUnchanged("s1", "Saturday", "s1", "Sunday") === false, "sale name changed");
+assert(selectedSaleUnchanged("s1", "Saturday", "s2", "Saturday") === false, "sale id changed");
+
+assert(
+  saleRowsUnchanged(
+    [{ id: "s1", name: "A" }],
+    [{ id: "s1", name: "A" }]
+  ) === true,
+  "same sale rows"
+);
+assert(
+  saleRowsUnchanged(
+    [{ id: "s1", name: "A" }],
+    [{ id: "s1", name: "B" }]
+  ) === false,
+  "renamed sale row"
+);
+
+assert(
+  queueRowsUnchanged(
+    [{ id: "d1", status: "uploaded", photoUris: ["a"] }],
+    [{ id: "d1", status: "uploaded", photoUris: ["a"] }]
+  ) === true,
+  "same queue row"
+);
+assert(
+  queueRowsUnchanged(
+    [{ id: "d1", status: "uploading", photoUris: ["a"] }],
+    [{ id: "d1", status: "uploaded", photoUris: ["a"] }]
+  ) === false,
+  "queue status change"
+);
 
 console.log("lotsReload.selftest ok");

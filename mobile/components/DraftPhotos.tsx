@@ -1,6 +1,7 @@
-import { Image } from "expo-image";
 import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+
+import { StableUriImage } from "@/components/StableUriImage";
 
 import { isVideoUri } from "@/lib/mediaKind";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
@@ -34,7 +35,7 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
                 <Text style={styles.videoThumbMark}>▶</Text>
               </View>
             ) : (
-              <Image source={{ uri }} style={styles.thumbImage} contentFit="cover" />
+              <StableUriImage uri={uri} style={styles.thumbImage} recyclingKey={uri} />
             )}
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{isVideoUri(uri) ? "Vid" : String(index + 1)}</Text>
@@ -114,7 +115,7 @@ export function PhotoPreviewModal({
                   <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
                 </View>
               ) : (
-                <Image source={{ uri }} style={styles.modalImage} contentFit="contain" />
+                <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
               )}
             </View>
           ) : null}

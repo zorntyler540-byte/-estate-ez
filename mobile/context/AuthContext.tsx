@@ -11,6 +11,7 @@ import {
 
 import { login as apiLogin } from "@/lib/api";
 import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
+import { selectedSaleUnchanged } from "@/lib/lotsReload";
 import { secureDelete, secureGet, secureSet } from "@/lib/secureStorage";
 import { registerSessionRefresher } from "@/lib/sessionBridge";
 
@@ -76,7 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const tokenRef = useRef<string | null>(null);
+  const selectedSaleIdRef = useRef<string | null>(null);
+  const selectedSaleNameRef = useRef<string | null>(null);
   const refreshInFlight = useRef<Promise<string | null> | null>(null);
+  selectedSaleIdRef.current = selectedSaleId;
+  selectedSaleNameRef.current = selectedSaleName;
 
   const persistToken = useCallback(async (next: string | null) => {
     tokenRef.current = next;
@@ -183,6 +188,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
     const name = saleName?.trim() || null;
+    // Same sale + same name must not broadcast a new auth value — that re-rendered every screen
+    // and looked like a 1s refresh loop on lot details / Lots.
+    if (selectedSaleUnchanged(selectedSaleIdRef.current, selectedSaleNameRef.current, saleId, name)) {
+      return;
+    }
     if (saleId) {
       await secureSet(SELECTED_SALE_KEY, saleId);
       if (name) {

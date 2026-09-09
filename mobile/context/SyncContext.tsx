@@ -21,11 +21,16 @@ export type SyncResult = {
   reconciled: number;
 };
 
-type SyncStateValue = {
+type SyncStatusValue = {
   syncing: boolean;
   lastMessage: string | null;
+};
+
+type SyncRefreshValue = {
   refreshKey: number;
 };
+
+type SyncStateValue = SyncStatusValue & SyncRefreshValue;
 
 type SyncActionsValue = {
   syncNow: () => Promise<SyncResult | null>;
@@ -34,7 +39,8 @@ type SyncActionsValue = {
 
 type SyncContextValue = SyncStateValue & SyncActionsValue;
 
-const SyncStateContext = createContext<SyncStateValue | null>(null);
+const SyncStatusContext = createContext<SyncStatusValue | null>(null);
+const SyncRefreshContext = createContext<SyncRefreshValue | null>(null);
 const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
@@ -149,10 +155,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     };
   }, [token, tryAutoSync]);
 
-  const stateValue = useMemo(
-    () => ({ syncing, lastMessage, refreshKey }),
-    [syncing, lastMessage, refreshKey]
+  const statusValue = useMemo(
+    () => ({ syncing, lastMessage }),
+    [syncing, lastMessage]
   );
+  const refreshValue = useMemo(() => ({ refreshKey }), [refreshKey]);
   const actionsValue = useMemo(
     () => ({ syncNow, setSyncPaused }),
     [syncNow, setSyncPaused]
@@ -160,7 +167,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   return (
     <SyncActionsContext.Provider value={actionsValue}>
-      <SyncStateContext.Provider value={stateValue}>{children}</SyncStateContext.Provider>
+      <SyncStatusContext.Provider value={statusValue}>
+        <SyncRefreshContext.Provider value={refreshValue}>{children}</SyncRefreshContext.Provider>
+      </SyncStatusContext.Provider>
     </SyncActionsContext.Provider>
   );
 }
@@ -171,9 +180,22 @@ export function useSyncActions(): SyncActionsValue {
   return ctx;
 }
 
+export function useSyncStatus(): SyncStatusValue {
+  const ctx = useContext(SyncStatusContext);
+  if (!ctx) throw new Error("useSyncStatus must be used within SyncProvider");
+  return ctx;
+}
+
+export function useSyncRefreshKey(): number {
+  const ctx = useContext(SyncRefreshContext);
+  if (!ctx) throw new Error("useSyncRefreshKey must be used within SyncProvider");
+  return ctx.refreshKey;
+}
+
 export function useSync(): SyncContextValue {
   const actions = useContext(SyncActionsContext);
-  const state = useContext(SyncStateContext);
-  if (!actions || !state) throw new Error("useSync must be used within SyncProvider");
-  return { ...state, ...actions };
+  const status = useContext(SyncStatusContext);
+  const refresh = useContext(SyncRefreshContext);
+  if (!actions || !status || !refresh) throw new Error("useSync must be used within SyncProvider");
+  return { ...status, ...refresh, ...actions };
 }

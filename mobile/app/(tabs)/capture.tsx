@@ -16,7 +16,7 @@ export default function CaptureScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void countPendingDrafts().then(setPending);
+      void countPendingDrafts().then((n) => setPending((prev) => (prev === n ? prev : n)));
     }, [])
   );
 

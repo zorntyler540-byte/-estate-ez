@@ -1,5 +1,4 @@
 import { router, useFocusEffect } from "expo-router";
-import { Image } from "expo-image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -14,15 +13,40 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 import { DraftPhotoStrip, draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
+import { StableUriImage } from "@/components/StableUriImage";
 import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
-import { useSync, type SyncResult } from "@/context/SyncContext";
+import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } from "@/context/SyncContext";
 import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
+import { queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
+
+/** Subscribes to sync ticks without making the Queue list re-render on every lot upload. */
+function QueueDraftRefresh({
+  enabled,
+  onRefresh
+}: {
+  enabled: boolean;
+  onRefresh: () => void;
+}) {
+  const refreshKey = useSyncRefreshKey();
+  const enabledRef = useRef(enabled);
+  const onRefreshRef = useRef(onRefresh);
+  enabledRef.current = enabled;
+  onRefreshRef.current = onRefresh;
+  useEffect(() => {
+    if (!enabledRef.current || refreshKey === 0) return;
+    const timer = setTimeout(() => {
+      if (enabledRef.current) onRefreshRef.current();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [refreshKey]);
+  return null;
+}
 
 function formatQueueSyncMessage(result: SyncResult, online: boolean | null): string {
   if (result.uploaded || result.failed) {
@@ -37,12 +61,14 @@ function formatQueueSyncMessage(result: SyncResult, online: boolean | null): str
 export default function QueueScreen() {
   const { token, selectedSaleId } = useAuth();
   const { getSaleName, refreshSales } = useSales();
-  const { syncing, lastMessage, refreshKey, syncNow } = useSync();
+  const { syncing, lastMessage } = useSyncStatus();
+  const { syncNow } = useSyncActions();
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [message, setMessage] = useState("");
   const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [focused, setFocused] = useState(false);
   const focusedRef = useRef(false);
 
   const refresh = useCallback(async (opts?: { sales?: boolean }) => {
@@ -54,29 +80,21 @@ export default function QueueScreen() {
         return { ...draft, photoUris: photos.map((p) => p.file_uri) };
       })
     );
-    setRows(enriched);
+    setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
     setOnline(net.isConnected ?? false);
   }, [refreshSales]);
 
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
+      setFocused(true);
       void refresh({ sales: true });
       return () => {
         focusedRef.current = false;
+        setFocused(false);
       };
     }, [refresh])
   );
-
-  // Debounce local queue rows while this tab is visible. Skip refreshSales here —
-  // that used to rewrite the selected sale name and flicker Lots/details underneath.
-  useEffect(() => {
-    if (!focusedRef.current || refreshKey === 0) return;
-    const timer = setTimeout(() => {
-      if (focusedRef.current) void refresh({ sales: false });
-    }, 1500);
-    return () => clearTimeout(timer);
-  }, [refreshKey, refresh]);
 
   async function queueDraft(id: string) {
     await setDraftStatus(id, "queued", null);
@@ -302,6 +320,7 @@ export default function QueueScreen() {
 
   return (
     <View style={styles.root}>
+      <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ sales: false })} />
       <Text style={styles.status}>
         Network: {online === null ? "…" : online ? "Online" : "Offline"}
         {syncing ? " · Uploading…" : ""}
@@ -355,7 +374,7 @@ export default function QueueScreen() {
               <View style={styles.cardTop}>
                 {hero ? (
                   <Pressable onPress={() => openPreview(item.photoUris, 0)}>
-                    <Image source={{ uri: hero }} style={styles.hero} contentFit="cover" />
+                    <StableUriImage uri={hero} style={styles.hero} recyclingKey={item.id} />
                   </Pressable>
                 ) : (
                   <View style={[styles.hero, styles.heroEmpty]}>

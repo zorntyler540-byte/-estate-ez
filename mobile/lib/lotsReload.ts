@@ -145,3 +145,54 @@ export function lotDetailSnapshot(lot: LotDetailSnapshotRow): string {
 export function mediaIdsKey(rows: { id: string }[]): string {
   return rows.map((row) => row.id).join(",");
 }
+
+export function selectedSaleUnchanged(
+  currentId: string | null | undefined,
+  currentName: string | null | undefined,
+  nextId: string | null,
+  nextName: string | null
+): boolean {
+  return (currentId ?? null) === nextId && (currentName ?? "").trim() === (nextName ?? "").trim();
+}
+
+export function saleRowsUnchanged(
+  prev: { id: string; name: string }[],
+  next: { id: string; name: string }[]
+): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i]!.id !== next[i]!.id || prev[i]!.name !== next[i]!.name) return false;
+  }
+  return true;
+}
+
+export function queueRowFingerprint(row: {
+  id: string;
+  status: string;
+  error_message?: string | null;
+  photo_count?: number | null;
+  photoUris?: string[];
+  sale_id?: string;
+  manual_sku?: string | null;
+}): string {
+  return [
+    row.id,
+    row.status,
+    row.error_message ?? "",
+    row.photo_count ?? 0,
+    row.sale_id ?? "",
+    row.manual_sku ?? "",
+    (row.photoUris || []).join(",")
+  ].join("|");
+}
+
+export function queueRowsUnchanged(
+  prev: Parameters<typeof queueRowFingerprint>[0][],
+  next: Parameters<typeof queueRowFingerprint>[0][]
+): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (queueRowFingerprint(prev[i]!) !== queueRowFingerprint(next[i]!)) return false;
+  }
+  return true;
+}

@@ -1,4 +1,3 @@
-import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import {
@@ -13,6 +12,7 @@ import {
   View
 } from "react-native";
 
+import { StableUriImage } from "@/components/StableUriImage";
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
@@ -177,7 +177,7 @@ export default function FacebookScreen() {
                 <View style={styles.cardTop}>
                   <View style={styles.thumbWrap}>
                     {signed ? (
-                      <Image source={{ uri: signed }} style={styles.thumb} contentFit="cover" />
+                      <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
                     ) : (
                       <View style={styles.thumbEmpty}>
                         <Text style={styles.thumbEmptyText}>No{"\n"}photo</Text>
