@@ -1870,6 +1870,8 @@ export default function DashboardPage() {
   const selectedSaleIdRef = useRef<string>("");
   const [newSaleName, setNewSaleName] = useState("");
   const [creatingSale, setCreatingSale] = useState(false);
+  const [mergeSourceSaleId, setMergeSourceSaleId] = useState("");
+  const [mergingSale, setMergingSale] = useState(false);
   const [closingSale, setClosingSale] = useState(false);
   const [isMasterAdmin, setIsMasterAdmin] = useState(false);
   const [adminLoadAttempted, setAdminLoadAttempted] = useState(false);
@@ -4816,6 +4818,43 @@ export default function DashboardPage() {
     }
   }
 
+  async function mergeCatalogSaleIntoSelected() {
+    if (!token || !selectedSaleId || !mergeSourceSaleId) return;
+    const keeper = selectedSale?.name?.trim() || "this sale";
+    const incoming = sales.find((s) => s.id === mergeSourceSaleId)?.name?.trim() || "the other sale";
+    const typed = window.prompt(
+      `Merge "${incoming}" into "${keeper}"?\n\nAll lots, photos, videos, and catalog jobs from "${incoming}" move here. "${incoming}" is then removed from the sale list.\n\nThis does not combine CT Seller auctions. Lots already posted stay on the CT Bids sale they were posted to.\n\nPhones should select "${keeper}" after this.\n\nType MERGE to confirm.`
+    );
+    if (typed !== "MERGE") return;
+    setMergingSale(true);
+    setError("");
+    try {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/merge`, token, {
+        method: "POST",
+        body: JSON.stringify({ source_sale_id: mergeSourceSaleId })
+      })) as {
+        lots_moved: number;
+        jobs_moved: number;
+        duplicate_sku_count: number;
+        source_sale_name: string;
+      };
+      setSales((prev) => prev.filter((s) => s.id !== mergeSourceSaleId));
+      setMergeSourceSaleId("");
+      setDataReloadNonce((n) => n + 1);
+      const dup =
+        res.duplicate_sku_count > 0
+          ? ` ${res.duplicate_sku_count} lot(s) now share a SKU in this sale — filter SKU checks for duplicates.`
+          : "";
+      window.alert(
+        `Moved ${res.lots_moved} lot(s) and ${res.jobs_moved} job(s) from "${res.source_sale_name}" into "${keeper}".${dup}`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not merge sales");
+    } finally {
+      setMergingSale(false);
+    }
+  }
+
   async function pullCtSellerSalesIntoCatalog() {
     if (!token) return;
     setPullingCtSellerSales(true);
@@ -5849,6 +5888,46 @@ export default function DashboardPage() {
             >
               {creatingSale ? "Creating…" : "Add sale"}
             </button>
+            {isAccountOwner && sales.filter((s) => s.id !== selectedSaleId && !s.closed_at).length > 0 ? (
+              <>
+                <label className="ct-label" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                    Merge into {selectedSale?.name || "this sale"}
+                  </span>
+                  <select
+                    className="ct-input"
+                    style={{ minWidth: 200 }}
+                    value={mergeSourceSaleId}
+                    disabled={mergingSale || !selectedSaleId || selectedSaleClosed}
+                    onChange={(e) => setMergeSourceSaleId(e.target.value)}
+                    aria-label="Sale to merge into the selected sale"
+                  >
+                    <option value="">Choose a sale to merge in…</option>
+                    {sales
+                      .filter((s) => s.id !== selectedSaleId && !s.closed_at)
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="ct-btn"
+                  disabled={
+                    mergingSale ||
+                    !mergeSourceSaleId ||
+                    !selectedSaleId ||
+                    selectedSaleClosed
+                  }
+                  title="Move lots and jobs from the chosen sale into the selected sale, then remove the empty sale"
+                  onClick={() => void mergeCatalogSaleIntoSelected()}
+                >
+                  {mergingSale ? "Merging…" : "Merge sales"}
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               className="ct-btn"
