@@ -6863,6 +6863,7 @@ export default function DashboardPage() {
         {selectedSaleId && token ? (
           <SaleCoverPhotos
             saleId={selectedSaleId}
+            saleName={selectedSale?.name || ""}
             token={token}
             ctsellerSaleId={Number(ctSellerPickId || "") || null}
             disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
