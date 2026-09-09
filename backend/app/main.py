@@ -1674,19 +1674,18 @@ def get_sale_cover_candidates(
     by_lot = photos_by_lot_id(photos)
     cards: list[SaleCoverCandidateOut] = []
     for photo in cover_candidate_photos(lots, photos):
-        lot = lots_by_id.get(photo.lot_id or "")
+        meta = photo_card_meta(photo, lots_by_id)
         cards.append(
             SaleCoverCandidateOut(
                 photo_id=photo.id,
                 lot_id=photo.lot_id or "",
-                sku=(lot.sku if lot else None),
-                auction_title=(lot.auction_title if lot else "") or "",
-                photo_role=normalize_catalog_photo_role(getattr(photo, "photo_role", None)),
+                sku=meta.get("sku"),
+                auction_title=str(meta.get("auction_title") or ""),
+                photo_role=meta.get("photo_role"),
                 is_hero=candidate_is_hero(photo, by_lot.get(photo.lot_id or "", [])),
                 suggested=False,
-                # Thumbs load per card in the picker. Signing every R2 URL here
-                # times out large sales (hundreds of lots).
-                thumb_url=None,
+                # Cheap HMAC of the original — do not generate 220px thumbs here.
+                thumb_url=meta.get("thumb_url"),
             )
         )
     return SaleCoverCandidatesOut(
@@ -2671,6 +2670,10 @@ def list_lots(
 def lot_media_url(
     lot_id: str,
     max_px: int = Query(220, description="Long edge for cached JPEG thumb (required for lot cover)."),
+    generate_if_missing: bool = Query(
+        False,
+        description="When true, build a missing thumb on Railway. Grids must leave this false.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CatalogMediaUrlOut:
@@ -2693,8 +2696,14 @@ def lot_media_url(
     last_err: Exception | None = None
     for ph in photos:
         try:
-            url = signed_catalog_url(ph.storage_path, max_px=px, expires_seconds=expires)
-            return CatalogMediaUrlOut(url=url, expires_in=expires, kind="thumb")
+            # Sign only — generating missing thumbs here stalls lot/dashboard loads.
+            url = signed_catalog_url(
+                ph.storage_path,
+                max_px=px,
+                expires_seconds=expires,
+                generate_if_missing=generate_if_missing,
+            )
+            return CatalogMediaUrlOut(url=url, expires_in=expires, kind="original")
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             continue
@@ -3459,6 +3468,10 @@ def lot_photo_media_url(
         None,
         description="When set, return a signed URL for a cached JPEG thumbnail at this long edge.",
     ),
+    generate_if_missing: bool = Query(
+        False,
+        description="When true, build a missing 220px thumb on Railway. Grids must leave this false.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CatalogMediaUrlOut:
@@ -3485,7 +3498,12 @@ def lot_photo_media_url(
     expires = 3600
     try:
         px = None if max_px is None else min(2048, max(64, int(max_px)))
-        url = signed_catalog_url(ph.storage_path, max_px=px, expires_seconds=expires)
+        url = signed_catalog_url(
+            ph.storage_path,
+            max_px=px,
+            expires_seconds=expires,
+            generate_if_missing=generate_if_missing,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc) or "Photo file missing") from exc
     except Exception as exc:  # noqa: BLE001
