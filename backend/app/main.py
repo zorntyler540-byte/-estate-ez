@@ -169,7 +169,7 @@ from app.services.photo_order import (
     reorder_photos_for_listing,
 )
 from app.services.mobile_drafts import cataloged_mobile_draft_lots
-from app.services.photo_roles import photos_for_ctbids_listing
+from app.services.photo_roles import normalize_catalog_photo_role, photos_for_ctbids_listing
 from app.services.sale_covers import (
     SALE_COVER_SLOT_COUNT,
     cover_candidate_photos,
@@ -1675,17 +1675,18 @@ def get_sale_cover_candidates(
     cards: list[SaleCoverCandidateOut] = []
     for photo in cover_candidate_photos(lots, photos):
         lot = lots_by_id.get(photo.lot_id or "")
-        meta = photo_card_meta(photo, lots_by_id)
         cards.append(
             SaleCoverCandidateOut(
                 photo_id=photo.id,
                 lot_id=photo.lot_id or "",
-                sku=meta.get("sku") if lot else None,
-                auction_title=str(meta.get("auction_title") or ""),
-                photo_role=meta.get("photo_role"),
+                sku=(lot.sku if lot else None),
+                auction_title=(lot.auction_title if lot else "") or "",
+                photo_role=normalize_catalog_photo_role(getattr(photo, "photo_role", None)),
                 is_hero=candidate_is_hero(photo, by_lot.get(photo.lot_id or "", [])),
                 suggested=False,
-                thumb_url=meta.get("thumb_url"),
+                # Thumbs load per card in the picker. Signing every R2 URL here
+                # times out large sales (hundreds of lots).
+                thumb_url=None,
             )
         )
     return SaleCoverCandidatesOut(

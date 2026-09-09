@@ -364,6 +364,32 @@ def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None
     assert encoded.startswith("data:image/jpeg;base64,")
 
 
+def test_upsert_sale_cover_photos_retries_seller_server_problem() -> None:
+    from app.services.ctseller import CTSellerError
+
+    client = CTSellerClient(access_token="tok")
+    calls = {"n": 0}
+
+    def flaky_post(path: str, payload: dict) -> dict:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise CTSellerError("Uh oh, looks like we encountered a server problem")
+        return {"status": "success", "data": [{"id": 88}]}
+
+    tiny = (
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xdb\x00C\x00" + bytes([8] * 64) + b"\xff\xd9"
+    )
+    with patch.object(client, "_post_raw", flaky_post), patch("app.services.ctseller.time.sleep", lambda *_a, **_k: None):
+        result = client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+        )
+    assert calls["n"] == 2
+    assert result["data"][0]["id"] == 88
+
+
 def test_list_sale_images_reads_data_list() -> None:
     client = CTSellerClient(access_token="tok")
 
