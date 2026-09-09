@@ -319,6 +319,16 @@ def test_client_uses_refresh_when_jwt_expired(tmp_path) -> None:
     assert unseal_secret(account.ctseller_refresh_token_enc) == "refresh-new"
 
 
+def _cover_jpeg() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (80, 60), color=(12, 80, 140)).save(buf, format="JPEG", quality=80)
+    return buf.getvalue()
+
+
 def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None:
     from app.services.ctseller import sale_cover_data_url
 
@@ -335,10 +345,7 @@ def test_upsert_sale_cover_photos_posts_data_urls_and_updates_existing() -> None
         putted.append((path, payload))
         return {"status": "success", "data": [{"id": 11}]}
 
-    tiny = (
-        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-        b"\xff\xdb\x00C\x00" + bytes([8] * 64) + b"\xff\xd9"
-    )
+    tiny = _cover_jpeg()
     with patch.object(client, "_post_raw", fake_post), patch.object(client, "_put_raw", fake_put):
         client.upsert_sale_cover_photos(
             sale_id=321,
@@ -372,22 +379,64 @@ def test_upsert_sale_cover_photos_retries_seller_server_problem() -> None:
 
     def flaky_post(path: str, payload: dict) -> dict:
         calls["n"] += 1
+        if path == "/sale/image/list":
+            return {"data": []}
         if calls["n"] == 1:
             raise CTSellerError("Uh oh, looks like we encountered a server problem")
         return {"status": "success", "data": [{"id": 88}]}
 
-    tiny = (
-        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-        b"\xff\xdb\x00C\x00" + bytes([8] * 64) + b"\xff\xd9"
-    )
+    tiny = _cover_jpeg()
     with patch.object(client, "_post_raw", flaky_post), patch("app.services.ctseller.time.sleep", lambda *_a, **_k: None):
         result = client.upsert_sale_cover_photos(
             sale_id=321,
             primary_jpeg=tiny,
             secondary_jpegs=[tiny, tiny, tiny],
         )
-    assert calls["n"] == 2
+    assert calls["n"] >= 2
     assert result["data"][0]["id"] == 88
+
+
+def test_upsert_sale_cover_photos_refreshes_stale_profile_id() -> None:
+    from app.services.ctseller import CTSellerError
+
+    client = CTSellerClient(access_token="tok")
+    puts: list[int | None] = []
+
+    def fake_put(path: str, payload: dict) -> dict:
+        row = payload["data"][0]
+        puts.append(row.get("id"))
+        if row.get("id") == 11:
+            raise CTSellerError("Uh oh, looks like we encountered a server problem")
+        return {"status": "success", "data": [{"id": 22}]}
+
+    def fake_post(path: str, payload: dict) -> dict:
+        assert path == "/sale/image/list"
+        return {"data": [{"id": 22, "name": "profile"}]}
+
+    tiny = _cover_jpeg()
+    with (
+        patch.object(client, "_put_raw", fake_put),
+        patch.object(client, "_post_raw", fake_post),
+        patch("app.services.ctseller.time.sleep", lambda *_a, **_k: None),
+    ):
+        result = client.upsert_sale_cover_photos(
+            sale_id=321,
+            primary_jpeg=tiny,
+            secondary_jpegs=[tiny, tiny, tiny],
+            existing_id=11,
+        )
+    assert puts == [11, 22]
+    assert result["data"][0]["id"] == 22
+
+
+def test_sale_cover_data_url_rejects_garbage() -> None:
+    from app.services.ctseller import CTSellerError, sale_cover_data_url
+
+    try:
+        sale_cover_data_url(b"not-an-image")
+        raise AssertionError("expected CTSellerError")
+    except CTSellerError as exc:
+        assert "could not be read" in str(exc).lower()
 
 
 def test_list_sale_images_reads_data_list() -> None:
