@@ -468,6 +468,7 @@ function CoverThumb({
   label: string;
 }) {
   const hostRef = useRef<HTMLSpanElement | null>(null);
+  const blobRef = useRef<string | null>(null);
   const [visible, setVisible] = useState(false);
   const [src, setSrc] = useState<string | null>(null);
 
@@ -509,9 +510,24 @@ function CoverThumb({
           `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?generate_if_missing=false`,
           { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: ac.signal }
         );
-        if (!mediaRes.ok) return;
-        const data = (await mediaRes.json()) as { url?: string };
-        if (!cancelled && data?.url) setSrc(data.url);
+        if (mediaRes.ok) {
+          const data = (await mediaRes.json()) as { url?: string };
+          if (!cancelled && data?.url) {
+            setSrc(data.url);
+            return;
+          }
+        }
+        const res = await fetch(
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=220`,
+          { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: ac.signal }
+        );
+        if (!res.ok || cancelled) return;
+        const blob = await res.blob();
+        if (cancelled) return;
+        if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+        const objectUrl = URL.createObjectURL(blob);
+        blobRef.current = objectUrl;
+        setSrc(objectUrl);
       } catch {
         if (!cancelled) setSrc(null);
       }
@@ -519,6 +535,10 @@ function CoverThumb({
     return () => {
       cancelled = true;
       ac.abort();
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
     };
   }, [visible, token, lotId, photoId, thumbUrl]);
 
