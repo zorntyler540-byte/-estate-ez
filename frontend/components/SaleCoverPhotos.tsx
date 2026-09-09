@@ -13,6 +13,9 @@ type CoverSlot = {
   auction_title: string;
   photo_role: string | null;
   thumb_url: string | null;
+  sale_id?: string | null;
+  sale_name?: string | null;
+  from_other_sale?: boolean;
 };
 
 type CoverCandidate = {
@@ -24,6 +27,9 @@ type CoverCandidate = {
   is_hero: boolean;
   suggested: boolean;
   thumb_url: string | null;
+  sale_id?: string | null;
+  sale_name?: string | null;
+  from_other_sale?: boolean;
 };
 
 type CoverPhotosOut = {
@@ -50,16 +56,30 @@ type Props = {
   onMapped?: (ctsellerSaleId: number) => void;
 };
 
-const EMPTY_SLOTS: CoverSlot[] = [1, 2, 3, 4].map((slot) => ({
-  slot,
-  label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
-  photo_id: null,
-  lot_id: null,
-  sku: null,
-  auction_title: "",
-  photo_role: null,
-  thumb_url: null
-}));
+function blankSlot(slot: number): CoverSlot {
+  return {
+    slot,
+    label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
+    photo_id: null,
+    lot_id: null,
+    sku: null,
+    auction_title: "",
+    photo_role: null,
+    thumb_url: null,
+    sale_id: null,
+    sale_name: "",
+    from_other_sale: false
+  };
+}
+
+const EMPTY_SLOTS: CoverSlot[] = [1, 2, 3, 4].map((slot) => blankSlot(slot));
+
+function markSlotsForSale(slots: CoverSlot[], currentSaleId: string): CoverSlot[] {
+  return slots.map((slot) => ({
+    ...slot,
+    from_other_sale: Boolean(slot.photo_id && slot.sale_id && slot.sale_id !== currentSaleId)
+  }));
+}
 
 function skuMatchesQuery(sku: string | null, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -75,20 +95,33 @@ function skuMatchesQuery(sku: string | null, query: string): boolean {
   return false;
 }
 
-function slotFromCandidate(slot: number, candidate: CoverCandidate | undefined): CoverSlot {
-  const label = slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`;
-  if (!candidate) {
-    return { slot, label, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null };
-  }
+function candidateMatchesQuery(candidate: CoverCandidate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (skuMatchesQuery(candidate.sku, query)) return true;
+  if ((candidate.auction_title || "").toLowerCase().includes(q)) return true;
+  return false;
+}
+
+function slotFromCandidate(
+  slot: number,
+  candidate: CoverCandidate | undefined,
+  currentSaleId: string
+): CoverSlot {
+  if (!candidate) return blankSlot(slot);
+  const saleId = candidate.sale_id || currentSaleId || null;
   return {
     slot,
-    label,
+    label: slot === 1 ? "Primary cover" : `Secondary ${slot - 1}`,
     photo_id: candidate.photo_id,
     lot_id: candidate.lot_id,
     sku: candidate.sku,
     auction_title: candidate.auction_title,
     photo_role: candidate.photo_role,
-    thumb_url: candidate.thumb_url
+    thumb_url: candidate.thumb_url,
+    sale_id: saleId,
+    sale_name: candidate.sale_name || "",
+    from_other_sale: Boolean(saleId && saleId !== currentSaleId)
   };
 }
 
@@ -105,6 +138,9 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const [pickerSkuQuery, setPickerSkuQuery] = useState("");
   const [candidatesLoaded, setCandidatesLoaded] = useState(false);
   const skuSearchRef = useRef<HTMLInputElement | null>(null);
+  const slotsRef = useRef<CoverSlot[]>(EMPTY_SLOTS);
+  const tokenRef = useRef(token);
+  slotsRef.current = slots;
 
   const selectedIds = useMemo(
     () => slots.map((s) => s.photo_id).filter((id): id is string => Boolean(id)),
@@ -124,18 +160,32 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   }, []);
 
   useEffect(() => {
+    const tokenChanged = tokenRef.current !== token;
+    tokenRef.current = token;
     if (!token || !saleId) {
       setSlots(EMPTY_SLOTS);
       setCandidates([]);
       setCandidatesLoaded(false);
+      setPickerSlot(null);
+      setPickerSkuQuery("");
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    setErr("");
-    setMsg("");
     setCandidatesLoaded(false);
     setCandidates([]);
+    setPickerSlot(null);
+    setPickerSkuQuery("");
+    setErr("");
+    setMsg("");
+
+    const keepWorkingPicks = !tokenChanged && slotsRef.current.some((slot) => slot.photo_id);
+    if (keepWorkingPicks) {
+      setSlots((prev) => markSlotsForSale(prev, saleId));
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
     void apiFetch(`/sales/${encodeURIComponent(saleId)}/cover-photos`, token)
       .then((raw) => {
         if (cancelled) return;
@@ -193,7 +243,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     [candidates]
   );
   const visibleCandidates = useMemo(
-    () => coverCandidates.filter((candidate) => skuMatchesQuery(candidate.sku, pickerSkuQuery)),
+    () => coverCandidates.filter((candidate) => candidateMatchesQuery(candidate, pickerSkuQuery)),
     [coverCandidates, pickerSkuQuery]
   );
 
@@ -202,10 +252,10 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
     setSlots((prev) =>
       prev.map((slot) => {
         if (slot.photo_id === candidate.photo_id && slot.slot !== pickerSlot) {
-          return { ...slot, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null };
+          return blankSlot(slot.slot);
         }
         if (slot.slot !== pickerSlot) return slot;
-        return slotFromCandidate(slot.slot, candidate);
+        return slotFromCandidate(slot.slot, candidate, saleId);
       })
     );
     closePicker();
@@ -215,9 +265,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
   const clearSlot = (slotNo: number) => {
     setSlots((prev) =>
       prev.map((slot) =>
-        slot.slot === slotNo
-          ? { ...slot, photo_id: null, lot_id: null, sku: null, auction_title: "", photo_role: null, thumb_url: null }
-          : slot
+        slot.slot === slotNo ? blankSlot(slot.slot) : slot
       )
     );
   };
@@ -280,8 +328,9 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
         <div>
           <h3 className="ct-sale-covers__title">CT Seller sale covers</h3>
           <p className="ct-sale-covers__hint">
-            CT Seller needs 4 cover photos before lots can move to Ready. Click each slot and pick a
-            photo from this sale — nothing is pre-filled.
+            CT Seller needs 4 cover photos before lots can move to Ready. Click a slot and pick from
+            this sale. To add a photo from another catalog, switch sales — your picks stay. Nothing
+            is pre-filled.
           </p>
         </div>
         <div className="ct-sale-covers__status" aria-live="polite">
@@ -318,6 +367,7 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
             <span className="ct-sale-covers__slot-label">
               {slot.label}
               {slot.sku ? ` · ${slot.sku}` : ""}
+              {slot.from_other_sale && slot.sale_name ? ` · ${slot.sale_name}` : ""}
             </span>
             {slot.photo_id ? (
               <span
@@ -388,8 +438,8 @@ export function SaleCoverPhotos({ saleId, token, ctsellerSaleId, disabled, onMap
               </button>
             </div>
             <p className="ct-sale-covers__hint">
-              One photo from every lot, plus extra listing shots when a lot has them. Photos
-              already used in another slot move here. SKU-tape frames are not shown.
+              Photos from this sale only. Switch the dashboard sale to browse another catalog — the
+              4 slots keep what you already picked. SKU-tape frames are not shown.
             </p>
             <label className="ct-sale-covers-modal__search">
               <span className="ct-sale-covers-modal__search-label">Search SKU</span>

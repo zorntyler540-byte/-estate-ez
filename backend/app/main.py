@@ -173,6 +173,7 @@ from app.services.photo_roles import normalize_catalog_photo_role, photos_for_ct
 from app.services.sale_covers import (
     SALE_COVER_SLOT_COUNT,
     cover_candidate_photos,
+    load_cover_photos_by_ids,
     load_sale_lots_and_photos,
     parse_cover_photo_ids,
     persist_cover_photo_ids,
@@ -1592,11 +1593,26 @@ def _sale_cover_remote(client: CTSellerClient, remote_sale_id: int) -> SaleCover
     return SaleCoverRemoteOut(id=parsed_id, primary_url=primary, secondary_urls=secondaries)
 
 
-def _cover_slots_out(selected: list[Photo], lots_by_id: dict[str, Lot]) -> list[SaleCoverPhotoSlotOut]:
+def _cover_slots_out(
+    selected: list[Photo],
+    lots_by_id: dict[str, Lot],
+    *,
+    sales_by_id: dict[str, Sale] | None = None,
+    current_sale_id: str | None = None,
+) -> list[SaleCoverPhotoSlotOut]:
     slots: list[SaleCoverPhotoSlotOut] = []
     for idx in range(SALE_COVER_SLOT_COUNT):
         photo = selected[idx] if idx < len(selected) else None
-        meta = photo_card_meta(photo, lots_by_id) if photo is not None else {}
+        meta = (
+            photo_card_meta(
+                photo,
+                lots_by_id,
+                sales_by_id=sales_by_id,
+                current_sale_id=current_sale_id,
+            )
+            if photo is not None
+            else {}
+        )
         slots.append(
             SaleCoverPhotoSlotOut(
                 slot=idx + 1,
@@ -1607,6 +1623,9 @@ def _cover_slots_out(selected: list[Photo], lots_by_id: dict[str, Lot]) -> list[
                 auction_title=str(meta.get("auction_title") or "") if photo is not None else "",
                 photo_role=meta.get("photo_role") if photo is not None else None,
                 thumb_url=meta.get("thumb_url") if photo is not None else None,
+                sale_id=meta.get("sale_id") if photo is not None else None,
+                sale_name=str(meta.get("sale_name") or "") if photo is not None else "",
+                from_other_sale=bool(meta.get("from_other_sale")) if photo is not None else False,
             )
         )
     return slots
@@ -1617,6 +1636,7 @@ def _sale_cover_photos_payload(
     sale: Sale,
     lots: list[Lot],
     photos: list[Photo],
+    sales_by_id: dict[str, Sale] | None = None,
     remote: SaleCoverRemoteOut | None = None,
     remote_error: str | None = None,
 ) -> SaleCoverPhotosOut:
@@ -1628,7 +1648,12 @@ def _sale_cover_photos_payload(
         ctseller_sale_id=sale.ctseller_sale_id,
         selected_photo_ids=saved,
         suggested_photo_ids=[],
-        slots=_cover_slots_out(selected, lots_by_id),
+        slots=_cover_slots_out(
+            selected,
+            lots_by_id,
+            sales_by_id=sales_by_id,
+            current_sale_id=sale.id,
+        ),
         remote=remote,
         remote_error=remote_error,
     )
@@ -1643,7 +1668,8 @@ def get_sale_cover_photos(
 ) -> SaleCoverPhotosOut:
     """Saved 4 sale covers plus what CT Seller already has. Slots stay empty until staff pick."""
     sale = _sale_for_user(sale_id, current, db)
-    lots, photos = load_sale_lots_and_photos(db, sale)
+    saved = parse_cover_photo_ids(getattr(sale, "ctseller_cover_photo_ids", None))
+    lots, photos, sales_by_id = load_cover_photos_by_ids(db, current.account_id, saved)
     remote: SaleCoverRemoteOut | None = None
     remote_error: str | None = None
     if include_remote and sale.ctseller_sale_id:
@@ -1657,7 +1683,12 @@ def get_sale_cover_photos(
             except Exception as exc:  # noqa: BLE001
                 remote_error = str(exc)
     return _sale_cover_photos_payload(
-        sale=sale, lots=lots, photos=photos, remote=remote, remote_error=remote_error
+        sale=sale,
+        lots=lots,
+        photos=photos,
+        sales_by_id=sales_by_id,
+        remote=remote,
+        remote_error=remote_error,
     )
 
 
@@ -1667,14 +1698,20 @@ def get_sale_cover_candidates(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverCandidatesOut:
-    """Catalog photos staff can pick as the 4 CT Seller sale covers."""
+    """Catalog photos from this sale only. Other catalogs stay out of the picker."""
     sale = _sale_for_user(sale_id, current, db)
     lots, photos = load_sale_lots_and_photos(db, sale)
     lots_by_id = {lot.id: lot for lot in lots}
+    sales_by_id = {sale.id: sale}
     by_lot = photos_by_lot_id(photos)
     cards: list[SaleCoverCandidateOut] = []
     for photo in cover_candidate_photos(lots, photos):
-        meta = photo_card_meta(photo, lots_by_id)
+        meta = photo_card_meta(
+            photo,
+            lots_by_id,
+            sales_by_id=sales_by_id,
+            current_sale_id=sale.id,
+        )
         cards.append(
             SaleCoverCandidateOut(
                 photo_id=photo.id,
@@ -1686,6 +1723,9 @@ def get_sale_cover_candidates(
                 suggested=False,
                 # Cheap HMAC of the original — do not generate 220px thumbs here.
                 thumb_url=meta.get("thumb_url"),
+                sale_id=meta.get("sale_id"),
+                sale_name=str(meta.get("sale_name") or ""),
+                from_other_sale=bool(meta.get("from_other_sale")),
             )
         )
     return SaleCoverCandidatesOut(
@@ -1704,10 +1744,12 @@ def select_sale_cover_photos(
 ) -> SaleCoverPhotosOut:
     """Remember up to 4 catalog photos as this sale's CT Seller covers."""
     sale = _sale_for_user(sale_id, current, db)
-    lots, photos = load_sale_lots_and_photos(db, sale)
+    lots, photos, sales_by_id = load_cover_photos_by_ids(
+        db, current.account_id, payload.photo_ids
+    )
     try:
         selected = validate_cover_photo_ids(
-            photo_ids=payload.photo_ids, sale_photos=photos, require_four=False
+            photo_ids=payload.photo_ids, catalog_photos=photos, require_four=False
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1715,7 +1757,9 @@ def select_sale_cover_photos(
     db.add(sale)
     db.commit()
     db.refresh(sale)
-    return _sale_cover_photos_payload(sale=sale, lots=lots, photos=photos)
+    return _sale_cover_photos_payload(
+        sale=sale, lots=lots, photos=photos, sales_by_id=sales_by_id
+    )
 
 
 @app.post("/sales/{sale_id}/cover-photos/push", response_model=SaleCoverPhotosPushOut)
@@ -1728,7 +1772,6 @@ def push_sale_cover_photos(
     """Upload the 4 selected catalog photos as CT Seller sale covers."""
     body = payload or SaleCoverPhotosPushIn()
     sale = _sale_for_user(sale_id, current, db)
-    lots, photos = load_sale_lots_and_photos(db, sale)
     remote_sale_id = body.ctseller_sale_id if body.ctseller_sale_id is not None else sale.ctseller_sale_id
     if remote_sale_id is None:
         raise HTTPException(
@@ -1743,9 +1786,10 @@ def push_sale_cover_photos(
             status_code=400,
             detail="Pick 4 cover photos on the dashboard first",
         )
+    _lots, photos, _sales_by_id = load_cover_photos_by_ids(db, current.account_id, wanted)
     try:
         selected_ids = validate_cover_photo_ids(
-            photo_ids=wanted, sale_photos=photos, require_four=True
+            photo_ids=wanted, catalog_photos=photos, require_four=True
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1753,7 +1797,7 @@ def push_sale_cover_photos(
     if len(selected) != SALE_COVER_SLOT_COUNT:
         raise HTTPException(
             status_code=400,
-            detail="Need 4 listing photos from this sale — catalog more lots or pick extras from a lot",
+            detail="Need 4 listing photos from your catalog — pick extras from this sale or another catalog",
         )
 
     account = db.query(Account).filter(Account.id == current.account_id).first()

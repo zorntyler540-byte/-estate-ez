@@ -347,6 +347,9 @@ class SaleCoverPhotoSlotOut(BaseModel):
     auction_title: str = ""
     photo_role: str | None = None
     thumb_url: str | None = None
+    sale_id: str | None = None
+    sale_name: str = ""
+    from_other_sale: bool = False
 
 
 class SaleCoverCandidateOut(BaseModel):
@@ -358,6 +361,9 @@ class SaleCoverCandidateOut(BaseModel):
     is_hero: bool = False
     suggested: bool = False
     thumb_url: str | None = None
+    sale_id: str | None = None
+    sale_name: str = ""
+    from_other_sale: bool = False
 
 
 class SaleCoverRemoteOut(BaseModel):
