@@ -127,19 +127,22 @@ export async function sweepArchiveConfirmedDrafts(token: string): Promise<number
       bySale.set(draft.sale_id, await catalogedDraftIndex(token, draft.sale_id));
     }
     const cataloged = bySale.get(draft.sale_id);
-    if (!cataloged || !cataloged.ok) continue;
-    const confirmed = cataloged.ids.has(draft.id.toLowerCase());
+    const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(draft.id.toLowerCase()));
+    const hasServerLotId = Boolean(draft.server_lot_id);
+    if (lookupFailed && !hasServerLotId) continue;
     if (
       !shouldArchiveCatalogedDraft({
         alreadyArchived: Boolean(draft.archived_at),
         status: draft.status,
         errorMessage: draft.error_message,
-        confirmedOnServer: confirmed
+        confirmedOnServer: confirmed,
+        hasServerLotId
       })
     ) {
       continue;
     }
-    const lotId = cataloged.lotByDraft.get(draft.id.toLowerCase());
+    const lotId = (cataloged?.ok ? cataloged.lotByDraft.get(draft.id.toLowerCase()) : null) || draft.server_lot_id;
     if (lotId && draft.server_lot_id !== lotId) {
       await setDraftServerLotId(draft.id, lotId);
     }
@@ -228,7 +231,13 @@ export async function syncPendingLots(
     const cataloged = catalogedBySale.get(draft.sale_id);
     const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(draft.id.toLowerCase()));
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
-    if (shouldSkipReupload({ confirmedOnServer: confirmed, catalogLookupFailed: lookupFailed })) {
+    if (
+      shouldSkipReupload({
+        confirmedOnServer: confirmed,
+        catalogLookupFailed: lookupFailed,
+        hasServerLotId: Boolean(draft.server_lot_id)
+      })
+    ) {
       continue;
     }
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
@@ -269,7 +278,11 @@ export async function syncPendingLots(
     const cataloged = catalogedBySale.get(d.sale_id);
     const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(d.id.toLowerCase()));
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
-    return !shouldSkipReupload({ confirmedOnServer: confirmed, catalogLookupFailed: lookupFailed });
+    return !shouldSkipReupload({
+      confirmedOnServer: confirmed,
+      catalogLookupFailed: lookupFailed,
+      hasServerLotId: Boolean(d.server_lot_id)
+    });
   });
 
   for (const draft of pending) {

@@ -87,7 +87,7 @@ export default function QueueScreen() {
       const enriched = queueRowsFromDrafts(drafts);
       setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
       setOnline(net.isConnected ?? false);
-      if (opts?.archive !== false && token) {
+      if (opts?.archive !== false && token && !syncing) {
         try {
           const n = await sweepArchiveConfirmedDrafts(token);
           if (n > 0) {
@@ -105,7 +105,7 @@ export default function QueueScreen() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load Queue");
     }
-  }, [token]);
+  }, [token, syncing]);
 
   useFocusEffect(
     useCallback(() => {

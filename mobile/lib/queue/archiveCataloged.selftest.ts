@@ -72,6 +72,15 @@ assert(
 );
 assert(
   shouldArchiveCatalogedDraft({
+    status: "uploaded",
+    errorMessage: "On server — cataloging…",
+    confirmedOnServer: false,
+    hasServerLotId: true
+  }) === true,
+  "linked website lot archives even if catalog list misses it"
+);
+assert(
+  shouldArchiveCatalogedDraft({
     alreadyArchived: true,
     status: "uploaded",
     errorMessage: null,
@@ -86,5 +95,9 @@ assert(
   shouldSkipReupload({ confirmedOnServer: false, catalogLookupFailed: true }) === true,
   "do not re-upload when we could not check the website"
 );
+assert(
+  shouldSkipReupload({ confirmedOnServer: false, hasServerLotId: true }) === true,
+  "do not re-upload a lot already linked on the website"
+);
 
-console.log("archiveCataloged selftest ok (16 cases)");
+console.log("archiveCataloged selftest ok (18 cases)");

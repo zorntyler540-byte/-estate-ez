@@ -23,19 +23,22 @@ export function shouldArchiveCatalogedDraft(opts: {
   status: string;
   errorMessage?: string | null;
   confirmedOnServer: boolean;
+  hasServerLotId?: boolean;
 }): boolean {
   if (opts.alreadyArchived) return false;
-  if (!opts.confirmedOnServer) return false;
   if (opts.status === "draft") return false;
   if (!ARCHIVEABLE_STATUS.has(opts.status)) return false;
-  return true;
+  if (opts.confirmedOnServer || opts.hasServerLotId) return true;
+  return false;
 }
 
 /** Do not start a new catalog job when the website already has this draft. */
 export function shouldSkipReupload(opts: {
   confirmedOnServer: boolean;
   catalogLookupFailed?: boolean;
+  hasServerLotId?: boolean;
 }): boolean {
+  if (opts.hasServerLotId) return true;
   if (opts.catalogLookupFailed) return true;
   return opts.confirmedOnServer;
 }

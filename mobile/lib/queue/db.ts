@@ -367,8 +367,21 @@ export async function countUploadPending(): Promise<number> {
   // can clear fake errors even when nothing is queued.
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
-     WHERE status IN ('queued', 'failed', 'uploading')
-        OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))`
+     WHERE archived_at IS NULL
+       AND (
+         status IN ('queued', 'failed', 'uploading')
+         OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))
+       )`
+  );
+  return Number(row?.c ?? 0);
+}
+
+/** Lots that still need photos sent — leftover uploaded notices are not uploads. */
+export async function countLotsNeedingPhotoUpload(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading')`
   );
   return Number(row?.c ?? 0);
 }
