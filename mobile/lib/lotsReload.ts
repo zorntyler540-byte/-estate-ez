@@ -56,6 +56,7 @@ export type LotListDisplayRow = LotReloadRow & {
   sku_needs_review?: boolean;
   sku_duplicate_in_sale?: boolean;
   sku_text_mismatch?: boolean;
+  video_count?: number | null;
 };
 
 /** Fields the Lots/Facebook rows actually paint — skip setState when these match. */
@@ -71,7 +72,8 @@ export function lotRowDisplayKey(lot: LotListDisplayRow): string {
     lot.ctseller_posted_at ?? "",
     lot.sku_needs_review ? "1" : "0",
     lot.sku_duplicate_in_sale ? "1" : "0",
-    lot.sku_text_mismatch ? "1" : "0"
+    lot.sku_text_mismatch ? "1" : "0",
+    lot.video_count ?? 0
   ].join("|");
 }
 

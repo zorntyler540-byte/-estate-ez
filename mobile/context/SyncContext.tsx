@@ -12,7 +12,7 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { countUploadPending } from "@/lib/queue/db";
+import { countPhotoJobsPending, countUploadPending } from "@/lib/queue/db";
 import { syncPendingLots } from "@/lib/queue/sync";
 
 export type SyncResult = {
@@ -111,7 +111,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       setSyncing(false);
       if (syncAgainRef.current) {
         syncAgainRef.current = false;
-        void syncNow();
+        // Do not immediately re-run for leftover videos — a failed clip would loop.
+        const stillPhotos = await countPhotoJobsPending();
+        if (stillPhotos > 0) void syncNow();
       }
     }
   }, [token]);

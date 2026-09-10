@@ -54,6 +54,13 @@ assert(
   ) === false,
   "photo count change is a real update"
 );
+assert(
+  lotRowsUnchanged(
+    [{ id: "a", photo_count: 2, video_count: 0, auction_title: "Lamp" }],
+    [{ id: "a", photo_count: 2, video_count: 1, auction_title: "Lamp" }]
+  ) === false,
+  "video count change is a real update"
+);
 
 const changed = lotIdsWithChangedPhotoCount("a:2,b:1", "a:3,b:1");
 assert(changed.has("a") && !changed.has("b"), "only the lot that gained photos");

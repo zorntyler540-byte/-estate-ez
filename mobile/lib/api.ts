@@ -5,6 +5,7 @@ import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types"
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
   resolveUploadFileUri,
+  resolveUploadVideoUri,
   type UploadPhotoUri
 } from "./uploadPrepare";
 import * as FileSystem from "expo-file-system/legacy";
@@ -201,8 +202,11 @@ async function nativeMultipartUpload(opts: {
   if (!uploadUri.startsWith("file://") && uploadUri.startsWith("/")) {
     uploadUri = `file://${uploadUri}`;
   }
+  const isVideoUpload = Boolean(opts.mimeType && opts.mimeType.startsWith("video/"));
   if (!uploadUri.startsWith("file://")) {
-    uploadUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+    uploadUri = isVideoUpload
+      ? await resolveUploadVideoUri(opts.fileUri)
+      : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
   }
 
   const url = `${API_BASE}${opts.path}`;
@@ -225,7 +229,10 @@ async function nativeMultipartUpload(opts: {
     const msg = e instanceof Error ? e.message : String(e);
     if (/not readable|could not be opened|no such file/i.test(msg)) {
       // Last chance: rematerialize from the original path / remapped Documents URI.
-      const retryUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+      // Videos skip JPEG rematerialize — that turned clips into stills.
+      const retryUri = isVideoUpload
+        ? await resolveUploadVideoUri(opts.fileUri)
+        : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
       if (retryUri !== uploadUri) {
         result = await withTimeout(
           FileSystem.uploadAsync(url, retryUri, {
@@ -242,7 +249,9 @@ async function nativeMultipartUpload(opts: {
         );
       } else {
         throw new Error(
-          "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
+          isVideoUpload
+            ? "Video file is not readable on this phone — record that clip again."
+            : "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
         );
       }
     } else {

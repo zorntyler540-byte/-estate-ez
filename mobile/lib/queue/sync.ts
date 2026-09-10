@@ -17,6 +17,7 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
+import { draftNeedsVideoAttach, videoUploadName } from "./attachVideos";
 import {
   listDraftPhotos,
   listLotDrafts,
@@ -39,12 +40,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function videoUploadName(draftId: string, fileUri: string, index: number): string {
-  const match = fileUri.toLowerCase().match(/\.(mp4|mov|m4v|webm)(?:\?|$)/);
-  const ext = match?.[1] ? `.${match[1]}` : ".mp4";
-  return `mobile-${draftId}-vid-${String(index + 1).padStart(2, "0")}${ext}`;
-}
-
 async function uploadPendingDraftVideos(
   token: string,
   draftId: string,
@@ -54,12 +49,39 @@ async function uploadPendingDraftVideos(
   const pending = rows.filter((p) => p.media_kind === "video" && !p.uploaded);
   for (let i = 0; i < pending.length; i++) {
     const row = pending[i]!;
-    if (mediaKindFromName(row.file_uri) !== "video") continue;
-    await uploadLotVideos(token, lotId, [
-      { uri: row.file_uri, name: videoUploadName(draftId, row.file_uri, i) }
-    ]);
+    // media_kind is the source of truth — a missing suffix used to skip the clip forever.
+    const name =
+      mediaKindFromName(row.file_uri) === "video"
+        ? videoUploadName(draftId, row.file_uri, i)
+        : videoUploadName(draftId, `${row.file_uri}.mp4`, i);
+    await uploadLotVideos(token, lotId, [{ uri: row.file_uri, name }]);
     await markDraftMediaUploaded(draftId, row.id);
   }
+}
+
+async function attachPendingVideosForKnownLots(
+  token: string,
+  catalogedBySale: Map<string, { ids: Set<string>; lotByDraft: Map<string, string> }>
+): Promise<number> {
+  let attached = 0;
+  for (const draft of await listLotDrafts()) {
+    const photos = await listDraftPhotos(draft.id);
+    const hasPending = photos.some((p) => p.media_kind === "video" && !p.uploaded);
+    const cataloged = catalogedBySale.get(draft.sale_id);
+    const lotId =
+      draft.server_lot_id || cataloged?.lotByDraft.get(draft.id.toLowerCase()) || null;
+    if (!draftNeedsVideoAttach({ hasPendingLocalVideos: hasPending, lotId })) continue;
+    try {
+      if (lotId && draft.server_lot_id !== lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+      }
+      await uploadPendingDraftVideos(token, draft.id, lotId!);
+      attached += 1;
+    } catch {
+      /* retry on the next Sync — do not fail the cataloged lot */
+    }
+  }
+  return attached;
 }
 
 function serverFailMessage(job: Job): string {
@@ -179,6 +201,15 @@ export async function syncPendingLots(
       await setDraftServerJobId(draft.id, null);
     } else if (job.status === "completed") {
       await setDraftServerJobId(draft.id, null);
+      const lotId = cataloged?.lotByDraft.get(draftKey);
+      if (lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        } catch {
+          /* final attach pass retries */
+        }
+      }
       await setDraftStatus(draft.id, "uploaded", null);
       reconciled += 1;
     } else if (job.status === "failed") {
@@ -202,6 +233,15 @@ export async function syncPendingLots(
       if (decideSyncRecovery(draft.status, job) === "adopt") {
         if (job?.status === "completed") {
           await setDraftServerJobId(draft.id, null);
+          const lotId = cataloged?.lotByDraft.get(draft.id.toLowerCase());
+          if (lotId) {
+            await setDraftServerLotId(draft.id, lotId);
+            try {
+              await uploadPendingDraftVideos(authToken, draft.id, lotId);
+            } catch {
+              /* final attach pass retries */
+            }
+          }
           await setDraftStatus(draft.id, "uploaded", null);
         } else {
           await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
@@ -426,6 +466,16 @@ export async function syncPendingLots(
       onProgress?.();
     }
   }
+
+  // Clips attach after the lot exists. Photos often look "uploaded" before Gemini
+  // finishes, and Sync used to stop there — website and Lots never got the video.
+  for (const draft of await listLotDrafts()) {
+    const photos = await listDraftPhotos(draft.id);
+    if (!photos.some((p) => p.media_kind === "video" && !p.uploaded)) continue;
+    if (draft.server_lot_id) continue;
+    catalogedBySale.set(draft.sale_id, await catalogedDraftIndex(authToken, draft.sale_id));
+  }
+  await attachPendingVideosForKnownLots(authToken, catalogedBySale);
 
   return { uploaded, failed, reconciled };
 }
