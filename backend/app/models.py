@@ -258,7 +258,7 @@ class SalePhotoZipExport(Base):
     photo_files_written: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # ``all`` = every catalog photo in SKU folders. ``heroes`` = one group/hero shot per lot.
+    # ``all`` = every catalog photo in SKU+title folders. ``heroes`` = one group/hero shot per lot.
     kind: Mapped[str] = mapped_column(String(20), default="all", nullable=False, server_default="all")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import re
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -9,7 +11,6 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.catalog_storage import resolve_catalog_storage_path
-from app.core.lotting import normalize_tape_sku_input, sku_digits
 from app.models import JobStatus, Lot, Photo, SalePhotoZipExport
 from app.services.photo_order import listing_photo_sort_key
 from app.services.photo_roles import is_hero_eligible_photo_role, normalize_catalog_photo_role
@@ -77,30 +78,75 @@ def pick_lot_hero_photo(photos: list[Photo]) -> Photo | None:
     return min(pool, key=listing_photo_sort_key)
 
 
+_WIN_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+_MAX_EXPORT_STEM = 100
+
+
+def _short_lot_id(lot: Lot) -> str:
+    return lot.id.replace("-", "")[:8]
+
+
+def _safe_fs_token(raw: str, max_len: int) -> str:
+    """Windows-safe file/folder token: no path separators or reserved device names."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", str(raw or ""))
+    s = re.sub(r"[^\w.\-]+", "-", s, flags=re.UNICODE)
+    s = re.sub(r"-{2,}", "-", s).strip(".-")
+    if not s:
+        return ""
+    if s.upper() in _WIN_RESERVED_STEMS:
+        s = f"lot-{s}"
+    return s[:max_len].rstrip(".-")
+
+
+def _sku_stem(lot: Lot) -> str:
+    """Full estate SKU (JZ5137AD stays JZ5137AD). Digit-only SKUs keep a ``lot-`` prefix."""
+    raw = (lot.sku or "").strip()
+    if not raw:
+        return f"lot-no-sku-{_short_lot_id(lot)}"
+    compact = re.sub(r"\s+", "", raw)
+    token = _safe_fs_token(compact, 48)
+    if not token:
+        return f"lot-no-sku-{_short_lot_id(lot)}"
+    if re.fullmatch(r"\d{1,8}", token):
+        return f"lot-{token}"
+    return token
+
+
+def _title_slug(lot: Lot) -> str:
+    return _safe_fs_token((lot.auction_title or "").strip(), 50)
+
+
 def _lot_folder_name(lot: Lot, used_folders: set[str]) -> str:
     """
-    One ZIP folder per lot, named from the estate tape / lot SKU (not a sale-wide sequence).
-    Duplicate SKUs in one sale get ``lot-045-2``, etc.
+    One ZIP folder (or hero filename stem) per lot: SKU plus a short title so the archive
+    is readable in WinRAR. Duplicate stems in one sale get ``-2``, ``-3``, etc.
     """
-    raw = (lot.sku or "").strip()
-    if raw:
-        digits = normalize_tape_sku_input(raw) or sku_digits(raw) or None
-        if digits:
-            candidate = f"lot-{digits}"
-        else:
-            slug = re.sub(r"[^\w.\-]+", "_", raw[:40]).strip("._")
-            candidate = f"lot-{slug}" if slug else f"lot-no-sku-{lot.id.replace('-', '')[:8]}"
-    else:
-        candidate = f"lot-no-sku-{lot.id.replace('-', '')[:8]}"
+    sku = _sku_stem(lot)
+    title = _title_slug(lot)
+    candidate = f"{sku}-{title}" if title else sku
+    if len(candidate) > _MAX_EXPORT_STEM:
+        candidate = candidate[:_MAX_EXPORT_STEM].rstrip(".-")
     if candidate not in used_folders:
         used_folders.add(candidate)
         return candidate
     for n in range(2, 10000):
         alt = f"{candidate}-{n}"
+        if len(alt) > _MAX_EXPORT_STEM:
+            alt = f"{candidate[: _MAX_EXPORT_STEM - len(f'-{n}')].rstrip('.-')}-{n}"
         if alt not in used_folders:
             used_folders.add(alt)
             return alt
-    return f"{candidate}-{lot.id.replace('-', '')[:8]}"
+    return f"{candidate}-{_short_lot_id(lot)}"
+
+
+def _lots_index_csv(rows: list[tuple[str, str, str]]) -> bytes:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["sku", "title", "zip_entry"])
+    writer.writerows(rows)
+    return buf.getvalue().encode("utf-8-sig")
 
 
 def _arc_base(original_name: str, photo_index: int, used: set[str]) -> str:
@@ -163,6 +209,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
         )
         written = 0
         used_folders: set[str] = set()
+        index_rows: list[tuple[str, str, str]] = []
         kind = normalize_sale_zip_kind(getattr(row, "kind", None))
         with zipfile.ZipFile(zip_final, "w", compression=zipfile.ZIP_STORED) as zf:
             for lot in lots:
@@ -180,6 +227,7 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                 if kind == ZIP_KIND_HEROES:
                     hero = pick_lot_hero_photo(photos)
                     photos = [hero] if hero is not None else []
+                lot_entry: str | None = None
                 for pi, ph in enumerate(photos, start=1):
                     src = resolve_catalog_storage_path(ph.storage_path)
                     if not src.is_file():
@@ -195,10 +243,16 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
                         base = _arc_base(ph.original_name, pi, used_names)
                         arcname = f"{folder}/{base}"
                     zf.write(src, arcname=arcname)
+                    if lot_entry is None:
+                        lot_entry = folder if kind != ZIP_KIND_HEROES else arcname
                     written += 1
                     if written % 100 == 0:
                         row.photo_files_written = written
                         db.commit()
+                if lot_entry is not None:
+                    index_rows.append((lot.sku or "", lot.auction_title or "", lot_entry))
+            if index_rows:
+                zf.writestr("_lots.csv", _lots_index_csv(index_rows))
         if written == 0:
             zip_final.unlink(missing_ok=True)
             row.status = JobStatus.failed
