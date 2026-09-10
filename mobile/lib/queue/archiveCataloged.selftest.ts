@@ -1,4 +1,8 @@
-import { isStillCatalogingMessage, shouldArchiveCatalogedDraft } from "./archiveCataloged";
+import {
+  isStillCatalogingMessage,
+  shouldArchiveCatalogedDraft,
+  shouldSkipReupload
+} from "./archiveCataloged";
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
@@ -23,8 +27,40 @@ assert(
     status: "uploaded",
     errorMessage: "On server — cataloging…",
     confirmedOnServer: true
+  }) === true,
+  "leftover cataloging copy archives once website confirms"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "queued",
+    errorMessage: null,
+    confirmedOnServer: true
+  }) === true,
+  "queued archives when website already has the lot"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "uploading",
+    errorMessage: "Sending photo 1 of 12…",
+    confirmedOnServer: true
+  }) === true,
+  "stuck uploading archives when website already has the lot"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "failed",
+    errorMessage: "Website was busy",
+    confirmedOnServer: true
+  }) === true,
+  "failed leftover archives when website already has the lot"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "draft",
+    errorMessage: null,
+    confirmedOnServer: true
   }) === false,
-  "do not archive while cataloging copy remains"
+  "draft stays — still shooting"
 );
 assert(
   shouldArchiveCatalogedDraft({
@@ -36,14 +72,6 @@ assert(
 );
 assert(
   shouldArchiveCatalogedDraft({
-    status: "queued",
-    errorMessage: null,
-    confirmedOnServer: true
-  }) === false,
-  "queued never archives"
-);
-assert(
-  shouldArchiveCatalogedDraft({
     alreadyArchived: true,
     status: "uploaded",
     errorMessage: null,
@@ -51,13 +79,12 @@ assert(
   }) === false,
   "already archived"
 );
+
+assert(shouldSkipReupload({ confirmedOnServer: true }) === true, "skip reupload when confirmed");
+assert(shouldSkipReupload({ confirmedOnServer: false }) === false, "upload when not on website");
 assert(
-  shouldArchiveCatalogedDraft({
-    status: "failed",
-    errorMessage: null,
-    confirmedOnServer: true
-  }) === false,
-  "failed stays in Queue until Sync"
+  shouldSkipReupload({ confirmedOnServer: false, catalogLookupFailed: true }) === true,
+  "do not re-upload when we could not check the website"
 );
 
-console.log("archiveCataloged selftest ok (11 cases)");
+console.log("archiveCataloged selftest ok (16 cases)");

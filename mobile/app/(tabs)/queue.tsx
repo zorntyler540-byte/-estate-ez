@@ -364,12 +364,12 @@ export default function QueueScreen() {
       <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ archive: false })} />
       <Text style={styles.status}>
         Network: {online === null ? "…" : online ? "Online" : "Offline"}
-        {syncing ? " · Uploading…" : ""}
+        {syncing ? " · Syncing…" : ""}
       </Text>
       <Text style={styles.hint}>
         {showArchive
           ? "Lots the website already cataloged. Photos were removed from this phone to save space. Add photos still attaches to that listing."
-          : "Unfinished lots stay here. This list is names only so the phone does not crash. Tap Review to see one lot's photos. After Sync confirms a lot is on the website, it moves to Archive."}
+          : "Unfinished lots stay here (names only). Sync now checks the website first — lots already cataloged move to Archive. It does not re-upload those."}
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 

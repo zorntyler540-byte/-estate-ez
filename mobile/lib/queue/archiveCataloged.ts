@@ -1,4 +1,5 @@
-/** Leftover copy while the worker is still running — do not strip local photos yet. */
+/** Leftover copy while the worker is still running — do not strip local photos yet
+ * unless the website has already confirmed the lot. */
 export function isStillCatalogingMessage(message: string | null | undefined): boolean {
   const m = (message || "").trim().toLowerCase();
   if (!m) return false;
@@ -10,9 +11,12 @@ export function isStillCatalogingMessage(message: string | null | undefined): bo
   );
 }
 
+const ARCHIVEABLE_STATUS = new Set(["uploaded", "queued", "uploading", "failed"]);
+
 /**
- * Archive only after the website has the lot (cataloged-mobile-drafts or a completed job).
- * Never archive on ``/run`` 200 or "On server — cataloging…".
+ * Archive after the website lists this draft (cataloged-mobile-drafts).
+ * Leftover "cataloging…" / queued / failed / uploading rows still archive once
+ * confirmed — Sync must not re-upload those. Draft stays in Queue (still shooting).
  */
 export function shouldArchiveCatalogedDraft(opts: {
   alreadyArchived?: boolean;
@@ -21,8 +25,17 @@ export function shouldArchiveCatalogedDraft(opts: {
   confirmedOnServer: boolean;
 }): boolean {
   if (opts.alreadyArchived) return false;
-  if (opts.status !== "uploaded") return false;
   if (!opts.confirmedOnServer) return false;
-  if (isStillCatalogingMessage(opts.errorMessage)) return false;
+  if (opts.status === "draft") return false;
+  if (!ARCHIVEABLE_STATUS.has(opts.status)) return false;
   return true;
+}
+
+/** Do not start a new catalog job when the website already has this draft. */
+export function shouldSkipReupload(opts: {
+  confirmedOnServer: boolean;
+  catalogLookupFailed?: boolean;
+}): boolean {
+  if (opts.catalogLookupFailed) return true;
+  return opts.confirmedOnServer;
 }

@@ -94,21 +94,28 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      const pending = await countUploadPending();
-      if (pending === 0) {
-        const archived = await sweepArchiveConfirmedDrafts(token);
+      setLastMessage("Checking the website for lots already cataloged…");
+      const archivedFirst = await sweepArchiveConfirmedDrafts(token);
+      if (archivedFirst) {
+        setRefreshKey((k) => k + 1);
         setLastMessage(
-          archived
-            ? `Moved ${archived} cataloged lot${archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
-            : null
+          `Moved ${archivedFirst} cataloged lot${archivedFirst === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
         );
-        if (archived) setRefreshKey((k) => k + 1);
-        return { uploaded: 0, failed: 0, reconciled: 0, archived };
       }
 
+      const pending = await countUploadPending();
+      if (pending === 0) {
+        if (!archivedFirst) {
+          setLastMessage("Nothing queued to upload — lots already on the website stay in Archive.");
+        }
+        return { uploaded: 0, failed: 0, reconciled: 0, archived: archivedFirst };
+      }
+
+      setLastMessage("Uploading lots that are not on the website yet…");
       const result = await syncPendingLots(token, () => {
         setRefreshKey((k) => k + 1);
       });
+      result.archived = (result.archived || 0) + archivedFirst;
       setLastMessage(formatSyncMessage(result));
       setRefreshKey((k) => k + 1);
       return result;

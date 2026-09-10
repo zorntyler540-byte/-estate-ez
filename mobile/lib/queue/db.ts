@@ -324,7 +324,11 @@ export async function archiveCatalogedDraft(draftId: string): Promise<void> {
 export async function archiveCatalogedDraftIfReady(draftId: string): Promise<boolean> {
   const existing = await getLotDraft(draftId);
   if (existing?.archived_at) return true;
-  if (await draftHasPendingLocalVideos(draftId)) return false;
+  // Website already has the lot — do not wait on local videos (that hung Sync
+  // on the iPhone 12 and blocked Archive).
+  if (existing && existing.status !== "uploaded") {
+    await setDraftStatus(draftId, "uploaded", null);
+  }
   await archiveCatalogedDraft(draftId);
   return true;
 }
