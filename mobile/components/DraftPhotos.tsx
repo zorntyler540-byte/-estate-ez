@@ -173,8 +173,19 @@ export function PhotoPreviewModal({
 
 export function draftStatusDisplay(
   status: string,
-  opts?: { online?: boolean | null; syncing?: boolean; errorMessage?: string | null }
+  opts?: {
+    online?: boolean | null;
+    syncing?: boolean;
+    errorMessage?: string | null;
+    archived?: boolean;
+  }
 ): { label: string; hint: string } {
+  if (opts?.archived) {
+    return {
+      label: "On website",
+      hint: "Photos were removed from this phone after catalog. Tap Add photos to shoot more for that listing."
+    };
+  }
   switch (status) {
     case "draft":
       return {

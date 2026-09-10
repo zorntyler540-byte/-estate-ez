@@ -174,6 +174,7 @@ export function queueRowFingerprint(row: {
   photoUris?: string[];
   sale_id?: string;
   manual_sku?: string | null;
+  archived_at?: number | null;
 }): string {
   return [
     row.id,
@@ -182,6 +183,7 @@ export function queueRowFingerprint(row: {
     row.photo_count ?? 0,
     row.sale_id ?? "",
     row.manual_sku ?? "",
+    row.archived_at ?? "",
     (row.photoUris || []).join(",")
   ].join("|");
 }

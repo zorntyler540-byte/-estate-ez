@@ -47,6 +47,12 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "server_lot_id")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_lot_id TEXT");
       }
+      if (!cols.some((c) => c.name === "archived_at")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_at INTEGER");
+      }
+      if (!cols.some((c) => c.name === "archived_photo_count")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_photo_count INTEGER");
+      }
       const photoCols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_photos)");
       if (!photoCols.some((c) => c.name === "media_kind")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'image'");
@@ -75,7 +81,8 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     server_lot_id: row.server_lot_id != null ? String(row.server_lot_id) : null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
-    photo_count: photoCount
+    photo_count: photoCount,
+    archived_at: row.archived_at != null ? Number(row.archived_at) : null
   };
 }
 
@@ -125,6 +132,12 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
   );
   const out: LotDraft[] = [];
   for (const row of rows) {
+    const archivedAt = row.archived_at != null ? Number(row.archived_at) : 0;
+    if (archivedAt > 0) {
+      const stored = Number(row.archived_photo_count ?? 0);
+      out.push(rowToDraft(row, stored));
+      continue;
+    }
     const pc = await db.getFirstAsync<{ c: number }>(
       "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
       [String(row.id)]
@@ -141,6 +154,9 @@ export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
     [draftId]
   );
   if (!row) return null;
+  if (row.archived_at != null && Number(row.archived_at) > 0) {
+    return rowToDraft(row, Number(row.archived_photo_count ?? 0));
+  }
   const pc = await db.getFirstAsync<{ c: number }>(
     "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
     [draftId]
@@ -281,6 +297,45 @@ export async function deletePhotoById(draftId: string, photoId: string): Promise
   await db.runAsync("DELETE FROM lot_photos WHERE id = ?", [row.id]);
   await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
   return true;
+}
+
+/**
+ * Confirmed cataloged: delete local files, keep a thin row for Add photos.
+ * Do not call until the website has the lot (see ``shouldArchiveCatalogedDraft``).
+ */
+export async function archiveCatalogedDraft(draftId: string): Promise<void> {
+  const existing = await getLotDraft(draftId);
+  if (existing?.archived_at) return;
+  const photos = await listDraftPhotos(draftId);
+  const count = photos.length || existing?.photo_count || 0;
+  for (const photo of photos) {
+    try {
+      await FileSystem.deleteAsync(photo.file_uri, { idempotent: true });
+    } catch {
+      /* file may already be gone */
+    }
+  }
+  const db = await getDb();
+  await db.runAsync("DELETE FROM lot_photos WHERE draft_id = ?", [draftId]);
+  await db.runAsync(
+    `UPDATE lot_drafts
+     SET archived_at = ?, archived_photo_count = ?, error_message = NULL, server_job_id = NULL, updated_at = ?
+     WHERE id = ?`,
+    [Date.now(), count, Date.now(), draftId]
+  );
+}
+
+export async function archiveCatalogedDraftIfReady(draftId: string): Promise<boolean> {
+  const existing = await getLotDraft(draftId);
+  if (existing?.archived_at) return true;
+  if (await draftHasPendingLocalVideos(draftId)) return false;
+  await archiveCatalogedDraft(draftId);
+  return true;
+}
+
+export async function draftHasPendingLocalVideos(draftId: string): Promise<boolean> {
+  const photos = await listDraftPhotos(draftId);
+  return photos.some((p) => p.media_kind === "video" && !p.uploaded);
 }
 
 export async function deleteLotDraft(draftId: string): Promise<void> {

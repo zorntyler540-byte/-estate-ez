@@ -23,6 +23,7 @@ import { queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
 import { mapInBatches, QUEUE_PHOTO_LOAD_BATCH, QUEUE_VISIBLE_THUMBS } from "@/lib/queue/loadQueueRows";
+import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
 
@@ -51,7 +52,13 @@ function QueueDraftRefresh({
 
 function formatQueueSyncMessage(result: SyncResult, online: boolean | null): string {
   if (result.uploaded || result.failed) {
-    return `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.`;
+    const extra = result.archived
+      ? ` Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive.`
+      : "";
+    return `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.${extra}`;
+  }
+  if (result.archived) {
+    return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
   }
   if (result.reconciled > 0) {
     return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
@@ -70,15 +77,29 @@ export default function QueueScreen() {
   const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [focused, setFocused] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
   const focusedRef = useRef(false);
 
-  const refresh = useCallback(async (opts?: { sales?: boolean }) => {
+  const refresh = useCallback(async (opts?: { sales?: boolean; archive?: boolean }) => {
     try {
       if (opts?.sales !== false) await refreshSales();
+      if (opts?.archive !== false && token) {
+        try {
+          const n = await sweepArchiveConfirmedDrafts(token);
+          if (n > 0) {
+            setMessage(
+              `Moved ${n} cataloged lot${n === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
+            );
+          }
+        } catch {
+          /* stay offline-capable — Sync will archive later */
+        }
+      }
       const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
       // Small batches — Promise.all on every draft opened SQLite + decoded every
       // JPEG at once and killed a field phone when Queue was opened.
       const enriched = await mapInBatches(drafts, QUEUE_PHOTO_LOAD_BATCH, async (draft) => {
+        if (draft.archived_at) return { ...draft, photoUris: [] as string[] };
         const photos = await listDraftPhotos(draft.id);
         return { ...draft, photoUris: photos.map((p) => p.file_uri).filter(Boolean) };
       });
@@ -87,7 +108,7 @@ export default function QueueScreen() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load Queue");
     }
-  }, [refreshSales]);
+  }, [refreshSales, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -236,7 +257,10 @@ export default function QueueScreen() {
     );
   }
 
-  const resendableLots = rows.filter((r) => r.status === "uploaded" && r.photoUris.length > 0);
+  const activeRows = rows.filter((r) => !r.archived_at);
+  const archiveRows = rows.filter((r) => r.archived_at);
+  const visibleRows = showArchive ? archiveRows : activeRows;
+  const resendableLots = activeRows.filter((r) => r.status === "uploaded" && r.photoUris.length > 0);
 
   /** Re-queue every “Sent to server” lot that still has photos on this phone. */
   function confirmResendAll() {
@@ -325,15 +349,15 @@ export default function QueueScreen() {
 
   return (
     <View style={styles.root}>
-      <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ sales: false })} />
+      <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ sales: false, archive: false })} />
       <Text style={styles.status}>
         Network: {online === null ? "…" : online ? "Online" : "Offline"}
         {syncing ? " · Uploading…" : ""}
       </Text>
       <Text style={styles.hint}>
-        Each row shows photos saved on this phone. Unfinished lots stay here if you leave the app —
-        tap Add photos to keep shooting, or Queue / Sync to upload. Review photos here in the order they
-        were taken. Catalog review is on the web dashboard.
+        {showArchive
+          ? "Lots the website already cataloged. Photos were removed from this phone to save space. Add photos still attaches to that listing."
+          : "Unfinished lots stay here. After Sync confirms a lot is on the website, photos leave this list and move to Archive."}
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 
@@ -345,7 +369,7 @@ export default function QueueScreen() {
         )}
       </Pressable>
 
-      {resendableLots.length > 0 ? (
+      {resendableLots.length > 0 && !showArchive ? (
         <Pressable
           style={[styles.resendAll, syncing && styles.disabled]}
           disabled={syncing}
@@ -357,16 +381,34 @@ export default function QueueScreen() {
         </Pressable>
       ) : null}
 
+      {archiveRows.length > 0 || showArchive ? (
+        <Pressable style={styles.resendAll} onPress={() => setShowArchive((v) => !v)}>
+          <Text style={styles.resendAllText}>
+            {showArchive
+              ? `Back to Queue (${activeRows.length})`
+              : `Archive (${archiveRows.length}) — cataloged, photos off this phone`}
+          </Text>
+        </Pressable>
+      ) : null}
+
       <FlatList
-        data={rows}
+        data={visibleRows}
         keyExtractor={(item) => item.id}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />}
-        ListEmptyComponent={<Text style={styles.empty}>No local lots yet. Capture photos on the Capture tab.</Text>}
+        ListEmptyComponent={
+          <Text style={styles.empty}>
+            {showArchive
+              ? "Archive is empty. Lots move here after Sync confirms they are on the website."
+              : "No lots waiting on this phone. Capture photos on the Capture tab."}
+          </Text>
+        }
         renderItem={({ item }) => {
+          const archived = Boolean(item.archived_at);
           const status = draftStatusDisplay(item.status, {
             online,
             syncing,
-            errorMessage: item.error_message
+            errorMessage: item.error_message,
+            archived
           });
           const noticeIsError =
             item.status === "failed" &&
@@ -394,7 +436,9 @@ export default function QueueScreen() {
                 <View style={styles.cardBody}>
                   <View style={styles.cardHeader}>
                     <Text style={styles.cardTitle}>
-                      {item.photo_count} photo{item.photo_count === 1 ? "" : "s"}
+                      {archived
+                        ? `${item.photo_count || 0} photo${item.photo_count === 1 ? "" : "s"} cataloged`
+                        : `${item.photo_count} photo${item.photo_count === 1 ? "" : "s"}`}
                     </Text>
                     <Pressable
                       style={styles.deleteBtn}
@@ -455,7 +499,7 @@ export default function QueueScreen() {
                       <Text style={styles.secondaryText}>Queue for upload</Text>
                     </Pressable>
                   ) : null}
-                  {item.status === "uploaded" ? (
+                  {item.status === "uploaded" && !archived && item.photoUris.length > 0 ? (
                     <Pressable
                       style={[styles.secondary, syncing && styles.disabled]}
                       disabled={syncing}

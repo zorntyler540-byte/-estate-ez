@@ -18,6 +18,7 @@ import {
   preparePhotosForUpload
 } from "../uploadPrepare";
 import {
+  archiveCatalogedDraftIfReady,
   listDraftPhotos,
   listLotDrafts,
   markDraftMediaUploaded,
@@ -25,6 +26,7 @@ import {
   setDraftServerLotId,
   setDraftStatus
 } from "./db";
+import { shouldArchiveCatalogedDraft } from "./archiveCataloged";
 import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
@@ -110,6 +112,45 @@ async function catalogedDraftIndex(
   }
 }
 
+/** After Sync confirms catalog, strip local JPEGs. Safe to call from Queue focus. */
+export async function sweepArchiveConfirmedDrafts(token: string): Promise<number> {
+  const drafts = await listLotDrafts();
+  const bySale = new Map<string, { ids: Set<string>; lotByDraft: Map<string, string> }>();
+  let archived = 0;
+  for (const draft of drafts) {
+    if (draft.archived_at) continue;
+    if (draft.status !== "uploaded") continue;
+    if (!bySale.has(draft.sale_id)) {
+      bySale.set(draft.sale_id, await catalogedDraftIndex(token, draft.sale_id));
+    }
+    const cataloged = bySale.get(draft.sale_id);
+    const confirmed = Boolean(cataloged?.ids.has(draft.id.toLowerCase()));
+    if (
+      !shouldArchiveCatalogedDraft({
+        alreadyArchived: Boolean(draft.archived_at),
+        status: draft.status,
+        errorMessage: draft.error_message,
+        confirmedOnServer: confirmed
+      })
+    ) {
+      continue;
+    }
+    const lotId = cataloged?.lotByDraft.get(draft.id.toLowerCase());
+    if (lotId && draft.server_lot_id !== lotId) {
+      await setDraftServerLotId(draft.id, lotId);
+    }
+    if (lotId) {
+      try {
+        await uploadPendingDraftVideos(token, draft.id, lotId);
+      } catch {
+        continue;
+      }
+    }
+    if (await archiveCatalogedDraftIfReady(draft.id)) archived += 1;
+  }
+  return archived;
+}
+
 /**
  * Upload queued/failed lot drafts when online.
  * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
@@ -120,10 +161,10 @@ async function catalogedDraftIndex(
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void
-): Promise<{ uploaded: number; failed: number; reconciled: number }> {
+): Promise<{ uploaded: number; failed: number; reconciled: number; archived: number }> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
-    return { uploaded: 0, failed: 0, reconciled: 0 };
+    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0 };
   }
 
   let uploaded = 0;
@@ -427,5 +468,6 @@ export async function syncPendingLots(
     }
   }
 
-  return { uploaded, failed, reconciled };
+  const archived = await sweepArchiveConfirmedDrafts(authToken);
+  return { uploaded, failed, reconciled, archived };
 }

@@ -13,12 +13,13 @@ import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
 import { countUploadPending } from "@/lib/queue/db";
-import { syncPendingLots } from "@/lib/queue/sync";
+import { sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
 
 export type SyncResult = {
   uploaded: number;
   failed: number;
   reconciled: number;
+  archived?: number;
 };
 
 type SyncStatusValue = {
@@ -45,6 +46,9 @@ const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
   if (result.uploaded === 0 && result.failed === 0) {
+    if (result.archived) {
+      return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
+    }
     if (result.reconciled > 0) {
       return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
     }
@@ -92,8 +96,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
       const pending = await countUploadPending();
       if (pending === 0) {
-        setLastMessage(null);
-        return { uploaded: 0, failed: 0, reconciled: 0 };
+        const archived = await sweepArchiveConfirmedDrafts(token);
+        setLastMessage(
+          archived
+            ? `Moved ${archived} cataloged lot${archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
+            : null
+        );
+        if (archived) setRefreshKey((k) => k + 1);
+        return { uploaded: 0, failed: 0, reconciled: 0, archived };
       }
 
       const result = await syncPendingLots(token, () => {
