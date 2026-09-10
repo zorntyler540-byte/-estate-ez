@@ -935,7 +935,7 @@ export default function LotDetailPage() {
       !window.confirm(
         "Sort this lot’s photos for a listing?\n\n" +
           "Order becomes: group shots of the whole lot, then each item with its angles, then labels/stickers, then measurements, then SKU tape.\n" +
-          "You can still drag photos afterward, or use Fix photo order on the dashboard to restore capture order."
+          "You can still drag photos afterward."
       )
     ) {
       return;
@@ -1919,8 +1919,8 @@ export default function LotDetailPage() {
                 </li>
                 <li>
                   <strong>Sort for listing</strong> groups photos the way shoppers expect (wide group
-                  shot, then each item as a chapter, then labels, then measuring-tape shots). Use dashboard{" "}
-                  <strong>Fix photo order</strong> to restore the order photos were taken.
+                  shot, then each item as a chapter, then labels, then measuring-tape shots). Drag a
+                  thumbnail to tweak the order after that.
                 </li>
                 <li>Order is saved for ZIP downloads, CT Bids posting, and AI.</li>
                 <li>
