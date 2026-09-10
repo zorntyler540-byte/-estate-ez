@@ -200,6 +200,9 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert by_email["owner@ct.test"].photos_per_hour == 1.0
     assert by_email["owner@ct.test"].lots_per_hour == 0.0
     assert by_email["idle@ct.test"].photos_uploaded == 0
+    assert by_email["maria@ct.test"].first_photo_at == inside
+    assert by_email["owner@ct.test"].first_photo_at == inside
+    assert by_email["idle@ct.test"].first_photo_at is None
     assert by_email["idle@ct.test"].active_hours == 0.0
     assert by_email["idle@ct.test"].photos_per_hour == 0.0
     assert summary.photos_uploaded == 3
