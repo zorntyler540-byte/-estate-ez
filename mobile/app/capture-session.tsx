@@ -609,7 +609,9 @@ export default function CaptureSessionScreen() {
     if (!pending.images.length) {
       Alert.alert(
         "Need a photo",
-        "AI catalog needs at least one still photo. Videos attach after the lot is on the website."
+        pending.videos.length
+          ? "Your video is already saved on this lot. Snap at least one still photo, then tap Finish lot. The clip uploads after the listing is on the website."
+          : "AI catalog needs at least one still photo. Videos attach after the lot is on the website."
       );
       return;
     }

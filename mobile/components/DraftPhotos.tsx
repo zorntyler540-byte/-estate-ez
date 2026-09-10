@@ -150,7 +150,7 @@ export function PhotoPreviewModal({
                 >
                   <Text style={styles.videoPreviewMark}>▶</Text>
                   <Text style={styles.videoPreviewHint}>
-                    {playing ? "Opening player…" : "Tap to play"}
+                    {playing ? "Opening…" : "Tap to play"}
                   </Text>
                   {playError ? <Text style={styles.videoPreviewError}>{playError}</Text> : null}
                 </Pressable>
