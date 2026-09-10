@@ -11,6 +11,8 @@ from app.db import Base
 from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, User
 from app.services.team_activity import (
     ActivityWindowError,
+    active_hours_for_timestamps,
+    per_active_hour,
     resolve_activity_window,
     summarize_team_activity,
 )
@@ -32,6 +34,30 @@ def test_resolve_activity_window_explicit_bounds() -> None:
     )
     assert start == datetime(2026, 9, 1, 7, 0, tzinfo=UTC)
     assert end == datetime(2026, 9, 1, 17, 0, tzinfo=UTC)
+
+
+def test_active_hours_empty_and_single_event() -> None:
+    assert active_hours_for_timestamps([]) == 0.0
+    assert active_hours_for_timestamps([T0]) == 1.0
+
+
+def test_active_hours_same_day_span() -> None:
+    start = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 9, 5, 14, 0, tzinfo=UTC)
+    assert active_hours_for_timestamps([start, end]) == 4.0
+
+
+def test_active_hours_sums_days_with_one_hour_floor() -> None:
+    day1_start = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
+    day1_end = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+    day2_only = datetime(2026, 9, 6, 9, 0, tzinfo=UTC)
+    assert active_hours_for_timestamps([day1_start, day1_end, day2_only]) == 3.0
+
+
+def test_per_active_hour() -> None:
+    assert per_active_hour(8, 4) == 2.0
+    assert per_active_hour(0, 4) == 0.0
+    assert per_active_hour(8, 0) == 0.0
 
 
 def test_resolve_activity_window_rejects_inverted_and_too_long() -> None:
@@ -165,13 +191,66 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert by_email["maria@ct.test"].photos_uploaded == 2
     assert by_email["maria@ct.test"].lots_created == 1
     assert by_email["maria@ct.test"].jobs_started == 1
+    assert by_email["maria@ct.test"].active_hours == 1.0
+    assert by_email["maria@ct.test"].photos_per_hour == 2.0
+    assert by_email["maria@ct.test"].lots_per_hour == 1.0
     assert by_email["owner@ct.test"].photos_uploaded == 1
     assert by_email["owner@ct.test"].jobs_started == 0
+    assert by_email["owner@ct.test"].active_hours == 1.0
+    assert by_email["owner@ct.test"].photos_per_hour == 1.0
+    assert by_email["owner@ct.test"].lots_per_hour == 0.0
     assert by_email["idle@ct.test"].photos_uploaded == 0
+    assert by_email["idle@ct.test"].active_hours == 0.0
+    assert by_email["idle@ct.test"].photos_per_hour == 0.0
     assert summary.photos_uploaded == 3
     assert summary.lots_created == 1
     assert summary.jobs_started == 1
+    assert summary.active_hours == 2.0
+    assert summary.photos_per_hour == 1.5
+    assert summary.lots_per_hour == 0.5
     assert summary.members[0].email == "maria@ct.test"
+
+
+def test_summarize_active_rate_uses_first_to_last_same_day(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    owner = _user(db, user_id="owner-a", account_id="acct-a", email="owner@ct.test", role="owner")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=owner.id, name="Sale A"))
+    first = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
+    last = datetime(2026, 9, 5, 14, 0, tzinfo=UTC)
+    photos = [
+        Photo(
+            id=f"p-{i}",
+            account_id="acct-a",
+            user_id=owner.id,
+            lot_id=None,
+            original_name=f"{i}.jpg",
+            storage_path=f"/{i}.jpg",
+            created_at=first + timedelta(minutes=30 * i),
+        )
+        for i in range(8)
+    ]
+    lots = [
+        Lot(
+            id=f"lot-{i}",
+            account_id="acct-a",
+            user_id=owner.id,
+            sale_id="sale-a",
+            auction_title=f"Lot {i}",
+            created_at=first + timedelta(hours=i),
+        )
+        for i in range(4)
+    ]
+    photos[-1].created_at = last
+    db.add_all(photos + lots)
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", first - timedelta(hours=1), last + timedelta(hours=1))
+    row = summary.members[0]
+    assert row.active_hours == 4.0
+    assert row.photos_uploaded == 8
+    assert row.lots_created == 4
+    assert row.photos_per_hour == 2.0
+    assert row.lots_per_hour == 1.0
 
 
 def test_summarize_excludes_photos_at_until_bound(tmp_path: Path) -> None:

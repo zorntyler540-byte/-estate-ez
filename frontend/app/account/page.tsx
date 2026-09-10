@@ -35,6 +35,9 @@ type TeamActivityMember = {
   photos_uploaded: number;
   lots_created: number;
   jobs_started: number;
+  active_hours: number;
+  photos_per_hour: number;
+  lots_per_hour: number;
 };
 
 type TeamActivity = {
@@ -46,6 +49,9 @@ type TeamActivity = {
     lots_created: number;
     jobs_started: number;
     member_count: number;
+    active_hours: number;
+    photos_per_hour: number;
+    lots_per_hour: number;
   };
 };
 
@@ -91,6 +97,16 @@ function formatActivityWhen(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
+}
+
+function formatActivityHours(n: number | undefined): string {
+  if (!n) return "—";
+  return n.toFixed(n >= 10 ? 1 : 2);
+}
+
+function formatActivityRate(n: number | undefined): string {
+  if (!n) return "—";
+  return n.toFixed(1);
 }
 
 function isAuthFailureMessage(message: string): boolean {
@@ -631,14 +647,17 @@ export default function AccountPage() {
             Team activity
           </h2>
           <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
-            Photos, lots, and catalog jobs each login created in this window.
+            Photos, lots, catalog jobs, and active-hour pace each login created in this window.
           </p>
           <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
             <summary>How this is counted</summary>
             <div className="ct-help-details__body">
-              Credit goes to the account that uploaded the photo or started the catalog job. Deleted
-              photos drop off. Shared logins look like one person. This is not hours worked — it is
-              surviving rows stamped with that person&apos;s user id and created time.
+              Credit goes to the login that uploaded the photo or started the catalog job. Deleted
+              photos drop off. Shared logins look like one person. Photos/hr and Lots/hr use{" "}
+              <strong>active hours</strong>: each UTC day with a photo or lot is the time from that
+              person&apos;s first event to their last that day, at least one hour. Totals divide
+              team counts by the sum of those person-hours. This is cataloging pace, not hours on
+              the clock.
             </div>
           </details>
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -714,6 +733,9 @@ export default function AccountPage() {
                       <th className="ct-table__num">Photos</th>
                       <th className="ct-table__num">Lots</th>
                       <th className="ct-table__num">Jobs</th>
+                      <th className="ct-table__num">Active hrs</th>
+                      <th className="ct-table__num">Photos/hr</th>
+                      <th className="ct-table__num">Lots/hr</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -729,6 +751,9 @@ export default function AccountPage() {
                         <td className="ct-table__num">{m.photos_uploaded}</td>
                         <td className="ct-table__num">{m.lots_created}</td>
                         <td className="ct-table__num">{m.jobs_started}</td>
+                        <td className="ct-table__num">{formatActivityHours(m.active_hours)}</td>
+                        <td className="ct-table__num">{formatActivityRate(m.photos_per_hour)}</td>
+                        <td className="ct-table__num">{formatActivityRate(m.lots_per_hour)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -741,6 +766,9 @@ export default function AccountPage() {
                       <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
                       <th className="ct-table__num">{activity.totals.lots_created}</th>
                       <th className="ct-table__num">{activity.totals.jobs_started}</th>
+                      <th className="ct-table__num">{formatActivityHours(activity.totals.active_hours)}</th>
+                      <th className="ct-table__num">{formatActivityRate(activity.totals.photos_per_hour)}</th>
+                      <th className="ct-table__num">{formatActivityRate(activity.totals.lots_per_hour)}</th>
                     </tr>
                   </tfoot>
                 </table>
