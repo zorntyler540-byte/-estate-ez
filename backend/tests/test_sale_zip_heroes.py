@@ -224,3 +224,84 @@ def test_photos_zip_uses_sku_title_folders(tmp_path: Path, monkeypatch) -> None:
     index = zipfile.ZipFile(row.zip_path).read("_lots.csv").decode("utf-8-sig")
     assert "JZ5137AD" in index
     assert folder in index
+
+
+def test_heroes_zip_can_filter_to_one_ctbids_sale(tmp_path: Path, monkeypatch) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'zip.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    monkeypatch.setattr("app.services.sale_zip_export.export_dir_for_account", lambda _aid: export_dir)
+
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    _tiny_jpeg(a)
+    _tiny_jpeg(b)
+
+    db.add_all(
+        [
+            Lot(
+                id="lot-a",
+                account_id="acct-1",
+                user_id="user-1",
+                sale_id="sale-1",
+                sku="TG415SK",
+                auction_title="Gold necklace",
+                ctseller_item_id=11,
+                ctseller_sale_id=100,
+            ),
+            Lot(
+                id="lot-b",
+                account_id="acct-1",
+                user_id="user-1",
+                sale_id="sale-1",
+                sku="MS322AD",
+                auction_title="Hallmark ornaments",
+                ctseller_item_id=22,
+                ctseller_sale_id=200,
+            ),
+            Photo(
+                id="p-a",
+                account_id="acct-1",
+                user_id="user-1",
+                lot_id="lot-a",
+                original_name="a.jpg",
+                storage_path=str(a),
+                sort_order=0,
+                photo_role="hero",
+            ),
+            Photo(
+                id="p-b",
+                account_id="acct-1",
+                user_id="user-1",
+                lot_id="lot-b",
+                original_name="b.jpg",
+                storage_path=str(b),
+                sort_order=0,
+                photo_role="hero",
+            ),
+        ]
+    )
+    row = SalePhotoZipExport(
+        id="ex-ctbids",
+        account_id="acct-1",
+        user_id="user-1",
+        sale_id="sale-1",
+        status=JobStatus.queued,
+        kind=ZIP_KIND_HEROES,
+        filter_ctseller_sale_id=100,
+        total_photos_expected=1,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+
+    run_sale_photo_zip_export(db, "ex-ctbids")
+    db.refresh(row)
+    assert row.status == JobStatus.completed
+    names = [n for n in zipfile.ZipFile(row.zip_path).namelist() if n != "_lots.csv"]
+    assert names == ["TG415SK-Gold-necklace.jpg"]
+    assert not any("MS322AD" in n for n in names)
+

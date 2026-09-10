@@ -27,30 +27,42 @@ def export_dir_for_account(account_id: str) -> Path:
     return d
 
 
-def count_sale_catalog_photos(db: Session, sale_id: str, account_id: str) -> int:
+def _zip_lot_filters(
+    sale_id: str,
+    account_id: str,
+    filter_ctseller_sale_id: int | None = None,
+) -> list:
+    clauses = [
+        Lot.sale_id == sale_id,
+        Lot.account_id == account_id,
+        Photo.account_id == account_id,
+    ]
+    if filter_ctseller_sale_id is not None:
+        clauses.append(Lot.ctseller_item_id.isnot(None))
+        clauses.append(Lot.ctseller_sale_id == int(filter_ctseller_sale_id))
+    return clauses
+
+
+def count_sale_catalog_photos(
+    db: Session, sale_id: str, account_id: str, filter_ctseller_sale_id: int | None = None
+) -> int:
     return (
         db.query(func.count(Photo.id))
         .join(Lot, Photo.lot_id == Lot.id)
-        .filter(
-            Lot.sale_id == sale_id,
-            Lot.account_id == account_id,
-            Photo.account_id == account_id,
-        )
+        .filter(*_zip_lot_filters(sale_id, account_id, filter_ctseller_sale_id))
         .scalar()
         or 0
     )
 
 
-def count_sale_hero_photos(db: Session, sale_id: str, account_id: str) -> int:
+def count_sale_hero_photos(
+    db: Session, sale_id: str, account_id: str, filter_ctseller_sale_id: int | None = None
+) -> int:
     """Lots in this sale that have at least one catalog photo (one hero zip entry each)."""
     return (
         db.query(func.count(func.distinct(Lot.id)))
         .join(Photo, Photo.lot_id == Lot.id)
-        .filter(
-            Lot.sale_id == sale_id,
-            Lot.account_id == account_id,
-            Photo.account_id == account_id,
-        )
+        .filter(*_zip_lot_filters(sale_id, account_id, filter_ctseller_sale_id))
         .scalar()
         or 0
     )
@@ -198,15 +210,21 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
 
     zip_final = export_dir_for_account(row.account_id) / f"sale-{row.sale_id}-{export_id}.zip"
     try:
-        lots = (
+        lots_q = (
             db.query(Lot)
             .filter(
                 Lot.sale_id == row.sale_id,
                 Lot.account_id == row.account_id,
             )
             .order_by(Lot.created_at.asc())
-            .all()
         )
+        filter_sid = getattr(row, "filter_ctseller_sale_id", None)
+        if filter_sid is not None:
+            lots_q = lots_q.filter(
+                Lot.ctseller_item_id.isnot(None),
+                Lot.ctseller_sale_id == int(filter_sid),
+            )
+        lots = lots_q.all()
         written = 0
         used_folders: set[str] = set()
         index_rows: list[tuple[str, str, str]] = []

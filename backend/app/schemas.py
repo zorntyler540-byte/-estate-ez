@@ -251,6 +251,7 @@ class LotOut(BaseModel):
     ai_regenerate_error: str | None = None
     ctseller_item_id: int | None = None
     ctseller_posted_at: datetime | None = None
+    ctseller_sale_id: int | None = None
     listing_channel: str = "ctseller"
     audience_hold: bool = False
     audience_hunting: bool = False
@@ -312,6 +313,19 @@ class CTSellerRemoteSaleOut(BaseModel):
     status: str | None = None
     starttime: str | None = None
     endtime: str | None = None
+
+
+class CTSellerPostedAuctionOut(BaseModel):
+    ctseller_sale_id: int
+    title: str
+    posted_count: int
+
+
+class CTSellerPostedAuctionsOut(BaseModel):
+    looked_up: int = 0
+    failed: int = 0
+    unknown_count: int = 0
+    auctions: list[CTSellerPostedAuctionOut] = []
 
 
 class CTSellerConditionOut(BaseModel):
@@ -718,6 +732,7 @@ class SaleZipExportOut(BaseModel):
     created_at: datetime
     ready: bool = False
     kind: str = "all"
+    filter_ctseller_sale_id: int | None = None
 
 
 class AppraisalResultOut(BaseModel):
