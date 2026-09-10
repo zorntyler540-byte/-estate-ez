@@ -1,7 +1,7 @@
-import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { StableUriImage } from "@/components/StableUriImage";
+import { ZoomablePreview } from "@/components/ZoomablePreview";
 
 import { isVideoUri } from "@/lib/mediaKind";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
@@ -77,7 +77,6 @@ export function PhotoPreviewModal({
   const total = uris.length;
   const canPrev = index > 0;
   const canNext = index < total - 1;
-  const swipeStartX = useRef<number | null>(null);
 
   function go(delta: number) {
     const next = stepCaptureIndex(index, total, delta);
@@ -94,29 +93,21 @@ export function PhotoPreviewModal({
             {isVideoUri(uri) ? "Video" : "Photo"} {index + 1} of {total}
             {total > 1 ? " · taken order" : ""}
           </Text>
+          {uri && !isVideoUri(uri) ? (
+            <Text style={styles.modalZoomHint}>Pinch to zoom · swipe when not zoomed to change photos</Text>
+          ) : null}
           {uri ? (
-            <View
-              style={styles.modalImageWrap}
-              onTouchStart={(e) => {
-                swipeStartX.current = e.nativeEvent.pageX;
-              }}
-              onTouchEnd={(e) => {
-                const start = swipeStartX.current;
-                swipeStartX.current = null;
-                if (start == null) return;
-                const dx = e.nativeEvent.pageX - start;
-                if (dx > 56) go(-1);
-                else if (dx < -56) go(1);
-              }}
-            >
-              {isVideoUri(uri) ? (
-                <View style={[styles.modalImage, styles.videoPreview]}>
-                  <Text style={styles.videoPreviewMark}>▶</Text>
-                  <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
-                </View>
-              ) : (
-                <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
-              )}
+            <View style={styles.modalImageWrap}>
+              <ZoomablePreview resetKey={`${index}:${uri}`} onSwipe={go}>
+                {isVideoUri(uri) ? (
+                  <View style={[styles.modalImage, styles.videoPreview]}>
+                    <Text style={styles.videoPreviewMark}>▶</Text>
+                    <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
+                  </View>
+                ) : (
+                  <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
+                )}
+              </ZoomablePreview>
             </View>
           ) : null}
           {total > 1 ? (
@@ -259,7 +250,8 @@ const styles = StyleSheet.create({
   },
   modalCard: { gap: 12 },
   modalTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  modalImageWrap: { width: "100%", height: "68%" },
+  modalZoomHint: { color: "#a8a29e", fontSize: 13, textAlign: "center" },
+  modalImageWrap: { width: "100%", height: "68%", overflow: "hidden", borderRadius: 12 },
   modalImage: { width: "100%", height: "100%", borderRadius: 12, backgroundColor: "#0e0e10" },
   modalNav: { flexDirection: "row", gap: 10 },
   modalNavBtn: {

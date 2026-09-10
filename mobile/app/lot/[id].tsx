@@ -3,6 +3,7 @@ import { Stack, router, useFocusEffect, useLocalSearchParams } from "expo-router
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +12,8 @@ import {
   type StyleProp,
   type ImageStyle
 } from "react-native";
+
+import { ZoomablePreview } from "@/components/ZoomablePreview";
 
 import { useAuth } from "@/context/AuthContext";
 import * as WebBrowser from "expo-web-browser";
@@ -73,6 +76,82 @@ const LotPhotoThumb = memo(function LotPhotoThumb({
   return <StableThumb source={source} style={styles.photo} recyclingKey={photoId} />;
 });
 
+function LotPhotoPreviewModal({
+  lotId,
+  photos,
+  index,
+  token,
+  onClose,
+  onIndexChange
+}: {
+  lotId: string;
+  photos: LotPhoto[];
+  index: number;
+  token: string;
+  onClose: () => void;
+  onIndexChange: (index: number) => void;
+}) {
+  const photo = photos[index];
+  const source = useMemo(
+    () => (photo ? lotPhotoThumbnailSource(lotId, photo.id, token, 1600) : null),
+    [lotId, photo?.id, token]
+  );
+  if (!photo || !source) return null;
+  const canPrev = index > 0;
+  const canNext = index < photos.length - 1;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.previewBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={styles.previewCard}>
+          <Text style={styles.previewTitle}>
+            Photo {index + 1} of {photos.length}
+          </Text>
+          <Text style={styles.previewHint}>Pinch to zoom · swipe when not zoomed to change photos</Text>
+          <View style={styles.previewImageWrap}>
+            <ZoomablePreview
+              resetKey={`${photo.id}:${index}`}
+              onSwipe={(dir) => {
+                const next = index + dir;
+                if (next >= 0 && next < photos.length) onIndexChange(next);
+              }}
+            >
+              <Image
+                source={source}
+                style={styles.previewImage}
+                contentFit="contain"
+                cachePolicy="memory-disk"
+                recyclingKey={photo.id}
+                transition={0}
+              />
+            </ZoomablePreview>
+          </View>
+          <View style={styles.previewNav}>
+            <Pressable
+              style={[styles.previewNavBtn, !canPrev && styles.previewNavBtnDisabled]}
+              disabled={!canPrev}
+              onPress={() => onIndexChange(index - 1)}
+            >
+              <Text style={styles.previewNavText}>Previous</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.previewNavBtn, !canNext && styles.previewNavBtnDisabled]}
+              disabled={!canNext}
+              onPress={() => onIndexChange(index + 1)}
+            >
+              <Text style={styles.previewNavText}>Next</Text>
+            </Pressable>
+          </View>
+          <Pressable style={styles.previewClose} onPress={onClose}>
+            <Text style={styles.previewCloseText}>Close</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function LotDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { token } = useAuth();
@@ -81,6 +160,7 @@ export default function LotDetailScreen() {
   const [videos, setVideos] = useState<LotVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const lotRef = useRef<Lot | null>(null);
   const lastLoadAtRef = useRef(0);
   lotRef.current = lot;
@@ -137,7 +217,14 @@ export default function LotDetailScreen() {
           <>
             <View style={styles.heroWrap}>
               {lot.has_thumbnail && heroSource ? (
-                <StableThumb source={heroSource} style={styles.hero} recyclingKey={lot.id} />
+                <Pressable
+                  style={styles.hero}
+                  onPress={() => {
+                    if (photos.length) setPreviewIndex(0);
+                  }}
+                >
+                  <StableThumb source={heroSource} style={styles.hero} recyclingKey={lot.id} />
+                </Pressable>
               ) : (
                 <View style={[styles.hero, styles.heroEmpty]}>
                   <Text style={styles.heroEmptyText}>No photo</Text>
@@ -173,8 +260,10 @@ export default function LotDetailScreen() {
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
               {photos.length && token
-                ? photos.map((photo) => (
-                    <LotPhotoThumb key={photo.id} lotId={lot.id} photoId={photo.id} token={token} />
+                ? photos.map((photo, photoIndex) => (
+                    <Pressable key={photo.id} onPress={() => setPreviewIndex(photoIndex)}>
+                      <LotPhotoThumb lotId={lot.id} photoId={photo.id} token={token} />
+                    </Pressable>
                   ))
                 : null}
               {!photos.length ? <Text style={styles.muted}>No photos linked.</Text> : null}
@@ -230,6 +319,16 @@ export default function LotDetailScreen() {
           </>
         ) : null}
       </ScrollView>
+      {previewIndex != null && lot && token && photos[previewIndex] ? (
+        <LotPhotoPreviewModal
+          lotId={lot.id}
+          photos={photos}
+          index={previewIndex}
+          token={token}
+          onClose={() => setPreviewIndex(null)}
+          onIndexChange={setPreviewIndex}
+        />
+      ) : null}
     </>
   );
 }
@@ -289,5 +388,36 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   addPhotosBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  addPhotosHint: { color: "#78716c", fontSize: 13, lineHeight: 18 }
+  addPhotosHint: { color: "#78716c", fontSize: 13, lineHeight: 18 },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(7, 7, 8, 0.92)",
+    justifyContent: "center",
+    padding: 16
+  },
+  previewCard: { gap: 10 },
+  previewTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
+  previewHint: { color: "#a8a29e", fontSize: 13, textAlign: "center" },
+  previewImageWrap: { width: "100%", height: "68%", overflow: "hidden", borderRadius: 12 },
+  previewImage: { width: "100%", height: "100%", backgroundColor: "#0e0e10" },
+  previewNav: { flexDirection: "row", gap: 10 },
+  previewNavBtn: {
+    flex: 1,
+    backgroundColor: "#292524",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#44403c"
+  },
+  previewNavBtnDisabled: { opacity: 0.35 },
+  previewNavText: { color: "#f5f5f4", fontWeight: "700", fontSize: 16 },
+  previewClose: {
+    alignSelf: "center",
+    backgroundColor: "#3f3f46",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 28
+  },
+  previewCloseText: { color: "#f5f5f4", fontWeight: "600", fontSize: 16 }
 });
