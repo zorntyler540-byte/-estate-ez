@@ -5,6 +5,8 @@ import {
   deleteJob,
   listCatalogedMobileDraftsDetailed,
   listJobsForSale,
+  listLots,
+  listSales,
   runJob,
   uploadLotVideos,
   uploadSingleLotJob
@@ -26,7 +28,12 @@ import {
   setDraftServerLotId,
   setDraftStatus
 } from "./db";
-import { shouldArchiveCatalogedDraft, shouldSkipReupload } from "./archiveCataloged";
+import {
+  normalizeArchiveSku,
+  shouldArchiveCatalogedDraft,
+  shouldSkipReupload,
+  uniqueSkuLotMap
+} from "./archiveCataloged";
 import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
@@ -95,7 +102,7 @@ async function fetchServerJobChecked(
 }
 
 type CatalogedIndex =
-  | { ok: true; ids: Set<string>; lotByDraft: Map<string, string> }
+  | { ok: true; ids: Set<string>; lotByDraft: Map<string, string>; skuToLot: Map<string, string> }
   | { ok: false };
 
 async function catalogedDraftIndex(token: string, saleId: string): Promise<CatalogedIndex> {
@@ -107,7 +114,16 @@ async function catalogedDraftIndex(token: string, saleId: string): Promise<Catal
       const lotId = String(row.lot_id || "").trim();
       if (draftId && lotId) lotByDraft.set(draftId, lotId);
     }
-    return { ok: true, ids: new Set(res.draftIds), lotByDraft };
+    let skuToLot = new Map<string, string>();
+    try {
+      const lots = await listLots(token, saleId, { sort: "sku_asc" });
+      skuToLot = uniqueSkuLotMap(lots);
+    } catch {
+      skuToLot = uniqueSkuLotMap(
+        res.lots.map((row) => ({ id: row.lot_id, sku: row.sku }))
+      );
+    }
+    return { ok: true, ids: new Set(res.draftIds), lotByDraft, skuToLot };
   } catch {
     // Empty is not the same as "nothing cataloged" — a failed lookup must not
     // make Sync re-upload every lot already on the website.
@@ -115,34 +131,70 @@ async function catalogedDraftIndex(token: string, saleId: string): Promise<Catal
   }
 }
 
+/** Draft ids / unique SKUs from every sale this phone knows, so merged or moved lots still match. */
+async function websiteArchiveIndexes(
+  token: string,
+  saleIds: string[]
+): Promise<{ bySale: Map<string, CatalogedIndex>; allDraftLots: Map<string, string> }> {
+  const ids = [...new Set(saleIds.filter(Boolean))];
+  try {
+    const sales = await listSales(token);
+    for (const sale of sales) {
+      if (sale.closed_at) continue;
+      if (!ids.includes(sale.id)) ids.push(sale.id);
+    }
+  } catch {
+    /* use the sale ids already on the drafts */
+  }
+  const bySale = new Map<string, CatalogedIndex>();
+  const allDraftLots = new Map<string, string>();
+  for (const saleId of ids) {
+    const idx = await catalogedDraftIndex(token, saleId);
+    bySale.set(saleId, idx);
+    if (idx.ok) {
+      for (const [draftId, lotId] of idx.lotByDraft) {
+        if (!allDraftLots.has(draftId)) allDraftLots.set(draftId, lotId);
+      }
+    }
+  }
+  return { bySale, allDraftLots };
+}
+
 /** After Sync confirms catalog, strip local JPEGs. Safe to call from Queue focus. */
 export async function sweepArchiveConfirmedDrafts(token: string): Promise<number> {
   const drafts = await listLotDrafts();
-  const bySale = new Map<string, CatalogedIndex>();
+  const saleIds = drafts.map((d) => d.sale_id);
+  const { bySale, allDraftLots } = await websiteArchiveIndexes(token, saleIds);
   let archived = 0;
   for (const draft of drafts) {
     if (draft.archived_at) continue;
-    if (draft.status === "draft") continue;
-    if (!bySale.has(draft.sale_id)) {
-      bySale.set(draft.sale_id, await catalogedDraftIndex(token, draft.sale_id));
-    }
     const cataloged = bySale.get(draft.sale_id);
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
-    const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(draft.id.toLowerCase()));
+    const draftKey = draft.id.toLowerCase();
+    const confirmed = allDraftLots.has(draftKey) || Boolean(cataloged?.ok && cataloged.ids.has(draftKey));
+    const sku = normalizeArchiveSku(draft.manual_sku);
+    const skuLot =
+      (sku && cataloged?.ok ? cataloged.skuToLot.get(sku) : undefined) || undefined;
+    const uniqueSkuMatch = Boolean(skuLot);
     const hasServerLotId = Boolean(draft.server_lot_id);
-    if (lookupFailed && !hasServerLotId) continue;
+    if (lookupFailed && !hasServerLotId && !confirmed && !uniqueSkuMatch) continue;
     if (
       !shouldArchiveCatalogedDraft({
         alreadyArchived: Boolean(draft.archived_at),
         status: draft.status,
         errorMessage: draft.error_message,
         confirmedOnServer: confirmed,
-        hasServerLotId
+        hasServerLotId,
+        uniqueSkuMatch
       })
     ) {
       continue;
     }
-    const lotId = (cataloged?.ok ? cataloged.lotByDraft.get(draft.id.toLowerCase()) : null) || draft.server_lot_id;
+    const lotId =
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      draft.server_lot_id;
     if (lotId && draft.server_lot_id !== lotId) {
       await setDraftServerLotId(draft.id, lotId);
     }
@@ -177,16 +229,22 @@ export async function syncPendingLots(
   const drafts = await listLotDrafts();
 
   // Phase 0: if the website already has the lot, adopt it. Do not re-upload.
-  const catalogedBySale = new Map<string, CatalogedIndex>();
+  const { bySale: catalogedBySale, allDraftLots } = await websiteArchiveIndexes(
+    authToken,
+    drafts.map((d) => d.sale_id)
+  );
   for (const draft of drafts) {
-    if (!catalogedBySale.has(draft.sale_id)) {
-      catalogedBySale.set(draft.sale_id, await catalogedDraftIndex(authToken, draft.sale_id));
-    }
     const cataloged = catalogedBySale.get(draft.sale_id);
     const draftKey = draft.id.toLowerCase();
-    if (cataloged?.ok && cataloged.ids.has(draftKey)) {
-      const lotId = cataloged.lotByDraft.get(draftKey);
-      if (lotId && draft.server_lot_id !== lotId) {
+    const sku = normalizeArchiveSku(draft.manual_sku);
+    const skuLot = sku && cataloged?.ok ? cataloged.skuToLot.get(sku) : undefined;
+    const lotId =
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : undefined) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      undefined;
+    if (lotId) {
+      if (draft.server_lot_id !== lotId) {
         await setDraftServerLotId(draft.id, lotId);
       }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
@@ -229,7 +287,7 @@ export async function syncPendingLots(
   for (const draft of await listLotDrafts()) {
     if (draft.archived_at) continue;
     const cataloged = catalogedBySale.get(draft.sale_id);
-    const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(draft.id.toLowerCase()));
+    const confirmed = allDraftLots.has(draft.id.toLowerCase());
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
     if (
       shouldSkipReupload({
@@ -276,7 +334,7 @@ export async function syncPendingLots(
   const pending = (await listLotDrafts()).filter((d) => {
     if (d.archived_at || d.status !== "queued") return false;
     const cataloged = catalogedBySale.get(d.sale_id);
-    const confirmed = Boolean(cataloged?.ok && cataloged.ids.has(d.id.toLowerCase()));
+    const confirmed = allDraftLots.has(d.id.toLowerCase());
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
     return !shouldSkipReupload({
       confirmedOnServer: confirmed,

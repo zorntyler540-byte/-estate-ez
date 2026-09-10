@@ -1,7 +1,8 @@
 import {
   isStillCatalogingMessage,
   shouldArchiveCatalogedDraft,
-  shouldSkipReupload
+  shouldSkipReupload,
+  uniqueSkuLotMap
 } from "./archiveCataloged";
 
 function assert(cond: unknown, msg: string) {
@@ -58,9 +59,9 @@ assert(
   shouldArchiveCatalogedDraft({
     status: "draft",
     errorMessage: null,
-    confirmedOnServer: true
+    confirmedOnServer: false
   }) === false,
-  "draft stays — still shooting"
+  "draft stays when the website does not have this id"
 );
 assert(
   shouldArchiveCatalogedDraft({
@@ -99,5 +100,37 @@ assert(
   shouldSkipReupload({ confirmedOnServer: false, hasServerLotId: true }) === true,
   "do not re-upload a lot already linked on the website"
 );
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "uploaded",
+    confirmedOnServer: false,
+    uniqueSkuMatch: true
+  }) === true,
+  "unique SKU on the website archives a sent lot"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "draft",
+    confirmedOnServer: false,
+    uniqueSkuMatch: true
+  }) === false,
+  "draft does not archive on SKU alone"
+);
+assert(
+  shouldArchiveCatalogedDraft({
+    status: "draft",
+    confirmedOnServer: true
+  }) === true,
+  "draft archives when this phone id is already on website photos"
+);
 
-console.log("archiveCataloged selftest ok (18 cases)");
+const skuMap = uniqueSkuLotMap([
+  { id: "a", sku: "LV101" },
+  { id: "b", sku: "lv102" },
+  { id: "c", sku: "LV101" },
+  { id: "d", sku: "  " }
+]);
+assert(skuMap.get("lv102") === "b", "unique sku maps");
+assert(skuMap.has("lv101") === false, "duplicate sku does not map");
+
+console.log("archiveCataloged selftest ok (22 cases)");
