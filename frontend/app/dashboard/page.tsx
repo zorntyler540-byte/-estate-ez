@@ -7306,7 +7306,7 @@ export default function DashboardPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Photo ZIP</span>
                   <span className="ct-upload-option__desc">
-                    Every catalog photo for this sale — one folder per lot in the archive.
+                    Every catalog photo for this sale — one folder per lot, named SKU plus title.
                   </span>
                 </div>
                 <div className="ct-upload-option__actions">
@@ -7342,7 +7342,7 @@ export default function DashboardPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Hero shots ZIP</span>
                   <span className="ct-upload-option__desc">
-                    One group/hero photo per lot (not SKU tape), named by SKU — for EstateSales.net.
+                    One group/hero photo per lot (not SKU tape), named SKU plus title — for EstateSales.net.
                   </span>
                 </div>
                 <div className="ct-upload-option__actions">
@@ -7377,13 +7377,15 @@ export default function DashboardPage() {
               <div className="ct-help-details__body">
                 <ul>
                   <li>
-                    <strong>Photo ZIP</strong>: original images, <strong>one folder per lot</strong> (named
-                    by SKU, e.g. <code>lot-045</code>).
+                    <strong>Photo ZIP</strong>: original images, <strong>one folder per lot</strong> named
+                    SKU plus a short title (e.g. <code>JZ5137AD-Liz-Co-Heart-Necklace</code>, or{" "}
+                    <code>lot-045-Table-Lamp</code> for number-only SKUs).
                   </li>
                   <li>
                     <strong>Hero shots ZIP</strong>: one listing photo per lot (AI group/hero, never the
-                    dedicated SKU-tape frame). Files are named like <code>lot-045.jpg</code> for
-                    EstateSales.net.
+                    dedicated SKU-tape frame). Files stay <strong>flat</strong> for EstateSales.net, named
+                    like <code>JZ5137AD-Liz-Co-Heart-Necklace.jpg</code>. Both ZIPs include{" "}
+                    <code>_lots.csv</code> (SKU, title, file/folder).
                   </li>
                   <li>Progress counts update every few seconds while the server builds the archive.</li>
                   <li>
