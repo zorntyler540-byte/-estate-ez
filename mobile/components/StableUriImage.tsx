@@ -7,20 +7,24 @@ export const StableUriImage = memo(function StableUriImage({
   uri,
   style,
   recyclingKey,
-  contentFit = "cover"
+  contentFit = "cover",
+  cachePolicy = "memory-disk"
 }: {
   uri: string;
   style: StyleProp<ImageStyle>;
   recyclingKey?: string;
   contentFit?: "cover" | "contain";
+  /** Queue uses disk-only so opening a long list does not keep every JPEG in RAM. */
+  cachePolicy?: "none" | "disk" | "memory" | "memory-disk";
 }) {
   const source = useMemo(() => ({ uri }), [uri]);
+  if (!uri.trim()) return null;
   return (
     <Image
       source={source}
       style={style}
       contentFit={contentFit}
-      cachePolicy="memory-disk"
+      cachePolicy={cachePolicy}
       recyclingKey={recyclingKey ?? uri}
       transition={0}
     />

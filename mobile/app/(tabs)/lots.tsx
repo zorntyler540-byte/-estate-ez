@@ -28,6 +28,9 @@ function lotSubtitle(lot: Lot): string {
   const parts: string[] = [];
   if (lot.sku?.trim()) parts.push(lot.sku.trim());
   parts.push(`${lot.photo_count} photo${lot.photo_count === 1 ? "" : "s"}`);
+  if ((lot.video_count ?? 0) > 0) {
+    parts.push(`${lot.video_count} video${lot.video_count === 1 ? "" : "s"}`);
+  }
   if (lot.ct_category?.trim()) parts.push(lot.ct_category.trim());
   return parts.join(" · ");
 }

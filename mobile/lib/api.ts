@@ -1,3 +1,4 @@
+import { parseApiError } from "./apiError";
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import { videoMimeType } from "./mediaKind";
@@ -5,6 +6,8 @@ import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types"
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
   resolveUploadFileUri,
+  resolveUploadVideoUri,
+  uriWithUploadFileName,
   type UploadPhotoUri
 } from "./uploadPrepare";
 import * as FileSystem from "expo-file-system/legacy";
@@ -14,28 +17,7 @@ export type SaleLotCoverUrls = {
   urls: Record<string, string>;
 };
 
-export function parseApiError(raw: string, fallback = "Request failed"): string {
-  const t = raw.trim();
-  if (!t) return fallback;
-  try {
-    const j = JSON.parse(t) as { detail?: unknown };
-    const d = j.detail;
-    if (typeof d === "string" && d.trim()) return d.trim();
-    if (Array.isArray(d)) {
-      const parts = d
-        .map((x) => {
-          if (typeof x === "string") return x;
-          if (x && typeof x === "object" && "msg" in x) return String((x as { msg: unknown }).msg);
-          return "";
-        })
-        .filter(Boolean);
-      if (parts.length) return parts.join("; ");
-    }
-  } catch {
-    /* not JSON */
-  }
-  return t.length > 280 ? `${t.slice(0, 277)}…` : t;
-}
+export { isProxyBusyError, parseApiError } from "./apiError";
 
 type ApiFetchInit = RequestInit & {
   /** Internal: already retried after a silent credential refresh. */
@@ -201,9 +183,13 @@ async function nativeMultipartUpload(opts: {
   if (!uploadUri.startsWith("file://") && uploadUri.startsWith("/")) {
     uploadUri = `file://${uploadUri}`;
   }
+  const isVideoUpload = Boolean(opts.mimeType && opts.mimeType.startsWith("video/"));
   if (!uploadUri.startsWith("file://")) {
-    uploadUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+    uploadUri = isVideoUpload
+      ? await resolveUploadVideoUri(opts.fileUri)
+      : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
   }
+  uploadUri = await uriWithUploadFileName(uploadUri, opts.fileName);
 
   const url = `${API_BASE}${opts.path}`;
   let result: FileSystem.FileSystemUploadResult;
@@ -225,7 +211,10 @@ async function nativeMultipartUpload(opts: {
     const msg = e instanceof Error ? e.message : String(e);
     if (/not readable|could not be opened|no such file/i.test(msg)) {
       // Last chance: rematerialize from the original path / remapped Documents URI.
-      const retryUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
+      // Videos skip JPEG rematerialize — that turned clips into stills.
+      const retryUri = isVideoUpload
+        ? await resolveUploadVideoUri(opts.fileUri)
+        : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
       if (retryUri !== uploadUri) {
         result = await withTimeout(
           FileSystem.uploadAsync(url, retryUri, {
@@ -242,7 +231,9 @@ async function nativeMultipartUpload(opts: {
         );
       } else {
         throw new Error(
-          "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
+          isVideoUpload
+            ? "Video file is not readable on this phone — record that clip again."
+            : "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
         );
       }
     } else {

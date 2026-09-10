@@ -37,6 +37,7 @@ export default function TabLayout() {
         name="queue"
         options={{
           title: "Queue",
+          freezeOnBlur: true,
           tabBarIcon: ({ color }) => <Ionicons name="cloud-upload-outline" size={26} color={color} />
         }}
       />

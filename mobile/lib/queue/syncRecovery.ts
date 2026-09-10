@@ -42,6 +42,7 @@ export function isTransientSyncError(message: string | null | undefined): boolea
     m.includes("502") ||
     m.includes("503") ||
     m.includes("504") ||
+    m.includes("upstream") ||
     m.includes("didn't finish") ||
     m.includes("did not finish") ||
     m.includes("website was busy") ||

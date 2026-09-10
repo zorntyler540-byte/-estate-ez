@@ -28,7 +28,9 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
+  const selectedSaleIdRef = useRef(selectedSaleId);
   const selectedSaleNameRef = useRef(selectedSaleName);
+  selectedSaleIdRef.current = selectedSaleId;
   selectedSaleNameRef.current = selectedSaleName;
   const salesLenRef = useRef(0);
   salesLenRef.current = sales.length;
@@ -47,8 +49,9 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       const nameById = new Map(open.map((s) => [s.id, s.name]));
       await backfillDraftSaleNames(nameById);
 
-      if (selectedSaleId) {
-        const current = open.find((s) => s.id === selectedSaleId);
+      const sid = selectedSaleIdRef.current;
+      if (sid) {
+        const current = open.find((s) => s.id === sid);
         if (current && saleNameNeedsUpdate(selectedSaleNameRef.current, current.name)) {
           await setSelectedSale(current.id, current.name);
         }
@@ -58,9 +61,9 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [token, selectedSaleId, setSelectedSale]);
+  }, [token, setSelectedSale]);
 
-  // Load once per token/sale — do not use useFocusEffect here. That hook re-ran on every
+  // Load once per token — do not use useFocusEffect here. That hook re-ran on every
   // screen focus (including the add-photos camera) and, when the stored sale name differed
   // from the API, retriggered itself about once per fetch (~1s flicker on some phones).
   useEffect(() => {

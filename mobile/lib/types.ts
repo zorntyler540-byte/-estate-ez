@@ -84,6 +84,8 @@ export type LotDraft = {
   created_at: number;
   updated_at: number;
   photo_count: number;
+  /** Set after the server confirmed catalog — local JPEGs were removed. */
+  archived_at: number | null;
 };
 
 export type LotMediaKind = "image" | "video";

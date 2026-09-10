@@ -12,13 +12,16 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { countUploadPending } from "@/lib/queue/db";
-import { syncPendingLots } from "@/lib/queue/sync";
+import { countLotsNeedingPhotoUpload } from "@/lib/queue/db";
+import { attachPendingLotVideos, sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
+
+const AUTO_SYNC_COOLDOWN_MS = 45_000;
 
 export type SyncResult = {
   uploaded: number;
   failed: number;
   reconciled: number;
+  archived?: number;
 };
 
 type SyncStatusValue = {
@@ -45,6 +48,9 @@ const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
   if (result.uploaded === 0 && result.failed === 0) {
+    if (result.archived) {
+      return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
+    }
     if (result.reconciled > 0) {
       return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
     }
@@ -63,8 +69,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const syncInProgressRef = useRef(false);
-  const syncAgainRef = useRef(false);
   const syncPausedRef = useRef(false);
+  const lastSyncAtRef = useRef(0);
   const wasConnectedRef = useRef<boolean | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
@@ -76,11 +82,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (!token) return null;
 
     if (syncInProgressRef.current) {
-      syncAgainRef.current = true;
       return null;
     }
 
     syncInProgressRef.current = true;
+    lastSyncAtRef.current = Date.now();
     setSyncing(true);
 
     try {
@@ -90,15 +96,35 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      const pending = await countUploadPending();
-      if (pending === 0) {
-        setLastMessage(null);
-        return { uploaded: 0, failed: 0, reconciled: 0 };
+      setLastMessage("Checking the website for lots already cataloged…");
+      const videosAttached = await attachPendingLotVideos(token);
+      if (videosAttached) {
+        setRefreshKey((k) => k + 1);
+        setLastMessage(
+          `Uploaded ${videosAttached} leftover video${videosAttached === 1 ? "" : "s"} to the website.`
+        );
+      }
+      const archivedFirst = await sweepArchiveConfirmedDrafts(token);
+      if (archivedFirst) {
+        setRefreshKey((k) => k + 1);
+        setLastMessage(
+          `Moved ${archivedFirst} cataloged lot${archivedFirst === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
+        );
       }
 
+      const needingUpload = await countLotsNeedingPhotoUpload();
+      if (needingUpload === 0) {
+        if (!archivedFirst && !videosAttached) {
+          setLastMessage("Nothing queued to upload — lots already on the website stay in Archive.");
+        }
+        return { uploaded: videosAttached, failed: 0, reconciled: 0, archived: archivedFirst };
+      }
+
+      setLastMessage(`Uploading ${needingUpload} lot${needingUpload === 1 ? "" : "s"} not on the website yet…`);
       const result = await syncPendingLots(token, () => {
         setRefreshKey((k) => k + 1);
       });
+      result.archived = (result.archived || 0) + archivedFirst;
       setLastMessage(formatSyncMessage(result));
       setRefreshKey((k) => k + 1);
       return result;
@@ -109,15 +135,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } finally {
       syncInProgressRef.current = false;
       setSyncing(false);
-      if (syncAgainRef.current) {
-        syncAgainRef.current = false;
-        void syncNow();
-      }
     }
   }, [token]);
 
   const tryAutoSync = useCallback(() => {
     if (syncPausedRef.current) return;
+    if (syncInProgressRef.current) return;
+    if (Date.now() - lastSyncAtRef.current < AUTO_SYNC_COOLDOWN_MS) return;
     void syncNow();
   }, [syncNow]);
 

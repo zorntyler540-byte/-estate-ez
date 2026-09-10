@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from collections import defaultdict
 
-from app.catalog_storage import catalog_photo_file_on_disk, resolve_catalog_storage_path
+from app.catalog_storage import (
+    catalog_file_listed_without_remote_stat,
+    catalog_photo_file_on_disk,
+    resolve_catalog_storage_path,
+)
 from app.core.lotting import listing_quality_issue
 from app.models import Lot, LotVideo, Photo
 from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut, LotVideoOut
@@ -73,7 +77,7 @@ def lot_video_out(video: LotVideo, *, lot_id: str | None = None) -> LotVideoOut:
         sort_order=int(video.sort_order or 0),
         content_type=(video.content_type or "video/mp4"),
         byte_size=int(video.byte_size or 0),
-        file_on_disk=catalog_photo_file_on_disk(video.storage_path),
+        file_on_disk=catalog_file_listed_without_remote_stat(video.storage_path),
     )
 
 
@@ -85,7 +89,7 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
         original_name=photo.original_name,
         created_at=photo.created_at,
         sort_order=int(photo.sort_order or 0),
-        file_on_disk=catalog_photo_file_on_disk(photo.storage_path),
+        file_on_disk=catalog_file_listed_without_remote_stat(photo.storage_path),
         photo_role=(str(photo.photo_role).strip() or None) if getattr(photo, "photo_role", None) else None,
         distinct_item_id=(str(photo.distinct_item_id).strip() or None)
         if getattr(photo, "distinct_item_id", None)

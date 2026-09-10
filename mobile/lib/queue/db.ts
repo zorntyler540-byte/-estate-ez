@@ -47,6 +47,12 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "server_lot_id")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN server_lot_id TEXT");
       }
+      if (!cols.some((c) => c.name === "archived_at")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_at INTEGER");
+      }
+      if (!cols.some((c) => c.name === "archived_photo_count")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_photo_count INTEGER");
+      }
       const photoCols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_photos)");
       if (!photoCols.some((c) => c.name === "media_kind")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'image'");
@@ -75,7 +81,8 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     server_lot_id: row.server_lot_id != null ? String(row.server_lot_id) : null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
-    photo_count: photoCount
+    photo_count: photoCount,
+    archived_at: row.archived_at != null ? Number(row.archived_at) : null
   };
 }
 
@@ -123,15 +130,17 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
   const rows = await db.getAllAsync<Record<string, unknown>>(
     "SELECT * FROM lot_drafts ORDER BY updated_at DESC"
   );
-  const out: LotDraft[] = [];
-  for (const row of rows) {
-    const pc = await db.getFirstAsync<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
-      [String(row.id)]
-    );
-    out.push(rowToDraft(row, Number(pc?.c ?? 0)));
-  }
-  return out;
+  const counts = await db.getAllAsync<{ draft_id: string; c: number }>(
+    "SELECT draft_id, COUNT(*) AS c FROM lot_photos GROUP BY draft_id"
+  );
+  const countByDraft = new Map(counts.map((r) => [String(r.draft_id), Number(r.c)]));
+  return rows.map((row) => {
+    const archivedAt = row.archived_at != null ? Number(row.archived_at) : 0;
+    if (archivedAt > 0) {
+      return rowToDraft(row, Number(row.archived_photo_count ?? 0));
+    }
+    return rowToDraft(row, countByDraft.get(String(row.id)) ?? 0);
+  });
 }
 
 export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
@@ -141,6 +150,9 @@ export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
     [draftId]
   );
   if (!row) return null;
+  if (row.archived_at != null && Number(row.archived_at) > 0) {
+    return rowToDraft(row, Number(row.archived_photo_count ?? 0));
+  }
   const pc = await db.getFirstAsync<{ c: number }>(
     "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
     [draftId]
@@ -283,6 +295,71 @@ export async function deletePhotoById(draftId: string, photoId: string): Promise
   return true;
 }
 
+/**
+ * Confirmed cataloged: delete local files, keep a thin row for Add photos.
+ * Do not call until the website has the lot (see ``shouldArchiveCatalogedDraft``).
+ */
+export async function archiveCatalogedDraft(draftId: string): Promise<void> {
+  const existing = await getLotDraft(draftId);
+  if (existing?.archived_at) return;
+  const photos = await listDraftPhotos(draftId);
+  const pendingVideos = photos.filter((p) => p.media_kind === "video" && !p.uploaded);
+  const toRemove = photos.filter((p) => !(p.media_kind === "video" && !p.uploaded));
+  const count = photos.length || existing?.photo_count || 0;
+  for (const photo of toRemove) {
+    try {
+      await FileSystem.deleteAsync(photo.file_uri, { idempotent: true });
+    } catch {
+      /* file may already be gone */
+    }
+  }
+  const db = await getDb();
+  for (const photo of toRemove) {
+    await db.runAsync("DELETE FROM lot_photos WHERE id = ?", [photo.id]);
+  }
+  if (pendingVideos.length) {
+    // Keep clips until they reach the website. Do not mark archived.
+    await db.runAsync(
+      `UPDATE lot_drafts SET error_message = NULL, server_job_id = NULL, updated_at = ? WHERE id = ?`,
+      [Date.now(), draftId]
+    );
+    return;
+  }
+  await db.runAsync("DELETE FROM lot_photos WHERE draft_id = ?", [draftId]);
+  await db.runAsync(
+    `UPDATE lot_drafts
+     SET archived_at = ?, archived_photo_count = ?, error_message = NULL, server_job_id = NULL, updated_at = ?
+     WHERE id = ?`,
+    [Date.now(), count, Date.now(), draftId]
+  );
+}
+
+export async function archiveCatalogedDraftIfReady(draftId: string): Promise<boolean> {
+  const existing = await getLotDraft(draftId);
+  if (existing?.archived_at) return true;
+  if (existing && existing.status !== "uploaded") {
+    await setDraftStatus(draftId, "uploaded", null);
+  }
+  await archiveCatalogedDraft(draftId);
+  const after = await getLotDraft(draftId);
+  return Boolean(after?.archived_at);
+}
+
+export async function draftHasPendingLocalVideos(draftId: string): Promise<boolean> {
+  const photos = await listDraftPhotos(draftId);
+  return photos.some((p) => p.media_kind === "video" && !p.uploaded);
+}
+
+/** Drop archived phone rows. Website listings stay. */
+export async function deleteArchivedDrafts(): Promise<number> {
+  const drafts = await listLotDrafts();
+  const archived = drafts.filter((d) => d.archived_at);
+  for (const draft of archived) {
+    await deleteLotDraft(draft.id);
+  }
+  return archived.length;
+}
+
 export async function deleteLotDraft(draftId: string): Promise<void> {
   const photos = await listDraftPhotos(draftId);
   for (const photo of photos) {
@@ -305,15 +382,44 @@ export async function countPendingDrafts(): Promise<number> {
   return Number(row?.c ?? 0);
 }
 
+export async function countPhotoJobsPending(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed', 'uploading')`
+  );
+  return Number(row?.c ?? 0);
+}
+
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
   // Include "uploading" so Sync Now / foreground sync recover lots stuck after an app kill.
   // Also include leftover "uploaded" notices (timeout / still-cataloging copy) so Phase 0
   // can clear fake errors even when nothing is queued.
+  // Unsent local videos must keep Sync alive after photos already look uploaded —
+  // catalog usually finishes after the 45s confirm window, and clips attach then.
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
-     WHERE status IN ('queued', 'failed', 'uploading')
-        OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))`
+     WHERE archived_at IS NULL
+       AND (
+         status IN ('queued', 'failed', 'uploading')
+         OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))
+         OR EXISTS (
+           SELECT 1 FROM lot_photos
+           WHERE lot_photos.draft_id = lot_drafts.id
+             AND lot_photos.media_kind = 'video'
+             AND lot_photos.uploaded = 0
+         )
+       )`
+  );
+  return Number(row?.c ?? 0);
+}
+
+/** Lots that still need photos sent — leftover uploaded notices are not uploads. */
+export async function countLotsNeedingPhotoUpload(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading')`
   );
   return Number(row?.c ?? 0);
 }

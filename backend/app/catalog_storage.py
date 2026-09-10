@@ -312,6 +312,22 @@ def migrate_local_photos_to_r2(
     }
 
 
+def catalog_file_listed_without_remote_stat(storage_path: str | None) -> bool:
+    """
+    Cheap ``file_on_disk`` for lot photo/video list endpoints.
+
+    Local file or an R2 object key is enough. Never HEAD R2 here — that ran inside
+    ``Depends(get_db)`` and Railway returned ``upstream error`` on phone lot details.
+    Use ``catalog_photo_file_on_disk`` only off the request path (photo-health).
+    """
+    if not storage_path or not str(storage_path).strip():
+        return False
+    if _local_catalog_file(storage_path) is not None:
+        return True
+    key = _object_key_from_storage_path(str(storage_path))
+    return bool(key and object_storage.r2_configured())
+
+
 def catalog_photo_file_on_disk(storage_path: str | None) -> bool:
     if not storage_path or not str(storage_path).strip():
         return False

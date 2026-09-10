@@ -609,7 +609,9 @@ export default function CaptureSessionScreen() {
     if (!pending.images.length) {
       Alert.alert(
         "Need a photo",
-        "AI catalog needs at least one still photo. Videos attach after the lot is on the website."
+        pending.videos.length
+          ? "Your video is already saved on this lot. Snap at least one still photo, then tap Finish lot. The clip uploads after the listing is on the website."
+          : "AI catalog needs at least one still photo. Videos attach after the lot is on the website."
       );
       return;
     }
@@ -815,188 +817,198 @@ export default function CaptureSessionScreen() {
         </View>
       </View>
 
-      <ScrollView
+      <View
         style={[
           styles.panel,
           landscape && styles.panelLandscape,
           landscape && { paddingRight: Math.max(insets.right, 8) }
         ]}
-        contentContainerStyle={[
-          styles.panelContent,
-          landscape && styles.panelContentLandscape,
-          !landscape && { paddingBottom: Math.max(insets.bottom, 14) }
-        ]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.aspectRow}>
-          {CAMERA_ASPECT_PRESETS.map((preset) => {
-            const active = aspectId === preset.id;
-            return (
-              <Pressable
-                key={preset.id}
-                style={[styles.aspectBtn, active && styles.aspectBtnActive]}
-                onPress={() => setAspectId(preset.id)}
-                accessibilityLabel={`Aspect ratio ${preset.label}`}
-              >
-                <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
-                  {preset.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        <View
+          style={[
+            styles.panelControls,
+            landscape && styles.panelControlsLandscape,
+            !landscape && { paddingBottom: 6 }
+          ]}
+        >
+          <View style={styles.aspectRow}>
+            {CAMERA_ASPECT_PRESETS.map((preset) => {
+              const active = aspectId === preset.id;
+              return (
+                <Pressable
+                  key={preset.id}
+                  style={[styles.aspectBtn, active && styles.aspectBtnActive]}
+                  onPress={() => setAspectId(preset.id)}
+                  accessibilityLabel={`Aspect ratio ${preset.label}`}
+                >
+                  <Text style={[styles.aspectBtnText, active && styles.aspectBtnTextActive]}>
+                    {preset.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
-        <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
-          <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
-            {isAppendMode
-              ? thumbs.length
-                ? `${thumbs.filter((u) => !isVideoUri(u)).length} photo${
-                    thumbs.filter((u) => !isVideoUri(u)).length === 1 ? "" : "s"
-                  }${
-                    thumbs.some(isVideoUri)
-                      ? ` · ${thumbs.filter(isVideoUri).length} video${
-                          thumbs.filter(isVideoUri).length === 1 ? "" : "s"
-                        }`
-                      : ""
-                  }`
-                : "Add photos or video"
-              : isFacebook
+          <View style={[styles.sessionMeta, landscape && styles.sessionMetaLandscape]}>
+            <Text style={[styles.sessionMetaLabel, landscape && styles.sessionMetaLabelLandscape]}>
+              {isAppendMode
                 ? thumbs.length
-                  ? `Facebook · ${thumbs.length}`
-                  : "Facebook"
-                : thumbs.length
                   ? `${thumbs.filter((u) => !isVideoUri(u)).length} photo${
                       thumbs.filter((u) => !isVideoUri(u)).length === 1 ? "" : "s"
                     }${
                       thumbs.some(isVideoUri)
-                        ? ` · ${thumbs.filter(isVideoUri).length} video`
+                        ? ` · ${thumbs.filter(isVideoUri).length} video${
+                            thumbs.filter(isVideoUri).length === 1 ? "" : "s"
+                          }`
                         : ""
                     }`
-                  : "New lot"}
-          </Text>
-          {resumedNotice ? (
-            <Text style={styles.sessionMetaResumed} numberOfLines={2}>
-              {resumedNotice}
+                  : "Add photos or video"
+                : isFacebook
+                  ? thumbs.length
+                    ? `Facebook · ${thumbs.length}`
+                    : "Facebook"
+                  : thumbs.length
+                    ? `${thumbs.filter((u) => !isVideoUri(u)).length} photo${
+                        thumbs.filter((u) => !isVideoUri(u)).length === 1 ? "" : "s"
+                      }${
+                        thumbs.some(isVideoUri)
+                          ? ` · ${thumbs.filter(isVideoUri).length} video`
+                          : ""
+                      }`
+                    : "New lot"}
             </Text>
-          ) : null}
-          {isAppendMode && (appendSku || appendTitle) ? (
-            <Text style={styles.sessionMetaSale} numberOfLines={2}>
-              {[appendSku, appendTitle].filter(Boolean).join(" · ")}
-            </Text>
-          ) : selectedSaleName ? (
-            <Text style={styles.sessionMetaSale} numberOfLines={1}>
-              {selectedSaleName}
-            </Text>
-          ) : null}
-        </View>
+            {resumedNotice ? (
+              <Text style={styles.sessionMetaResumed} numberOfLines={2}>
+                {resumedNotice}
+              </Text>
+            ) : null}
+            {isAppendMode && (appendSku || appendTitle) ? (
+              <Text style={styles.sessionMetaSale} numberOfLines={2}>
+                {[appendSku, appendTitle].filter(Boolean).join(" · ")}
+              </Text>
+            ) : selectedSaleName ? (
+              <Text style={styles.sessionMetaSale} numberOfLines={1}>
+                {selectedSaleName}
+              </Text>
+            ) : null}
+          </View>
 
-        {!landscape ? (
-          <Text style={styles.sectionTitle}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
-        ) : (
-          <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
-        )}
+          <View style={styles.modeRow}>
+            {(["photo", "video"] as const).map((mode) => {
+              const active = captureMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  style={[styles.modeBtn, active && styles.modeBtnActive]}
+                  disabled={recording}
+                  onPress={() => setCaptureMode(mode)}
+                >
+                  <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
+                    {mode === "photo" ? "Photo" : "Video"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
-        <DraftPhotoStrip
-          uris={thumbs}
-          size="md"
-          onPressPhoto={openPreview}
-          onDeletePhoto={deleteFromStrip}
-        />
-
-        {!isAppendMode ? (
-          <TextInput
-            placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
-            placeholderTextColor="#78716c"
-            style={[styles.input, landscape && styles.inputLandscape]}
-            value={manualSku}
-            autoCapitalize={isFacebook ? "sentences" : "characters"}
-            autoCorrect={false}
-            onChangeText={onSkuChange}
-          />
-        ) : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        <View style={styles.modeRow}>
-          {(["photo", "video"] as const).map((mode) => {
-            const active = captureMode === mode;
-            return (
+          <View style={[styles.actions, landscape && styles.actionsLandscape]}>
+            {!landscape ? (
               <Pressable
-                key={mode}
-                style={[styles.modeBtn, active && styles.modeBtnActive]}
-                disabled={recording}
-                onPress={() => setCaptureMode(mode)}
+                style={styles.secondary}
+                onPress={() => {
+                  if (isAppendMode && thumbs.length) {
+                    void cleanupAppendFiles(thumbs).then(() => {
+                      setThumbs([]);
+                      router.back();
+                    });
+                    return;
+                  }
+                  router.back();
+                }}
               >
-                <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
-                  {mode === "photo" ? "Photo" : "Video"}
-                </Text>
+                <Text style={styles.secondaryText}>Cancel</Text>
               </Pressable>
-            );
-          })}
-        </View>
-
-        <View style={[styles.actions, landscape && styles.actionsLandscape]}>
-          {!landscape ? (
+            ) : null}
             <Pressable
-              style={styles.secondary}
+              style={[
+                styles.snap,
+                landscape && styles.snapLandscape,
+                recording && styles.snapRecording,
+                (!recording && (busy || !cameraReady || !sessionReady)) && styles.disabled
+              ]}
+              disabled={!recording && (busy || !cameraReady || !sessionReady)}
               onPress={() => {
-                if (isAppendMode && thumbs.length) {
-                  void cleanupAppendFiles(thumbs).then(() => {
-                    setThumbs([]);
-                    router.back();
-                  });
+                if (captureMode === "video") {
+                  if (recording) stopVideo();
+                  else void recordVideo();
                   return;
                 }
-                router.back();
+                void snap();
               }}
             >
-              <Text style={styles.secondaryText}>Cancel</Text>
+              {busy && !recording ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryText}>
+                  {captureMode === "video"
+                    ? recording
+                      ? "Stop"
+                      : `Record (${MAX_VIDEO_DURATION_SEC}s)`
+                    : "Snap"}
+                </Text>
+              )}
             </Pressable>
-          ) : null}
-          <Pressable
-            style={[
-              styles.snap,
-              landscape && styles.snapLandscape,
-              recording && styles.snapRecording,
-              (!recording && (busy || !cameraReady || !sessionReady)) && styles.disabled
-            ]}
-            disabled={!recording && (busy || !cameraReady || !sessionReady)}
-            onPress={() => {
-              if (captureMode === "video") {
-                if (recording) stopVideo();
-                else void recordVideo();
-                return;
-              }
-              void snap();
-            }}
-          >
-            {busy && !recording ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
+            <Pressable
+              style={[
+                styles.primary,
+                landscape && styles.primaryLandscape,
+                (!thumbs.length || busy) && styles.disabled
+              ]}
+              disabled={!thumbs.length || busy}
+              onPress={confirmFinish}
+            >
               <Text style={styles.primaryText}>
-                {captureMode === "video"
-                  ? recording
-                    ? "Stop"
-                    : `Record (${MAX_VIDEO_DURATION_SEC}s)`
-                  : "Snap"}
+                {isAppendMode ? "Upload" : landscape ? "Finish" : "Finish lot"}
               </Text>
-            )}
-          </Pressable>
-          <Pressable
-            style={[
-              styles.primary,
-              landscape && styles.primaryLandscape,
-              (!thumbs.length || busy) && styles.disabled
-            ]}
-            disabled={!thumbs.length || busy}
-            onPress={confirmFinish}
-          >
-            <Text style={styles.primaryText}>
-              {isAppendMode ? (landscape ? "Upload" : "Upload") : landscape ? "Finish" : "Finish lot"}
-            </Text>
-          </Pressable>
+            </Pressable>
+          </View>
+
+          {!isAppendMode ? (
+            <TextInput
+              placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
+              placeholderTextColor="#78716c"
+              style={[styles.input, landscape && styles.inputLandscape]}
+              value={manualSku}
+              autoCapitalize={isFacebook ? "sentences" : "characters"}
+              autoCorrect={false}
+              onChangeText={onSkuChange}
+            />
+          ) : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
-      </ScrollView>
+
+        <ScrollView
+          style={styles.panelThumbs}
+          contentContainerStyle={[
+            styles.panelThumbsContent,
+            !landscape && { paddingBottom: Math.max(insets.bottom, 14) }
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {!landscape ? (
+            <Text style={styles.sectionTitle}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
+          ) : (
+            <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
+          )}
+          <DraftPhotoStrip
+            uris={thumbs}
+            size="md"
+            onPressPhoto={openPreview}
+            onDeletePhoto={deleteFromStrip}
+          />
+        </ScrollView>
+      </View>
 
       <PhotoPreviewModal
         uris={previewUri ? thumbs : []}
@@ -1142,20 +1154,26 @@ const styles = StyleSheet.create({
     borderLeftColor: "#141416",
     alignSelf: "stretch"
   },
-  panelContent: {
+  panelControls: {
     paddingHorizontal: 12,
     paddingTop: 8,
-    paddingBottom: 8,
     gap: 6
   },
-  panelContentLandscape: {
+  panelControlsLandscape: {
     paddingTop: 10,
-    paddingBottom: 10,
     paddingLeft: 10,
-    paddingRight: 6,
-    gap: 6,
+    paddingRight: 6
+  },
+  panelThumbs: {
     flexGrow: 1,
-    justifyContent: "flex-start"
+    flexShrink: 1,
+    minHeight: 72
+  },
+  panelThumbsContent: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 8,
+    gap: 6
   },
   sessionMeta: {
     gap: 2,
@@ -1188,7 +1206,7 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
   actions: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 2 },
-  actionsLandscape: { flexDirection: "column", gap: 6, marginTop: "auto" },
+  actionsLandscape: { flexDirection: "column", gap: 6 },
   modeRow: {
     flexDirection: "row",
     gap: 6,

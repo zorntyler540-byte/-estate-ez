@@ -5,6 +5,8 @@ import {
   deleteJob,
   listCatalogedMobileDraftsDetailed,
   listJobsForSale,
+  listLots,
+  listSales,
   runJob,
   uploadLotVideos,
   uploadSingleLotJob
@@ -17,7 +19,9 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
+import { draftNeedsVideoAttach, videoUploadName } from "./attachVideos";
 import {
+  archiveCatalogedDraftIfReady,
   listDraftPhotos,
   listLotDrafts,
   markDraftMediaUploaded,
@@ -25,6 +29,14 @@ import {
   setDraftServerLotId,
   setDraftStatus
 } from "./db";
+import {
+  findUniqueSkuLot,
+  mergeUniqueSkuMaps,
+  normalizeArchiveSku,
+  shouldArchiveCatalogedDraft,
+  shouldSkipReupload,
+  uniqueSkuLotMap
+} from "./archiveCataloged";
 import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 
 /**
@@ -39,12 +51,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function videoUploadName(draftId: string, fileUri: string, index: number): string {
-  const match = fileUri.toLowerCase().match(/\.(mp4|mov|m4v|webm)(?:\?|$)/);
-  const ext = match?.[1] ? `.${match[1]}` : ".mp4";
-  return `mobile-${draftId}-vid-${String(index + 1).padStart(2, "0")}${ext}`;
-}
-
 async function uploadPendingDraftVideos(
   token: string,
   draftId: string,
@@ -54,12 +60,54 @@ async function uploadPendingDraftVideos(
   const pending = rows.filter((p) => p.media_kind === "video" && !p.uploaded);
   for (let i = 0; i < pending.length; i++) {
     const row = pending[i]!;
-    if (mediaKindFromName(row.file_uri) !== "video") continue;
-    await uploadLotVideos(token, lotId, [
-      { uri: row.file_uri, name: videoUploadName(draftId, row.file_uri, i) }
-    ]);
+    // media_kind is the source of truth — a missing suffix used to skip the clip forever.
+    const name =
+      mediaKindFromName(row.file_uri) === "video"
+        ? videoUploadName(draftId, row.file_uri, i)
+        : videoUploadName(draftId, `${row.file_uri}.mp4`, i);
+    await uploadLotVideos(token, lotId, [{ uri: row.file_uri, name }]);
     await markDraftMediaUploaded(draftId, row.id);
   }
+}
+
+export async function attachPendingLotVideos(token: string): Promise<number> {
+  const drafts = (await listLotDrafts()).filter((d) => !d.archived_at);
+  const { bySale, allDraftLots, allSkuToLot } = await websiteArchiveIndexes(
+    token,
+    drafts.map((d) => d.sale_id)
+  );
+  let attached = 0;
+  for (const draft of drafts) {
+    const photos = await listDraftPhotos(draft.id);
+    const hasPending = photos.some((p) => p.media_kind === "video" && !p.uploaded);
+    if (!hasPending) continue;
+    const cataloged = bySale.get(draft.sale_id);
+    const draftKey = draft.id.toLowerCase();
+    const skuLot =
+      (cataloged?.ok
+        ? findUniqueSkuLot(
+            draft.manual_sku,
+            draft.listing_channel === "facebook" ? cataloged.skuToLot : cataloged.skuToLotCtseller
+          )
+        : undefined) || findUniqueSkuLot(draft.manual_sku, allSkuToLot);
+    const lotId =
+      draft.server_lot_id ||
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      null;
+    if (!draftNeedsVideoAttach({ hasPendingLocalVideos: hasPending, lotId })) continue;
+    try {
+      if (lotId && draft.server_lot_id !== lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+      }
+      await uploadPendingDraftVideos(token, draft.id, lotId!);
+      attached += 1;
+    } catch {
+      /* retry on the next Sync — do not fail the cataloged lot */
+    }
+  }
+  return attached;
 }
 
 function serverFailMessage(job: Job): string {
@@ -92,10 +140,17 @@ async function fetchServerJobChecked(
   }
 }
 
-async function catalogedDraftIndex(
-  token: string,
-  saleId: string
-): Promise<{ ids: Set<string>; lotByDraft: Map<string, string> }> {
+type CatalogedIndex =
+  | {
+      ok: true;
+      ids: Set<string>;
+      lotByDraft: Map<string, string>;
+      skuToLot: Map<string, string>;
+      skuToLotCtseller: Map<string, string>;
+    }
+  | { ok: false };
+
+async function catalogedDraftIndex(token: string, saleId: string): Promise<CatalogedIndex> {
   try {
     const res = await listCatalogedMobileDraftsDetailed(token, saleId);
     const lotByDraft = new Map<string, string>();
@@ -104,10 +159,109 @@ async function catalogedDraftIndex(
       const lotId = String(row.lot_id || "").trim();
       if (draftId && lotId) lotByDraft.set(draftId, lotId);
     }
-    return { ids: new Set(res.draftIds), lotByDraft };
+    let skuToLot = new Map<string, string>();
+    let skuToLotCtseller = new Map<string, string>();
+    try {
+      const lots = await listLots(token, saleId, { sort: "sku_asc" });
+      skuToLot = uniqueSkuLotMap(lots);
+      skuToLotCtseller = uniqueSkuLotMap(
+        lots.filter((lot) => (lot.listing_channel || "ctseller") !== "facebook")
+      );
+    } catch {
+      skuToLot = uniqueSkuLotMap(res.lots.map((row) => ({ id: row.lot_id, sku: row.sku })));
+      skuToLotCtseller = skuToLot;
+    }
+    return { ok: true, ids: new Set(res.draftIds), lotByDraft, skuToLot, skuToLotCtseller };
   } catch {
-    return { ids: new Set(), lotByDraft: new Map() };
+    // Empty is not the same as "nothing cataloged" — a failed lookup must not
+    // make Sync re-upload every lot already on the website.
+    return { ok: false };
   }
+}
+
+/** Draft ids / unique SKUs from every sale this phone knows, so merged or moved lots still match. */
+async function websiteArchiveIndexes(
+  token: string,
+  saleIds: string[]
+): Promise<{
+  bySale: Map<string, CatalogedIndex>;
+  allDraftLots: Map<string, string>;
+  allSkuToLot: Map<string, string>;
+}> {
+  const ids = [...new Set(saleIds.filter(Boolean))];
+  try {
+    const sales = await listSales(token);
+    for (const sale of sales) {
+      if (sale.closed_at) continue;
+      if (!ids.includes(sale.id)) ids.push(sale.id);
+    }
+  } catch {
+    /* use the sale ids already on the drafts */
+  }
+  const bySale = new Map<string, CatalogedIndex>();
+  const allDraftLots = new Map<string, string>();
+  for (const saleId of ids) {
+    const idx = await catalogedDraftIndex(token, saleId);
+    bySale.set(saleId, idx);
+    if (idx.ok) {
+      for (const [draftId, lotId] of idx.lotByDraft) {
+        if (!allDraftLots.has(draftId)) allDraftLots.set(draftId, lotId);
+      }
+    }
+  }
+  const allSkuToLot = mergeUniqueSkuMaps(
+    [...bySale.values()]
+      .filter((idx): idx is Extract<CatalogedIndex, { ok: true }> => idx.ok)
+      .map((idx) => idx.skuToLotCtseller)
+  );
+  return { bySale, allDraftLots, allSkuToLot };
+}
+
+/** After Sync confirms catalog, strip local JPEGs. Safe to call from Queue focus. */
+export async function sweepArchiveConfirmedDrafts(token: string): Promise<number> {
+  const drafts = await listLotDrafts();
+  const saleIds = drafts.map((d) => d.sale_id);
+  const { bySale, allDraftLots, allSkuToLot } = await websiteArchiveIndexes(token, saleIds);
+  let archived = 0;
+  for (const draft of drafts) {
+    if (draft.archived_at) continue;
+    const cataloged = bySale.get(draft.sale_id);
+    const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    const draftKey = draft.id.toLowerCase();
+    const confirmed = allDraftLots.has(draftKey) || Boolean(cataloged?.ok && cataloged.ids.has(draftKey));
+    const skuLot =
+      (cataloged?.ok
+        ? findUniqueSkuLot(
+            draft.manual_sku,
+            draft.listing_channel === "facebook" ? cataloged.skuToLot : cataloged.skuToLotCtseller
+          )
+        : undefined) || findUniqueSkuLot(draft.manual_sku, allSkuToLot);
+    const uniqueSkuMatch = Boolean(skuLot);
+    const hasServerLotId = Boolean(draft.server_lot_id);
+    if (lookupFailed && !hasServerLotId && !confirmed && !uniqueSkuMatch) continue;
+    if (
+      !shouldArchiveCatalogedDraft({
+        alreadyArchived: Boolean(draft.archived_at),
+        status: draft.status,
+        errorMessage: draft.error_message,
+        confirmedOnServer: confirmed,
+        hasServerLotId,
+        uniqueSkuMatch
+      })
+    ) {
+      continue;
+    }
+    const lotId =
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      draft.server_lot_id;
+    if (lotId && draft.server_lot_id !== lotId) {
+      await setDraftServerLotId(draft.id, lotId);
+    }
+    if (await archiveCatalogedDraftIfReady(draft.id)) archived += 1;
+  }
+  return archived;
 }
 
 /**
@@ -120,10 +274,10 @@ async function catalogedDraftIndex(
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void
-): Promise<{ uploaded: number; failed: number; reconciled: number }> {
+): Promise<{ uploaded: number; failed: number; reconciled: number; archived: number }> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
-    return { uploaded: 0, failed: 0, reconciled: 0 };
+    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0 };
   }
 
   let uploaded = 0;
@@ -135,26 +289,29 @@ export async function syncPendingLots(
 
   const drafts = await listLotDrafts();
 
-  // Phase 0: if the website already has the lot, clear fake "failed / didn't finish" rows.
-  // The phone often timed out on a full DB pool after /run while the worker still cataloged.
-  const catalogedBySale = new Map<string, { ids: Set<string>; lotByDraft: Map<string, string> }>();
+  // Phase 0: if the website already has the lot, adopt it. Do not re-upload.
+  const { bySale: catalogedBySale, allDraftLots } = await websiteArchiveIndexes(
+    authToken,
+    drafts.map((d) => d.sale_id)
+  );
   for (const draft of drafts) {
-    if (!catalogedBySale.has(draft.sale_id)) {
-      catalogedBySale.set(draft.sale_id, await catalogedDraftIndex(authToken, draft.sale_id));
-    }
     const cataloged = catalogedBySale.get(draft.sale_id);
     const draftKey = draft.id.toLowerCase();
-    if (cataloged?.ids.has(draftKey)) {
-      const lotId = cataloged.lotByDraft.get(draftKey);
-      if (lotId && draft.server_lot_id !== lotId) {
+    const sku = normalizeArchiveSku(draft.manual_sku);
+    const skuLot = sku && cataloged?.ok ? cataloged.skuToLot.get(sku) : undefined;
+    const lotId =
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : undefined) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      undefined;
+    if (lotId) {
+      if (draft.server_lot_id !== lotId) {
         await setDraftServerLotId(draft.id, lotId);
       }
-      if (lotId) {
-        try {
-          await uploadPendingDraftVideos(authToken, draft.id, lotId);
-        } catch {
-          /* photos already cataloged — retry clips on the next sync */
-        }
+      try {
+        await uploadPendingDraftVideos(authToken, draft.id, lotId);
+      } catch {
+        /* leftover clips retry on the next Sync */
       }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
@@ -163,6 +320,7 @@ export async function syncPendingLots(
       }
       continue;
     }
+    if (cataloged && !cataloged.ok) continue;
     if (!draft.server_job_id) continue;
     if (
       draft.status !== "uploaded" &&
@@ -179,6 +337,15 @@ export async function syncPendingLots(
       await setDraftServerJobId(draft.id, null);
     } else if (job.status === "completed") {
       await setDraftServerJobId(draft.id, null);
+      const lotId = cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : undefined;
+      if (lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        } catch {
+          /* final attach pass retries */
+        }
+      }
       await setDraftStatus(draft.id, "uploaded", null);
       reconciled += 1;
     } else if (job.status === "failed") {
@@ -189,9 +356,22 @@ export async function syncPendingLots(
   }
   onProgress?.();
 
+  await attachPendingLotVideos(authToken);
+  const archivedEarly = await sweepArchiveConfirmedDrafts(authToken);
+  onProgress?.();
+
   for (const draft of await listLotDrafts()) {
+    if (draft.archived_at) continue;
     const cataloged = catalogedBySale.get(draft.sale_id);
-    if (cataloged?.ids.has(draft.id.toLowerCase())) {
+    const confirmed = allDraftLots.has(draft.id.toLowerCase());
+    const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    if (
+      shouldSkipReupload({
+        confirmedOnServer: confirmed,
+        catalogLookupFailed: lookupFailed,
+        hasServerLotId: Boolean(draft.server_lot_id)
+      })
+    ) {
       continue;
     }
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
@@ -202,6 +382,15 @@ export async function syncPendingLots(
       if (decideSyncRecovery(draft.status, job) === "adopt") {
         if (job?.status === "completed") {
           await setDraftServerJobId(draft.id, null);
+          const lotId = cataloged?.ok ? cataloged.lotByDraft.get(draft.id.toLowerCase()) : undefined;
+          if (lotId) {
+            await setDraftServerLotId(draft.id, lotId);
+            try {
+              await uploadPendingDraftVideos(authToken, draft.id, lotId);
+            } catch {
+              /* final attach pass retries */
+            }
+          }
           await setDraftStatus(draft.id, "uploaded", null);
         } else {
           await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
@@ -227,7 +416,17 @@ export async function syncPendingLots(
   }
   onProgress?.();
 
-  const pending = (await listLotDrafts()).filter((d) => d.status === "queued");
+  const pending = (await listLotDrafts()).filter((d) => {
+    if (d.archived_at || d.status !== "queued") return false;
+    const cataloged = catalogedBySale.get(d.sale_id);
+    const confirmed = allDraftLots.has(d.id.toLowerCase());
+    const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    return !shouldSkipReupload({
+      confirmedOnServer: confirmed,
+      catalogLookupFailed: lookupFailed,
+      hasServerLotId: Boolean(d.server_lot_id)
+    });
+  });
 
   for (const draft of pending) {
     const photos = await listDraftPhotos(draft.id);
@@ -427,5 +626,7 @@ export async function syncPendingLots(
     }
   }
 
-  return { uploaded, failed, reconciled };
+  await attachPendingLotVideos(authToken);
+  const archived = archivedEarly + (await sweepArchiveConfirmedDrafts(authToken));
+  return { uploaded, failed, reconciled, archived };
 }

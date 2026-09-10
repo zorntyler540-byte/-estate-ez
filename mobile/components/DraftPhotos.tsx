@@ -1,21 +1,34 @@
+import { useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { ZoomablePreview } from "@/components/ZoomablePreview";
 
 import { isVideoUri } from "@/lib/mediaKind";
+import { playVideoUri } from "@/lib/playVideo";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 
 type DraftPhotoStripProps = {
   uris: string[];
   size?: "md" | "lg";
+  /** Decode at most this many thumbs (Queue). Remaining URIs still open in Review. */
+  maxVisible?: number;
+  cachePolicy?: "none" | "disk" | "memory" | "memory-disk";
   onPressPhoto?: (uri: string, index: number) => void;
   onDeletePhoto?: (uri: string, index: number) => void;
 };
 
-export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto }: DraftPhotoStripProps) {
+export function DraftPhotoStrip({
+  uris,
+  size = "md",
+  maxVisible,
+  cachePolicy,
+  onPressPhoto,
+  onDeletePhoto
+}: DraftPhotoStripProps) {
   const thumbSize = size === "lg" ? 96 : 72;
+  const shown = maxVisible != null && maxVisible >= 0 ? uris.slice(0, maxVisible) : uris;
 
   if (!uris.length) {
     return (
@@ -27,15 +40,20 @@ export function DraftPhotoStrip({ uris, size = "md", onPressPhoto, onDeletePhoto
 
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-      {uris.map((uri, index) => (
-        <View key={uri} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
+      {shown.map((uri, index) => (
+        <View key={`${index}:${uri}`} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
           <Pressable style={styles.thumbPress} onPress={() => onPressPhoto?.(uri, index)}>
             {isVideoUri(uri) ? (
               <View style={[styles.thumbImage, styles.videoThumb]}>
                 <Text style={styles.videoThumbMark}>▶</Text>
               </View>
             ) : (
-              <StableUriImage uri={uri} style={styles.thumbImage} recyclingKey={uri} />
+              <StableUriImage
+                uri={uri}
+                style={styles.thumbImage}
+                recyclingKey={uri}
+                cachePolicy={cachePolicy}
+              />
             )}
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{isVideoUri(uri) ? "Vid" : String(index + 1)}</Text>
@@ -77,10 +95,26 @@ export function PhotoPreviewModal({
   const total = uris.length;
   const canPrev = index > 0;
   const canNext = index < total - 1;
+  const [playError, setPlayError] = useState("");
+  const [playing, setPlaying] = useState(false);
+
+  async function playCurrent() {
+    if (!uri || !isVideoUri(uri)) return;
+    setPlayError("");
+    setPlaying(true);
+    try {
+      await playVideoUri(uri);
+    } catch (e) {
+      setPlayError(e instanceof Error ? e.message : "Could not play this video");
+    } finally {
+      setPlaying(false);
+    }
+  }
 
   function go(delta: number) {
     const next = stepCaptureIndex(index, total, delta);
     if (next === index) return;
+    setPlayError("");
     onIndexChange?.(next);
   }
 
@@ -98,16 +132,23 @@ export function PhotoPreviewModal({
           ) : null}
           {uri ? (
             <View style={styles.modalImageWrap}>
-              <ZoomablePreview resetKey={`${index}:${uri}`} onSwipe={go}>
-                {isVideoUri(uri) ? (
-                  <View style={[styles.modalImage, styles.videoPreview]}>
-                    <Text style={styles.videoPreviewMark}>▶</Text>
-                    <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
-                  </View>
-                ) : (
+              {isVideoUri(uri) ? (
+                <Pressable
+                  style={[styles.modalImage, styles.videoPreview]}
+                  onPress={() => void playCurrent()}
+                  accessibilityLabel="Play video"
+                >
+                  <Text style={styles.videoPreviewMark}>▶</Text>
+                  <Text style={styles.videoPreviewHint}>
+                    {playing ? "Opening…" : "Tap to play"}
+                  </Text>
+                  {playError ? <Text style={styles.videoPreviewError}>{playError}</Text> : null}
+                </Pressable>
+              ) : (
+                <ZoomablePreview resetKey={`${index}:${uri}`} onSwipe={go}>
                   <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
-                )}
-              </ZoomablePreview>
+                </ZoomablePreview>
+              )}
             </View>
           ) : null}
           {total > 1 ? (
@@ -131,6 +172,11 @@ export function PhotoPreviewModal({
             </View>
           ) : null}
           <View style={styles.modalActions}>
+            {uri && isVideoUri(uri) ? (
+              <Pressable style={styles.modalPlay} onPress={() => void playCurrent()}>
+                <Text style={styles.modalPlayText}>{playing ? "Opening…" : "Play video"}</Text>
+              </Pressable>
+            ) : null}
             {onDelete ? (
               <Pressable style={styles.modalDelete} onPress={onDelete}>
                 <Text style={styles.modalDeleteText}>{isVideoUri(uri) ? "Delete video" : "Delete photo"}</Text>
@@ -148,8 +194,19 @@ export function PhotoPreviewModal({
 
 export function draftStatusDisplay(
   status: string,
-  opts?: { online?: boolean | null; syncing?: boolean; errorMessage?: string | null }
+  opts?: {
+    online?: boolean | null;
+    syncing?: boolean;
+    errorMessage?: string | null;
+    archived?: boolean;
+  }
 ): { label: string; hint: string } {
+  if (opts?.archived) {
+    return {
+      label: "On website",
+      hint: "Photos were removed from this phone after catalog. Tap Add photos to shoot more for that listing."
+    };
+  }
   switch (status) {
     case "draft":
       return {
@@ -172,7 +229,7 @@ export function draftStatusDisplay(
     case "uploaded":
       return {
         label: "Sent to server",
-        hint: "Forgot a shot? Tap Add photos. Only Resend if this listing is missing on the website."
+        hint: "Photos catalog first; videos attach after the lot is on the website. Tap Sync if a clip is still only on this phone. Forgot a shot? Tap Add photos."
       };
     case "failed":
       if (isTransientSyncError(opts?.errorMessage) || !opts?.errorMessage) {
@@ -242,6 +299,14 @@ const styles = StyleSheet.create({
   videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
   videoPreviewMark: { color: "#fff", fontSize: 48, fontWeight: "700" },
   videoPreviewHint: { color: "#a8a29e", marginTop: 12, fontSize: 15, fontWeight: "600" },
+  videoPreviewError: { color: "#fca5a5", marginTop: 10, fontSize: 13, textAlign: "center" },
+  modalPlay: {
+    backgroundColor: "#ff4d1a",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20
+  },
+  modalPlayText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",

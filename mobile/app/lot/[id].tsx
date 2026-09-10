@@ -16,7 +16,6 @@ import {
 import { ZoomablePreview } from "@/components/ZoomablePreview";
 
 import { useAuth } from "@/context/AuthContext";
-import * as WebBrowser from "expo-web-browser";
 
 import {
   getLot,
@@ -26,6 +25,7 @@ import {
   lotPhotoThumbnailSource,
   lotThumbnailSource
 } from "@/lib/api";
+import { playVideoUri } from "@/lib/playVideo";
 import { lotDetailSnapshot, mediaIdsKey, shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 import type { Lot, LotPhoto, LotVideo } from "@/lib/types";
 
@@ -171,16 +171,21 @@ export default function LotDetailScreen() {
     // Keep the details page on screen. A full spinner swap is the ~1s flicker.
     if (!hadLot) setLoading(true);
     try {
-      const [lotRow, photoRows, videoRows] = await Promise.all([
-        getLot(token, id),
-        listLotPhotos(token, id),
-        listLotVideos(token, id).catch(() => [] as LotVideo[])
-      ]);
+      // Lot JSON first — photos used to ride in Promise.all, so one Railway
+      // ``upstream error`` on /photos blanked the whole page.
+      const lotRow = await getLot(token, id);
       lastLoadAtRef.current = Date.now();
       setLot((prev) => (prev && lotDetailSnapshot(prev) === lotDetailSnapshot(lotRow) ? prev : lotRow));
-      setPhotos((prev) => (mediaIdsKey(prev) === mediaIdsKey(photoRows) ? prev : photoRows));
-      setVideos((prev) => (mediaIdsKey(prev) === mediaIdsKey(videoRows) ? prev : videoRows));
       setError("");
+      setLoading(false);
+      const [photoRows, videoRows] = await Promise.all([
+        listLotPhotos(token, id).catch(() => null),
+        listLotVideos(token, id).catch(() => [] as LotVideo[])
+      ]);
+      if (photoRows) {
+        setPhotos((prev) => (mediaIdsKey(prev) === mediaIdsKey(photoRows) ? prev : photoRows));
+      }
+      setVideos((prev) => (mediaIdsKey(prev) === mediaIdsKey(videoRows) ? prev : videoRows));
     } catch (e) {
       if (!lotRef.current) {
         setError(e instanceof Error ? e.message : "Could not load lot");
@@ -212,7 +217,12 @@ export default function LotDetailScreen() {
         {loading && !lot ? (
           <ActivityIndicator style={{ marginTop: 32 }} color="#ff4d1a" />
         ) : error && !lot ? (
-          <Text style={styles.error}>{error}</Text>
+          <>
+            <Text style={styles.error}>{error}</Text>
+            <Pressable style={styles.addPhotosBtn} onPress={() => void load()}>
+              <Text style={styles.addPhotosBtnText}>Try again</Text>
+            </Pressable>
+          </>
         ) : lot ? (
           <>
             <View style={styles.heroWrap}>
@@ -269,30 +279,32 @@ export default function LotDetailScreen() {
               {!photos.length ? <Text style={styles.muted}>No photos linked.</Text> : null}
             </ScrollView>
 
-            {videos.length ? (
-              <>
-                <Text style={styles.section}>Videos ({videos.length})</Text>
-                <View style={styles.videoList}>
-                  {videos.map((video, index) => (
-                    <Pressable
-                      key={video.id}
-                      style={styles.videoRow}
-                      onPress={() => {
-                        if (!token) return;
-                        void getLotVideoPlayUrl(token, lot.id, video.id)
-                          .then((url) => WebBrowser.openBrowserAsync(url))
-                          .catch((e) => setError(e instanceof Error ? e.message : "Could not play video"));
-                      }}
-                    >
-                      <Text style={styles.videoPlay}>▶</Text>
-                      <Text style={styles.videoName} numberOfLines={1}>
-                        {video.original_name || `Video ${index + 1}`}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </>
-            ) : null}
+            <Text style={styles.section}>Videos ({videos.length})</Text>
+            {videos.length && token ? (
+              <View style={styles.videoList}>
+                {videos.map((video, index) => (
+                  <Pressable
+                    key={video.id}
+                    style={styles.videoRow}
+                    onPress={() => {
+                      void getLotVideoPlayUrl(token, lot.id, video.id)
+                        .then((url) => playVideoUri(url))
+                        .catch((e) => setError(e instanceof Error ? e.message : "Could not play video"));
+                    }}
+                  >
+                    <Text style={styles.videoPlay}>▶ Play</Text>
+                    <Text style={styles.videoName} numberOfLines={1}>
+                      {video.original_name || `Video ${index + 1}`}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.muted}>
+                No videos on the website yet. Record one in Capture (Photo / Video), then Sync —
+                clips attach after the lot is cataloged.
+              </Text>
+            )}
 
             <Pressable
               style={styles.addPhotosBtn}

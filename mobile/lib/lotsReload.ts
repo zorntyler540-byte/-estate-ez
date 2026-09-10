@@ -56,6 +56,7 @@ export type LotListDisplayRow = LotReloadRow & {
   sku_needs_review?: boolean;
   sku_duplicate_in_sale?: boolean;
   sku_text_mismatch?: boolean;
+  video_count?: number | null;
 };
 
 /** Fields the Lots/Facebook rows actually paint — skip setState when these match. */
@@ -71,7 +72,8 @@ export function lotRowDisplayKey(lot: LotListDisplayRow): string {
     lot.ctseller_posted_at ?? "",
     lot.sku_needs_review ? "1" : "0",
     lot.sku_duplicate_in_sale ? "1" : "0",
-    lot.sku_text_mismatch ? "1" : "0"
+    lot.sku_text_mismatch ? "1" : "0",
+    lot.video_count ?? 0
   ].join("|");
 }
 
@@ -174,6 +176,7 @@ export function queueRowFingerprint(row: {
   photoUris?: string[];
   sale_id?: string;
   manual_sku?: string | null;
+  archived_at?: number | null;
 }): string {
   return [
     row.id,
@@ -182,6 +185,7 @@ export function queueRowFingerprint(row: {
     row.photo_count ?? 0,
     row.sale_id ?? "",
     row.manual_sku ?? "",
+    row.archived_at ?? "",
     (row.photoUris || []).join(",")
   ].join("|");
 }
