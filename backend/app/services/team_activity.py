@@ -3,12 +3,17 @@
 Counts surviving ``photos`` / ``lots`` / ``processing_jobs`` rows stamped with
 ``user_id`` and ``created_at``. Deleted photos drop off. Credit is the login
 that uploaded or started the job, not the person holding the camera.
+
+Active hours (for photos/hr and lots/hr) use photo and lot timestamps only.
+Each UTC calendar day with activity is the span from that person's first
+event to their last that day, floored at one hour so a short burst does
+not look like an impossible pace.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -17,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.models import Lot, Photo, ProcessingJob, User
 
 MAX_ACTIVITY_DAYS = 366
+MIN_ACTIVE_HOURS_PER_DAY = 1.0
 
 
 class ActivityWindowError(ValueError):
@@ -71,6 +77,52 @@ def _counts_by_user(
     return {str(uid): int(n or 0) for uid, n in rows}
 
 
+def _event_times_by_user(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, list[datetime]]:
+    """Photo + lot ``created_at`` values in the window, grouped by login."""
+    out: dict[str, list[datetime]] = {}
+    for model in (Photo, Lot):
+        rows = (
+            db.query(model.user_id, model.created_at)
+            .filter(
+                model.account_id == account_id,
+                model.created_at >= start,
+                model.created_at < end,
+            )
+            .all()
+        )
+        for uid, ts in rows:
+            if not uid or ts is None:
+                continue
+            out.setdefault(str(uid), []).append(ts)
+    return out
+
+
+def active_hours_for_timestamps(times: list[datetime]) -> float:
+    """Sum first-to-last span per UTC day; at least one hour on each active day."""
+    if not times:
+        return 0.0
+    by_day: dict[date, list[datetime]] = {}
+    for raw in times:
+        ts = aware_utc(raw)
+        by_day.setdefault(ts.date(), []).append(ts)
+    total = 0.0
+    for day_times in by_day.values():
+        span_hours = (max(day_times) - min(day_times)).total_seconds() / 3600.0
+        total += max(span_hours, MIN_ACTIVE_HOURS_PER_DAY)
+    return round(total, 2)
+
+
+def per_active_hour(count: int, hours: float) -> float:
+    if hours <= 0 or count <= 0:
+        return 0.0
+    return round(count / hours, 2)
+
+
 @dataclass(frozen=True)
 class TeamActivityMember:
     user_id: str
@@ -79,6 +131,9 @@ class TeamActivityMember:
     photos_uploaded: int
     lots_created: int
     jobs_started: int
+    active_hours: float
+    photos_per_hour: float
+    lots_per_hour: float
 
 
 @dataclass(frozen=True)
@@ -89,6 +144,9 @@ class TeamActivitySummary:
     photos_uploaded: int
     lots_created: int
     jobs_started: int
+    active_hours: float
+    photos_per_hour: float
+    lots_per_hour: float
 
 
 def summarize_team_activity(
@@ -108,25 +166,39 @@ def summarize_team_activity(
     photos = _counts_by_user(db, Photo, account_id, start, end)
     lots = _counts_by_user(db, Lot, account_id, start, end)
     jobs = _counts_by_user(db, ProcessingJob, account_id, start, end)
-    members = [
-        TeamActivityMember(
-            user_id=row.id,
-            email=row.email,
-            role=row.role,
-            photos_uploaded=photos.get(row.id, 0),
-            lots_created=lots.get(row.id, 0),
-            jobs_started=jobs.get(row.id, 0),
+    times = _event_times_by_user(db, account_id, start, end)
+    members = []
+    for row in users:
+        hours = active_hours_for_timestamps(times.get(row.id, []))
+        photo_n = photos.get(row.id, 0)
+        lot_n = lots.get(row.id, 0)
+        members.append(
+            TeamActivityMember(
+                user_id=row.id,
+                email=row.email,
+                role=row.role,
+                photos_uploaded=photo_n,
+                lots_created=lot_n,
+                jobs_started=jobs.get(row.id, 0),
+                active_hours=hours,
+                photos_per_hour=per_active_hour(photo_n, hours),
+                lots_per_hour=per_active_hour(lot_n, hours),
+            )
         )
-        for row in users
-    ]
     members.sort(
         key=lambda m: (-m.photos_uploaded, -m.lots_created, -m.jobs_started, m.email.lower())
     )
+    photo_total = sum(m.photos_uploaded for m in members)
+    lot_total = sum(m.lots_created for m in members)
+    hour_total = round(sum(m.active_hours for m in members), 2)
     return TeamActivitySummary(
         since=start,
         until=end,
         members=members,
-        photos_uploaded=sum(m.photos_uploaded for m in members),
-        lots_created=sum(m.lots_created for m in members),
+        photos_uploaded=photo_total,
+        lots_created=lot_total,
         jobs_started=sum(m.jobs_started for m in members),
+        active_hours=hour_total,
+        photos_per_hour=per_active_hour(photo_total, hour_total),
+        lots_per_hour=per_active_hour(lot_total, hour_total),
     )
