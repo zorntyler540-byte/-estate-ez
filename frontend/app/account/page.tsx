@@ -434,7 +434,7 @@ export default function AccountPage() {
         </>
       }
     >
-      <div className="ct-dashboard" style={{ maxWidth: 800 }}>
+      <div className="ct-dashboard" style={{ maxWidth: 1100 }}>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
