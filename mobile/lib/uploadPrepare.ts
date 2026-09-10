@@ -21,6 +21,30 @@ export type PreparePhotosResult = {
   skipped: number;
 };
 
+/** Multipart filename the website stores — must stay ``mobile-<draft>-NN.jpg``. */
+export function uploadCacheFileName(fileName: string): string {
+  const base = String(fileName || "photo.jpg").replace(/[^a-zA-Z0-9._-]+/g, "_") || "photo.jpg";
+  return /\.(jpe?g|png|heic|webp)$/i.test(base) ? base : `${base}.jpg`;
+}
+
+export async function uriWithUploadFileName(fileUri: string, fileName: string): Promise<string> {
+  const wanted = uploadCacheFileName(fileName);
+  const current = (fileUri.split("?")[0] || "").split("/").pop() || "";
+  if (current === wanted) return fileUri;
+  const root = FileSystem.cacheDirectory;
+  if (!root) return fileUri;
+  const dir = `${root}ct-upload-names/`;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => undefined);
+  const dest = `${dir}${wanted}`;
+  const from = normalizeFileUri(fileUri) || fileUri;
+  try {
+    await FileSystem.copyAsync({ from, to: dest });
+    return dest;
+  } catch {
+    return fileUri;
+  }
+}
+
 export function normalizeFileUri(uri: string): string {
   const raw = (uri || "").trim();
   if (!raw) return "";

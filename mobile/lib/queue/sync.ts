@@ -29,7 +29,8 @@ import {
   setDraftStatus
 } from "./db";
 import {
-  normalizeArchiveSku,
+  findUniqueSkuLot,
+  mergeUniqueSkuMaps,
   shouldArchiveCatalogedDraft,
   shouldSkipReupload,
   uniqueSkuLotMap
@@ -102,7 +103,13 @@ async function fetchServerJobChecked(
 }
 
 type CatalogedIndex =
-  | { ok: true; ids: Set<string>; lotByDraft: Map<string, string>; skuToLot: Map<string, string> }
+  | {
+      ok: true;
+      ids: Set<string>;
+      lotByDraft: Map<string, string>;
+      skuToLot: Map<string, string>;
+      skuToLotCtseller: Map<string, string>;
+    }
   | { ok: false };
 
 async function catalogedDraftIndex(token: string, saleId: string): Promise<CatalogedIndex> {
@@ -115,15 +122,18 @@ async function catalogedDraftIndex(token: string, saleId: string): Promise<Catal
       if (draftId && lotId) lotByDraft.set(draftId, lotId);
     }
     let skuToLot = new Map<string, string>();
+    let skuToLotCtseller = new Map<string, string>();
     try {
       const lots = await listLots(token, saleId, { sort: "sku_asc" });
       skuToLot = uniqueSkuLotMap(lots);
-    } catch {
-      skuToLot = uniqueSkuLotMap(
-        res.lots.map((row) => ({ id: row.lot_id, sku: row.sku }))
+      skuToLotCtseller = uniqueSkuLotMap(
+        lots.filter((lot) => (lot.listing_channel || "ctseller") !== "facebook")
       );
+    } catch {
+      skuToLot = uniqueSkuLotMap(res.lots.map((row) => ({ id: row.lot_id, sku: row.sku })));
+      skuToLotCtseller = skuToLot;
     }
-    return { ok: true, ids: new Set(res.draftIds), lotByDraft, skuToLot };
+    return { ok: true, ids: new Set(res.draftIds), lotByDraft, skuToLot, skuToLotCtseller };
   } catch {
     // Empty is not the same as "nothing cataloged" — a failed lookup must not
     // make Sync re-upload every lot already on the website.
@@ -135,7 +145,11 @@ async function catalogedDraftIndex(token: string, saleId: string): Promise<Catal
 async function websiteArchiveIndexes(
   token: string,
   saleIds: string[]
-): Promise<{ bySale: Map<string, CatalogedIndex>; allDraftLots: Map<string, string> }> {
+): Promise<{
+  bySale: Map<string, CatalogedIndex>;
+  allDraftLots: Map<string, string>;
+  allSkuToLot: Map<string, string>;
+}> {
   const ids = [...new Set(saleIds.filter(Boolean))];
   try {
     const sales = await listSales(token);
@@ -157,14 +171,19 @@ async function websiteArchiveIndexes(
       }
     }
   }
-  return { bySale, allDraftLots };
+  const allSkuToLot = mergeUniqueSkuMaps(
+    [...bySale.values()]
+      .filter((idx): idx is Extract<CatalogedIndex, { ok: true }> => idx.ok)
+      .map((idx) => idx.skuToLotCtseller)
+  );
+  return { bySale, allDraftLots, allSkuToLot };
 }
 
 /** After Sync confirms catalog, strip local JPEGs. Safe to call from Queue focus. */
 export async function sweepArchiveConfirmedDrafts(token: string): Promise<number> {
   const drafts = await listLotDrafts();
   const saleIds = drafts.map((d) => d.sale_id);
-  const { bySale, allDraftLots } = await websiteArchiveIndexes(token, saleIds);
+  const { bySale, allDraftLots, allSkuToLot } = await websiteArchiveIndexes(token, saleIds);
   let archived = 0;
   for (const draft of drafts) {
     if (draft.archived_at) continue;
@@ -172,9 +191,13 @@ export async function sweepArchiveConfirmedDrafts(token: string): Promise<number
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
     const draftKey = draft.id.toLowerCase();
     const confirmed = allDraftLots.has(draftKey) || Boolean(cataloged?.ok && cataloged.ids.has(draftKey));
-    const sku = normalizeArchiveSku(draft.manual_sku);
     const skuLot =
-      (sku && cataloged?.ok ? cataloged.skuToLot.get(sku) : undefined) || undefined;
+      (cataloged?.ok
+        ? findUniqueSkuLot(
+            draft.manual_sku,
+            draft.listing_channel === "facebook" ? cataloged.skuToLot : cataloged.skuToLotCtseller
+          )
+        : undefined) || findUniqueSkuLot(draft.manual_sku, allSkuToLot);
     const uniqueSkuMatch = Boolean(skuLot);
     const hasServerLotId = Boolean(draft.server_lot_id);
     if (lookupFailed && !hasServerLotId && !confirmed && !uniqueSkuMatch) continue;

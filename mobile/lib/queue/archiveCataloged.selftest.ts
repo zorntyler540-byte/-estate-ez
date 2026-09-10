@@ -1,4 +1,5 @@
 import {
+  findUniqueSkuLot,
   isStillCatalogingMessage,
   shouldArchiveCatalogedDraft,
   shouldSkipReupload,
@@ -133,4 +134,19 @@ const skuMap = uniqueSkuLotMap([
 assert(skuMap.get("lv102") === "b", "unique sku maps");
 assert(skuMap.has("lv101") === false, "duplicate sku does not map");
 
-console.log("archiveCataloged selftest ok (22 cases)");
+const jl = uniqueSkuLotMap([{ id: "lot-jl", sku: "JL91500" }]);
+assert(findUniqueSkuLot("JL91500ADD", jl) === "lot-jl", "ADD suffix matches base SKU");
+assert(findUniqueSkuLot("jl91500", jl) === "lot-jl", "exact sku matches");
+assert(findUniqueSkuLot("JL90400", jl) === undefined, "other sku does not match");
+assert(
+  findUniqueSkuLot(
+    "JL91",
+    uniqueSkuLotMap([
+      { id: "a", sku: "JL91500" },
+      { id: "b", sku: "JL91000" }
+    ])
+  ) === undefined,
+  "short prefix does not guess when two lots share a stem"
+);
+
+console.log("archiveCataloged selftest ok (26 cases)");

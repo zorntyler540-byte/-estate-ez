@@ -257,44 +257,6 @@ export default function QueueScreen() {
   const activeRows = rows.filter((r) => !r.archived_at);
   const archiveRows = rows.filter((r) => r.archived_at);
   const visibleRows = showArchive ? archiveRows : activeRows;
-  const resendableLots = activeRows.filter((r) => r.status === "uploaded" && r.photo_count > 0);
-
-  /** Re-queue every “Sent to server” lot that still has photos on this phone. */
-  function confirmResendAll() {
-    if (syncing) {
-      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
-      return;
-    }
-    if (!resendableLots.length) {
-      Alert.alert("Nothing to resend", "No sent lots with photos saved on this phone.");
-      return;
-    }
-    const n = resendableLots.length;
-    Alert.alert(
-      "Resend all to server?",
-      `Re-uploads ${n} lot${n === 1 ? "" : "s"} already marked Sent to server as new catalog jobs.\n\nUse this when web jobs failed or photos are missing online. Lots that already look fine may create duplicates — delete those on the website first if you only need some.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: `Resend ${n}`,
-          onPress: () => {
-            void (async () => {
-              for (const lot of resendableLots) {
-                await setDraftStatus(lot.id, "queued", null);
-              }
-              await refresh();
-              setMessage(`Re-queued ${n} lot${n === 1 ? "" : "s"} — syncing…`);
-              const result = await syncNow();
-              if (result) {
-                setMessage(formatQueueSyncMessage(result, online));
-              }
-              await refresh();
-            })();
-          }
-        }
-      ]
-    );
-  }
 
   async function syncAll() {
     setMessage("");
@@ -381,17 +343,7 @@ export default function QueueScreen() {
         )}
       </Pressable>
 
-      {resendableLots.length > 0 && !showArchive ? (
-        <Pressable
-          style={[styles.resendAll, syncing && styles.disabled]}
-          disabled={syncing}
-          onPress={confirmResendAll}
-        >
-          <Text style={styles.resendAllText}>
-            Resend all sent lots ({resendableLots.length})
-          </Text>
-        </Pressable>
-      ) : null}
+      {/* Bulk Resend is hidden — leftover Sent lots are usually already on the website. */}
 
       {archiveRows.length > 0 || showArchive ? (
         <Pressable style={styles.resendAll} onPress={() => setShowArchive((v) => !v)}>

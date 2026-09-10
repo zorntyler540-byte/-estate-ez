@@ -6,6 +6,7 @@ import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types"
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
   resolveUploadFileUri,
+  uriWithUploadFileName,
   type UploadPhotoUri
 } from "./uploadPrepare";
 import * as FileSystem from "expo-file-system/legacy";
@@ -184,6 +185,7 @@ async function nativeMultipartUpload(opts: {
   if (!uploadUri.startsWith("file://")) {
     uploadUri = await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
   }
+  uploadUri = await uriWithUploadFileName(uploadUri, opts.fileName);
 
   const url = `${API_BASE}${opts.path}`;
   let result: FileSystem.FileSystemUploadResult;

@@ -41,6 +41,59 @@ export function uniqueSkuLotMap(
   return unique;
 }
 
+/** Phone SKU keys, including a trailing ADD used when a second phone reshoots. */
+export function skuLookupKeys(sku: string | null | undefined): string[] {
+  const raw = normalizeArchiveSku(sku);
+  if (!raw) return [];
+  const keys = [raw];
+  const noAdd = raw.replace(/add$/i, "").trim();
+  if (noAdd && noAdd !== raw) keys.push(noAdd);
+  const compact = raw.replace(/[^a-z0-9]/g, "");
+  if (compact && !keys.includes(compact)) keys.push(compact);
+  return keys;
+}
+
+/**
+ * Map a phone SKU to one website lot. Exact, ADD-stripped, or a single prefix
+ * hit (JL91500ADD ↔ JL91500). Null if two lots could match.
+ */
+export function findUniqueSkuLot(
+  phoneSku: string | null | undefined,
+  skuToLot: Map<string, string>
+): string | undefined {
+  for (const key of skuLookupKeys(phoneSku)) {
+    const hit = skuToLot.get(key);
+    if (hit) return hit;
+  }
+  const phoneKeys = skuLookupKeys(phoneSku).filter((k) => k.length >= 4);
+  if (!phoneKeys.length) return undefined;
+  const prefixHits = new Set<string>();
+  for (const [webSku, lotId] of skuToLot) {
+    if (webSku.length < 4) continue;
+    if (phoneKeys.some((pk) => webSku.startsWith(pk) || pk.startsWith(webSku))) {
+      prefixHits.add(lotId);
+    }
+  }
+  if (prefixHits.size === 1) return [...prefixHits][0];
+  return undefined;
+}
+
+export function mergeUniqueSkuMaps(maps: Map<string, string>[]): Map<string, string> {
+  const counts = new Map<string, string[]>();
+  for (const map of maps) {
+    for (const [sku, lotId] of map) {
+      const ids = counts.get(sku) || [];
+      if (!ids.includes(lotId)) ids.push(lotId);
+      counts.set(sku, ids);
+    }
+  }
+  const unique = new Map<string, string>();
+  for (const [sku, ids] of counts) {
+    if (ids.length === 1) unique.set(sku, ids[0]!);
+  }
+  return unique;
+}
+
 export function shouldArchiveCatalogedDraft(opts: {
   alreadyArchived?: boolean;
   status: string;
