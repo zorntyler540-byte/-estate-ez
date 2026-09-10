@@ -15,9 +15,9 @@ from app.core.lotting import (
     LotOutput,
     dedupe_specification_lines_preserve_order,
     filter_brands_to_label_evidence,
-    format_auction_title_case,
     infer_brands_from_label_context,
     normalize_brand_list,
+    polish_auction_title,
     strip_product_box_misread_as_tape_sku,
     tape_marking_canonical,
     tape_sku_opens_new_lot,
@@ -511,7 +511,13 @@ def _apply_pro_manifest_to_lot(
     )
     # Pro title/description are authoritative — finalize must not overwrite them.
     if title:
-        lot.auction_title = format_auction_title_case(title, lot.brands)
+        lot.auction_title, lot.brands = polish_auction_title(
+            title,
+            lot.brands,
+            labels_and_tags=lot.labels_and_tags,
+            specification_lines=lot.specification_lines,
+            description=desc or lot.professional_description,
+        )
     if desc:
         lot.professional_description = desc
     if manifest.listing_was_corrected_by_pro:

@@ -2188,6 +2188,8 @@ def _split_title_word_parts(word: str) -> tuple[str, str, str]:
 def _capitalize_title_core(core: str, *, force_lower: bool) -> str:
     if not core:
         return core
+    if core[:1] in {"'", "‘", "’"} and len(core) > 1:
+        return core[0] + _capitalize_title_core(core[1:], force_lower=force_lower)
     if core.isdigit():
         return core
     if core.isupper() and 1 < len(core) <= 5:
@@ -2197,6 +2199,140 @@ def _capitalize_title_core(core: str, *, force_lower: bool) -> str:
     if "-" in core:
         return "-".join(_capitalize_title_core(part, force_lower=False) for part in core.split("-"))
     return core.lower().capitalize()
+
+
+_LEADING_COUNT_WORDS = {
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+_TIFFANY_NAME_RE = re.compile(r"\btiffany(?:\s*(?:and|&)\s*co)?\.?", re.I)
+_LIZ_AND_CO_RE = re.compile(r"\bliz\s*(?:and|&)\s*co\.?|\blizandco\b|\bliz\s+claiborne\b", re.I)
+_FASHION_FILLER_RE = re.compile(
+    r"\bfashion\s+(?=(?:necklace|necklaces|bracelet|bracelets|earring|earrings|"
+    r"jewelry|jewellery|pendant|pendants|choker|chokers|ring|rings)\b)",
+    re.I,
+)
+_LEADING_COUNT_RE = re.compile(
+    r"^(two|three|four|five|six|seven|eight|nine|ten)\s+(?!tone\b|piece\b)(.+)$",
+    re.I,
+)
+_PCS_COUNT_RE = re.compile(r"\((\d+)\s*pcs?\.?\)", re.I)
+_INCLUDING_TAIL_RE = re.compile(r",\s*including\s+(.+)$", re.I)
+
+
+def _collapse_title_spaces(title: str) -> str:
+    t = re.sub(r"\s{2,}", " ", title or "").strip(" ,-–—")
+    t = re.sub(r"(?i)\band\s+and\b", "and", t)
+    return re.sub(r"\s{2,}", " ", t).strip(" ,-–—")
+
+
+def _promote_including_clause(title: str) -> str:
+    """Turn ', including Jessica Simpson' into a leading search brand when it is a short name."""
+    matched = _INCLUDING_TAIL_RE.search(title)
+    if not matched:
+        return title
+    included = matched.group(1).strip(" .")
+    rest = title[: matched.start()].strip(" ,")
+    if not included or not rest:
+        return title
+    if len(included.split()) > 4 or re.match(r"(?i)^(a|an|the|various|assorted|multiple)\b", included):
+        return _collapse_title_spaces(f"{rest} + {included}")
+    return _collapse_title_spaces(f"{included} {rest}")
+
+
+def scrub_padded_auction_title(title: str) -> str:
+    """Drop Collection/Statement/Ft. padding and move leading counts to (n)."""
+    t = clean_listing_text(title).strip()
+    if not t:
+        return t
+    t = re.sub(r"\b(?:ft|feat)(?:\.|\b)", "with", t, flags=re.I)
+    t = re.sub(r"\bfeaturing\b", "with", t, flags=re.I)
+    t = re.sub(r"(?i)^(?:a|an|the)\s+collection\s+of\s+", "", t)
+    t = re.sub(r"(?i)\bcollection\s+of\s+", "", t)
+    t = re.sub(r"(?i)\s+\bcollection\b(?=\s*,|\s*$)", "", t)
+    t = re.sub(r"(?i)\s+\bassortment\b\.?\s*$", "", t)
+    t = re.sub(r"(?i)\bstatement\s+", "", t)
+    t = _FASHION_FILLER_RE.sub("", t)
+    t = re.sub(r"(?i)\band\s+assorted\b", " and", t)
+    t = _PCS_COUNT_RE.sub(r"(\1)", t)
+    t = _collapse_title_spaces(t)
+    t = _promote_including_clause(t)
+    if t and not re.search(r"\(\d+\)\s*$", t):
+        counted = _LEADING_COUNT_RE.match(t)
+        if counted:
+            n = _LEADING_COUNT_WORDS[counted.group(1).lower()]
+            t = f"{counted.group(2).strip()} ({n})"
+    return _collapse_title_spaces(t)
+
+
+def liz_and_co_evidence(*parts: str) -> bool:
+    blob = " ".join(p for p in parts if p)
+    return bool(_LIZ_AND_CO_RE.search(blob))
+
+
+def prefer_liz_and_co_over_tiffany(
+    title: str,
+    brands: list[str] | None = None,
+    *,
+    labels_and_tags: list[str] | None = None,
+    specification_lines: list[str] | None = None,
+    description: str = "",
+) -> tuple[str, list[str]]:
+    """Liz & Co (Liz Claiborne) stamps are not Tiffany & Co."""
+    brands_in = list(brands or [])
+    evidence = liz_and_co_evidence(
+        title or "",
+        description or "",
+        *brands_in,
+        *(labels_and_tags or []),
+        *(specification_lines or []),
+    )
+    has_tiffany = bool(_TIFFANY_NAME_RE.search(title or "")) or any(
+        _TIFFANY_NAME_RE.search(b) for b in brands_in
+    )
+    if not evidence or not has_tiffany:
+        return title, brands_in
+    title_out = _TIFFANY_NAME_RE.sub("Liz & Co", title or "")
+    brands_out: list[str] = []
+    seen: set[str] = set()
+    for brand in brands_in:
+        nxt = "Liz & Co" if _TIFFANY_NAME_RE.search(brand) else brand
+        key = nxt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        brands_out.append(nxt)
+    if "liz & co" not in seen:
+        brands_out = ["Liz & Co", *brands_out]
+    return _collapse_title_spaces(title_out), brands_out
+
+
+def polish_auction_title(
+    title: str,
+    brands: list[str] | None = None,
+    *,
+    labels_and_tags: list[str] | None = None,
+    specification_lines: list[str] | None = None,
+    description: str = "",
+) -> tuple[str, list[str]]:
+    """Shopper-facing title cleanup used after Flash and Pro listing text."""
+    title_out, brands_out = prefer_liz_and_co_over_tiffany(
+        title,
+        brands,
+        labels_and_tags=labels_and_tags,
+        specification_lines=specification_lines,
+        description=description,
+    )
+    title_out = scrub_padded_auction_title(title_out)
+    title_out = format_auction_title_case(title_out, brands_out)
+    return title_out, brands_out
 
 
 def format_auction_title_case(title: str, brands: list[str] | None = None) -> str:
@@ -3422,6 +3558,13 @@ class LotOutput:
             self.specification_lines, blob
         )
         pre_brands = normalize_brand_list(self.brands)
+        self.auction_title, self.brands = prefer_liz_and_co_over_tiffany(
+            self.auction_title,
+            self.brands,
+            labels_and_tags=self.labels_and_tags,
+            specification_lines=self.specification_lines,
+            description=self.professional_description,
+        )
         label_inferred = infer_brands_from_label_context(
             self.labels_and_tags,
             self.specification_lines,
@@ -3484,7 +3627,13 @@ class LotOutput:
             self.professional_description,
         )
         self.professional_description = vary_overused_compliment_adjectives(self.professional_description)
-        self.auction_title = format_auction_title_case(self.auction_title, self.brands)
+        self.auction_title, self.brands = polish_auction_title(
+            self.auction_title,
+            self.brands,
+            labels_and_tags=self.labels_and_tags,
+            specification_lines=self.specification_lines,
+            description=self.professional_description,
+        )
         self.professional_description = apply_title_hook_casing_to_description(
             self.auction_title,
             self.professional_description,

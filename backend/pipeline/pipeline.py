@@ -913,6 +913,7 @@ BRAND_AUDIT_SYSTEM = (
     "Never invent brands or details not visible in the images or triage OCR. "
     "Do not use redundant **Pair of** when the object type is already plural (Sculptures, Knives, Figurines…). "
     "Leave confirmed_brand empty when no readable maker mark exists on any frame — do not guess. "
+    "Liz & Co / Liz Claiborne costume marks are not Tiffany & Co. "
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
 
@@ -1090,6 +1091,10 @@ def run_brand_audit_pro(
             "8. Leave confirmed_brand empty only when no readable maker mark exists on any frame or OCR line — "
             "never guess from object type alone.\n"
             "9. When one primary brand is clearly readable, lead final_auction_title with it for search.\n"
+            "9b. **Jewelry titles:** Brand + metal tone + distinctive form + type + (count). Never pad with "
+            "Collection, Statement, Fashion, Assorted, Ft., or Feat. Mixed lots: distinctive piece + count of the rest "
+            "('Napier Red Link Bracelet + 3 Beaded Necklaces'). **Liz & Co / Liz Claiborne is not Tiffany & Co** — "
+            "do not retitle an '& Co' costume stamp as Tiffany unless the word Tiffany is clearly readable.\n"
             "10. When maker foil stickers show material lines (e.g. 22 KT GOLD) or tune names, include exact phrases — "
             "do not downgrade to vague 'gold-tone' when text is legible.\n"
             "11. Do not add 'vintage' or 'antique' as filler unless a specific decade or era mark is visible.\n"
@@ -1135,6 +1140,7 @@ def run_brand_audit_pro(
             "5. When label/tag images show a maker name, set confirmed_brand on that item.\n"
             "6. Leave confirmed_brand empty when no readable maker mark exists — never guess.\n"
             "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
+            "7b. Jewelry: no Collection/Statement/Fashion/Ft. padding. Liz & Co is not Tiffany & Co.\n"
             "8. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
             "9. **Ruler / measuring tape:** read the number and put a **Dimensions:** line (with units) in "
             "final_specification_lines when visible. **Weight scale:** when the item is on a scale with a visible "
