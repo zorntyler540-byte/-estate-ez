@@ -136,6 +136,20 @@ export async function resolveUploadFileUri(photo: UploadPhotoUri): Promise<strin
 }
 
 /**
+ * Videos must stay video files. ``resolveUploadFileUri`` runs ImageManipulator
+ * and can turn a clip into a JPEG that ``/videos/upload`` then rejects.
+ */
+export async function resolveUploadVideoUri(uri: string): Promise<string> {
+  for (const candidate of uriCandidates(uri)) {
+    const tryUri = normalizeFileUri(candidate) || candidate;
+    if (tryUri.startsWith("file://")) return tryUri;
+  }
+  const fallback = normalizeFileUri(uri);
+  if (fallback) return fallback;
+  throw new Error("Video file is not readable on this phone — record that clip again.");
+}
+
+/**
  * Prepare queue photos for upload.
  */
 export async function preparePhotosForUpload(

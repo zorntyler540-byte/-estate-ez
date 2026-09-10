@@ -305,15 +305,31 @@ export async function countPendingDrafts(): Promise<number> {
   return Number(row?.c ?? 0);
 }
 
+export async function countPhotoJobsPending(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts WHERE status IN ('queued', 'failed', 'uploading')`
+  );
+  return Number(row?.c ?? 0);
+}
+
 export async function countUploadPending(): Promise<number> {
   const db = await getDb();
   // Include "uploading" so Sync Now / foreground sync recover lots stuck after an app kill.
   // Also include leftover "uploaded" notices (timeout / still-cataloging copy) so Phase 0
   // can clear fake errors even when nothing is queued.
+  // Unsent local videos must keep Sync alive after photos already look uploaded —
+  // catalog usually finishes after the 45s confirm window, and clips attach then.
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
      WHERE status IN ('queued', 'failed', 'uploading')
-        OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))`
+        OR (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))
+        OR EXISTS (
+          SELECT 1 FROM lot_photos
+          WHERE lot_photos.draft_id = lot_drafts.id
+            AND lot_photos.media_kind = 'video'
+            AND lot_photos.uploaded = 0
+        )`
   );
   return Number(row?.c ?? 0);
 }
