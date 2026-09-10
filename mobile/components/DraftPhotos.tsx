@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useVideoPlayer, VideoView } from "expo-video";
 
 import { StableUriImage } from "@/components/StableUriImage";
 
@@ -74,6 +75,10 @@ export function PhotoPreviewModal({
   onDelete
 }: PhotoPreviewModalProps) {
   const uri = uris[index] ?? null;
+  const videoUri = uri && isVideoUri(uri) ? uri : null;
+  const videoPlayer = useVideoPlayer(videoUri, (player) => {
+    player.loop = false;
+  });
   const total = uris.length;
   const canPrev = index > 0;
   const canNext = index < total - 1;
@@ -110,10 +115,12 @@ export function PhotoPreviewModal({
               }}
             >
               {isVideoUri(uri) ? (
-                <View style={[styles.modalImage, styles.videoPreview]}>
-                  <Text style={styles.videoPreviewMark}>▶</Text>
-                  <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
-                </View>
+                <VideoView
+                  style={[styles.modalImage, styles.videoPreview]}
+                  player={videoPlayer}
+                  nativeControls
+                  contentFit="contain"
+                />
               ) : (
                 <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
               )}
@@ -248,9 +255,7 @@ const styles = StyleSheet.create({
   badgeText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" },
   videoThumb: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
   videoThumbMark: { color: "#fff", fontSize: 22, fontWeight: "700" },
-  videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
-  videoPreviewMark: { color: "#fff", fontSize: 48, fontWeight: "700" },
-  videoPreviewHint: { color: "#a8a29e", marginTop: 12, fontSize: 15, fontWeight: "600" },
+  videoPreview: { backgroundColor: "#1c1917" },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",
