@@ -77,27 +77,28 @@ def _counts_by_user(
     return {str(uid): int(n or 0) for uid, n in rows}
 
 
-def _first_photo_at_by_user(
+def _created_at_bounds_by_user(
     db: Session,
+    model: Any,
     account_id: str,
     start: datetime,
     end: datetime,
-) -> dict[str, datetime]:
+) -> dict[str, tuple[datetime, datetime]]:
     rows = (
-        db.query(Photo.user_id, func.min(Photo.created_at))
+        db.query(model.user_id, func.min(model.created_at), func.max(model.created_at))
         .filter(
-            Photo.account_id == account_id,
-            Photo.created_at >= start,
-            Photo.created_at < end,
+            model.account_id == account_id,
+            model.created_at >= start,
+            model.created_at < end,
         )
-        .group_by(Photo.user_id)
+        .group_by(model.user_id)
         .all()
     )
-    out: dict[str, datetime] = {}
-    for uid, ts in rows:
-        if not uid or ts is None:
+    out: dict[str, tuple[datetime, datetime]] = {}
+    for uid, first_ts, last_ts in rows:
+        if not uid or first_ts is None or last_ts is None:
             continue
-        out[str(uid)] = aware_utc(ts)
+        out[str(uid)] = (aware_utc(first_ts), aware_utc(last_ts))
     return out
 
 
@@ -159,6 +160,8 @@ class TeamActivityMember:
     photos_per_hour: float
     lots_per_hour: float
     first_photo_at: datetime | None = None
+    last_photo_at: datetime | None = None
+    last_lot_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -192,12 +195,15 @@ def summarize_team_activity(
     lots = _counts_by_user(db, Lot, account_id, start, end)
     jobs = _counts_by_user(db, ProcessingJob, account_id, start, end)
     times = _event_times_by_user(db, account_id, start, end)
-    first_photos = _first_photo_at_by_user(db, account_id, start, end)
+    photo_bounds = _created_at_bounds_by_user(db, Photo, account_id, start, end)
+    lot_bounds = _created_at_bounds_by_user(db, Lot, account_id, start, end)
     members = []
     for row in users:
         hours = active_hours_for_timestamps(times.get(row.id, []))
         photo_n = photos.get(row.id, 0)
         lot_n = lots.get(row.id, 0)
+        photo_first, photo_last = photo_bounds.get(row.id, (None, None))
+        _, lot_last = lot_bounds.get(row.id, (None, None))
         members.append(
             TeamActivityMember(
                 user_id=row.id,
@@ -209,7 +215,9 @@ def summarize_team_activity(
                 active_hours=hours,
                 photos_per_hour=per_active_hour(photo_n, hours),
                 lots_per_hour=per_active_hour(lot_n, hours),
-                first_photo_at=first_photos.get(row.id),
+                first_photo_at=photo_first,
+                last_photo_at=photo_last,
+                last_lot_at=lot_last,
             )
         )
     members.sort(

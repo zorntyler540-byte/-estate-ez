@@ -156,6 +156,14 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
                 created_at=inside,
             ),
             Lot(
+                id="lot-maria-later",
+                account_id="acct-a",
+                user_id=maria.id,
+                sale_id="sale-a",
+                auction_title="Chair",
+                created_at=inside + timedelta(minutes=8),
+            ),
+            Lot(
                 id="lot-old",
                 account_id="acct-a",
                 user_id=maria.id,
@@ -189,11 +197,11 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     by_email = {m.email: m for m in summary.members}
     assert set(by_email) == {"owner@ct.test", "maria@ct.test", "idle@ct.test"}
     assert by_email["maria@ct.test"].photos_uploaded == 2
-    assert by_email["maria@ct.test"].lots_created == 1
+    assert by_email["maria@ct.test"].lots_created == 2
     assert by_email["maria@ct.test"].jobs_started == 1
     assert by_email["maria@ct.test"].active_hours == 1.0
     assert by_email["maria@ct.test"].photos_per_hour == 2.0
-    assert by_email["maria@ct.test"].lots_per_hour == 1.0
+    assert by_email["maria@ct.test"].lots_per_hour == 2.0
     assert by_email["owner@ct.test"].photos_uploaded == 1
     assert by_email["owner@ct.test"].jobs_started == 0
     assert by_email["owner@ct.test"].active_hours == 1.0
@@ -201,16 +209,22 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert by_email["owner@ct.test"].lots_per_hour == 0.0
     assert by_email["idle@ct.test"].photos_uploaded == 0
     assert by_email["maria@ct.test"].first_photo_at == inside
+    assert by_email["maria@ct.test"].last_photo_at == inside + timedelta(minutes=5)
+    assert by_email["maria@ct.test"].last_lot_at == inside + timedelta(minutes=8)
     assert by_email["owner@ct.test"].first_photo_at == inside
+    assert by_email["owner@ct.test"].last_photo_at == inside
+    assert by_email["owner@ct.test"].last_lot_at is None
     assert by_email["idle@ct.test"].first_photo_at is None
+    assert by_email["idle@ct.test"].last_photo_at is None
+    assert by_email["idle@ct.test"].last_lot_at is None
     assert by_email["idle@ct.test"].active_hours == 0.0
     assert by_email["idle@ct.test"].photos_per_hour == 0.0
     assert summary.photos_uploaded == 3
-    assert summary.lots_created == 1
+    assert summary.lots_created == 2
     assert summary.jobs_started == 1
     assert summary.active_hours == 2.0
     assert summary.photos_per_hour == 1.5
-    assert summary.lots_per_hour == 0.5
+    assert summary.lots_per_hour == 1.0
     assert summary.members[0].email == "maria@ct.test"
 
 
@@ -254,6 +268,9 @@ def test_summarize_active_rate_uses_first_to_last_same_day(tmp_path: Path) -> No
     assert row.lots_created == 4
     assert row.photos_per_hour == 2.0
     assert row.lots_per_hour == 1.0
+    assert row.first_photo_at == first
+    assert row.last_photo_at == last
+    assert row.last_lot_at == first + timedelta(hours=3)
 
 
 def test_summarize_excludes_photos_at_until_bound(tmp_path: Path) -> None:
