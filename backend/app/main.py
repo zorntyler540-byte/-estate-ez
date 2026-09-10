@@ -811,6 +811,8 @@ def team_activity(
                 photos_per_hour=m.photos_per_hour,
                 lots_per_hour=m.lots_per_hour,
                 first_photo_at=m.first_photo_at,
+                last_photo_at=m.last_photo_at,
+                last_lot_at=m.last_lot_at,
             )
             for m in summary.members
         ],

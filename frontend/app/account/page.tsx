@@ -39,6 +39,8 @@ type TeamActivityMember = {
   photos_per_hour: number;
   lots_per_hour: number;
   first_photo_at?: string | null;
+  last_photo_at?: string | null;
+  last_lot_at?: string | null;
 };
 
 type TeamActivity = {
@@ -110,7 +112,7 @@ function formatActivityRate(n: number | undefined): string {
   return n.toFixed(1);
 }
 
-function formatFirstPhotoAt(iso: string | null | undefined): string {
+function formatActivityStamp(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
@@ -432,7 +434,7 @@ export default function AccountPage() {
         </>
       }
     >
-      <div className="ct-dashboard" style={{ maxWidth: 800 }}>
+      <div className="ct-dashboard" style={{ maxWidth: 1100 }}>
       <header className="ct-page-header">
         <div>
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
@@ -666,12 +668,14 @@ export default function AccountPage() {
             <summary>How this is counted</summary>
             <div className="ct-help-details__body">
               Credit goes to the login that uploaded the photo or started the catalog job. Deleted
-              photos drop off. Shared logins look like one person. <strong>First photo</strong> is
-              when that login&apos;s first photo in this window landed in the catalog (upload time,
-              not the camera shutter). Photos/hr and Lots/hr use <strong>active hours</strong>: each
-              UTC day with a photo or lot is the time from that person&apos;s first event to their
-              last that day, at least one hour. Totals divide team counts by the sum of those
-              person-hours. This is cataloging pace, not hours on the clock.
+              photos drop off. Shared logins look like one person. <strong>First photo</strong>,{" "}
+              <strong>Last photo</strong>, and <strong>Last lot</strong> are when that login&apos;s
+              first/last photo or last lot in this window landed in the catalog (upload time, not
+              the camera shutter). On Today that is that day; on 7d/30d it is last in the selected
+              range. Photos/hr and Lots/hr use <strong>active hours</strong>: each UTC day with a
+              photo or lot is the time from that person&apos;s first event to their last that day,
+              at least one hour. Totals divide team counts by the sum of those person-hours. This
+              is cataloging pace, not hours on the clock.
             </div>
           </details>
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -745,6 +749,8 @@ export default function AccountPage() {
                     <tr>
                       <th>Person</th>
                       <th>First photo</th>
+                      <th>Last photo</th>
+                      <th>Last lot</th>
                       <th className="ct-table__num">Photos</th>
                       <th className="ct-table__num">Lots</th>
                       <th className="ct-table__num">Jobs</th>
@@ -763,7 +769,9 @@ export default function AccountPage() {
                             {m.user_id === me?.id ? " · you" : ""}
                           </div>
                         </td>
-                        <td>{formatFirstPhotoAt(m.first_photo_at)}</td>
+                        <td>{formatActivityStamp(m.first_photo_at)}</td>
+                        <td>{formatActivityStamp(m.last_photo_at)}</td>
+                        <td>{formatActivityStamp(m.last_lot_at)}</td>
                         <td className="ct-table__num">{m.photos_uploaded}</td>
                         <td className="ct-table__num">{m.lots_created}</td>
                         <td className="ct-table__num">{m.jobs_started}</td>
@@ -779,6 +787,8 @@ export default function AccountPage() {
                         Total · {activity.totals.member_count}{" "}
                         {activity.totals.member_count === 1 ? "login" : "logins"}
                       </th>
+                      <th>—</th>
+                      <th>—</th>
                       <th>—</th>
                       <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
                       <th className="ct-table__num">{activity.totals.lots_created}</th>

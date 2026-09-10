@@ -63,6 +63,8 @@ class TeamActivityMemberOut(BaseModel):
     photos_per_hour: float = 0
     lots_per_hour: float = 0
     first_photo_at: datetime | None = None
+    last_photo_at: datetime | None = None
+    last_lot_at: datetime | None = None
 
 
 class TeamActivityTotalsOut(BaseModel):
