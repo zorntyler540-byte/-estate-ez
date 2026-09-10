@@ -122,6 +122,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   when `shows_whole_lot` is true. Persisted roles feed listing sort, CT Seller cover, and the
   Hero shots ZIP. A group/table shot with tape at the *edge* can still be hero. Already-cataloged
   lots keep stored roles until they are cataloged again — do not Resend all just to refresh heroes.
+- **Lots can move between open Estate-EZ sales.** `POST /lots/move-to-sale` and
+  `POST /lots/{id}/move` change `lot.sale_id` only (photos/videos stay on the lot).
+  Cover slots on the old sale that used that lot's photos are cleared. Closed sales
+  cannot be destinations. Posted CT Seller items are not edited — staff still fix
+  those on seller.ctbids.com if needed. Dashboard **Move** and the lot Details
+  **Sale** panel both call this. Do not Resend-all after a move.
 - **Lot videos are extra media, not catalog frames.** The phone capture session has a Photo /
   Video toggle (`expo-camera` `recordAsync`, 45s / 80 MB / 8 per lot). Clips upload to
   `POST /lots/{id}/videos/upload` after the lot exists (append immediately; new lots wait until

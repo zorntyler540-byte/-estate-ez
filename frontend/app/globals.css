@@ -3315,6 +3315,14 @@ select.ct-input option {
   background: var(--ct-bg-elevated);
 }
 
+.ct-move-sale {
+  min-width: 0;
+}
+
+.ct-move-sale--compact .ct-input {
+  min-width: 10rem;
+}
+
 .ct-dash-lots__toolbar-filters {
   display: flex;
   flex-wrap: wrap;

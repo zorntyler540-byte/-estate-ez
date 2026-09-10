@@ -26,6 +26,7 @@ import {
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
+import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
 import {
   AudienceHuntProgress,
@@ -1917,6 +1918,7 @@ export default function DashboardPage() {
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
   /** Lots checked for selective CT Seller post (empty = post all unposted). */
   const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
+  const [pendingMoveLotIds, setPendingMoveLotIds] = useState<string[] | null>(null);
   const [audienceHuntBusy, setAudienceHuntBusy] = useState(false);
   const [audienceHuntMsg, setAudienceHuntMsg] = useState("");
   const [audienceHuntErr, setAudienceHuntErr] = useState("");
@@ -2060,6 +2062,10 @@ export default function DashboardPage() {
   }, [ctSellerPostSelected, ctSellerEligibleIds]);
   const ctSellerAllEligibleSelected =
     ctSellerEligibleIds.length > 0 && ctSellerSelectedCount === ctSellerEligibleIds.length;
+  const moveLotIds = pendingMoveLotIds ?? Array.from(ctSellerPostSelected);
+  const movePostedCount = lots.filter(
+    (l) => moveLotIds.includes(l.id) && lotIsPostedToCtSeller(l)
+  ).length;
   const dashboardStats = useMemo(() => {
     const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
     const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
@@ -6699,9 +6705,61 @@ export default function DashboardPage() {
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
           Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
-          post a subset to CT Seller, or leave none checked to post all unposted. SKU-tape photos stay in
-          the catalog and are not uploaded to CT Bids.
+          post a subset to CT Seller, or leave none checked to post all unposted. Use{" "}
+          <strong>Move</strong> to send a lot to another sale. SKU-tape photos stay in the catalog and
+          are not uploaded to CT Bids.
         </p>
+        {selectedSaleId ? (
+          <div className="ct-dash-panel" style={{ margin: "0 0 0.85rem", padding: "0.85rem 1rem" }}>
+            <h3 className="ct-dash-panel__title" style={{ fontSize: "1rem", marginBottom: "0.35rem" }}>
+              Move to another sale
+            </h3>
+            {pendingMoveLotIds ? (
+              <p className="ct-muted" style={{ margin: "0 0 0.45rem", fontSize: "0.82rem" }}>
+                Moving{" "}
+                {pendingMoveLotIds
+                  .map((id) => lots.find((l) => l.id === id)?.sku || "lot")
+                  .join(", ")}
+                .{" "}
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  style={{ minHeight: 0, padding: "0.1rem 0.35rem" }}
+                  onClick={() => setPendingMoveLotIds(null)}
+                >
+                  Use checked rows instead
+                </button>
+              </p>
+            ) : (
+              <p className="ct-muted" style={{ margin: "0 0 0.45rem", fontSize: "0.82rem" }}>
+                {ctSellerSelectedCount > 0
+                  ? `${ctSellerSelectedCount} checked lot${ctSellerSelectedCount === 1 ? "" : "s"} will move.`
+                  : "Check lots, or tap Move on a row."}
+              </p>
+            )}
+            <MoveLotsToSale
+              token={token}
+              lotIds={moveLotIds}
+              currentSaleId={selectedSaleId}
+              currentSaleName={selectedSale?.name}
+              sales={sales}
+              postedCount={movePostedCount}
+              disabled={busyProcessing || !selectedSaleId}
+              compact
+              onMoved={(result) => {
+                const moved = new Set(moveLotIds);
+                setLots((prev) => prev.filter((l) => !moved.has(l.id)));
+                setCtSellerPostSelected((prev) => {
+                  const next = new Set(prev);
+                  for (const id of moved) next.delete(id);
+                  return next;
+                });
+                setPendingMoveLotIds(null);
+                void result;
+              }}
+            />
+          </div>
+        ) : null}
         <div className="ct-dash-lots__toolbar">
           <div className="ct-dash-lots__toolbar-filters">
             <label className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.45rem" }}>
@@ -7017,6 +7075,15 @@ export default function DashboardPage() {
               >
                 Details
               </Link>
+              <button
+                type="button"
+                className="ct-btn ct-lot-mobile-card__details-btn"
+                onClick={() => setPendingMoveLotIds([lot.id])}
+                disabled={busyProcessing}
+                title="Move this lot to another sale"
+              >
+                Move
+              </button>
               <span
                 className={`ct-lot-detail-status ct-lot-mobile-card__status${
                   lotIsPostedToCtSeller(lot) ? " ct-lot-detail-status--done" : ""
@@ -7183,6 +7250,16 @@ export default function DashboardPage() {
                 >
                   Details
                 </Link>
+                <button
+                  type="button"
+                  className="ct-btn ct-lots-table__details-btn"
+                  style={{ marginLeft: "0.35rem" }}
+                  onClick={() => setPendingMoveLotIds([lot.id])}
+                  disabled={busyProcessing}
+                  title="Move this lot to another sale"
+                >
+                  Move
+                </button>
               </td>
               {isAccountOwner ? (
                 <td>
