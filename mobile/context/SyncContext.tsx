@@ -13,7 +13,7 @@ import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
 import { countLotsNeedingPhotoUpload } from "@/lib/queue/db";
-import { sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
+import { attachPendingLotVideos, sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
 
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
 
@@ -97,6 +97,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       }
 
       setLastMessage("Checking the website for lots already cataloged…");
+      const videosAttached = await attachPendingLotVideos(token);
+      if (videosAttached) {
+        setRefreshKey((k) => k + 1);
+        setLastMessage(
+          `Uploaded ${videosAttached} leftover video${videosAttached === 1 ? "" : "s"} to the website.`
+        );
+      }
       const archivedFirst = await sweepArchiveConfirmedDrafts(token);
       if (archivedFirst) {
         setRefreshKey((k) => k + 1);
@@ -107,10 +114,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
       const needingUpload = await countLotsNeedingPhotoUpload();
       if (needingUpload === 0) {
-        if (!archivedFirst) {
+        if (!archivedFirst && !videosAttached) {
           setLastMessage("Nothing queued to upload — lots already on the website stay in Archive.");
         }
-        return { uploaded: 0, failed: 0, reconciled: 0, archived: archivedFirst };
+        return { uploaded: videosAttached, failed: 0, reconciled: 0, archived: archivedFirst };
       }
 
       setLastMessage(`Uploading ${needingUpload} lot${needingUpload === 1 ? "" : "s"} not on the website yet…`);

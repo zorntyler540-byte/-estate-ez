@@ -19,6 +19,7 @@ import {
   chunkPhotos,
   preparePhotosForUpload
 } from "../uploadPrepare";
+import { draftNeedsVideoAttach, videoUploadName } from "./attachVideos";
 import {
   archiveCatalogedDraftIfReady,
   listDraftPhotos,
@@ -31,6 +32,7 @@ import {
 import {
   findUniqueSkuLot,
   mergeUniqueSkuMaps,
+  normalizeArchiveSku,
   shouldArchiveCatalogedDraft,
   shouldSkipReupload,
   uniqueSkuLotMap
@@ -49,12 +51,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function videoUploadName(draftId: string, fileUri: string, index: number): string {
-  const match = fileUri.toLowerCase().match(/\.(mp4|mov|m4v|webm)(?:\?|$)/);
-  const ext = match?.[1] ? `.${match[1]}` : ".mp4";
-  return `mobile-${draftId}-vid-${String(index + 1).padStart(2, "0")}${ext}`;
-}
-
 async function uploadPendingDraftVideos(
   token: string,
   draftId: string,
@@ -64,12 +60,54 @@ async function uploadPendingDraftVideos(
   const pending = rows.filter((p) => p.media_kind === "video" && !p.uploaded);
   for (let i = 0; i < pending.length; i++) {
     const row = pending[i]!;
-    if (mediaKindFromName(row.file_uri) !== "video") continue;
-    await uploadLotVideos(token, lotId, [
-      { uri: row.file_uri, name: videoUploadName(draftId, row.file_uri, i) }
-    ]);
+    // media_kind is the source of truth — a missing suffix used to skip the clip forever.
+    const name =
+      mediaKindFromName(row.file_uri) === "video"
+        ? videoUploadName(draftId, row.file_uri, i)
+        : videoUploadName(draftId, `${row.file_uri}.mp4`, i);
+    await uploadLotVideos(token, lotId, [{ uri: row.file_uri, name }]);
     await markDraftMediaUploaded(draftId, row.id);
   }
+}
+
+export async function attachPendingLotVideos(token: string): Promise<number> {
+  const drafts = (await listLotDrafts()).filter((d) => !d.archived_at);
+  const { bySale, allDraftLots, allSkuToLot } = await websiteArchiveIndexes(
+    token,
+    drafts.map((d) => d.sale_id)
+  );
+  let attached = 0;
+  for (const draft of drafts) {
+    const photos = await listDraftPhotos(draft.id);
+    const hasPending = photos.some((p) => p.media_kind === "video" && !p.uploaded);
+    if (!hasPending) continue;
+    const cataloged = bySale.get(draft.sale_id);
+    const draftKey = draft.id.toLowerCase();
+    const skuLot =
+      (cataloged?.ok
+        ? findUniqueSkuLot(
+            draft.manual_sku,
+            draft.listing_channel === "facebook" ? cataloged.skuToLot : cataloged.skuToLotCtseller
+          )
+        : undefined) || findUniqueSkuLot(draft.manual_sku, allSkuToLot);
+    const lotId =
+      draft.server_lot_id ||
+      (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) ||
+      allDraftLots.get(draftKey) ||
+      skuLot ||
+      null;
+    if (!draftNeedsVideoAttach({ hasPendingLocalVideos: hasPending, lotId })) continue;
+    try {
+      if (lotId && draft.server_lot_id !== lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+      }
+      await uploadPendingDraftVideos(token, draft.id, lotId!);
+      attached += 1;
+    } catch {
+      /* retry on the next Sync — do not fail the cataloged lot */
+    }
+  }
+  return attached;
 }
 
 function serverFailMessage(job: Job): string {
@@ -270,6 +308,11 @@ export async function syncPendingLots(
       if (draft.server_lot_id !== lotId) {
         await setDraftServerLotId(draft.id, lotId);
       }
+      try {
+        await uploadPendingDraftVideos(authToken, draft.id, lotId);
+      } catch {
+        /* leftover clips retry on the next Sync */
+      }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
         await setDraftStatus(draft.id, "uploaded", null);
@@ -294,6 +337,15 @@ export async function syncPendingLots(
       await setDraftServerJobId(draft.id, null);
     } else if (job.status === "completed") {
       await setDraftServerJobId(draft.id, null);
+      const lotId = cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : undefined;
+      if (lotId) {
+        await setDraftServerLotId(draft.id, lotId);
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        } catch {
+          /* final attach pass retries */
+        }
+      }
       await setDraftStatus(draft.id, "uploaded", null);
       reconciled += 1;
     } else if (job.status === "failed") {
@@ -304,6 +356,7 @@ export async function syncPendingLots(
   }
   onProgress?.();
 
+  await attachPendingLotVideos(authToken);
   const archivedEarly = await sweepArchiveConfirmedDrafts(authToken);
   onProgress?.();
 
@@ -329,6 +382,15 @@ export async function syncPendingLots(
       if (decideSyncRecovery(draft.status, job) === "adopt") {
         if (job?.status === "completed") {
           await setDraftServerJobId(draft.id, null);
+          const lotId = cataloged?.ok ? cataloged.lotByDraft.get(draft.id.toLowerCase()) : undefined;
+          if (lotId) {
+            await setDraftServerLotId(draft.id, lotId);
+            try {
+              await uploadPendingDraftVideos(authToken, draft.id, lotId);
+            } catch {
+              /* final attach pass retries */
+            }
+          }
           await setDraftStatus(draft.id, "uploaded", null);
         } else {
           await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
@@ -564,6 +626,7 @@ export async function syncPendingLots(
     }
   }
 
+  await attachPendingLotVideos(authToken);
   const archived = archivedEarly + (await sweepArchiveConfirmedDrafts(authToken));
   return { uploaded, failed, reconciled, archived };
 }

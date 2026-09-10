@@ -24,7 +24,8 @@ export type PreparePhotosResult = {
 /** Multipart filename the website stores — must stay ``mobile-<draft>-NN.jpg``. */
 export function uploadCacheFileName(fileName: string): string {
   const base = String(fileName || "photo.jpg").replace(/[^a-zA-Z0-9._-]+/g, "_") || "photo.jpg";
-  return /\.(jpe?g|png|heic|webp)$/i.test(base) ? base : `${base}.jpg`;
+  if (/\.(jpe?g|png|heic|webp|mp4|mov|m4v|webm)$/i.test(base)) return base;
+  return `${base}.jpg`;
 }
 
 export async function uriWithUploadFileName(fileUri: string, fileName: string): Promise<string> {
@@ -157,6 +158,20 @@ export async function resolveUploadFileUri(photo: UploadPhotoUri): Promise<strin
   throw new Error(
     "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
   );
+}
+
+/**
+ * Videos must stay video files. ``resolveUploadFileUri`` runs ImageManipulator
+ * and can turn a clip into a JPEG that ``/videos/upload`` then rejects.
+ */
+export async function resolveUploadVideoUri(uri: string): Promise<string> {
+  for (const candidate of uriCandidates(uri)) {
+    const tryUri = normalizeFileUri(candidate) || candidate;
+    if (tryUri.startsWith("file://")) return tryUri;
+  }
+  const fallback = normalizeFileUri(uri);
+  if (fallback) return fallback;
+  throw new Error("Video file is not readable on this phone — record that clip again.");
 }
 
 /**

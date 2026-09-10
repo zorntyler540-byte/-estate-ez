@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { StableUriImage } from "@/components/StableUriImage";
 
 import { isVideoUri } from "@/lib/mediaKind";
+import { playVideoUri } from "@/lib/playVideo";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 
@@ -94,10 +95,26 @@ export function PhotoPreviewModal({
   const canPrev = index > 0;
   const canNext = index < total - 1;
   const swipeStartX = useRef<number | null>(null);
+  const [playError, setPlayError] = useState("");
+  const [playing, setPlaying] = useState(false);
+
+  async function playCurrent() {
+    if (!uri || !isVideoUri(uri)) return;
+    setPlayError("");
+    setPlaying(true);
+    try {
+      await playVideoUri(uri);
+    } catch (e) {
+      setPlayError(e instanceof Error ? e.message : "Could not play this video");
+    } finally {
+      setPlaying(false);
+    }
+  }
 
   function go(delta: number) {
     const next = stepCaptureIndex(index, total, delta);
     if (next === index) return;
+    setPlayError("");
     onIndexChange?.(next);
   }
 
@@ -126,10 +143,17 @@ export function PhotoPreviewModal({
               }}
             >
               {isVideoUri(uri) ? (
-                <View style={[styles.modalImage, styles.videoPreview]}>
+                <Pressable
+                  style={[styles.modalImage, styles.videoPreview]}
+                  onPress={() => void playCurrent()}
+                  accessibilityLabel="Play video"
+                >
                   <Text style={styles.videoPreviewMark}>▶</Text>
-                  <Text style={styles.videoPreviewHint}>Video saved on this phone</Text>
-                </View>
+                  <Text style={styles.videoPreviewHint}>
+                    {playing ? "Opening player…" : "Tap to play"}
+                  </Text>
+                  {playError ? <Text style={styles.videoPreviewError}>{playError}</Text> : null}
+                </Pressable>
               ) : (
                 <StableUriImage uri={uri} style={styles.modalImage} recyclingKey={uri} contentFit="contain" />
               )}
@@ -156,6 +180,11 @@ export function PhotoPreviewModal({
             </View>
           ) : null}
           <View style={styles.modalActions}>
+            {uri && isVideoUri(uri) ? (
+              <Pressable style={styles.modalPlay} onPress={() => void playCurrent()}>
+                <Text style={styles.modalPlayText}>{playing ? "Opening…" : "Play video"}</Text>
+              </Pressable>
+            ) : null}
             {onDelete ? (
               <Pressable style={styles.modalDelete} onPress={onDelete}>
                 <Text style={styles.modalDeleteText}>{isVideoUri(uri) ? "Delete video" : "Delete photo"}</Text>
@@ -208,7 +237,7 @@ export function draftStatusDisplay(
     case "uploaded":
       return {
         label: "Sent to server",
-        hint: "Forgot a shot? Tap Add photos. Only Resend if this listing is missing on the website."
+        hint: "Photos catalog first; videos attach after the lot is on the website. Tap Sync if a clip is still only on this phone. Forgot a shot? Tap Add photos."
       };
     case "failed":
       if (isTransientSyncError(opts?.errorMessage) || !opts?.errorMessage) {
@@ -278,6 +307,14 @@ const styles = StyleSheet.create({
   videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
   videoPreviewMark: { color: "#fff", fontSize: 48, fontWeight: "700" },
   videoPreviewHint: { color: "#a8a29e", marginTop: 12, fontSize: 15, fontWeight: "600" },
+  videoPreviewError: { color: "#fca5a5", marginTop: 10, fontSize: 13, textAlign: "center" },
+  modalPlay: {
+    backgroundColor: "#ff4d1a",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20
+  },
+  modalPlayText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",
