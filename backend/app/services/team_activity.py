@@ -77,6 +77,30 @@ def _counts_by_user(
     return {str(uid): int(n or 0) for uid, n in rows}
 
 
+def _first_photo_at_by_user(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, datetime]:
+    rows = (
+        db.query(Photo.user_id, func.min(Photo.created_at))
+        .filter(
+            Photo.account_id == account_id,
+            Photo.created_at >= start,
+            Photo.created_at < end,
+        )
+        .group_by(Photo.user_id)
+        .all()
+    )
+    out: dict[str, datetime] = {}
+    for uid, ts in rows:
+        if not uid or ts is None:
+            continue
+        out[str(uid)] = aware_utc(ts)
+    return out
+
+
 def _event_times_by_user(
     db: Session,
     account_id: str,
@@ -134,6 +158,7 @@ class TeamActivityMember:
     active_hours: float
     photos_per_hour: float
     lots_per_hour: float
+    first_photo_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +192,7 @@ def summarize_team_activity(
     lots = _counts_by_user(db, Lot, account_id, start, end)
     jobs = _counts_by_user(db, ProcessingJob, account_id, start, end)
     times = _event_times_by_user(db, account_id, start, end)
+    first_photos = _first_photo_at_by_user(db, account_id, start, end)
     members = []
     for row in users:
         hours = active_hours_for_timestamps(times.get(row.id, []))
@@ -183,6 +209,7 @@ def summarize_team_activity(
                 active_hours=hours,
                 photos_per_hour=per_active_hour(photo_n, hours),
                 lots_per_hour=per_active_hour(lot_n, hours),
+                first_photo_at=first_photos.get(row.id),
             )
         )
     members.sort(

@@ -38,6 +38,7 @@ type TeamActivityMember = {
   active_hours: number;
   photos_per_hour: number;
   lots_per_hour: number;
+  first_photo_at?: string | null;
 };
 
 type TeamActivity = {
@@ -107,6 +108,18 @@ function formatActivityHours(n: number | undefined): string {
 function formatActivityRate(n: number | undefined): string {
   if (!n) return "—";
   return n.toFixed(1);
+}
+
+function formatFirstPhotoAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
 function isAuthFailureMessage(message: string): boolean {
@@ -653,11 +666,12 @@ export default function AccountPage() {
             <summary>How this is counted</summary>
             <div className="ct-help-details__body">
               Credit goes to the login that uploaded the photo or started the catalog job. Deleted
-              photos drop off. Shared logins look like one person. Photos/hr and Lots/hr use{" "}
-              <strong>active hours</strong>: each UTC day with a photo or lot is the time from that
-              person&apos;s first event to their last that day, at least one hour. Totals divide
-              team counts by the sum of those person-hours. This is cataloging pace, not hours on
-              the clock.
+              photos drop off. Shared logins look like one person. <strong>First photo</strong> is
+              when that login&apos;s first photo in this window landed in the catalog (upload time,
+              not the camera shutter). Photos/hr and Lots/hr use <strong>active hours</strong>: each
+              UTC day with a photo or lot is the time from that person&apos;s first event to their
+              last that day, at least one hour. Totals divide team counts by the sum of those
+              person-hours. This is cataloging pace, not hours on the clock.
             </div>
           </details>
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -730,6 +744,7 @@ export default function AccountPage() {
                   <thead>
                     <tr>
                       <th>Person</th>
+                      <th>First photo</th>
                       <th className="ct-table__num">Photos</th>
                       <th className="ct-table__num">Lots</th>
                       <th className="ct-table__num">Jobs</th>
@@ -748,6 +763,7 @@ export default function AccountPage() {
                             {m.user_id === me?.id ? " · you" : ""}
                           </div>
                         </td>
+                        <td>{formatFirstPhotoAt(m.first_photo_at)}</td>
                         <td className="ct-table__num">{m.photos_uploaded}</td>
                         <td className="ct-table__num">{m.lots_created}</td>
                         <td className="ct-table__num">{m.jobs_started}</td>
@@ -763,6 +779,7 @@ export default function AccountPage() {
                         Total · {activity.totals.member_count}{" "}
                         {activity.totals.member_count === 1 ? "login" : "logins"}
                       </th>
+                      <th>—</th>
                       <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
                       <th className="ct-table__num">{activity.totals.lots_created}</th>
                       <th className="ct-table__num">{activity.totals.jobs_started}</th>

@@ -810,6 +810,7 @@ def team_activity(
                 active_hours=m.active_hours,
                 photos_per_hour=m.photos_per_hour,
                 lots_per_hour=m.lots_per_hour,
+                first_photo_at=m.first_photo_at,
             )
             for m in summary.members
         ],
