@@ -130,21 +130,17 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
   const rows = await db.getAllAsync<Record<string, unknown>>(
     "SELECT * FROM lot_drafts ORDER BY updated_at DESC"
   );
-  const out: LotDraft[] = [];
-  for (const row of rows) {
+  const counts = await db.getAllAsync<{ draft_id: string; c: number }>(
+    "SELECT draft_id, COUNT(*) AS c FROM lot_photos GROUP BY draft_id"
+  );
+  const countByDraft = new Map(counts.map((r) => [String(r.draft_id), Number(r.c)]));
+  return rows.map((row) => {
     const archivedAt = row.archived_at != null ? Number(row.archived_at) : 0;
     if (archivedAt > 0) {
-      const stored = Number(row.archived_photo_count ?? 0);
-      out.push(rowToDraft(row, stored));
-      continue;
+      return rowToDraft(row, Number(row.archived_photo_count ?? 0));
     }
-    const pc = await db.getFirstAsync<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
-      [String(row.id)]
-    );
-    out.push(rowToDraft(row, Number(pc?.c ?? 0)));
-  }
-  return out;
+    return rowToDraft(row, countByDraft.get(String(row.id)) ?? 0);
+  });
 }
 
 export async function getLotDraft(draftId: string): Promise<LotDraft | null> {

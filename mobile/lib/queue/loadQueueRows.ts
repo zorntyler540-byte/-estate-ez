@@ -1,8 +1,11 @@
-/** How many draft photo rows to query at once when opening Queue. */
-export const QUEUE_PHOTO_LOAD_BATCH = 4;
+/** Queue first paint must never decode camera JPEGs. Review loads one lot on tap. */
+export const QUEUE_OPEN_PHOTO_URIS: string[] = [];
 
-/** Thumbs decoded on each Queue card. The rest stay as URIs for Review / Resend. */
-export const QUEUE_VISIBLE_THUMBS = 6;
+export function queueRowsFromDrafts<T extends { id: string }>(
+  drafts: T[]
+): Array<T & { photoUris: string[] }> {
+  return drafts.map((draft) => ({ ...draft, photoUris: QUEUE_OPEN_PHOTO_URIS }));
+}
 
 export async function mapInBatches<T, R>(
   items: T[],

@@ -12,8 +12,7 @@ import {
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 
-import { DraftPhotoStrip, draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
-import { StableUriImage } from "@/components/StableUriImage";
+import { draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
 import { isTransientSyncError } from "@/lib/queue/syncRecovery";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
@@ -22,7 +21,7 @@ import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
 import { queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
 import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
-import { mapInBatches, QUEUE_PHOTO_LOAD_BATCH, QUEUE_VISIBLE_THUMBS } from "@/lib/queue/loadQueueRows";
+import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
 type DraftRow = LotDraft & { photoUris: string[] };
@@ -68,7 +67,7 @@ function formatQueueSyncMessage(result: SyncResult, online: boolean | null): str
 
 export default function QueueScreen() {
   const { token, selectedSaleId } = useAuth();
-  const { getSaleName, refreshSales } = useSales();
+  const { getSaleName } = useSales();
   const { syncing, lastMessage } = useSyncStatus();
   const { syncNow } = useSyncActions();
   const [rows, setRows] = useState<DraftRow[]>([]);
@@ -80,9 +79,14 @@ export default function QueueScreen() {
   const [showArchive, setShowArchive] = useState(false);
   const focusedRef = useRef(false);
 
-  const refresh = useCallback(async (opts?: { sales?: boolean; archive?: boolean }) => {
+  const refresh = useCallback(async (opts?: { archive?: boolean }) => {
     try {
-      if (opts?.sales !== false) await refreshSales();
+      // Text-only first. Loading every JPEG URI and decoding thumbs is what
+      // hard-killed the pink iPhone when this tab opened.
+      const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
+      const enriched = queueRowsFromDrafts(drafts);
+      setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
+      setOnline(net.isConnected ?? false);
       if (opts?.archive !== false && token) {
         try {
           const n = await sweepArchiveConfirmedDrafts(token);
@@ -90,31 +94,24 @@ export default function QueueScreen() {
             setMessage(
               `Moved ${n} cataloged lot${n === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
             );
+            const after = await listLotDrafts();
+            const next = queueRowsFromDrafts(after);
+            setRows((prev) => (queueRowsUnchanged(prev, next) ? prev : next));
           }
         } catch {
           /* stay offline-capable — Sync will archive later */
         }
       }
-      const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
-      // Small batches — Promise.all on every draft opened SQLite + decoded every
-      // JPEG at once and killed a field phone when Queue was opened.
-      const enriched = await mapInBatches(drafts, QUEUE_PHOTO_LOAD_BATCH, async (draft) => {
-        if (draft.archived_at) return { ...draft, photoUris: [] as string[] };
-        const photos = await listDraftPhotos(draft.id);
-        return { ...draft, photoUris: photos.map((p) => p.file_uri).filter(Boolean) };
-      });
-      setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
-      setOnline(net.isConnected ?? false);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load Queue");
     }
-  }, [refreshSales, token]);
+  }, [token]);
 
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
       setFocused(true);
-      void refresh({ sales: true });
+      void refresh({ archive: true });
       return () => {
         focusedRef.current = false;
         setFocused(false);
@@ -229,7 +226,7 @@ export default function QueueScreen() {
       Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
       return;
     }
-    if (!item.photoUris.length) {
+    if (!item.photo_count) {
       Alert.alert("No photos", "This lot has no photos saved on the phone to resend.");
       return;
     }
@@ -260,7 +257,7 @@ export default function QueueScreen() {
   const activeRows = rows.filter((r) => !r.archived_at);
   const archiveRows = rows.filter((r) => r.archived_at);
   const visibleRows = showArchive ? archiveRows : activeRows;
-  const resendableLots = activeRows.filter((r) => r.status === "uploaded" && r.photoUris.length > 0);
+  const resendableLots = activeRows.filter((r) => r.status === "uploaded" && r.photo_count > 0);
 
   /** Re-queue every “Sent to server” lot that still has photos on this phone. */
   function confirmResendAll() {
@@ -345,11 +342,26 @@ export default function QueueScreen() {
     setPreviewIndex(Math.max(0, Math.min(index, uris.length - 1)));
   }
 
+  async function reviewDraftPhotos(item: DraftRow) {
+    if (item.archived_at || !item.photo_count) return;
+    try {
+      const photos = await listDraftPhotos(item.id);
+      const uris = photos.map((p) => p.file_uri).filter(Boolean);
+      if (!uris.length) {
+        Alert.alert("No photos", "This lot has no photos saved on this phone.");
+        return;
+      }
+      openPreview(uris, 0);
+    } catch (e) {
+      Alert.alert("Could not open photos", e instanceof Error ? e.message : "Try again.");
+    }
+  }
+
   const banner = message || lastMessage;
 
   return (
     <View style={styles.root}>
-      <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ sales: false, archive: false })} />
+      <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ archive: false })} />
       <Text style={styles.status}>
         Network: {online === null ? "…" : online ? "Online" : "Offline"}
         {syncing ? " · Uploading…" : ""}
@@ -357,7 +369,7 @@ export default function QueueScreen() {
       <Text style={styles.hint}>
         {showArchive
           ? "Lots the website already cataloged. Photos were removed from this phone to save space. Add photos still attaches to that listing."
-          : "Unfinished lots stay here. After Sync confirms a lot is on the website, photos leave this list and move to Archive."}
+          : "Unfinished lots stay here. This list is names only so the phone does not crash. Tap Review to see one lot's photos. After Sync confirms a lot is on the website, it moves to Archive."}
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 
@@ -394,6 +406,10 @@ export default function QueueScreen() {
       <FlatList
         data={visibleRows}
         keyExtractor={(item) => item.id}
+        initialNumToRender={8}
+        maxToRenderPerBatch={6}
+        windowSize={5}
+        removeClippedSubviews
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />}
         ListEmptyComponent={
           <Text style={styles.empty}>
@@ -414,71 +430,30 @@ export default function QueueScreen() {
             item.status === "failed" &&
             Boolean(item.error_message) &&
             !isTransientSyncError(item.error_message);
-          const hero = item.photoUris[0];
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           return (
             <View style={styles.card}>
-              <View style={styles.cardTop}>
-                {hero ? (
-                  <Pressable onPress={() => openPreview(item.photoUris, 0)}>
-                    <StableUriImage
-                      uri={hero}
-                      style={styles.hero}
-                      recyclingKey={item.id}
-                      cachePolicy="disk"
-                    />
-                  </Pressable>
-                ) : (
-                  <View style={[styles.hero, styles.heroEmpty]}>
-                    <Text style={styles.heroEmptyText}>No{'\n'}photo</Text>
-                  </View>
-                )}
-                <View style={styles.cardBody}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>
-                      {archived
-                        ? `${item.photo_count || 0} photo${item.photo_count === 1 ? "" : "s"} cataloged`
-                        : `${item.photo_count} photo${item.photo_count === 1 ? "" : "s"}`}
-                    </Text>
-                    <Pressable
-                      style={styles.deleteBtn}
-                      hitSlop={8}
-                      onPress={() => confirmRemoveLot(item)}
-                    >
-                      <Text style={styles.deleteBtnText}>Delete</Text>
-                    </Pressable>
-                  </View>
-                  <Text style={styles.cardStatus}>{status.label}</Text>
-                  <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
-                    Sale: {getSaleName(item.sale_id, item.sale_name)}
-                    {otherSale ? " — not the sale currently selected" : ""}
-                  </Text>
-                  <Text style={styles.cardHint}>{status.hint}</Text>
-                  {item.manual_sku ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}
-                </View>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>
+                  {archived
+                    ? `${item.photo_count || 0} photo${item.photo_count === 1 ? "" : "s"} cataloged`
+                    : `${item.photo_count} photo${item.photo_count === 1 ? "" : "s"}`}
+                </Text>
+                <Pressable
+                  style={styles.deleteBtn}
+                  hitSlop={8}
+                  onPress={() => confirmRemoveLot(item)}
+                >
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </Pressable>
               </View>
-
-              {item.photoUris.length > 0 ? (
-                <View style={styles.reviewBlock}>
-                  <DraftPhotoStrip
-                    uris={item.photoUris}
-                    size="md"
-                    maxVisible={QUEUE_VISIBLE_THUMBS}
-                    cachePolicy="disk"
-                    onPressPhoto={(_uri, index) => openPreview(item.photoUris, index)}
-                  />
-                  {item.photoUris.length > 1 ? (
-                    <Pressable
-                      style={styles.reviewBtn}
-                      onPress={() => openPreview(item.photoUris, 0)}
-                    >
-                      <Text style={styles.reviewBtnText}>
-                        Review all {item.photoUris.length} photos (taken order)
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ) : null}
+              <Text style={styles.cardStatus}>{status.label}</Text>
+              <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
+                Sale: {getSaleName(item.sale_id, item.sale_name)}
+                {otherSale ? " — not the sale currently selected" : ""}
+              </Text>
+              <Text style={styles.cardHint}>{status.hint}</Text>
+              {item.manual_sku ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}
 
               {item.error_message ? (
                 <Text style={noticeIsError ? styles.error : styles.progress}>
@@ -487,6 +462,13 @@ export default function QueueScreen() {
               ) : null}
               {item.status !== "uploading" ? (
                 <View style={styles.draftActions}>
+                  {!archived && item.photo_count > 0 ? (
+                    <Pressable style={styles.secondary} onPress={() => void reviewDraftPhotos(item)}>
+                      <Text style={styles.secondaryText}>
+                        Review {item.photo_count} photo{item.photo_count === 1 ? "" : "s"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     style={[styles.continueBtn, syncing && item.status === "uploaded" && styles.disabled]}
                     disabled={syncing && item.status === "uploaded"}
@@ -499,7 +481,7 @@ export default function QueueScreen() {
                       <Text style={styles.secondaryText}>Queue for upload</Text>
                     </Pressable>
                   ) : null}
-                  {item.status === "uploaded" && !archived && item.photoUris.length > 0 ? (
+                  {item.status === "uploaded" && !archived && item.photo_count > 0 ? (
                     <Pressable
                       style={[styles.secondary, syncing && styles.disabled]}
                       disabled={syncing}
@@ -555,13 +537,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#141416",
-    gap: 10
+    gap: 6
   },
-  cardTop: { flexDirection: "row", gap: 12 },
-  hero: { width: 88, height: 88, borderRadius: 10, backgroundColor: "#141416" },
-  heroEmpty: { alignItems: "center", justifyContent: "center" },
-  heroEmptyText: { color: "#78716c", fontSize: 12, textAlign: "center" },
-  cardBody: { flex: 1, gap: 3 },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   cardTitle: { color: "#f5f5f4", fontWeight: "700", fontSize: 16, flex: 1 },
   deleteBtn: {
@@ -578,17 +555,6 @@ const styles = StyleSheet.create({
   cardSaleOther: { color: "#fcd34d" },
   cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },
   cardMeta: { color: "#78716c", fontSize: 12, marginTop: 2 },
-  reviewBlock: { gap: 4 },
-  reviewBtn: {
-    alignSelf: "flex-start",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#1c1917",
-    borderWidth: 1,
-    borderColor: "#44403c"
-  },
-  reviewBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
   error: { color: "#fca5a5", fontSize: 12 },
   progress: { color: "#fdba74", fontSize: 12, marginTop: 4 },
   draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
