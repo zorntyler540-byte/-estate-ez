@@ -20,7 +20,7 @@ import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } fro
 import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
 import { queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
-import { deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
+import { deleteArchivedDrafts, deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
@@ -269,6 +269,38 @@ export default function QueueScreen() {
     await refresh();
   }
 
+  function confirmClearArchive() {
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
+      return;
+    }
+    const n = archiveRows.length;
+    if (!n) return;
+    Alert.alert(
+      "Clear Archive?",
+      `Removes ${n} cataloged lot${n === 1 ? "" : "s"} from this phone only. Photos are already gone. Listings stay on the website. Add photos later from the Lots tab.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear Archive",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              const removed = await deleteArchivedDrafts();
+              setShowArchive(false);
+              setMessage(
+                removed
+                  ? `Cleared ${removed} lot${removed === 1 ? "" : "s"} from Archive. Website listings were not changed.`
+                  : "Archive was already empty."
+              );
+              await refresh({ archive: false });
+            })();
+          }
+        }
+      ]
+    );
+  }
+
   function confirmRemoveLot(item: DraftRow) {
     // Block deletes during a live sync. Stuck "uploading" (app killed mid-send) is
     // deletable when idle; Sync now also auto-retries those.
@@ -330,7 +362,7 @@ export default function QueueScreen() {
       </Text>
       <Text style={styles.hint}>
         {showArchive
-          ? "Lots the website already cataloged. Photos were removed from this phone to save space. Add photos still attaches to that listing."
+          ? "Temporary list of cataloged lots. Photos are already off this phone. Clear Archive when you are done — website listings stay."
           : "Unfinished lots stay here (names only). Sync now checks the website first — lots already cataloged move to Archive. It does not re-upload those."}
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
@@ -355,6 +387,12 @@ export default function QueueScreen() {
         </Pressable>
       ) : null}
 
+      {showArchive && archiveRows.length > 0 ? (
+        <Pressable style={styles.resendAll} onPress={confirmClearArchive}>
+          <Text style={styles.resendAllText}>Clear Archive ({archiveRows.length}) — keep website listings</Text>
+        </Pressable>
+      ) : null}
+
       <FlatList
         data={visibleRows}
         keyExtractor={(item) => item.id}
@@ -366,7 +404,7 @@ export default function QueueScreen() {
         ListEmptyComponent={
           <Text style={styles.empty}>
             {showArchive
-              ? "Archive is empty. Lots move here after Sync confirms they are on the website."
+              ? "Archive is empty. Cataloged lots land here until you Clear Archive. Website listings stay."
               : "No lots waiting on this phone. Capture photos on the Capture tab."}
           </Text>
         }

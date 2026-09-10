@@ -338,6 +338,16 @@ export async function draftHasPendingLocalVideos(draftId: string): Promise<boole
   return photos.some((p) => p.media_kind === "video" && !p.uploaded);
 }
 
+/** Drop archived phone rows. Website listings stay. */
+export async function deleteArchivedDrafts(): Promise<number> {
+  const drafts = await listLotDrafts();
+  const archived = drafts.filter((d) => d.archived_at);
+  for (const draft of archived) {
+    await deleteLotDraft(draft.id);
+  }
+  return archived.length;
+}
+
 export async function deleteLotDraft(draftId: string): Promise<void> {
   const photos = await listDraftPhotos(draftId);
   for (const photo of photos) {
