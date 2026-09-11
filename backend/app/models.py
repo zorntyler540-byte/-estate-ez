@@ -104,6 +104,10 @@ class Lot(Base):
     ctseller_posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # CT Seller / CT Bids auction this lot was posted to (can differ from Sale.ctseller_sale_id after moves).
     ctseller_sale_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Last known CT Seller itemstatus (Pending / Ready / Sold / Unsold / …).
+    ctseller_item_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Hammer / winning bid when CT Seller reports the lot sold.
+    ctseller_sold_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     # ctseller (CT Bids) vs facebook (Marketplace) — never mix Facebook into CT Seller posts.
     listing_channel: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ctseller", server_default="ctseller"

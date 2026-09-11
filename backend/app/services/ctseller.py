@@ -391,6 +391,10 @@ class CTSellerClient:
                 "reserveprice",
                 "buynowprice",
                 "itemstatus",
+                "currentbid",
+                "highbid",
+                "winningbid",
+                "soldprice",
                 "category",
                 "area",
                 "condition",
@@ -405,6 +409,60 @@ class CTSellerClient:
         if isinstance(data, dict):
             return data
         raise CTSellerError(f"CT Seller item {item_id} not found")
+
+    def list_sale_items(self, sale_id: int) -> list[dict[str, Any]]:
+        """Items on one CT Seller auction (sold / unsold / pending), paginated."""
+        fields = [
+            "id",
+            "saleid",
+            "SKU",
+            "title",
+            "itemstatus",
+            "currentbid",
+            "highbid",
+            "winningbid",
+            "soldprice",
+        ]
+        out: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        next_key: str | None = None
+        for _ in range(20):
+            page: dict[str, Any] = {"size": 100}
+            if next_key:
+                page["next"] = next_key
+            payload: dict[str, Any] = {
+                "filter": [{"field": "saleid", "value": int(sale_id), "op": "=", "join": "AND"}],
+                "field": fields,
+                "sort": [{"field": "id", "direction": "asc"}],
+                "page": page,
+            }
+            body = self._post_raw("/item/list", payload)
+            data = body.get("data")
+            rows = data if isinstance(data, list) else []
+            if isinstance(data, dict):
+                inner = data.get("data")
+                rows = inner if isinstance(inner, list) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    iid = int(row.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if iid in seen:
+                    continue
+                seen.add(iid)
+                out.append(row)
+            page_meta = body.get("page") if isinstance(body.get("page"), dict) else {}
+            nxt = None
+            if isinstance(page_meta, dict):
+                keyset = page_meta.get("keyset")
+                if isinstance(keyset, dict):
+                    nxt = keyset.get("next") or None
+            if not nxt or not rows:
+                break
+            next_key = str(nxt)
+        return out
 
     def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
         """Set ``reserveprice`` on an existing item without re-posting photos."""

@@ -88,6 +88,8 @@ type Lot = {
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   ctseller_sale_id?: number | null;
+  ctseller_item_status?: string | null;
+  ctseller_sold_price?: number | null;
   audience_hold?: boolean;
   audience_hunting?: boolean;
   audience_hunt_error?: string | null;
@@ -877,7 +879,9 @@ export default function LotDetailPage() {
               ...prev,
               ctseller_item_id: res.ctseller_item_id,
               ctseller_posted_at: new Date().toISOString(),
-              ctseller_sale_id: res.ctseller_sale_id
+              ctseller_sale_id: res.ctseller_sale_id,
+              ctseller_item_status: "Pending",
+              ctseller_sold_price: null
             }
           : prev
       );
@@ -1514,16 +1518,24 @@ export default function LotDetailPage() {
               }`}
               title={
                 lot.ctseller_item_id || lot.ctseller_posted_at
-                  ? lot.ctseller_sale_id
-                    ? `Posted to CT Bids sale #${lot.ctseller_sale_id}`
-                    : "Posted to CT Seller"
+                  ? [
+                      lot.ctseller_item_status || "Posted to CT Seller",
+                      lot.ctseller_sale_id ? `sale #${lot.ctseller_sale_id}` : "",
+                      lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
+                        ? `$${lot.ctseller_sold_price}`
+                        : ""
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
                   : "Not posted to CT Seller yet"
               }
             >
               {lot.ctseller_item_id || lot.ctseller_posted_at
-                ? lot.ctseller_sale_id
-                  ? `Posted · #${lot.ctseller_sale_id}`
-                  : "Posted"
+                ? lot.ctseller_item_status
+                  ? lot.ctseller_item_status
+                  : lot.ctseller_sale_id
+                    ? `Posted · #${lot.ctseller_sale_id}`
+                    : "Posted"
                 : "Not posted"}
             </span>
             <div className="ct-lot-detail-hero__actions">
@@ -1764,6 +1776,10 @@ export default function LotDetailPage() {
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
               Last posted as CT Seller item <strong>#{lot.ctseller_item_id}</strong>
               {lot.ctseller_sale_id ? ` · CT Bids sale #${lot.ctseller_sale_id}` : ""}
+              {lot.ctseller_item_status ? ` · ${lot.ctseller_item_status}` : ""}
+              {lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
+                ? ` · $${lot.ctseller_sold_price}`
+                : ""}
               {lot.ctseller_posted_at
                 ? ` · ${new Date(lot.ctseller_posted_at).toLocaleString()}`
                 : ""}
