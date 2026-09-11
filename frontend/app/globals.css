@@ -2424,7 +2424,7 @@ select.ct-input option {
 
 .ct-table--lots {
   table-layout: fixed;
-  min-width: 1120px;
+  min-width: 1140px;
   width: 100%;
 }
 
@@ -2483,8 +2483,8 @@ select.ct-input option {
 
 .ct-table--lots th:nth-child(7),
 .ct-table--lots td:nth-child(7) {
-  width: 6.25rem;
-  max-width: 6.25rem;
+  width: 7.25rem;
+  max-width: 7.25rem;
   overflow: hidden;
 }
 
@@ -2608,7 +2608,7 @@ select.ct-input option {
 }
 
 .ct-lot-detail-status--table {
-  display: block;
+  display: inline-block;
   box-sizing: border-box;
   max-width: 100%;
   font-size: 0.76rem;
@@ -2617,6 +2617,7 @@ select.ct-input option {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 .ct-lots-table__row-actions {
