@@ -1271,6 +1271,19 @@ function lotPostedStatusLabel(lot: Lot, remoteSales: CTSellerRemoteSale[]): stri
   return name ? `Posted · ${name}` : "Posted";
 }
 
+/** Short table chip — auction name stays on hover so the Status column cannot overflow Details. */
+function lotPostedStatusChip(lot: Lot): string {
+  if (!lotIsPostedToCtSeller(lot)) return lot.audience_hold ? "Held" : "Not posted";
+  const outcome = lotCtBidsOutcome(lot);
+  if (outcome === "sold") {
+    const px = formatCtBidsSoldPrice(lot.ctseller_sold_price);
+    return px ? `Sold ${px}` : "Sold";
+  }
+  if (outcome === "unsold") return "Didn't sell";
+  if (outcome === "pulled") return "Pulled";
+  return "Posted";
+}
+
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
   return (
     (lot.listing_channel || "ctseller") !== "facebook" &&
@@ -7426,7 +7439,7 @@ export default function DashboardPage() {
                         : "Not posted to CT Seller yet"
                   }
                 >
-                  {lotPostedStatusLabel(lot, ctSellerRemoteSales)}
+                  {lotPostedStatusChip(lot)}
                 </span>
               </td>
               <td className="ct-lots-table__photo-count">
@@ -7440,7 +7453,7 @@ export default function DashboardPage() {
                   </span>
                 ) : null}
               </td>
-              <td>
+              <td className="ct-lots-table__row-actions">
                 <Link
                   href={`/lots/${lot.id}#listing-details`}
                   className="ct-lots-table__details-btn"
@@ -7456,7 +7469,6 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   className="ct-btn ct-lots-table__details-btn"
-                  style={{ marginLeft: "0.35rem" }}
                   onClick={() => setPendingMoveLotIds([lot.id])}
                   disabled={busyProcessing}
                   title="Move this lot to another sale"
