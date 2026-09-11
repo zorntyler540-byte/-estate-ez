@@ -1083,6 +1083,8 @@ type Lot = {
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
   ctseller_sale_id?: number | null;
+  ctseller_item_status?: string | null;
+  ctseller_sold_price?: number | null;
   listing_channel?: string | null;
   audience_hold?: boolean;
 };
@@ -1225,9 +1227,47 @@ function ctBidsAuctionLabel(
   return title || `CT Bids #${saleId}`;
 }
 
+function lotCtBidsOutcome(
+  lot: Lot
+): "unposted" | "sold" | "unsold" | "live" | "pulled" | "unknown" {
+  if (!lotIsPostedToCtSeller(lot)) return "unposted";
+  const s = (lot.ctseller_item_status || "").trim().toLowerCase().replace(/_/g, " ");
+  const compact = s.replace(/\s+/g, "");
+  if (compact.startsWith("sold") || compact === "paid" || compact === "invoiced") return "sold";
+  if (compact.includes("unsold") || compact === "nosale" || s === "no sale" || s.includes("did not sell")) {
+    return "unsold";
+  }
+  if (["pulled", "withdrawn", "deleted", "removed", "cancelled", "canceled"].includes(compact)) {
+    return "pulled";
+  }
+  if (["pending", "ready", "live", "started", "approved", "active", "open", "published"].includes(compact)) {
+    return "live";
+  }
+  if (lot.ctseller_sold_price && lot.ctseller_sold_price > 0 && s) return "sold";
+  return s ? "unknown" : "unknown";
+}
+
+function formatCtBidsSoldPrice(price: number | null | undefined): string {
+  if (price == null || !Number.isFinite(price) || price <= 0) return "";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: price % 1 === 0 ? 0 : 2
+  }).format(price);
+}
+
 function lotPostedStatusLabel(lot: Lot, remoteSales: CTSellerRemoteSale[]): string {
   if (!lotIsPostedToCtSeller(lot)) return lot.audience_hold ? "Held" : "Not posted";
   const name = ctBidsAuctionLabel(lot.ctseller_sale_id, remoteSales);
+  const outcome = lotCtBidsOutcome(lot);
+  if (outcome === "sold") {
+    const px = formatCtBidsSoldPrice(lot.ctseller_sold_price);
+    if (px && name) return `Sold ${px} · ${name}`;
+    if (px) return `Sold ${px}`;
+    return name ? `Sold · ${name}` : "Sold";
+  }
+  if (outcome === "unsold") return name ? `Didn't sell · ${name}` : "Didn't sell";
+  if (outcome === "pulled") return name ? `Pulled · ${name}` : "Pulled";
   return name ? `Posted · ${name}` : "Posted";
 }
 
@@ -1929,7 +1969,9 @@ export default function DashboardPage() {
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
   const [saleHeroZipBusy, setSaleHeroZipBusy] = useState(false);
-  const [lotPostedSaleFilter, setLotPostedSaleFilter] = useState<"all" | "picked" | "other" | "unposted">("all");
+  const [lotPostedSaleFilter, setLotPostedSaleFilter] = useState<
+    "all" | "picked" | "other" | "unposted" | "sold" | "unsold" | "live"
+  >("all");
   const [ctSellerPostedRefreshBusy, setCtSellerPostedRefreshBusy] = useState(false);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
@@ -2112,6 +2154,12 @@ export default function DashboardPage() {
       }).length,
     [lots, pickedCtBidsSaleId]
   );
+  const soldCount = useMemo(() => lots.filter((l) => lotCtBidsOutcome(l) === "sold").length, [lots]);
+  const unsoldCount = useMemo(() => lots.filter((l) => lotCtBidsOutcome(l) === "unsold").length, [lots]);
+  const liveOnCtBidsCount = useMemo(
+    () => lots.filter((l) => lotCtBidsOutcome(l) === "live" || lotCtBidsOutcome(l) === "unknown").length,
+    [lots]
+  );
   const visibleLots = useMemo(() => {
     if (lotPostedSaleFilter === "unposted") {
       return lots.filter((l) => !lotIsPostedToCtSeller(l));
@@ -2125,6 +2173,15 @@ export default function DashboardPage() {
         if (!l.ctseller_sale_id) return true;
         return pickedCtBidsSaleId > 0 && l.ctseller_sale_id !== pickedCtBidsSaleId;
       });
+    }
+    if (lotPostedSaleFilter === "sold") {
+      return lots.filter((l) => lotCtBidsOutcome(l) === "sold");
+    }
+    if (lotPostedSaleFilter === "unsold") {
+      return lots.filter((l) => lotCtBidsOutcome(l) === "unsold");
+    }
+    if (lotPostedSaleFilter === "live") {
+      return lots.filter((l) => lotCtBidsOutcome(l) === "live" || lotCtBidsOutcome(l) === "unknown");
     }
     return lots;
   }, [lots, lotPostedSaleFilter, pickedCtBidsSaleId]);
@@ -2646,7 +2703,9 @@ export default function DashboardPage() {
         setLoading(false);
         const loaded = lotsData as Lot[];
         const needsAuctionLookup = loaded.some(
-          (l) => lotIsPostedToCtSeller(l) && (l.ctseller_sale_id == null || l.ctseller_sale_id <= 0)
+          (l) =>
+            lotIsPostedToCtSeller(l) &&
+            ((l.ctseller_sale_id == null || l.ctseller_sale_id <= 0) || !l.ctseller_item_status)
         );
         if (needsAuctionLookup) {
           void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, t, {
@@ -6785,7 +6844,10 @@ export default function DashboardPage() {
           {pickedCtBidsSaleId > 0 && postedToPickedCount > 0
             ? ` · ${postedToPickedCount} on ${ctBidsAuctionLabel(pickedCtBidsSaleId, ctSellerRemoteSales) || "this CT Bids sale"}`
             : ""}
-          {postedToOtherCount > 0 ? ` · ${postedToOtherCount} on other CT Bids sales` : ""}{" "}
+          {postedToOtherCount > 0 ? ` · ${postedToOtherCount} on other CT Bids sales` : ""}
+          {soldCount > 0 ? ` · ${soldCount} sold` : ""}
+          {unsoldCount > 0 ? ` · ${unsoldCount} didn't sell` : ""}
+          {liveOnCtBidsCount > 0 ? ` · ${liveOnCtBidsCount} still on CT Bids` : ""}{" "}
           · {lots.filter((l) => !lotIsPostedToCtSeller(l)).length} not posted
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
@@ -6931,7 +6993,9 @@ export default function DashboardPage() {
               className="ct-input"
               value={lotPostedSaleFilter}
               onChange={(e) =>
-                setLotPostedSaleFilter(e.target.value as "all" | "picked" | "other" | "unposted")
+                setLotPostedSaleFilter(
+                  e.target.value as "all" | "picked" | "other" | "unposted" | "sold" | "unsold" | "live"
+                )
               }
               disabled={!selectedSaleId}
             >
@@ -6943,6 +7007,15 @@ export default function DashboardPage() {
               <option value="other" disabled={postedToOtherCount < 1}>
                 Posted to a different CT Bids sale ({postedToOtherCount})
               </option>
+              <option value="sold" disabled={soldCount < 1}>
+                Sold ({soldCount})
+              </option>
+              <option value="unsold" disabled={unsoldCount < 1}>
+                Didn't sell ({unsoldCount})
+              </option>
+              <option value="live" disabled={liveOnCtBidsCount < 1}>
+                Still on CT Bids ({liveOnCtBidsCount})
+              </option>
               <option value="unposted">Not posted</option>
             </select>
           </div>
@@ -6951,7 +7024,7 @@ export default function DashboardPage() {
             className="ct-btn ct-btn--ghost"
             onClick={() => void refreshPostedCtBidsSales()}
             disabled={ctSellerPostedRefreshBusy || ctSellerBulkBusy || !selectedSaleId}
-            title="Ask CT Seller which auction each posted lot is actually on"
+            title="Ask CT Seller which auction each posted lot is on, and whether it sold"
           >
             {ctSellerPostedRefreshBusy ? "Checking CT Bids…" : "Check CT Bids sales"}
           </button>
@@ -7204,7 +7277,13 @@ export default function DashboardPage() {
               </button>
               <span
                 className={`ct-lot-detail-status ct-lot-mobile-card__status${
-                  lotIsPostedToCtSeller(lot) ? " ct-lot-detail-status--done" : ""
+                  lotCtBidsOutcome(lot) === "sold"
+                    ? " ct-lot-detail-status--done"
+                    : lotCtBidsOutcome(lot) === "unsold"
+                      ? " ct-lot-detail-status--unsold"
+                      : lotIsPostedToCtSeller(lot)
+                        ? " ct-lot-detail-status--done"
+                        : ""
                 }`}
                 title={
                   lotIsPostedToCtSeller(lot)
@@ -7331,7 +7410,13 @@ export default function DashboardPage() {
               <td>
                 <span
                   className={`ct-lot-detail-status ct-lot-detail-status--table${
-                    lotIsPostedToCtSeller(lot) ? " ct-lot-detail-status--done" : ""
+                    lotCtBidsOutcome(lot) === "sold"
+                      ? " ct-lot-detail-status--done"
+                      : lotCtBidsOutcome(lot) === "unsold"
+                        ? " ct-lot-detail-status--unsold"
+                        : lotIsPostedToCtSeller(lot)
+                          ? " ct-lot-detail-status--done"
+                          : ""
                   }`}
                   title={
                     lotIsPostedToCtSeller(lot)

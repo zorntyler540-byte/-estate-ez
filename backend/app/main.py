@@ -150,6 +150,7 @@ from app.services.ctseller import (
 )
 from app.services.ctseller_posted import (
     posted_auction_counts,
+    posted_outcome_counts,
     refresh_lot_ctseller_sale_ids,
 )
 from app.services import job_events
@@ -639,6 +640,12 @@ def _ensure_lot_ctseller_sale_id_column() -> None:
         if "ctseller_sale_id" not in lot_cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE lots ADD COLUMN ctseller_sale_id INTEGER"))
+        if "ctseller_item_status" not in lot_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE lots ADD COLUMN ctseller_item_status VARCHAR(40)"))
+        if "ctseller_sold_price" not in lot_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE lots ADD COLUMN ctseller_sold_price FLOAT"))
     if "sale_photo_zip_exports" in insp.get_table_names():
         zip_cols = {c["name"] for c in insp.get_columns("sale_photo_zip_exports")}
         if "filter_ctseller_sale_id" not in zip_cols:
@@ -2318,6 +2325,7 @@ def refresh_ctseller_posted_auctions(
         )
         posted = [lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at]
     ranked, unknown = posted_auction_counts(posted)
+    outcomes = posted_outcome_counts(posted)
     auctions = [
         CTSellerPostedAuctionOut(
             ctseller_sale_id=sid,
@@ -2330,6 +2338,9 @@ def refresh_ctseller_posted_auctions(
         looked_up=looked_up,
         failed=failed,
         unknown_count=unknown,
+        sold_count=outcomes.get("sold", 0),
+        unsold_count=outcomes.get("unsold", 0),
+        live_count=outcomes.get("live", 0),
         auctions=auctions,
     )
 
@@ -2486,6 +2497,8 @@ def _post_one_lot_to_ctseller(
     lot.ctseller_item_id = int(item_id)
     lot.ctseller_posted_at = now
     lot.ctseller_sale_id = int(remote_sale_id)
+    lot.ctseller_item_status = "Pending"
+    lot.ctseller_sold_price = None
     db.add(lot)
     db.commit()
     db.refresh(lot)

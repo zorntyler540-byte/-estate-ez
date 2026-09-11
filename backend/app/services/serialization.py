@@ -237,6 +237,8 @@ def lot_to_schema(
         ctseller_item_id=getattr(row, "ctseller_item_id", None),
         ctseller_posted_at=getattr(row, "ctseller_posted_at", None),
         ctseller_sale_id=getattr(row, "ctseller_sale_id", None),
+        ctseller_item_status=getattr(row, "ctseller_item_status", None),
+        ctseller_sold_price=getattr(row, "ctseller_sold_price", None),
         listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
         audience_hold=bool(getattr(row, "audience_hold", False)),
         audience=audience_payload_for_lot(row),

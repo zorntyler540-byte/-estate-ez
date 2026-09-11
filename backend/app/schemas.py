@@ -252,6 +252,8 @@ class LotOut(BaseModel):
     ctseller_item_id: int | None = None
     ctseller_posted_at: datetime | None = None
     ctseller_sale_id: int | None = None
+    ctseller_item_status: str | None = None
+    ctseller_sold_price: float | None = None
     listing_channel: str = "ctseller"
     audience_hold: bool = False
     audience_hunting: bool = False
@@ -325,6 +327,9 @@ class CTSellerPostedAuctionsOut(BaseModel):
     looked_up: int = 0
     failed: int = 0
     unknown_count: int = 0
+    sold_count: int = 0
+    unsold_count: int = 0
+    live_count: int = 0
     auctions: list[CTSellerPostedAuctionOut] = []
 
 

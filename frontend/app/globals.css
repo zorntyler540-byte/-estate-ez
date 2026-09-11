@@ -1373,6 +1373,11 @@ a.ct-btn:hover {
   background: rgba(34, 197, 94, 0.1);
 }
 
+.ct-lot-detail-status--unsold {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+}
+
 .ct-lot-detail-hero__actions {
   display: flex;
   flex-wrap: wrap;
