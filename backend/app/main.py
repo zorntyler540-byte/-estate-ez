@@ -59,6 +59,8 @@ from app.schemas import (
     CTSellerCredentialsIn,
     CTSellerConditionOut,
     CTSellerRemoteSaleOut,
+    CTSellerPostedAuctionOut,
+    CTSellerPostedAuctionsOut,
     CTSellerStatusOut,
     CatalogR2MigrateIn,
     CatalogR2MigrateOut,
@@ -145,6 +147,10 @@ from app.services.ctseller import (
     resolve_lot_reserve_price,
     seal_secret,
     unseal_secret,
+)
+from app.services.ctseller_posted import (
+    posted_auction_counts,
+    refresh_lot_ctseller_sale_ids,
 )
 from app.services import job_events
 from app.services.lot_moves import move_lots_to_sale
@@ -507,6 +513,7 @@ def startup() -> None:
     _ensure_lot_search_tags_column()
     _ensure_sale_cover_photo_ids_column()
     _ensure_reserve_price_columns()
+    _ensure_lot_ctseller_sale_id_column()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -620,6 +627,23 @@ def _ensure_reserve_price_columns() -> None:
         if "reserve_price" not in lot_cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE lots ADD COLUMN reserve_price FLOAT"))
+
+
+def _ensure_lot_ctseller_sale_id_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing lots / zip export tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "lots" in insp.get_table_names():
+        lot_cols = {c["name"] for c in insp.get_columns("lots")}
+        if "ctseller_sale_id" not in lot_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE lots ADD COLUMN ctseller_sale_id INTEGER"))
+    if "sale_photo_zip_exports" in insp.get_table_names():
+        zip_cols = {c["name"] for c in insp.get_columns("sale_photo_zip_exports")}
+        if "filter_ctseller_sale_id" not in zip_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE sale_photo_zip_exports ADD COLUMN filter_ctseller_sale_id INTEGER"))
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -2256,6 +2280,60 @@ def ctseller_list_sales(
     ]
 
 
+@app.post("/sales/{sale_id}/refresh-ctseller-auctions", response_model=CTSellerPostedAuctionsOut)
+def refresh_ctseller_posted_auctions(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerPostedAuctionsOut:
+    """Look up which CT Bids auction each posted lot in this catalog actually lives on."""
+    sale = _sale_for_user(sale_id, current, db)
+    lots = (
+        db.query(Lot)
+        .filter(Lot.sale_id == sale.id, Lot.account_id == current.account_id)
+        .all()
+    )
+    posted = [lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at]
+    looked_up = 0
+    failed = 0
+    title_by_id: dict[int, str] = {}
+    if posted:
+        account = db.query(Account).filter(Account.id == current.account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        try:
+            client = _ctseller_client_for_account(account, db, probe=False)
+            looked_up, failed = refresh_lot_ctseller_sale_ids(db, posted, client)
+            try:
+                for row in client.list_open_sales():
+                    title_by_id[int(row.id)] = row.title
+            except CTSellerError:
+                pass
+        except CTSellerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        lots = (
+            db.query(Lot)
+            .filter(Lot.sale_id == sale.id, Lot.account_id == current.account_id)
+            .all()
+        )
+        posted = [lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at]
+    ranked, unknown = posted_auction_counts(posted)
+    auctions = [
+        CTSellerPostedAuctionOut(
+            ctseller_sale_id=sid,
+            title=title_by_id.get(sid) or f"CT Bids sale #{sid}",
+            posted_count=n,
+        )
+        for sid, n in ranked
+    ]
+    return CTSellerPostedAuctionsOut(
+        looked_up=looked_up,
+        failed=failed,
+        unknown_count=unknown,
+        auctions=auctions,
+    )
+
+
 def _search_tags_for_lot_row(lot: Lot) -> list[str]:
     from app.services.search_tags import parse_search_tags_json, search_tags_for_lot_fields
 
@@ -2407,6 +2485,7 @@ def _post_one_lot_to_ctseller(
     now = datetime.now(timezone.utc)
     lot.ctseller_item_id = int(item_id)
     lot.ctseller_posted_at = now
+    lot.ctseller_sale_id = int(remote_sale_id)
     db.add(lot)
     db.commit()
     db.refresh(lot)
@@ -2657,6 +2736,10 @@ def list_lots(
         None,
         description="When set to duplicate, text_mismatch, or any, only rows with that SKU sanity flag.",
     ),
+    ctseller_sale_id: int | None = Query(
+        None,
+        description="When set, only lots posted to this CT Seller / CT Bids auction id.",
+    ),
     sort: str = Query(
         "created_desc",
         description="created_desc (default), created_asc (oldest first), or sku_asc.",
@@ -2702,6 +2785,9 @@ def list_lots(
             q = q.filter(Lot.sku_text_mismatch.is_(True))
         else:
             q = q.filter(or_(Lot.sku_duplicate_in_sale.is_(True), Lot.sku_text_mismatch.is_(True)))
+
+    if ctseller_sale_id is not None:
+        q = q.filter(Lot.ctseller_item_id.isnot(None), Lot.ctseller_sale_id == int(ctseller_sale_id))
 
     if sort_key == "created_asc":
         q = q.order_by(Lot.created_at.asc())
@@ -4793,6 +4879,7 @@ def _sale_zip_export_out(row: SalePhotoZipExport) -> SaleZipExportOut:
         created_at=row.created_at,
         ready=ready,
         kind=normalize_sale_zip_kind(getattr(row, "kind", None)),
+        filter_ctseller_sale_id=getattr(row, "filter_ctseller_sale_id", None),
     )
 
 
@@ -4822,6 +4909,10 @@ def _reconcile_stale_sale_zip_export(db: Session, row: SalePhotoZipExport) -> No
 def start_sale_photos_zip_export(
     sale_id: str,
     kind: str = Query("all", description="all = every photo in SKU folders; heroes = one group shot per lot."),
+    ctseller_sale_id: int | None = Query(
+        None,
+        description="When set, only lots posted to this CT Seller auction (heroes for one CT Bids sale).",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleZipExportOut:
@@ -4831,18 +4922,21 @@ def start_sale_photos_zip_export(
     if raw_kind not in (ZIP_KIND_ALL, ZIP_KIND_HEROES):
         raise HTTPException(status_code=400, detail="kind must be 'all' or 'heroes'")
     zip_kind = raw_kind
+    filter_sid = int(ctseller_sale_id) if ctseller_sale_id is not None else None
+    if filter_sid is not None and filter_sid <= 0:
+        raise HTTPException(status_code=400, detail="ctseller_sale_id must be a positive integer")
     cleanup_expired_sale_zip_exports(db, current.account_id)
-    in_progress = (
-        db.query(SalePhotoZipExport)
-        .filter(
-            SalePhotoZipExport.sale_id == sale.id,
-            SalePhotoZipExport.account_id == current.account_id,
-            SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
-            SalePhotoZipExport.kind == zip_kind,
-        )
-        .order_by(SalePhotoZipExport.created_at.desc())
-        .first()
+    in_progress_q = db.query(SalePhotoZipExport).filter(
+        SalePhotoZipExport.sale_id == sale.id,
+        SalePhotoZipExport.account_id == current.account_id,
+        SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
+        SalePhotoZipExport.kind == zip_kind,
     )
+    if filter_sid is None:
+        in_progress_q = in_progress_q.filter(SalePhotoZipExport.filter_ctseller_sale_id.is_(None))
+    else:
+        in_progress_q = in_progress_q.filter(SalePhotoZipExport.filter_ctseller_sale_id == filter_sid)
+    in_progress = in_progress_q.order_by(SalePhotoZipExport.created_at.desc()).first()
     if in_progress is not None:
         _reconcile_stale_sale_zip_export(db, in_progress)
         db.refresh(in_progress)
@@ -4850,11 +4944,19 @@ def start_sale_photos_zip_export(
             return _sale_zip_export_out(in_progress)
 
     n = int(
-        count_sale_hero_photos(db, sale.id, current.account_id)
+        count_sale_hero_photos(db, sale.id, current.account_id, filter_sid)
         if zip_kind == ZIP_KIND_HEROES
-        else count_sale_catalog_photos(db, sale.id, current.account_id)
+        else count_sale_catalog_photos(db, sale.id, current.account_id, filter_sid)
     )
     if n <= 0:
+        if filter_sid is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No posted lots with photos for that CT Bids sale in this catalog. "
+                    "Use “Check CT Bids sales” first, then pick the auction those lots were posted to."
+                ),
+            )
         raise HTTPException(status_code=400, detail="No catalog photos in this sale to export.")
     row = SalePhotoZipExport(
         account_id=current.account_id,
@@ -4864,6 +4966,7 @@ def start_sale_photos_zip_export(
         total_photos_expected=n,
         photo_files_written=0,
         kind=zip_kind,
+        filter_ctseller_sale_id=filter_sid,
     )
     db.add(row)
     db.commit()
@@ -4921,6 +5024,9 @@ def download_sale_photos_zip_export(
     sale = db.query(Sale).filter(Sale.id == row.sale_id).first()
     slug = re.sub(r"[^\w\-]+", "_", (sale.name if sale else "sale")[:60]).strip("_") or "sale"
     suffix = "heroes" if normalize_sale_zip_kind(getattr(row, "kind", None)) == ZIP_KIND_HEROES else "photos"
+    filter_sid = getattr(row, "filter_ctseller_sale_id", None)
+    if filter_sid:
+        suffix = f"{suffix}-ctbids-{int(filter_sid)}"
     return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-{suffix}.zip")
 
 

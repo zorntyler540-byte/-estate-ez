@@ -1082,6 +1082,7 @@ type Lot = {
   listing_review_reason?: string | null;
   ctseller_item_id?: number | null;
   ctseller_posted_at?: string | null;
+  ctseller_sale_id?: number | null;
   listing_channel?: string | null;
   audience_hold?: boolean;
 };
@@ -1212,6 +1213,22 @@ function formatLotPrice(price: number | null): string {
 
 function lotIsPostedToCtSeller(lot: Lot): boolean {
   return Boolean(lot.ctseller_item_id || lot.ctseller_posted_at);
+}
+
+function ctBidsAuctionLabel(
+  saleId: number | null | undefined,
+  remoteSales: CTSellerRemoteSale[]
+): string | null {
+  if (saleId == null || !Number.isFinite(saleId) || saleId <= 0) return null;
+  const row = remoteSales.find((s) => s.id === saleId);
+  const title = (row?.title || "").trim();
+  return title || `CT Bids #${saleId}`;
+}
+
+function lotPostedStatusLabel(lot: Lot, remoteSales: CTSellerRemoteSale[]): string {
+  if (!lotIsPostedToCtSeller(lot)) return lot.audience_hold ? "Held" : "Not posted";
+  const name = ctBidsAuctionLabel(lot.ctseller_sale_id, remoteSales);
+  return name ? `Posted · ${name}` : "Posted";
 }
 
 function lotEligibleForCtSellerPost(lot: Lot): boolean {
@@ -1382,6 +1399,7 @@ type SaleZipExport = {
   created_at: string;
   ready: boolean;
   kind?: string;
+  filter_ctseller_sale_id?: number | null;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -1911,6 +1929,8 @@ export default function DashboardPage() {
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
   const [saleHeroZipBusy, setSaleHeroZipBusy] = useState(false);
+  const [lotPostedSaleFilter, setLotPostedSaleFilter] = useState<"all" | "picked" | "other" | "unposted">("all");
+  const [ctSellerPostedRefreshBusy, setCtSellerPostedRefreshBusy] = useState(false);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
   const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
@@ -2066,6 +2086,48 @@ export default function DashboardPage() {
   const movePostedCount = lots.filter(
     (l) => moveLotIds.includes(l.id) && lotIsPostedToCtSeller(l)
   ).length;
+  const pickedCtBidsSaleId = Number(ctSellerPickId || "") || 0;
+  const postedAuctionIdCount = useMemo(() => {
+    const ids = new Set<number>();
+    for (const l of lots) {
+      if (lotIsPostedToCtSeller(l) && l.ctseller_sale_id && l.ctseller_sale_id > 0) {
+        ids.add(l.ctseller_sale_id);
+      }
+    }
+    return ids.size;
+  }, [lots]);
+  const postedToPickedCount = useMemo(
+    () =>
+      pickedCtBidsSaleId > 0
+        ? lots.filter((l) => lotIsPostedToCtSeller(l) && l.ctseller_sale_id === pickedCtBidsSaleId).length
+        : 0,
+    [lots, pickedCtBidsSaleId]
+  );
+  const postedToOtherCount = useMemo(
+    () =>
+      lots.filter((l) => {
+        if (!lotIsPostedToCtSeller(l)) return false;
+        if (!l.ctseller_sale_id) return pickedCtBidsSaleId > 0;
+        return pickedCtBidsSaleId > 0 && l.ctseller_sale_id !== pickedCtBidsSaleId;
+      }).length,
+    [lots, pickedCtBidsSaleId]
+  );
+  const visibleLots = useMemo(() => {
+    if (lotPostedSaleFilter === "unposted") {
+      return lots.filter((l) => !lotIsPostedToCtSeller(l));
+    }
+    if (lotPostedSaleFilter === "picked") {
+      return lots.filter((l) => lotIsPostedToCtSeller(l) && l.ctseller_sale_id === pickedCtBidsSaleId);
+    }
+    if (lotPostedSaleFilter === "other") {
+      return lots.filter((l) => {
+        if (!lotIsPostedToCtSeller(l)) return false;
+        if (!l.ctseller_sale_id) return true;
+        return pickedCtBidsSaleId > 0 && l.ctseller_sale_id !== pickedCtBidsSaleId;
+      });
+    }
+    return lots;
+  }, [lots, lotPostedSaleFilter, pickedCtBidsSaleId]);
   const dashboardStats = useMemo(() => {
     const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
     const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
@@ -2582,6 +2644,28 @@ export default function DashboardPage() {
         setLots(lotsData as Lot[]);
         inventoryFirstLoad.current = false;
         setLoading(false);
+        const loaded = lotsData as Lot[];
+        const needsAuctionLookup = loaded.some(
+          (l) => lotIsPostedToCtSeller(l) && (l.ctseller_sale_id == null || l.ctseller_sale_id <= 0)
+        );
+        if (needsAuctionLookup) {
+          void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, t, {
+            method: "POST"
+          })
+            .then(() =>
+              apiFetch(
+                `/lots?sale_id=${encodeURIComponent(selectedSaleId)}&listing_channel=ctseller${skuQ}`,
+                t
+              )
+            )
+            .then((fresh) => {
+              if (loadId !== inventoryLoadId.current) return;
+              setLots(fresh as Lot[]);
+            })
+            .catch(() => {
+              /* Keep Posted without auction names if CT Seller lookup fails. */
+            });
+        }
       })
       .catch((e) => {
         if (loadId !== inventoryLoadId.current) return;
@@ -2752,6 +2836,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setCtSellerPostSelected(new Set());
+    setLotPostedSaleFilter("all");
   }, [selectedSaleId]);
 
   useEffect(() => {
@@ -5156,6 +5241,30 @@ export default function DashboardPage() {
     setCtSellerPostSelected(checked ? new Set(ctSellerEligibleIds) : new Set());
   }
 
+  async function refreshPostedCtBidsSales() {
+    if (!token || !selectedSaleId) return;
+    setCtSellerPostedRefreshBusy(true);
+    setError("");
+    try {
+      await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, token, {
+        method: "POST"
+      });
+      const skuQ =
+        inventorySkuFlagFilter === ""
+          ? ""
+          : `&sku_flags=${encodeURIComponent(inventorySkuFlagFilter)}`;
+      const lotsData = await apiFetch(
+        `/lots?sale_id=${encodeURIComponent(selectedSaleId)}&listing_channel=ctseller${skuQ}`,
+        token
+      );
+      setLots(lotsData as Lot[]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not look up CT Bids sales");
+    } finally {
+      setCtSellerPostedRefreshBusy(false);
+    }
+  }
+
   async function bulkPostSaleToCtSeller() {
     if (!token || !selectedSaleId) return;
     const pick = Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "");
@@ -5487,7 +5596,10 @@ export default function DashboardPage() {
     }
   }
 
-  async function startSalePhotosZipExport(kind: "all" | "heroes" = "all") {
+  async function startSalePhotosZipExport(
+    kind: "all" | "heroes" = "all",
+    ctsellerSaleId?: number | null
+  ) {
     if (!token || !selectedSaleId) return;
     setError("");
     const setBusy = kind === "heroes" ? setSaleHeroZipBusy : setSaleZipBusy;
@@ -5495,6 +5607,9 @@ export default function DashboardPage() {
     setBusy(true);
     try {
       const q = new URLSearchParams({ sale_id: selectedSaleId, kind });
+      if (ctsellerSaleId && ctsellerSaleId > 0) {
+        q.set("ctseller_sale_id", String(ctsellerSaleId));
+      }
       const row = (await apiFetch(`/exports/sale-photos-zip?${q.toString()}`, token, {
         method: "POST"
       })) as SaleZipExport;
@@ -5522,7 +5637,9 @@ export default function DashboardPage() {
       const blob = await res.blob();
       const saleName = sales.find((s) => s.id === selectedSaleId)?.name?.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
       const base = saleName || selectedSaleId || "sale";
-      const fileName = kind === "heroes" ? `sale-${base}-heroes.zip` : `sale-${base}-photos.zip`;
+      const ctbids = row.filter_ctseller_sale_id ? `-ctbids-${row.filter_ctseller_sale_id}` : "";
+      const fileName =
+        kind === "heroes" ? `sale-${base}-heroes${ctbids}.zip` : `sale-${base}-photos${ctbids}.zip`;
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
@@ -6659,10 +6776,17 @@ export default function DashboardPage() {
         </div>
       ) : null}
       <header className="ct-dash-lots__header">
-        <h2 className="ct-dash-panel__title">Lots ({lots.length})</h2>
+        <h2 className="ct-dash-panel__title">
+          Lots ({lotPostedSaleFilter === "all" ? lots.length : `${visibleLots.length} of ${lots.length}`})
+        </h2>
         <p className="ct-dash-lots__stats">
-          {lots.filter((l) => lotIsPostedToCtSeller(l)).length} posted ·{" "}
-          {lots.filter((l) => !lotIsPostedToCtSeller(l)).length} not posted
+          {lots.filter((l) => lotIsPostedToCtSeller(l)).length} posted
+          {postedAuctionIdCount > 1 ? ` across ${postedAuctionIdCount} CT Bids sales` : ""}
+          {pickedCtBidsSaleId > 0 && postedToPickedCount > 0
+            ? ` · ${postedToPickedCount} on ${ctBidsAuctionLabel(pickedCtBidsSaleId, ctSellerRemoteSales) || "this CT Bids sale"}`
+            : ""}
+          {postedToOtherCount > 0 ? ` · ${postedToOtherCount} on other CT Bids sales` : ""}{" "}
+          · {lots.filter((l) => !lotIsPostedToCtSeller(l)).length} not posted
         </p>
         <p className="ct-upload-intro ct-dash-lots__intro">
           Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
@@ -6798,6 +6922,39 @@ export default function DashboardPage() {
               ))}
             </select>
           </div>
+          <div style={{ minWidth: 180, flex: "0 1 200px" }}>
+            <label className="ct-label" htmlFor="dash-posted-sale-filter">
+              Show lots
+            </label>
+            <select
+              id="dash-posted-sale-filter"
+              className="ct-input"
+              value={lotPostedSaleFilter}
+              onChange={(e) =>
+                setLotPostedSaleFilter(e.target.value as "all" | "picked" | "other" | "unposted")
+              }
+              disabled={!selectedSaleId}
+            >
+              <option value="all">All lots in this catalog</option>
+              <option value="picked" disabled={pickedCtBidsSaleId < 1}>
+                Posted to this CT Bids sale
+                {pickedCtBidsSaleId > 0 ? ` (${postedToPickedCount})` : ""}
+              </option>
+              <option value="other" disabled={postedToOtherCount < 1}>
+                Posted to a different CT Bids sale ({postedToOtherCount})
+              </option>
+              <option value="unposted">Not posted</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            className="ct-btn ct-btn--ghost"
+            onClick={() => void refreshPostedCtBidsSales()}
+            disabled={ctSellerPostedRefreshBusy || ctSellerBulkBusy || !selectedSaleId}
+            title="Ask CT Seller which auction each posted lot is actually on"
+          >
+            {ctSellerPostedRefreshBusy ? "Checking CT Bids…" : "Check CT Bids sales"}
+          </button>
           <button
             type="button"
             className="ct-btn ct-btn--primary"
@@ -6957,7 +7114,7 @@ export default function DashboardPage() {
         ) : null}
       </header>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
-        {lots.map((lot) => (
+        {visibleLots.map((lot) => (
           <div
             key={`m-${lot.id}`}
             className={`ct-lot-mobile-card ct-card ct-card--padded${
@@ -7051,13 +7208,13 @@ export default function DashboardPage() {
                 }`}
                 title={
                   lotIsPostedToCtSeller(lot)
-                    ? "Posted to CT Seller"
+                    ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
                     : lot.audience_hold
                       ? "Held for collector groups — skipped on bulk CT Seller post"
                       : "Not posted to CT Seller yet"
                 }
               >
-                {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
+                {lotPostedStatusLabel(lot, ctSellerRemoteSales)}
               </span>
               {isAccountOwner ? (
                 <button
@@ -7106,7 +7263,7 @@ export default function DashboardPage() {
           </tr>
         </thead>
         <tbody>
-          {lots.map((lot) => (
+          {visibleLots.map((lot) => (
             <tr
               key={lot.id}
               className={
@@ -7178,13 +7335,13 @@ export default function DashboardPage() {
                   }`}
                   title={
                     lotIsPostedToCtSeller(lot)
-                      ? "Posted to CT Seller"
+                      ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
                       : lot.audience_hold
                         ? "Held for collector groups — skipped on bulk CT Seller post"
                         : "Not posted to CT Seller yet"
                   }
                 >
-                  {lotIsPostedToCtSeller(lot) ? "Posted" : lot.audience_hold ? "Held" : "Not posted"}
+                  {lotPostedStatusLabel(lot, ctSellerRemoteSales)}
                 </span>
               </td>
               <td className="ct-lots-table__photo-count">
@@ -7342,7 +7499,9 @@ export default function DashboardPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Hero shots ZIP</span>
                   <span className="ct-upload-option__desc">
-                    One group/hero photo per lot (not SKU tape), named SKU plus title — for EstateSales.net.
+                    One group/hero photo per lot (not SKU tape), named SKU plus title. Use{" "}
+                    <strong>this CT Bids sale</strong> if lots in this catalog were posted to more than one
+                    auction.
                   </span>
                 </div>
                 <div className="ct-upload-option__actions">
@@ -7357,8 +7516,38 @@ export default function DashboardPage() {
                       saleHeroZipExport?.status === "queued" ||
                       saleHeroZipExport?.status === "processing"
                     }
+                    title="Every lot in this Estate-EZ catalog, posted or not"
                   >
-                    {saleHeroZipBusy ? "Starting…" : "Prepare ZIP…"}
+                    {saleHeroZipBusy && !saleHeroZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : "All lots in this catalog"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    onClick={() => void startSalePhotosZipExport("heroes", pickedCtBidsSaleId)}
+                    disabled={
+                      !selectedSaleId ||
+                      pickedCtBidsSaleId < 1 ||
+                      postedToPickedCount < 1 ||
+                      saleHeroZipBusy ||
+                      busyProcessing ||
+                      saleHeroZipExport?.status === "queued" ||
+                      saleHeroZipExport?.status === "processing"
+                    }
+                    title={
+                      pickedCtBidsSaleId < 1
+                        ? "Pick a CT Seller auction above first"
+                        : postedToPickedCount < 1
+                          ? "No lots in this catalog are posted to that CT Bids sale — Check CT Bids sales, or pick the auction they were posted to"
+                          : `Heroes for ${postedToPickedCount} lot(s) posted to the selected CT Bids sale`
+                    }
+                  >
+                    {saleHeroZipBusy && saleHeroZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : pickedCtBidsSaleId > 0
+                        ? `This CT Bids sale (${postedToPickedCount})`
+                        : "This CT Bids sale"}
                   </button>
                   {saleHeroZipExport?.ready ? (
                     <button
@@ -7366,7 +7555,9 @@ export default function DashboardPage() {
                       className="ct-btn ct-btn--primary ct-upload-option__btn"
                       onClick={() => void downloadSaleZipExport("heroes")}
                     >
-                      Download heroes
+                      {saleHeroZipExport.filter_ctseller_sale_id
+                        ? "Download CT Bids heroes"
+                        : "Download heroes"}
                     </button>
                   ) : null}
                 </div>
@@ -7384,7 +7575,9 @@ export default function DashboardPage() {
                   <li>
                     <strong>Hero shots ZIP</strong>: one listing photo per lot (AI group/hero, never the
                     dedicated SKU-tape frame). Files stay <strong>flat</strong> for EstateSales.net, named
-                    like <code>JZ5137AD-Liz-Co-Heart-Necklace.jpg</code>. Both ZIPs include{" "}
+                    like <code>JZ5137AD-Liz-Co-Heart-Necklace.jpg</code>.{" "}
+                    <strong>This CT Bids sale</strong> only includes lots posted to the auction selected
+                    above (so mixed catalogs do not dump every hero). Both ZIPs include{" "}
                     <code>_lots.csv</code> (SKU, title, file/folder).
                   </li>
                   <li>Progress counts update every few seconds while the server builds the archive.</li>

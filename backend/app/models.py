@@ -102,6 +102,8 @@ class Lot(Base):
     ai_regenerate_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ctseller_posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # CT Seller / CT Bids auction this lot was posted to (can differ from Sale.ctseller_sale_id after moves).
+    ctseller_sale_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # ctseller (CT Bids) vs facebook (Marketplace) — never mix Facebook into CT Seller posts.
     listing_channel: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ctseller", server_default="ctseller"
@@ -260,6 +262,8 @@ class SalePhotoZipExport(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # ``all`` = every catalog photo in SKU+title folders. ``heroes`` = one group/hero shot per lot.
     kind: Mapped[str] = mapped_column(String(20), default="all", nullable=False, server_default="all")
+    # When set, ZIP only includes lots posted to this CT Seller auction (not every lot in the Estate-EZ sale).
+    filter_ctseller_sale_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
