@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Archive,
   ChevronDown,
@@ -1231,20 +1231,87 @@ function lotCtBidsOutcome(
   lot: Lot
 ): "unposted" | "sold" | "unsold" | "live" | "pulled" | "unknown" {
   if (!lotIsPostedToCtSeller(lot)) return "unposted";
-  const s = (lot.ctseller_item_status || "").trim().toLowerCase().replace(/_/g, " ");
+  const s = (lot.ctseller_item_status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, " ")
+    .replace(/\s+/g, " ");
   const compact = s.replace(/\s+/g, "");
-  if (compact.startsWith("sold") || compact === "paid" || compact === "invoiced") return "sold";
-  if (compact.includes("unsold") || compact === "nosale" || s === "no sale" || s.includes("did not sell")) {
-    return "unsold";
-  }
   if (["pulled", "withdrawn", "deleted", "removed", "cancelled", "canceled"].includes(compact)) {
     return "pulled";
   }
+  if (compact.startsWith("sold") || compact === "paid" || compact === "invoiced" || compact === "awarded") {
+    return "sold";
+  }
+  if (
+    compact.includes("unsold") ||
+    compact === "nosale" ||
+    compact === "notsold" ||
+    s === "no sale" ||
+    s === "not sold" ||
+    s.includes("did not sell") ||
+    s.includes("didn't sell") ||
+    s.includes("reserve not met")
+  ) {
+    return "unsold";
+  }
+  if (lot.ctseller_sold_price && lot.ctseller_sold_price > 0) return "sold";
+  if (["closed", "complete", "completed", "ended", "finished"].includes(compact)) return "unsold";
   if (["pending", "ready", "live", "started", "approved", "active", "open", "published"].includes(compact)) {
     return "live";
   }
-  if (lot.ctseller_sold_price && lot.ctseller_sold_price > 0 && s) return "sold";
   return s ? "unknown" : "unknown";
+}
+
+/** Leading letter prefix (MS, DK, JZ). CLONEFH744 → CLONEFH. 2701JZ → JZ. */
+function lotSkuPrefix(sku: string | null | undefined): string {
+  const raw = (sku || "").trim();
+  if (!raw) return "OTHER";
+  const upper = raw.toUpperCase();
+  if (upper.startsWith("CLONE")) {
+    const rest = upper.slice(5);
+    const letters = rest.match(/^[A-Z]+/);
+    return letters ? `CLONE${letters[0]}` : "CLONE";
+  }
+  const lead = raw.match(/^([A-Za-z]+)/);
+  if (lead) return lead[1].toUpperCase();
+  const tail = raw.match(/([A-Za-z]+)\d*$/);
+  return tail ? tail[1].toUpperCase() : "OTHER";
+}
+
+function lotSkuSortKey(sku: string | null | undefined): Array<number | string> {
+  const parts = (sku || "").toUpperCase().match(/\d+|[A-Z]+/g) || ["~"];
+  const key: Array<number | string> = [];
+  for (const part of parts) {
+    if (/^\d+$/.test(part)) {
+      key.push(0, Number(part));
+    } else {
+      key.push(1, part);
+    }
+  }
+  return key;
+}
+
+function compareLotsBySkuPrefix(a: Lot, b: Lot): number {
+  const pa = lotSkuPrefix(a.sku);
+  const pb = lotSkuPrefix(b.sku);
+  const cloneA = pa.startsWith("CLONE") ? 1 : pa === "OTHER" ? 2 : 0;
+  const cloneB = pb.startsWith("CLONE") ? 1 : pb === "OTHER" ? 2 : 0;
+  if (cloneA !== cloneB) return cloneA - cloneB;
+  if (pa !== pb) return pa.localeCompare(pb);
+  const ka = lotSkuSortKey(a.sku);
+  const kb = lotSkuSortKey(b.sku);
+  const n = Math.max(ka.length, kb.length);
+  for (let i = 0; i < n; i += 1) {
+    const va = ka[i];
+    const vb = kb[i];
+    if (va === undefined) return -1;
+    if (vb === undefined) return 1;
+    if (va === vb) continue;
+    if (typeof va === "number" && typeof vb === "number") return va - vb;
+    return String(va).localeCompare(String(vb));
+  }
+  return 0;
 }
 
 function formatCtBidsSoldPrice(price: number | null | undefined): string {
@@ -1266,7 +1333,7 @@ function lotPostedStatusLabel(lot: Lot, remoteSales: CTSellerRemoteSale[]): stri
     if (px) return `Sold ${px}`;
     return name ? `Sold · ${name}` : "Sold";
   }
-  if (outcome === "unsold") return name ? `Didn't sell · ${name}` : "Didn't sell";
+  if (outcome === "unsold") return name ? `Not sold · ${name}` : "Not sold";
   if (outcome === "pulled") return name ? `Pulled · ${name}` : "Pulled";
   return name ? `Posted · ${name}` : "Posted";
 }
@@ -1279,7 +1346,7 @@ function lotPostedStatusChip(lot: Lot): string {
     const px = formatCtBidsSoldPrice(lot.ctseller_sold_price);
     return px ? `Sold ${px}` : "Sold";
   }
-  if (outcome === "unsold") return "Didn't sell";
+  if (outcome === "unsold") return "Not sold";
   if (outcome === "pulled") return "Pulled";
   return "Posted";
 }
@@ -2174,30 +2241,42 @@ export default function DashboardPage() {
     [lots]
   );
   const visibleLots = useMemo(() => {
+    let rows: Lot[];
     if (lotPostedSaleFilter === "unposted") {
-      return lots.filter((l) => !lotIsPostedToCtSeller(l));
-    }
-    if (lotPostedSaleFilter === "picked") {
-      return lots.filter((l) => lotIsPostedToCtSeller(l) && l.ctseller_sale_id === pickedCtBidsSaleId);
-    }
-    if (lotPostedSaleFilter === "other") {
-      return lots.filter((l) => {
+      rows = lots.filter((l) => !lotIsPostedToCtSeller(l));
+    } else if (lotPostedSaleFilter === "picked") {
+      rows = lots.filter((l) => lotIsPostedToCtSeller(l) && l.ctseller_sale_id === pickedCtBidsSaleId);
+    } else if (lotPostedSaleFilter === "other") {
+      rows = lots.filter((l) => {
         if (!lotIsPostedToCtSeller(l)) return false;
         if (!l.ctseller_sale_id) return true;
         return pickedCtBidsSaleId > 0 && l.ctseller_sale_id !== pickedCtBidsSaleId;
       });
+    } else if (lotPostedSaleFilter === "sold") {
+      rows = lots.filter((l) => lotCtBidsOutcome(l) === "sold");
+    } else if (lotPostedSaleFilter === "unsold") {
+      rows = lots.filter((l) => lotCtBidsOutcome(l) === "unsold");
+    } else if (lotPostedSaleFilter === "live") {
+      rows = lots.filter((l) => lotCtBidsOutcome(l) === "live" || lotCtBidsOutcome(l) === "unknown");
+    } else {
+      rows = lots;
     }
-    if (lotPostedSaleFilter === "sold") {
-      return lots.filter((l) => lotCtBidsOutcome(l) === "sold");
+    if (lotPostedSaleFilter === "sold" || lotPostedSaleFilter === "unsold") {
+      return [...rows].sort(compareLotsBySkuPrefix);
     }
-    if (lotPostedSaleFilter === "unsold") {
-      return lots.filter((l) => lotCtBidsOutcome(l) === "unsold");
-    }
-    if (lotPostedSaleFilter === "live") {
-      return lots.filter((l) => lotCtBidsOutcome(l) === "live" || lotCtBidsOutcome(l) === "unknown");
-    }
-    return lots;
+    return rows;
   }, [lots, lotPostedSaleFilter, pickedCtBidsSaleId]);
+  const groupLotsBySkuPrefix =
+    lotPostedSaleFilter === "sold" || lotPostedSaleFilter === "unsold";
+  const skuPrefixCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!groupLotsBySkuPrefix) return counts;
+    for (const lot of visibleLots) {
+      const prefix = lotSkuPrefix(lot.sku);
+      counts.set(prefix, (counts.get(prefix) || 0) + 1);
+    }
+    return counts;
+  }, [visibleLots, groupLotsBySkuPrefix]);
   const dashboardStats = useMemo(() => {
     const photoTotal = lots.reduce((n, l) => n + (l.photo_count || 0), 0);
     const withCondition = lots.filter((l) => (l.condition_text || "").trim().length > 0).length;
@@ -6859,7 +6938,7 @@ export default function DashboardPage() {
             : ""}
           {postedToOtherCount > 0 ? ` · ${postedToOtherCount} on other CT Bids sales` : ""}
           {soldCount > 0 ? ` · ${soldCount} sold` : ""}
-          {unsoldCount > 0 ? ` · ${unsoldCount} didn't sell` : ""}
+          {unsoldCount > 0 ? ` · ${unsoldCount} not sold` : ""}
           {liveOnCtBidsCount > 0 ? ` · ${liveOnCtBidsCount} still on CT Bids` : ""}{" "}
           · {lots.filter((l) => !lotIsPostedToCtSeller(l)).length} not posted
         </p>
@@ -6867,8 +6946,29 @@ export default function DashboardPage() {
           Open <strong>Details</strong> to edit listing copy, photos, and SKU for each lot. Check rows to
           post a subset to CT Seller, or leave none checked to post all unposted. Use{" "}
           <strong>Move</strong> to send a lot to another sale. SKU-tape photos stay in the catalog and
-          are not uploaded to CT Bids.
+          are not uploaded to CT Bids. Sold / not sold follows CT Seller after you tap{" "}
+          <strong>Check CT Bids sales</strong>.
         </p>
+        <div className="ct-dash-lots__outcome-tabs ct-seg" role="tablist" aria-label="Sold or not sold">
+          {(
+            [
+              ["all", "All lots", lots.length],
+              ["sold", "Sold", soldCount],
+              ["unsold", "Not sold", unsoldCount]
+            ] as const
+          ).map(([id, label, count]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={lotPostedSaleFilter === id}
+              disabled={lotPostedSaleFilter === id}
+              onClick={() => setLotPostedSaleFilter(id)}
+            >
+              {label} ({count})
+            </button>
+          ))}
+        </div>
         {selectedSaleId ? (
           <div className="ct-dash-panel" style={{ margin: "0 0 0.85rem", padding: "0.85rem 1rem" }}>
             <h3 className="ct-dash-panel__title" style={{ fontSize: "1rem", marginBottom: "0.35rem" }}>
@@ -7024,7 +7124,7 @@ export default function DashboardPage() {
                 Sold ({soldCount})
               </option>
               <option value="unsold" disabled={unsoldCount < 1}>
-                Didn't sell ({unsoldCount})
+                Not sold ({unsoldCount})
               </option>
               <option value="live" disabled={liveOnCtBidsCount < 1}>
                 Still on CT Bids ({liveOnCtBidsCount})
@@ -7200,9 +7300,29 @@ export default function DashboardPage() {
         ) : null}
       </header>
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
-        {visibleLots.map((lot) => (
+        {visibleLots.length < 1 && lotPostedSaleFilter === "unsold" ? (
+          <p className="ct-muted ct-dash-lots__empty">
+            Nothing marked not sold on CT Seller yet. After the auction ends, tap{" "}
+            <strong>Check CT Bids sales</strong> to pull Unsold from CT Seller. This tab then groups
+            leftovers by SKU prefix (MS, DK, JZ).
+          </p>
+        ) : null}
+        {visibleLots.length < 1 && lotPostedSaleFilter === "sold" ? (
+          <p className="ct-muted ct-dash-lots__empty">
+            Nothing marked sold on CT Seller yet. Tap <strong>Check CT Bids sales</strong> after
+            lots hammer.
+          </p>
+        ) : null}
+        {visibleLots.map((lot, lotIndex) => (
+          <Fragment key={`m-${lot.id}`}>
+            {groupLotsBySkuPrefix &&
+            (lotIndex === 0 || lotSkuPrefix(visibleLots[lotIndex - 1].sku) !== lotSkuPrefix(lot.sku)) ? (
+              <h3 className="ct-lots-prefix-heading">
+                {lotSkuPrefix(lot.sku)} · {skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0} lot
+                {(skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0) === 1 ? "" : "s"}
+              </h3>
+            ) : null}
           <div
-            key={`m-${lot.id}`}
             className={`ct-lot-mobile-card ct-card ct-card--padded${
               lot.many_photos_review ||
               lot.sku_duplicate_in_sale ||
@@ -7320,6 +7440,7 @@ export default function DashboardPage() {
               ) : null}
             </div>
           </div>
+          </Fragment>
         ))}
       </div>
 
@@ -7355,9 +7476,29 @@ export default function DashboardPage() {
           </tr>
         </thead>
         <tbody>
-          {visibleLots.map((lot) => (
+          {visibleLots.length < 1 && (lotPostedSaleFilter === "unsold" || lotPostedSaleFilter === "sold") ? (
+            <tr>
+              <td colSpan={isAccountOwner ? 10 : 9} className="ct-lots-table__empty">
+                {lotPostedSaleFilter === "unsold"
+                  ? "Nothing marked not sold on CT Seller yet. After the auction, tap Check CT Bids sales — leftovers then sort by SKU prefix."
+                  : "Nothing marked sold on CT Seller yet. Tap Check CT Bids sales after lots hammer."}
+              </td>
+            </tr>
+          ) : null}
+          {visibleLots.map((lot, lotIndex) => (
+            <Fragment key={lot.id}>
+            {groupLotsBySkuPrefix &&
+            (lotIndex === 0 || lotSkuPrefix(visibleLots[lotIndex - 1].sku) !== lotSkuPrefix(lot.sku)) ? (
+              <tr className="ct-lots-prefix-row">
+                <td colSpan={isAccountOwner ? 10 : 9}>
+                  <span className="ct-lots-prefix-heading">
+                    {lotSkuPrefix(lot.sku)} · {skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0} lot
+                    {(skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0) === 1 ? "" : "s"}
+                  </span>
+                </td>
+              </tr>
+            ) : null}
             <tr
-              key={lot.id}
               className={
                 lot.many_photos_review ||
                 lot.sku_duplicate_in_sale ||
@@ -7489,6 +7630,7 @@ export default function DashboardPage() {
                 </td>
               ) : null}
             </tr>
+            </Fragment>
           ))}
         </tbody>
         </table>

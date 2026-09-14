@@ -2310,7 +2310,17 @@ def refresh_ctseller_posted_auctions(
             raise HTTPException(status_code=404, detail="Account not found")
         try:
             client = _ctseller_client_for_account(account, db, probe=False)
-            looked_up, failed = refresh_lot_ctseller_sale_ids(db, posted, client)
+            extra_ids: list[int] = []
+            mapped = getattr(sale, "ctseller_sale_id", None)
+            try:
+                mapped_n = int(mapped) if mapped is not None else 0
+            except (TypeError, ValueError):
+                mapped_n = 0
+            if mapped_n > 0:
+                extra_ids.append(mapped_n)
+            looked_up, failed = refresh_lot_ctseller_sale_ids(
+                db, posted, client, extra_sale_ids=extra_ids
+            )
             try:
                 for row in client.list_open_sales():
                     title_by_id[int(row.id)] = row.title

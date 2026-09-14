@@ -16,8 +16,24 @@ OUTCOME_LIVE = "live"
 OUTCOME_PULLED = "pulled"
 OUTCOME_UNKNOWN = "unknown"
 
-_SOLD = frozenset({"sold", "soldonline", "sold online", "sold-in-house", "paid", "invoiced"})
-_UNSOLD = frozenset({"unsold", "no sale", "nosale", "did not sell", "didn't sell", "reserve not met"})
+_SOLD = frozenset(
+    {"sold", "soldonline", "sold online", "sold-in-house", "paid", "invoiced", "awarded"}
+)
+_UNSOLD = frozenset(
+    {
+        "unsold",
+        "no sale",
+        "nosale",
+        "did not sell",
+        "didn't sell",
+        "not sold",
+        "notsold",
+        "reserve not met",
+        "passed",
+        "passed in",
+    }
+)
+_CLOSED = frozenset({"closed", "complete", "completed", "ended", "finished"})
 _PULLED = frozenset({"pulled", "withdrawn", "deleted", "removed", "cancelled", "canceled"})
 _LIVE = frozenset({"pending", "ready", "live", "started", "approved", "active", "open", "published"})
 
@@ -66,19 +82,26 @@ def parse_sold_price(detail: dict[str, Any] | None, *, status: str | None = None
     return None
 
 
+def _compact_status_set(values: frozenset[str]) -> set[str]:
+    return {x.replace(" ", "") for x in values}
+
+
 def normalize_ctseller_outcome(status: str | None, sold_price: float | None = None) -> str:
-    s = " ".join(str(status or "").strip().lower().replace("_", " ").split())
+    """Map a CT Seller ``itemstatus`` (+ optional hammer) to sold / unsold / live / pulled."""
+    s = " ".join(str(status or "").strip().lower().replace("_", " ").replace("-", " ").split())
     compact = s.replace(" ", "")
-    if compact in {x.replace(" ", "") for x in _SOLD} or s.startswith("sold"):
-        return OUTCOME_SOLD
-    if compact in {x.replace(" ", "") for x in _UNSOLD} or "unsold" in s or s == "no sale":
-        return OUTCOME_UNSOLD
-    if compact in {x.replace(" ", "") for x in _PULLED}:
+    if compact in _compact_status_set(_PULLED):
         return OUTCOME_PULLED
-    if compact in {x.replace(" ", "") for x in _LIVE}:
-        return OUTCOME_LIVE
-    if sold_price is not None and sold_price > 0 and s:
+    if compact in _compact_status_set(_SOLD) or s.startswith("sold"):
         return OUTCOME_SOLD
+    if compact in _compact_status_set(_UNSOLD) or "unsold" in s or s == "no sale":
+        return OUTCOME_UNSOLD
+    if sold_price is not None and sold_price > 0:
+        return OUTCOME_SOLD
+    if compact in _compact_status_set(_CLOSED):
+        return OUTCOME_UNSOLD
+    if compact in _compact_status_set(_LIVE):
+        return OUTCOME_LIVE
     if s:
         return OUTCOME_UNKNOWN
     return OUTCOME_UNKNOWN
@@ -118,6 +141,7 @@ def refresh_lot_ctseller_sale_ids(
     db: Session,
     lots: list[Lot],
     client: CTSellerClient,
+    extra_sale_ids: list[int] | None = None,
 ) -> tuple[int, int]:
     """Refresh CT Bids auction id, item status, and sold price for posted lots."""
     posted = [lot for lot in lots if _item_id(lot)]
@@ -129,6 +153,13 @@ def refresh_lot_ctseller_sale_ids(
         for lot in posted
         if (sid := getattr(lot, "ctseller_sale_id", None)) not in (None, 0, "")
     }
+    for raw in extra_sale_ids or []:
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            sale_ids.add(n)
     for sid in sale_ids:
         try:
             for row in client.list_sale_items(int(sid)):

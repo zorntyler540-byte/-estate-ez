@@ -34,9 +34,12 @@ def test_normalize_ctseller_outcome() -> None:
     assert normalize_ctseller_outcome("Sold") == "sold"
     assert normalize_ctseller_outcome("sold online") == "sold"
     assert normalize_ctseller_outcome("Unsold") == "unsold"
+    assert normalize_ctseller_outcome("Not sold") == "unsold"
     assert normalize_ctseller_outcome("Pending") == "live"
     assert normalize_ctseller_outcome("Ready") == "live"
     assert normalize_ctseller_outcome("Pulled") == "pulled"
+    assert normalize_ctseller_outcome("Closed") == "unsold"
+    assert normalize_ctseller_outcome("Closed", 25) == "sold"
     assert normalize_ctseller_outcome(None) == "unknown"
 
 
@@ -113,7 +116,22 @@ def test_refresh_lot_ctseller_sale_ids_fills_missing() -> None:
     client.list_sale_items.assert_not_called()
 
 
-def test_refresh_uses_item_list_then_detail_fallback() -> None:
+def test_refresh_uses_extra_sale_ids() -> None:
+    lot = SimpleNamespace(
+        ctseller_item_id=9,
+        ctseller_sale_id=None,
+        ctseller_item_status=None,
+        ctseller_sold_price=None,
+    )
+    client = MagicMock()
+    client.list_sale_items.return_value = [{"id": 9, "saleid": 47921, "itemstatus": "Unsold"}]
+    db = MagicMock()
+    looked, failed = refresh_lot_ctseller_sale_ids(db, [lot], client, extra_sale_ids=[47921])  # type: ignore[arg-type]
+    assert looked == 1
+    assert failed == 0
+    assert lot.ctseller_item_status == "Unsold"
+    client.list_sale_items.assert_called_once_with(47921)
+    client.item_detail.assert_not_called()
     known = SimpleNamespace(
         ctseller_item_id=1,
         ctseller_sale_id=100,
