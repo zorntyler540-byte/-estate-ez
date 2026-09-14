@@ -3333,6 +3333,42 @@ select.ct-input option {
   margin-bottom: 0.75rem;
 }
 
+.ct-dash-lots__outcome-tabs {
+  margin: 0 0 0.85rem;
+  flex-wrap: wrap;
+}
+
+.ct-dash-lots__empty,
+.ct-lots-table__empty {
+  margin: 0.35rem 0 0.75rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.ct-lots-table__empty {
+  padding: 0.85rem 0.75rem;
+  color: var(--ct-text-muted);
+}
+
+.ct-lots-prefix-heading {
+  margin: 0.85rem 0 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ct-primary);
+}
+
+.ct-lots-prefix-row td {
+  padding: 0.55rem 0.6rem 0.25rem;
+  background: rgba(255, 77, 26, 0.06);
+  border-bottom: 1px solid rgba(255, 77, 26, 0.18);
+}
+
+.ct-lots-prefix-row .ct-lots-prefix-heading {
+  margin: 0;
+}
+
 .ct-dash-lots__toolbar {
   display: flex;
   flex-wrap: wrap;
