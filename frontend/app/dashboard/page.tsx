@@ -2044,7 +2044,7 @@ export default function DashboardPage() {
   const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
   const [inheritSkuFromSubfolder, setInheritSkuFromSubfolder] = useState(false);
-  const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
+  const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv" | "pdf">("");
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
@@ -5772,12 +5772,19 @@ export default function DashboardPage() {
     return {
       markdown: `${API_BASE}/exports/markdown${q}`,
       json: `${API_BASE}/exports/json${q}`,
-      csv: `${API_BASE}/exports/csv${q}`
+      csv: `${API_BASE}/exports/csv${q}`,
+      pdf: selectedSaleId
+        ? `${API_BASE}/exports/inventory-pdf?sale_id=${encodeURIComponent(selectedSaleId)}`
+        : ""
     };
   }, [selectedSaleId]);
 
-  async function downloadExport(kind: "markdown" | "json" | "csv") {
+  async function downloadExport(kind: "markdown" | "json" | "csv" | "pdf") {
     if (!token) return;
+    if (kind === "pdf" && !selectedSaleId) {
+      setError("Select a sale first.");
+      return;
+    }
     setError("");
     setExporting(kind);
     try {
@@ -5794,7 +5801,7 @@ export default function DashboardPage() {
       const ext = kind === "markdown" ? "md" : kind;
       const saleName = sales.find((s) => s.id === selectedSaleId)?.name?.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
       const baseName = saleName || selectedSaleId || "all-sales";
-      const fileName = `ct-export-${baseName}.${ext}`;
+      const fileName = kind === "pdf" ? `${baseName}-inventory.pdf` : `ct-export-${baseName}.${ext}`;
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
@@ -7727,6 +7734,25 @@ export default function DashboardPage() {
             <h2 className="ct-dash-panel__title">Exports</h2>
             <p className="ct-upload-intro">Download catalog data and photos for the selected sale.</p>
             <div className="ct-upload-options" role="group" aria-label="Export formats">
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Images size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Inventory PDF</span>
+                  <span className="ct-upload-option__desc">
+                    Printable sheet: thumbnail, SKU, title, and description for every lot in this sale.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ct-btn ct-upload-option__btn"
+                  onClick={() => void downloadExport("pdf")}
+                  disabled={!selectedSaleId || (exporting !== "" && exporting !== "pdf")}
+                >
+                  {exporting === "pdf" ? "Building…" : "Download"}
+                </button>
+              </div>
               <div className="ct-upload-option">
                 <span className="ct-upload-option__icon" aria-hidden>
                   <FileText size={20} strokeWidth={1.75} />
