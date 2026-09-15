@@ -2044,7 +2044,7 @@ export default function DashboardPage() {
   const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
   const [inheritSkuFromSubfolder, setInheritSkuFromSubfolder] = useState(false);
-  const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv">("");
+  const [exporting, setExporting] = useState<"" | "markdown" | "json" | "csv" | "pdf">("");
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
