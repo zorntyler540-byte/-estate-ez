@@ -5397,9 +5397,9 @@ export default function DashboardPage() {
     setCtSellerPostedRefreshBusy(true);
     setError("");
     try {
-      await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, token, {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, token, {
         method: "POST"
-      });
+      })) as { looked_up?: number; failed?: number };
       const skuQ =
         inventorySkuFlagFilter === ""
           ? ""
@@ -5409,6 +5409,13 @@ export default function DashboardPage() {
         token
       );
       setLots(lotsData as Lot[]);
+      const n = res.looked_up ?? 0;
+      const fail = res.failed ?? 0;
+      setCtSellerBulkMsg(
+        `Loaded CT Seller status and reserves for ${n} posted lot${n === 1 ? "" : "s"}` +
+          (fail ? ` (${fail} could not be read)` : "") +
+          "."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not look up CT Bids sales");
     } finally {
@@ -7137,7 +7144,7 @@ export default function DashboardPage() {
             className="ct-btn ct-btn--ghost"
             onClick={() => void refreshPostedCtBidsSales()}
             disabled={ctSellerPostedRefreshBusy || ctSellerBulkBusy || !selectedSaleId}
-            title="Ask CT Seller which auction each posted lot is on, and whether it sold"
+            title="Ask CT Seller which auction each posted lot is on, sold vs not sold, and the current reserve"
           >
             {ctSellerPostedRefreshBusy ? "Checking CT Bids…" : "Check CT Bids sales"}
           </button>
@@ -7255,6 +7262,8 @@ export default function DashboardPage() {
             }))}
             postedCount={lots.filter((lot) => lotIsPostedToCtSeller(lot)).length}
             disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
+            pullBusy={ctSellerPostedRefreshBusy}
+            onPullFromCtSeller={() => refreshPostedCtBidsSales()}
             onApplied={({ saleDefault, lotUpdates }) => {
               if (saleDefault !== undefined) {
                 setSales((prev) =>

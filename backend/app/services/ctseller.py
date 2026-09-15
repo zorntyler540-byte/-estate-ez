@@ -422,6 +422,7 @@ class CTSellerClient:
             "highbid",
             "winningbid",
             "soldprice",
+            "reserveprice",
         ]
         out: list[dict[str, Any]] = []
         seen: set[int] = set()

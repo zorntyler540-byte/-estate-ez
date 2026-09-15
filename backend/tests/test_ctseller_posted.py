@@ -7,6 +7,7 @@ from app.services.ctseller import CTSellerError
 from app.services.ctseller_posted import (
     apply_item_detail_to_lot,
     normalize_ctseller_outcome,
+    parse_item_reserve_price,
     parse_item_sale_id,
     parse_item_status,
     parse_sold_price,
@@ -86,15 +87,33 @@ def test_posted_outcome_counts() -> None:
     }
 
 
+def test_parse_item_reserve_price() -> None:
+    assert parse_item_reserve_price({}) == (False, None)
+    assert parse_item_reserve_price({"reserveprice": ""}) == (True, None)
+    assert parse_item_reserve_price({"reserveprice": 0}) == (True, None)
+    assert parse_item_reserve_price({"reserveprice": "25.00"}) == (True, 25.0)
+    assert parse_item_reserve_price({"reservePrice": 10}) == (True, 10.0)
+
+
 def test_apply_item_detail_to_lot() -> None:
-    lot = SimpleNamespace(ctseller_sale_id=None, ctseller_item_status=None, ctseller_sold_price=None)
+    lot = SimpleNamespace(
+        ctseller_sale_id=None,
+        ctseller_item_status=None,
+        ctseller_sold_price=None,
+        reserve_price=None,
+    )
     assert apply_item_detail_to_lot(
         lot,  # type: ignore[arg-type]
-        {"saleid": 50, "itemstatus": "Sold", "soldprice": 9},
+        {"saleid": 50, "itemstatus": "Sold", "soldprice": 9, "reserveprice": "15"},
     )
     assert lot.ctseller_sale_id == 50
     assert lot.ctseller_item_status == "Sold"
     assert lot.ctseller_sold_price == 9
+    assert lot.reserve_price == 15.0
+    assert apply_item_detail_to_lot(lot, {"reserveprice": ""})  # type: ignore[arg-type]
+    assert lot.reserve_price is None
+    assert apply_item_detail_to_lot(lot, {"itemstatus": "Sold"}) is False  # type: ignore[arg-type]
+    assert lot.reserve_price is None
 
 
 def test_refresh_lot_ctseller_sale_ids_fills_missing() -> None:
@@ -105,13 +124,19 @@ def test_refresh_lot_ctseller_sale_ids_fills_missing() -> None:
         ctseller_sold_price=None,
     )
     client = MagicMock()
-    client.item_detail.return_value = {"id": 55, "saleid": 47921, "itemstatus": "Pending"}
+    client.item_detail.return_value = {
+        "id": 55,
+        "saleid": 47921,
+        "itemstatus": "Pending",
+        "reserveprice": 8,
+    }
     db = MagicMock()
     looked, failed = refresh_lot_ctseller_sale_ids(db, [lot], client)  # type: ignore[arg-type]
     assert looked == 1
     assert failed == 0
     assert lot.ctseller_sale_id == 47921
     assert lot.ctseller_item_status == "Pending"
+    assert lot.reserve_price == 8.0
     db.commit.assert_called_once()
     client.list_sale_items.assert_not_called()
 
@@ -122,14 +147,18 @@ def test_refresh_uses_extra_sale_ids() -> None:
         ctseller_sale_id=None,
         ctseller_item_status=None,
         ctseller_sold_price=None,
+        reserve_price=None,
     )
     client = MagicMock()
-    client.list_sale_items.return_value = [{"id": 9, "saleid": 47921, "itemstatus": "Unsold"}]
+    client.list_sale_items.return_value = [
+        {"id": 9, "saleid": 47921, "itemstatus": "Unsold", "reserveprice": 20}
+    ]
     db = MagicMock()
     looked, failed = refresh_lot_ctseller_sale_ids(db, [lot], client, extra_sale_ids=[47921])  # type: ignore[arg-type]
     assert looked == 1
     assert failed == 0
     assert lot.ctseller_item_status == "Unsold"
+    assert lot.reserve_price == 20.0
     client.list_sale_items.assert_called_once_with(47921)
     client.item_detail.assert_not_called()
     known = SimpleNamespace(
@@ -137,16 +166,18 @@ def test_refresh_uses_extra_sale_ids() -> None:
         ctseller_sale_id=100,
         ctseller_item_status=None,
         ctseller_sold_price=None,
+        reserve_price=None,
     )
     missing = SimpleNamespace(
         ctseller_item_id=2,
         ctseller_sale_id=100,
         ctseller_item_status=None,
         ctseller_sold_price=None,
+        reserve_price=None,
     )
     client = MagicMock()
     client.list_sale_items.return_value = [
-        {"id": 1, "saleid": 100, "itemstatus": "Sold", "soldprice": 12}
+        {"id": 1, "saleid": 100, "itemstatus": "Sold", "soldprice": 12, "reserveprice": ""}
     ]
     client.item_detail.side_effect = CTSellerError("gone", status_code=404)
     db = MagicMock()
@@ -157,3 +188,27 @@ def test_refresh_uses_extra_sale_ids() -> None:
     assert known.ctseller_sold_price == 12
     client.item_detail.assert_called_once_with(2)
     db.commit.assert_called_once()
+
+
+def test_refresh_fetches_item_detail_when_list_omits_reserve() -> None:
+    lot = SimpleNamespace(
+        ctseller_item_id=9,
+        ctseller_sale_id=47921,
+        ctseller_item_status="Pending",
+        ctseller_sold_price=None,
+        reserve_price=None,
+    )
+    client = MagicMock()
+    client.list_sale_items.return_value = [{"id": 9, "saleid": 47921, "itemstatus": "Pending"}]
+    client.item_detail.return_value = {
+        "id": 9,
+        "saleid": 47921,
+        "itemstatus": "Pending",
+        "reserveprice": 35,
+    }
+    db = MagicMock()
+    looked, failed = refresh_lot_ctseller_sale_ids(db, [lot], client)  # type: ignore[arg-type]
+    assert looked == 1
+    assert failed == 0
+    assert lot.reserve_price == 35.0
+    client.item_detail.assert_called_once_with(9)
