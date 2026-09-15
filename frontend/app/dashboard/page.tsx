@@ -7246,13 +7246,27 @@ export default function DashboardPage() {
                 ? selectedSale.ctseller_reserve_price
                 : null
             }
+            lots={lots.map((lot) => ({
+              id: lot.id,
+              sku: lot.sku,
+              auction_title: lot.auction_title,
+              reserve_price: lot.reserve_price,
+              ctseller_item_id: lot.ctseller_item_id
+            }))}
             postedCount={lots.filter((lot) => lotIsPostedToCtSeller(lot)).length}
             disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
-            onApplied={(reserve) => {
-              setSales((prev) =>
-                prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_reserve_price: reserve } : s))
-              );
-              setLots((prev) => prev.map((lot) => ({ ...lot, reserve_price: reserve })));
+            onApplied={({ saleDefault, lotUpdates }) => {
+              if (saleDefault !== undefined) {
+                setSales((prev) =>
+                  prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_reserve_price: saleDefault } : s))
+                );
+              }
+              if (lotUpdates.length) {
+                const byId = new Map(lotUpdates.map((row) => [row.id, row.reserve_price]));
+                setLots((prev) =>
+                  prev.map((lot) => (byId.has(lot.id) ? { ...lot, reserve_price: byId.get(lot.id) } : lot))
+                );
+              }
             }}
           />
         ) : null}

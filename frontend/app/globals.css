@@ -3968,3 +3968,116 @@ select.ct-input option {
 .ct-sale-reserve .ct-banner {
   margin-top: 0.5rem;
 }
+
+.ct-sale-reserve__toggle {
+  display: inline-block;
+  margin-top: 0.7rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ct-primary);
+  font: inherit;
+  font-size: 0.88rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.ct-sale-reserve__toggle:disabled {
+  color: var(--ct-text-muted);
+  cursor: default;
+  text-decoration: none;
+}
+
+.ct-sale-reserve-list {
+  margin-top: 0.7rem;
+}
+
+.ct-sale-reserve-list__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.ct-sale-reserve-list__filters,
+.ct-sale-reserve-list__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ct-sale-reserve-list__table-wrap {
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg);
+}
+
+.ct-sale-reserve-list__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.ct-sale-reserve-list__table th,
+.ct-sale-reserve-list__table td {
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  border-bottom: 1px solid var(--ct-border);
+  vertical-align: middle;
+}
+
+.ct-sale-reserve-list__table th {
+  position: sticky;
+  top: 0;
+  background: var(--ct-bg-elevated);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.ct-sale-reserve-list__check-col {
+  width: 1.75rem;
+}
+
+.ct-sale-reserve-list__sku {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ct-sale-reserve-list__title {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-sale-reserve__row-input {
+  min-width: 6.5rem;
+  max-width: 8rem;
+}
+
+.ct-sale-reserve-list__empty {
+  color: var(--ct-text-muted);
+}
+
+.ct-sale-reserve-list__filters .ct-btn,
+.ct-sale-reserve-list__actions .ct-btn,
+.ct-sale-reserve-list__table .ct-btn {
+  font-size: 0.78rem;
+  padding: 0.22rem 0.55rem;
+}
+
+.ct-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

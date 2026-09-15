@@ -1982,25 +1982,27 @@ def set_sale_reserve_price(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleReservePriceOut:
-    """Save a sale-wide reserve and optionally stamp every lot / update posted CT Seller items."""
+    """Save a sale-wide reserve and optionally stamp lots / update posted CT Seller items."""
     sale = _sale_for_user(sale_id, current, db)
     reserve = payload.reserve_price
     if reserve is not None:
         reserve = float(reserve)
         if reserve <= 0:
             reserve = None
-    sale.ctseller_reserve_price = reserve
-    db.add(sale)
+    if payload.update_sale_default:
+        sale.ctseller_reserve_price = reserve
+        db.add(sale)
 
     lots = (
         db.query(Lot)
         .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
         .all()
     )
-    wanted: set[str] | None = None
     if payload.lot_ids:
         wanted = {str(x).strip() for x in payload.lot_ids if str(x).strip()}
         lots = [lot for lot in lots if lot.id in wanted]
+    if payload.only_without_reserve:
+        lots = [lot for lot in lots if lot.reserve_price is None]
 
     lots_updated = 0
     if payload.apply_to_lots:

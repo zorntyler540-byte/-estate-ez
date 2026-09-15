@@ -625,6 +625,130 @@ def test_sale_reserve_price_applies_to_all_lots(tmp_path) -> None:
         db.close()
 
 
+def test_sale_reserve_price_only_without_reserve_and_selected_lots(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Sale, User
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'reserve-partial.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-r2", name="CT")
+    user = User(id="user-r2", account_id=account.id, email="r2@example.com", password_hash="x", role="owner")
+    sale = Sale(id="sale-r2", account_id=account.id, user_id=user.id, name="Reserve sale")
+    lot_a = Lot(
+        id="lot-a2",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="A",
+        auction_title="Has reserve",
+        reserve_price=25,
+        ctseller_item_id=601,
+    )
+    lot_b = Lot(
+        id="lot-b2",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="B",
+        auction_title="No reserve",
+        ctseller_item_id=602,
+    )
+    lot_c = Lot(
+        id="lot-c2",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale.id,
+        sku="C",
+        auction_title="Also none",
+    )
+    db.add_all([account, user, sale, lot_a, lot_b, lot_c])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        fake = MagicMock()
+        fake.update_item_reserve.return_value = {"status": "success"}
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            fill = client.post(
+                "/sales/sale-r2/reserve-price",
+                json={
+                    "reserve_price": 10,
+                    "apply_to_lots": True,
+                    "push_posted": True,
+                    "only_without_reserve": True,
+                    "update_sale_default": True,
+                },
+            )
+        assert fill.status_code == 200, fill.text
+        body = fill.json()
+        assert body["lots_updated"] == 2
+        assert body["posted_updated"] == 1
+        assert fake.update_item_reserve.call_args.kwargs["item_id"] == 602
+        assert fake.update_item_reserve.call_args.kwargs["reserve_price"] == 10
+
+        inner = Session()
+        try:
+            saved_sale = inner.query(Sale).filter(Sale.id == "sale-r2").one()
+            assert saved_sale.ctseller_reserve_price == 10
+            by_id = {row.id: row.reserve_price for row in inner.query(Lot).all()}
+            assert by_id["lot-a2"] == 25
+            assert by_id["lot-b2"] == 10
+            assert by_id["lot-c2"] == 10
+        finally:
+            inner.close()
+
+        fake.reset_mock()
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            one = client.post(
+                "/sales/sale-r2/reserve-price",
+                json={
+                    "reserve_price": 40,
+                    "apply_to_lots": True,
+                    "push_posted": True,
+                    "update_sale_default": False,
+                    "lot_ids": ["lot-a2"],
+                },
+            )
+        assert one.status_code == 200, one.text
+        assert one.json()["lots_updated"] == 1
+        fake.update_item_reserve.assert_called_once()
+        assert fake.update_item_reserve.call_args.kwargs["item_id"] == 601
+        assert fake.update_item_reserve.call_args.kwargs["reserve_price"] == 40
+
+        inner = Session()
+        try:
+            saved_sale = inner.query(Sale).filter(Sale.id == "sale-r2").one()
+            assert saved_sale.ctseller_reserve_price == 10
+            by_id = {row.id: row.reserve_price for row in inner.query(Lot).all()}
+            assert by_id["lot-a2"] == 40
+            assert by_id["lot-b2"] == 10
+            assert by_id["lot-c2"] == 10
+        finally:
+            inner.close()
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
 def test_parse_sale_image_secondary_urls() -> None:
     assert parse_sale_image_secondary_urls(["a", "b"]) == ["a", "b"]
     assert parse_sale_image_secondary_urls('["https://cdn/a.jpg","https://cdn/b.jpg"]') == [
