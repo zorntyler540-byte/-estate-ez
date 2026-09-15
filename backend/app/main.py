@@ -61,6 +61,7 @@ from app.schemas import (
     CTSellerRemoteSaleOut,
     CTSellerPostedAuctionOut,
     CTSellerPostedAuctionsOut,
+    CTSellerPostedRefreshIn,
     CTSellerStatusOut,
     CatalogR2MigrateIn,
     CatalogR2MigrateOut,
@@ -1993,14 +1994,17 @@ def set_sale_reserve_price(
         sale.ctseller_reserve_price = reserve
         db.add(sale)
 
-    lots = (
-        db.query(Lot)
-        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
-        .all()
-    )
+    lots_q = db.query(Lot).filter(Lot.account_id == current.account_id)
     if payload.lot_ids:
         wanted = {str(x).strip() for x in payload.lot_ids if str(x).strip()}
-        lots = [lot for lot in lots if lot.id in wanted]
+        lots = lots_q.filter(Lot.id.in_(wanted)).all() if wanted else []
+    elif payload.ctseller_sale_id:
+        lots = lots_q.filter(
+            Lot.ctseller_sale_id == int(payload.ctseller_sale_id),
+            Lot.ctseller_item_id.isnot(None),
+        ).all()
+    else:
+        lots = lots_q.filter(Lot.sale_id == sale.id).all()
     if payload.only_without_reserve:
         lots = [lot for lot in lots if lot.reserve_price is None]
 
@@ -2292,37 +2296,84 @@ def ctseller_list_sales(
 @app.post("/sales/{sale_id}/refresh-ctseller-auctions", response_model=CTSellerPostedAuctionsOut)
 def refresh_ctseller_posted_auctions(
     sale_id: str,
+    payload: CTSellerPostedRefreshIn | None = None,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CTSellerPostedAuctionsOut:
-    """Look up which CT Bids auction each posted lot in this catalog actually lives on."""
+    """Look up which CT Bids auction each posted lot lives on (this catalog, plus a focused live sale)."""
     sale = _sale_for_user(sale_id, current, db)
+    body = payload or CTSellerPostedRefreshIn()
+    try:
+        focus_id = int(body.ctseller_sale_id) if body.ctseller_sale_id is not None else 0
+    except (TypeError, ValueError):
+        focus_id = 0
     lots = (
         db.query(Lot)
         .filter(Lot.sale_id == sale.id, Lot.account_id == current.account_id)
         .all()
     )
-    posted = [lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at]
+    posted_by_id = {
+        lot.id: lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at
+    }
+    extra_ids: list[int] = []
+    mapped = getattr(sale, "ctseller_sale_id", None)
+    try:
+        mapped_n = int(mapped) if mapped is not None else 0
+    except (TypeError, ValueError):
+        mapped_n = 0
+    if mapped_n > 0:
+        extra_ids.append(mapped_n)
+    if focus_id > 0:
+        extra_ids.append(focus_id)
+        for lot in (
+            db.query(Lot)
+            .filter(
+                Lot.account_id == current.account_id,
+                Lot.ctseller_sale_id == focus_id,
+                Lot.ctseller_item_id.isnot(None),
+            )
+            .all()
+        ):
+            posted_by_id[lot.id] = lot
+    posted = list(posted_by_id.values())
     looked_up = 0
     failed = 0
     title_by_id: dict[int, str] = {}
-    if posted:
+    need_client = bool(posted) or focus_id > 0
+    if need_client:
         account = db.query(Account).filter(Account.id == current.account_id).first()
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         try:
             client = _ctseller_client_for_account(account, db, probe=False)
-            extra_ids: list[int] = []
-            mapped = getattr(sale, "ctseller_sale_id", None)
-            try:
-                mapped_n = int(mapped) if mapped is not None else 0
-            except (TypeError, ValueError):
-                mapped_n = 0
-            if mapped_n > 0:
-                extra_ids.append(mapped_n)
-            looked_up, failed = refresh_lot_ctseller_sale_ids(
-                db, posted, client, extra_sale_ids=extra_ids
-            )
+            if focus_id > 0:
+                extra_ids.append(focus_id)
+                try:
+                    focus_item_ids: set[int] = set()
+                    for row in client.list_sale_items(int(focus_id)):
+                        try:
+                            iid = int(row.get("id"))
+                        except (TypeError, ValueError, AttributeError):
+                            continue
+                        if iid > 0:
+                            focus_item_ids.add(iid)
+                    if focus_item_ids:
+                        for lot in (
+                            db.query(Lot)
+                            .filter(
+                                Lot.account_id == current.account_id,
+                                Lot.ctseller_item_id.in_(list(focus_item_ids)),
+                            )
+                            .all()
+                        ):
+                            posted_by_id[lot.id] = lot
+                except CTSellerError:
+                    pass
+            posted = list(posted_by_id.values())
+            if posted:
+                looked_up, failed = refresh_lot_ctseller_sale_ids(
+                    db, posted, client, extra_sale_ids=extra_ids
+                )
             try:
                 for row in client.list_open_sales():
                     title_by_id[int(row.id)] = row.title
@@ -2330,12 +2381,7 @@ def refresh_ctseller_posted_auctions(
                 pass
         except CTSellerError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        lots = (
-            db.query(Lot)
-            .filter(Lot.sale_id == sale.id, Lot.account_id == current.account_id)
-            .all()
-        )
-        posted = [lot for lot in lots if lot.ctseller_item_id or lot.ctseller_posted_at]
+        posted = list(posted_by_id.values())
     ranked, unknown = posted_auction_counts(posted)
     outcomes = posted_outcome_counts(posted)
     auctions = [

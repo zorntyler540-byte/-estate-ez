@@ -749,6 +749,82 @@ def test_sale_reserve_price_only_without_reserve_and_selected_lots(tmp_path) -> 
         db.close()
 
 
+def test_sale_reserve_price_scopes_to_ctseller_sale_and_other_catalog(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account, Lot, Sale, User
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'reserve-scope.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    account = Account(id="acct-r3", name="CT")
+    user = User(id="user-r3", account_id=account.id, email="r3@example.com", password_hash="x", role="owner")
+    sale_a = Sale(id="sale-a3", account_id=account.id, user_id=user.id, name="Catalog A")
+    sale_b = Sale(id="sale-b3", account_id=account.id, user_id=user.id, name="Catalog B")
+    on_live = Lot(
+        id="lot-live",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale_b.id,
+        sku="LIVE1",
+        auction_title="On live sale",
+        ctseller_item_id=701,
+        ctseller_sale_id=47921,
+    )
+    other_auction = Lot(
+        id="lot-other",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sale_a.id,
+        sku="OTH1",
+        auction_title="Other auction",
+        ctseller_item_id=702,
+        ctseller_sale_id=100,
+        reserve_price=5,
+    )
+    db.add_all([account, user, sale_a, sale_b, on_live, other_auction])
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.post(
+            "/sales/sale-a3/reserve-price",
+            json={
+                "reserve_price": 12,
+                "apply_to_lots": True,
+                "push_posted": False,
+                "update_sale_default": False,
+                "ctseller_sale_id": 47921,
+            },
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["lots_updated"] == 1
+        inner = Session()
+        try:
+            assert inner.query(Lot).filter(Lot.id == "lot-live").one().reserve_price == 12
+            assert inner.query(Lot).filter(Lot.id == "lot-other").one().reserve_price == 5
+        finally:
+            inner.close()
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
 def test_parse_sale_image_secondary_urls() -> None:
     assert parse_sale_image_secondary_urls(["a", "b"]) == ["a", "b"]
     assert parse_sale_image_secondary_urls('["https://cdn/a.jpg","https://cdn/b.jpg"]') == [
