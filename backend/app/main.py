@@ -222,6 +222,7 @@ from app.services.sale_zip_export import (
     count_sale_hero_photos,
     normalize_sale_zip_kind,
 )
+from app.services.inventory_pdf import build_sale_inventory_pdf
 from app.services.thumbnail_image import thumbnail_jpeg_bytes, thumbnail_jpeg_bytes_first_available
 from app.catalog_storage import (
     delete_catalog_photo,
@@ -4874,6 +4875,23 @@ def export_markdown(
 ) -> Response:
     rows = _lots_for_export(db, current, sale_id)
     return Response(_markdown_for_lots(rows), media_type="text/markdown")
+
+
+@app.get("/exports/inventory-pdf")
+def export_inventory_pdf(
+    sale_id: str = Query(..., description="Catalog sale to print."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """SKU + description + thumbnail sheet for one catalog sale."""
+    sale = _sale_for_user(sale_id, current, db)
+    body = build_sale_inventory_pdf(db, sale=sale, account_id=current.account_id)
+    raw = re.sub(r"[^A-Za-z0-9._-]+", "-", (sale.name or "sale").strip())[:80].strip("-") or "sale"
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{raw}-inventory.pdf"'},
+    )
 
 
 @app.get("/exports/json")
