@@ -452,6 +452,8 @@ class SaleReservePriceIn(BaseModel):
     apply_to_lots: bool = True
     push_posted: bool = False
     lot_ids: list[str] | None = None
+    only_without_reserve: bool = False
+    update_sale_default: bool = True
 
 
 class SaleReservePriceLotResult(BaseModel):
