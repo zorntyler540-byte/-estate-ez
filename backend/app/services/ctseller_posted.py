@@ -61,6 +61,39 @@ def parse_item_status(detail: dict[str, Any] | None) -> str | None:
     return text[:40] if text else None
 
 
+def parse_item_reserve_price(detail: dict[str, Any] | None) -> tuple[bool, float | None]:
+    """CT Seller ``reserveprice`` when the field is present. Missing field → ``(False, None)``."""
+    if not isinstance(detail, dict):
+        return False, None
+    raw = None
+    present = False
+    for key in ("reserveprice", "reservePrice", "reserve_price"):
+        if key in detail:
+            raw = detail.get(key)
+            present = True
+            break
+    if not present:
+        return False, None
+    if raw in (None, "", "null", "None"):
+        return True, None
+    try:
+        n = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return True, None
+    return True, n if n > 0 else None
+
+
+def _same_money(left: float | None, right: float | None) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    try:
+        return abs(float(left) - float(right)) < 0.0001
+    except (TypeError, ValueError):
+        return False
+
+
 def parse_sold_price(detail: dict[str, Any] | None, *, status: str | None = None) -> float | None:
     """Hammer price only when CT Seller reports the lot sold (not a live current bid)."""
     if not isinstance(detail, dict):
@@ -108,7 +141,7 @@ def normalize_ctseller_outcome(status: str | None, sold_price: float | None = No
 
 
 def apply_item_detail_to_lot(lot: Lot, detail: dict[str, Any]) -> bool:
-    """Copy sale id / status / hammer price from a CT Seller item row. Returns True if changed."""
+    """Copy sale id / status / hammer / reserve from a CT Seller item row. Returns True if changed."""
     changed = False
     sid = parse_item_sale_id(detail)
     if sid and getattr(lot, "ctseller_sale_id", None) != sid:
@@ -125,6 +158,18 @@ def apply_item_detail_to_lot(lot: Lot, detail: dict[str, Any]) -> bool:
     if price is None and normalize_ctseller_outcome(status, None) == OUTCOME_UNSOLD:
         if getattr(lot, "ctseller_sold_price", None) is not None:
             lot.ctseller_sold_price = None
+            changed = True
+    reserve_present, reserve = parse_item_reserve_price(detail)
+    if reserve_present:
+        current = getattr(lot, "reserve_price", None)
+        try:
+            current_n = float(current) if current is not None else None
+        except (TypeError, ValueError):
+            current_n = None
+        if current_n is not None and current_n <= 0:
+            current_n = None
+        if not _same_money(current_n, reserve):
+            lot.reserve_price = reserve
             changed = True
     return changed
 
@@ -143,7 +188,7 @@ def refresh_lot_ctseller_sale_ids(
     client: CTSellerClient,
     extra_sale_ids: list[int] | None = None,
 ) -> tuple[int, int]:
-    """Refresh CT Bids auction id, item status, and sold price for posted lots."""
+    """Refresh CT Bids auction id, item status, sold price, and reserve for posted lots."""
     posted = [lot for lot in lots if _item_id(lot)]
     if not posted:
         return 0, 0
@@ -172,6 +217,8 @@ def refresh_lot_ctseller_sale_ids(
         except CTSellerError:
             continue
 
+    listed_includes_reserve = any(parse_item_reserve_price(row)[0] for row in by_item.values())
+
     looked_up = 0
     failed = 0
     dirty = False
@@ -180,12 +227,18 @@ def refresh_lot_ctseller_sale_ids(
         if iid is None:
             continue
         detail = by_item.get(iid)
-        if detail is None:
+        if detail is None or not listed_includes_reserve:
             try:
-                detail = client.item_detail(iid)
+                fetched = client.item_detail(iid)
+                if isinstance(fetched, dict):
+                    detail = {**(detail or {}), **fetched}
             except CTSellerError:
-                failed += 1
-                continue
+                if detail is None:
+                    failed += 1
+                    continue
+        if not detail:
+            failed += 1
+            continue
         if apply_item_detail_to_lot(lot, detail):
             dirty = True
         looked_up += 1

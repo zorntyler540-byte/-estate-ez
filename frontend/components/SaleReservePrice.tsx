@@ -25,6 +25,8 @@ type Props = {
   lots: SaleReserveLot[];
   postedCount: number;
   disabled?: boolean;
+  pullBusy?: boolean;
+  onPullFromCtSeller?: () => Promise<void> | void;
   onApplied?: (args: {
     saleDefault?: number | null;
     lotUpdates: SaleReserveLotUpdate[];
@@ -59,6 +61,8 @@ export function SaleReservePrice({
   lots,
   postedCount,
   disabled,
+  pullBusy,
+  onPullFromCtSeller,
   onApplied
 }: Props) {
   const [draft, setDraft] = useState(initialReserve != null ? String(initialReserve) : "");
@@ -224,9 +228,9 @@ export function SaleReservePrice({
         <div>
           <h3 className="ct-sale-reserve__title">CT Seller reserve</h3>
           <p className="ct-sale-reserve__hint">
-            Hidden reserve on CT Seller. Bidding still starts at the lot starting price (usually $1).
-            Apply a blanket amount, fill only lots with no reserve, or change individual lots below.
-            Posted lots are updated in place — photos are not re-sent.
+            Reserves live on CT Seller — that is the source. Load them here (or tap Check CT Bids
+            sales) after you change them there. Apply / fill / save still push from this site to CT
+            Seller if you want to set them here instead.
           </p>
         </div>
       </div>
@@ -268,6 +272,16 @@ export function SaleReservePrice({
         >
           Fill {missingCount} with no reserve
         </button>
+        {postedCount > 0 && onPullFromCtSeller ? (
+          <button
+            type="button"
+            className="ct-btn ct-btn--ghost"
+            disabled={disabled || busy || pullBusy}
+            onClick={() => void onPullFromCtSeller()}
+          >
+            {pullBusy ? "Loading from CT Seller…" : "Load from CT Seller"}
+          </button>
+        ) : null}
       </div>
       {postedCount > 0 ? (
         <label className="ct-sale-reserve__check">
@@ -286,9 +300,14 @@ export function SaleReservePrice({
         type="button"
         className="ct-sale-reserve__toggle"
         disabled={!lots.length}
-        onClick={() => setOpenList((open) => !open)}
+        onClick={() => {
+          const next = !openList;
+          setOpenList(next);
+          if (next && postedCount > 0 && onPullFromCtSeller) void onPullFromCtSeller();
+        }}
       >
         {openList ? "Hide" : "Show"} lot reserves ({setCount} set · {missingCount} none)
+        {pullBusy ? " · loading…" : ""}
       </button>
       {openList ? (
         <div className="ct-sale-reserve-list">

@@ -2709,8 +2709,8 @@ export default function LotDetailPage() {
                     />
                   </div>
                   <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
-                    Hidden CT Seller reserve. Dashboard can fill only lots with no reserve, or change
-                    individual lots, without overwriting the rest.
+                    Loaded from CT Seller when you Check CT Bids sales / Load from CT Seller. Saving
+                    here also writes the lot, and bulk apply can push to CT Seller.
                   </p>
                 </div>
                 <div>
