@@ -3953,8 +3953,9 @@ select.ct-input option {
   gap: 0.55rem 0.75rem;
 }
 
-.ct-sale-reserve__input {
-  min-width: 8.5rem;
+.ct-sale-reserve__sale-select {
+  min-width: 16rem;
+  flex: 1 1 16rem;
 }
 
 .ct-sale-reserve__check {

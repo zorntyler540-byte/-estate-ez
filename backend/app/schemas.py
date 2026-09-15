@@ -317,6 +317,10 @@ class CTSellerRemoteSaleOut(BaseModel):
     endtime: str | None = None
 
 
+class CTSellerPostedRefreshIn(BaseModel):
+    ctseller_sale_id: int | None = None
+
+
 class CTSellerPostedAuctionOut(BaseModel):
     ctseller_sale_id: int
     title: str
@@ -454,6 +458,7 @@ class SaleReservePriceIn(BaseModel):
     lot_ids: list[str] | None = None
     only_without_reserve: bool = False
     update_sale_default: bool = True
+    ctseller_sale_id: int | None = None
 
 
 class SaleReservePriceLotResult(BaseModel):

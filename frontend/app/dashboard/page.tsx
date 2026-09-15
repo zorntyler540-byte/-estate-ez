@@ -2055,6 +2055,9 @@ export default function DashboardPage() {
   const [ctSellerPostedRefreshBusy, setCtSellerPostedRefreshBusy] = useState(false);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
+  const [auctionReserveLots, setAuctionReserveLots] = useState<Lot[]>([]);
+  const [auctionReserveBusy, setAuctionReserveBusy] = useState(false);
+  const [auctionReserveNonce, setAuctionReserveNonce] = useState(0);
   const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
   const [ctSellerBulkMsg, setCtSellerBulkMsg] = useState("");
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
@@ -2234,6 +2237,26 @@ export default function DashboardPage() {
       }).length,
     [lots, pickedCtBidsSaleId]
   );
+  const reserveAuctionOptions = useMemo(() => {
+    const byId = new Map<number, CTSellerRemoteSale>();
+    for (const s of ctSellerRemoteSales) byId.set(s.id, s);
+    const extra = [...lots, ...auctionReserveLots];
+    for (const l of extra) {
+      const id = l.ctseller_sale_id;
+      if (id && id > 0 && !byId.has(id)) {
+        byId.set(id, { id, title: `CT Bids #${id}` });
+      }
+    }
+    if (pickedCtBidsSaleId > 0 && !byId.has(pickedCtBidsSaleId)) {
+      byId.set(pickedCtBidsSaleId, {
+        id: pickedCtBidsSaleId,
+        title: ctBidsAuctionLabel(pickedCtBidsSaleId, ctSellerRemoteSales) || `CT Bids #${pickedCtBidsSaleId}`
+      });
+    }
+    return [...byId.values()].sort((a, b) =>
+      (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
+    );
+  }, [ctSellerRemoteSales, lots, auctionReserveLots, pickedCtBidsSaleId]);
   const soldCount = useMemo(() => lots.filter((l) => lotCtBidsOutcome(l) === "sold").length, [lots]);
   const unsoldCount = useMemo(() => lots.filter((l) => lotCtBidsOutcome(l) === "unsold").length, [lots]);
   const liveOnCtBidsCount = useMemo(
@@ -2984,6 +3007,35 @@ export default function DashboardPage() {
       setCtSellerPickId((prev) => prev || String(mapped));
     }
   }, [selectedSale?.id, selectedSale?.ctseller_sale_id]);
+
+  useEffect(() => {
+    if (!token || pickedCtBidsSaleId < 1) {
+      setAuctionReserveLots([]);
+      setAuctionReserveBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setAuctionReserveBusy(true);
+    void apiFetch(`/lots?ctseller_sale_id=${pickedCtBidsSaleId}&sort=sku_asc`, token)
+      .then((rows) => {
+        if (cancelled) return;
+        setAuctionReserveLots(Array.isArray(rows) ? (rows as Lot[]) : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAuctionReserveLots(
+          lots.filter((l) => lotIsPostedToCtSeller(l) && l.ctseller_sale_id === pickedCtBidsSaleId)
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setAuctionReserveBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // lots is only used in the error fallback; nonce refreshes after Check CT Bids / apply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, pickedCtBidsSaleId, auctionReserveNonce]);
 
   useEffect(() => {
     setCtSellerPostSelected(new Set());
@@ -5398,7 +5450,10 @@ export default function DashboardPage() {
     setError("");
     try {
       const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/refresh-ctseller-auctions`, token, {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify(
+          pickedCtBidsSaleId > 0 ? { ctseller_sale_id: pickedCtBidsSaleId } : {}
+        )
       })) as { looked_up?: number; failed?: number };
       const skuQ =
         inventorySkuFlagFilter === ""
@@ -5409,6 +5464,7 @@ export default function DashboardPage() {
         token
       );
       setLots(lotsData as Lot[]);
+      setAuctionReserveNonce((n) => n + 1);
       const n = res.looked_up ?? 0;
       const fail = res.failed ?? 0;
       setCtSellerBulkMsg(
@@ -7253,26 +7309,32 @@ export default function DashboardPage() {
                 ? selectedSale.ctseller_reserve_price
                 : null
             }
-            lots={lots.map((lot) => ({
+            lots={auctionReserveLots.map((lot) => ({
               id: lot.id,
               sku: lot.sku,
               auction_title: lot.auction_title,
               reserve_price: lot.reserve_price,
               ctseller_item_id: lot.ctseller_item_id
             }))}
-            postedCount={lots.filter((lot) => lotIsPostedToCtSeller(lot)).length}
+            auctions={reserveAuctionOptions}
+            ctsellerSaleId={pickedCtBidsSaleId > 0 ? pickedCtBidsSaleId : null}
+            onCtSellerSaleIdChange={(id) => {
+              setCtSellerPickId(id);
+              setCtSellerBulkErr("");
+              setCtSellerBulkMsg("");
+            }}
+            postedCount={auctionReserveLots.length}
             disabled={ctSellerBulkBusy || busyProcessing || selectedSaleClosed}
             pullBusy={ctSellerPostedRefreshBusy}
+            listBusy={auctionReserveBusy}
             onPullFromCtSeller={() => refreshPostedCtBidsSales()}
-            onApplied={({ saleDefault, lotUpdates }) => {
-              if (saleDefault !== undefined) {
-                setSales((prev) =>
-                  prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_reserve_price: saleDefault } : s))
-                );
-              }
+            onApplied={({ lotUpdates }) => {
               if (lotUpdates.length) {
                 const byId = new Map(lotUpdates.map((row) => [row.id, row.reserve_price]));
                 setLots((prev) =>
+                  prev.map((lot) => (byId.has(lot.id) ? { ...lot, reserve_price: byId.get(lot.id) } : lot))
+                );
+                setAuctionReserveLots((prev) =>
                   prev.map((lot) => (byId.has(lot.id) ? { ...lot, reserve_price: byId.get(lot.id) } : lot))
                 );
               }

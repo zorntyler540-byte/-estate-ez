@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, parseApiErrorMessage } from "../lib/api";
 
+export type SaleReserveAuction = {
+  id: number;
+  title: string;
+  status?: string | null;
+  starttime?: string | null;
+};
+
 export type SaleReserveLot = {
   id: string;
   sku: string | null;
@@ -23,9 +30,13 @@ type Props = {
   token: string;
   initialReserve: number | null;
   lots: SaleReserveLot[];
+  auctions?: SaleReserveAuction[];
+  ctsellerSaleId?: number | null;
+  onCtSellerSaleIdChange?: (id: string) => void;
   postedCount: number;
   disabled?: boolean;
   pullBusy?: boolean;
+  listBusy?: boolean;
   onPullFromCtSeller?: () => Promise<void> | void;
   onApplied?: (args: {
     saleDefault?: number | null;
@@ -59,9 +70,13 @@ export function SaleReservePrice({
   token,
   initialReserve,
   lots,
+  auctions = [],
+  ctsellerSaleId = null,
+  onCtSellerSaleIdChange,
   postedCount,
   disabled,
   pullBusy,
+  listBusy,
   onPullFromCtSeller,
   onApplied
 }: Props) {
@@ -88,7 +103,7 @@ export function SaleReservePrice({
     setFilter("all");
     setMsg("");
     setErr("");
-  }, [saleId, postedCount]);
+  }, [saleId, ctsellerSaleId]);
 
   const missingCount = lots.filter((lot) => lot.reserve_price == null).length;
   const setCount = lots.length - missingCount;
@@ -148,6 +163,16 @@ export function SaleReservePrice({
       setErr("Every lot already has a reserve.");
       return;
     }
+    if (!ctsellerSaleId) {
+      setErr("Pick the live CT Seller auction first.");
+      return;
+    }
+    const scopedIds =
+      mode === "selected"
+        ? lotIds || []
+        : mode === "one"
+          ? lotIds || []
+          : lots.map((lot) => lot.id);
     setBusy(true);
     setErr("");
     setMsg("");
@@ -157,8 +182,9 @@ export function SaleReservePrice({
         apply_to_lots: true,
         push_posted: Boolean(pushPosted && postedCount > 0),
         only_without_reserve: mode === "missing",
-        update_sale_default: mode === "all" || mode === "missing",
-        lot_ids: lotIds && lotIds.length ? lotIds : null
+        update_sale_default: false,
+        ctseller_sale_id: ctsellerSaleId,
+        lot_ids: scopedIds.length ? scopedIds : null
       });
       const saved = res.reserve_price ?? null;
       const targetLots =
@@ -169,7 +195,6 @@ export function SaleReservePrice({
             : lots.filter((lot) => lotIds?.includes(lot.id));
       const amount = mode === "one" ? (rowAmount ?? null) : saved;
       onApplied?.({
-        saleDefault: mode === "all" || mode === "missing" ? saved : undefined,
         lotUpdates: targetLots.map((lot) => ({ id: lot.id, reserve_price: amount }))
       });
       setMsg(summarize(res, mode, targetLots.length));
@@ -196,6 +221,7 @@ export function SaleReservePrice({
         apply_to_lots: true,
         push_posted: Boolean(pushPosted && lot.ctseller_item_id),
         update_sale_default: false,
+        ctseller_sale_id: ctsellerSaleId || null,
         lot_ids: [lot.id]
       });
       onApplied?.({
@@ -228,11 +254,32 @@ export function SaleReservePrice({
         <div>
           <h3 className="ct-sale-reserve__title">CT Seller reserve</h3>
           <p className="ct-sale-reserve__hint">
-            Reserves live on CT Seller — that is the source. Load them here (or tap Check CT Bids
-            sales) after you change them there. Apply / fill / save still push from this site to CT
-            Seller if you want to set them here instead.
+            Pick the live CT Seller auction. This list is only lots already on that sale — including
+            lots sitting in other catalog tabs. Load from CT Seller to refresh reserves. Apply / fill
+            / save only touch those lots.
           </p>
         </div>
+      </div>
+      <div className="ct-sale-reserve__row">
+        <label className="ct-label" htmlFor="reserve-ctseller-sale">
+          Live CT Seller sale
+        </label>
+        <select
+          id="reserve-ctseller-sale"
+          className="ct-input ct-sale-reserve__sale-select"
+          value={ctsellerSaleId ? String(ctsellerSaleId) : ""}
+          disabled={disabled || busy}
+          onChange={(e) => onCtSellerSaleIdChange?.(e.target.value)}
+        >
+          <option value="">Select auction…</option>
+          {auctions.map((s) => (
+            <option key={s.id} value={String(s.id)}>
+              {s.title}
+              {s.status ? ` (${s.status})` : ""}
+              {s.starttime ? ` · ${String(s.starttime).slice(0, 10)}` : ""} · #{s.id}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="ct-sale-reserve__row">
         <label className="ct-label" htmlFor="sale-reserve-price">
@@ -258,25 +305,25 @@ export function SaleReservePrice({
         <button
           type="button"
           className="ct-btn ct-btn--primary"
-          disabled={disabled || busy || !saleId}
+          disabled={disabled || busy || !saleId || !ctsellerSaleId || lots.length < 1}
           onClick={() => void apply("all")}
         >
-          {busy ? "Saving…" : "Apply to all lots"}
+          {busy ? "Saving…" : "Apply to this sale"}
         </button>
         <button
           type="button"
           className="ct-btn"
-          disabled={disabled || busy || !saleId || missingCount === 0}
+          disabled={disabled || busy || !saleId || !ctsellerSaleId || missingCount === 0}
           onClick={() => void apply("missing")}
           title="Leaves lots that already have a reserve alone"
         >
           Fill {missingCount} with no reserve
         </button>
-        {postedCount > 0 && onPullFromCtSeller ? (
+        {ctsellerSaleId && onPullFromCtSeller ? (
           <button
             type="button"
             className="ct-btn ct-btn--ghost"
-            disabled={disabled || busy || pullBusy}
+            disabled={disabled || busy || pullBusy || !ctsellerSaleId}
             onClick={() => void onPullFromCtSeller()}
           >
             {pullBusy ? "Loading from CT Seller…" : "Load from CT Seller"}
@@ -306,8 +353,12 @@ export function SaleReservePrice({
           if (next && postedCount > 0 && onPullFromCtSeller) void onPullFromCtSeller();
         }}
       >
-        {openList ? "Hide" : "Show"} lot reserves ({setCount} set · {missingCount} none)
-        {pullBusy ? " · loading…" : ""}
+        {openList ? "Hide" : "Show"} lot reserves (
+        {ctsellerSaleId
+          ? `${setCount} set · ${missingCount} none · ${lots.length} on this sale`
+          : "pick a sale"}
+        )
+        {listBusy || pullBusy ? " · loading…" : ""}
       </button>
       {openList ? (
         <div className="ct-sale-reserve-list">
@@ -432,7 +483,9 @@ export function SaleReservePrice({
                 {visibleLots.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="ct-sale-reserve-list__empty">
-                      No lots in this filter.
+                    {ctsellerSaleId
+                      ? "No lots posted to this CT Bids sale yet. Load from CT Seller, or pick another auction."
+                      : "Pick a live CT Seller sale above."}
                     </td>
                   </tr>
                 ) : null}
