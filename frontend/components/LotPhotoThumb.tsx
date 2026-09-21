@@ -169,6 +169,7 @@ function LotPhotoThumbInner({
             maxHeight,
             objectFit: "contain",
             display: "block",
+            imageOrientation: "from-image",
             // Avoid browser “optimize for speed” softening when upscaling thumbs on retina.
             imageRendering: "auto",
             WebkitUserDrag: "none"

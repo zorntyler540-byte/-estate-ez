@@ -312,6 +312,7 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
                     maxHeight: "78vh",
                     objectFit: "contain",
                     display: "block",
+                    imageOrientation: "from-image",
                     cursor: cropMode ? "crosshair" : "zoom-in"
                   }}
                 />

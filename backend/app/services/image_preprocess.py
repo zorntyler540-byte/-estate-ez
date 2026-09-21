@@ -89,8 +89,7 @@ def compress_upload_bytes_if_image(
         return out, str(path.with_suffix(".jpg"))
     if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
         return data, raw_name
-    # Mobile already downscales to ~2048 JPEG; skip a second Pillow pass when the
-    # file already fits the catalog max edge and does not need EXIF rotation.
+    # Skip a second JPEG pass only when pixels already match display orientation.
     if ext in {".jpg", ".jpeg"} and not image_bytes_need_orientation_reencode(data, filename):
         try:
             from PIL import Image
@@ -107,6 +106,31 @@ def compress_upload_bytes_if_image(
         return data, raw_name
 
 
+def jpeg_exif_orientation(im) -> int:
+    """EXIF Orientation (tag 274). Phones often store it on the root IFD or the Exif IFD."""
+    try:
+        exif = im.getexif()
+    except Exception:
+        return 1
+    if not exif:
+        return 1
+    for src in (exif,):
+        try:
+            raw = src.get(0x0112)
+            if raw is not None:
+                return int(raw)
+        except Exception:
+            pass
+    try:
+        nested = exif.get_ifd(0x8769)
+        raw = nested.get(0x0112) if nested else None
+        if raw is not None:
+            return int(raw)
+    except Exception:
+        pass
+    return 1
+
+
 def image_bytes_need_orientation_reencode(data: bytes, filename: str) -> bool:
     """
     True when re-encoding would apply EXIF orientation or HEIC→JPEG — avoids double-compressing
@@ -121,13 +145,7 @@ def image_bytes_need_orientation_reencode(data: bytes, filename: str) -> bool:
         from PIL import Image
 
         with Image.open(BytesIO(data)) as im:
-            exif = im.getexif()
-            if not exif:
-                return False
-            ori = exif.get(274)
-            if ori is None:
-                return False
-            return int(ori) != 1
+            return jpeg_exif_orientation(im) not in (0, 1)
     except Exception:
         return True
 

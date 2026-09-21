@@ -64,8 +64,25 @@ export function centerCropPixels(
 }
 
 /**
+ * Re-encode so EXIF orientation is baked into pixels.
+ * ``skipProcessing`` camera JPEGs are often landscape sensor pixels plus a rotate tag;
+ * copying them as-is makes the website grid show cups and bowls on their side.
+ */
+export async function bakeCaptureOrientation(uri: string): Promise<string> {
+  try {
+    const out = await ImageManipulator.manipulateAsync(uri, [], {
+      compress: 1,
+      format: ImageManipulator.SaveFormat.JPEG
+    });
+    return out.uri || uri;
+  } catch {
+    return uri;
+  }
+}
+
+/**
  * If ``ratio`` is set, center-crop ``uri`` to that aspect and return a new JPEG file URI.
- * Otherwise return the original URI.
+ * Always re-encodes so EXIF orientation is applied even when keeping full sensor aspect.
  */
 export async function maybeCropToAspect(
   uri: string,
@@ -73,7 +90,7 @@ export async function maybeCropToAspect(
   imageH: number | undefined,
   ratio: number | null
 ): Promise<string> {
-  if (ratio == null || ratio <= 0) return uri;
+  if (ratio == null || ratio <= 0) return bakeCaptureOrientation(uri);
   let w = imageW && imageW > 0 ? imageW : 0;
   let h = imageH && imageH > 0 ? imageH : 0;
   if (!w || !h) {
@@ -90,7 +107,7 @@ export async function maybeCropToAspect(
   }
   const crop = centerCropPixels(w, h, ratio);
   if (crop.width >= w && crop.height >= h && crop.originX === 0 && crop.originY === 0) {
-    return uri;
+    return bakeCaptureOrientation(uri);
   }
   const out = await ImageManipulator.manipulateAsync(uri, [{ crop }], {
     compress: 1,

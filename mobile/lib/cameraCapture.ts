@@ -1,6 +1,9 @@
 import type { CameraPictureOptions } from "expo-camera";
 
-/** Full sensor JPEG; server applies EXIF orientation on upload. */
+/**
+ * Full sensor JPEG. Orientation is baked in ``maybeCropToAspect`` / upload compress
+ * so the website grid is upright (raw files are often sideways + EXIF rotate).
+ */
 export const MAX_DETAIL_CAPTURE_OPTIONS: CameraPictureOptions = {
   quality: 1,
   skipProcessing: true
