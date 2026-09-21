@@ -59,6 +59,7 @@ from app.schemas import (
     CTSellerCredentialsIn,
     CTSellerConditionOut,
     CTSellerRemoteSaleOut,
+    CtsellerSaleSyncOut,
     CTSellerPostedAuctionOut,
     CTSellerPostedAuctionsOut,
     CTSellerPostedRefreshIn,
@@ -197,7 +198,7 @@ from app.services.sale_covers import (
     read_cover_image_bytes,
     validate_cover_photo_ids,
 )
-from app.services.audience_hunt import lot_is_held_from_ctseller
+from app.services.ctseller_sale_sync import apply_ctseller_catalog_sale_sync
 from app.services.roles import (
     ALLOWED_ROLES,
     can_delete_lot,
@@ -1463,6 +1464,84 @@ def list_sales(current: User = Depends(get_current_user), db: Session = Depends(
         .all()
     )
     return [_sale_out(r) for r in rows]
+
+
+def _ctseller_remote_sale_outs(rows: list) -> list[CTSellerRemoteSaleOut]:
+    return [
+        CTSellerRemoteSaleOut(
+            id=r.id,
+            title=r.title,
+            status=r.status,
+            starttime=r.starttime,
+            endtime=r.endtime,
+        )
+        for r in rows
+    ]
+
+
+def _account_sales_out(db: Session, account_id: str) -> list[SaleOut]:
+    rows = (
+        db.query(Sale)
+        .filter(Sale.account_id == account_id)
+        .order_by(Sale.created_at.asc())
+        .all()
+    )
+    return [_sale_out(r) for r in rows]
+
+
+@app.post("/sales/sync-from-ctseller", response_model=CtsellerSaleSyncOut)
+def sync_sales_from_ctseller(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CtsellerSaleSyncOut:
+    """Create catalog sales for open CT Seller auctions; refresh names on mapped open sales."""
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    username = (getattr(account, "ctseller_username", None) or "").strip()
+    password = unseal_secret(getattr(account, "ctseller_password_enc", None))
+    if not username or not password:
+        return CtsellerSaleSyncOut(
+            connected=False,
+            sales=_account_sales_out(db, current.account_id),
+        )
+    try:
+        client = _ctseller_client_for_account(account, db, probe=False)
+        account_id = account.id
+        user_id = current.id
+        try:
+            remote = client.list_open_sales()
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_after_expired_session(account_id)
+            remote = client.list_open_sales()
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            return CtsellerSaleSyncOut(
+                connected=False,
+                sales=_account_sales_out(db, current.account_id),
+            )
+        raise
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    stats = apply_ctseller_catalog_sale_sync(
+        db,
+        account_id=account_id,
+        user_id=user_id,
+        remote_sales=remote,
+    )
+    db.commit()
+    return CtsellerSaleSyncOut(
+        connected=True,
+        created=stats.created,
+        renamed=stats.renamed,
+        already_mapped=stats.already_mapped,
+        remote_count=len(remote),
+        remote_sales=_ctseller_remote_sale_outs(remote),
+        sales=_account_sales_out(db, account_id),
+    )
 
 
 @app.get("/sales/{sale_id}/photo-health", response_model=SalePhotoHealthOut)
