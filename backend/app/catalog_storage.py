@@ -121,6 +121,35 @@ def thumb_object_key(storage_path: str | None, max_px: int) -> str | None:
     return f"{key}.thumb.{px}.jpg"
 
 
+def purge_catalog_photo_thumbs(storage_path: str | None) -> None:
+    """Drop cached ``*.thumb.{px}.jpg`` siblings so grids reload after rotate/replace."""
+    key = _object_key_from_storage_path(storage_path or "")
+    if not key:
+        return
+    name = key.rsplit("/", 1)[-1]
+    if "." in name:
+        base, _ext = key.rsplit(".", 1)
+        prefix = f"{base}.thumb."
+        stem = Path(name).stem
+        local_parent = (upload_root() / key).parent
+    else:
+        prefix = f"{key}.thumb."
+        stem = name
+        local_parent = (upload_root() / key).parent
+    try:
+        if local_parent.is_dir():
+            for p in local_parent.glob(f"{stem}.thumb.*.jpg"):
+                p.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if object_storage.r2_configured():
+        try:
+            for tkey in object_storage.list_keys(prefix, max_keys=40):
+                object_storage.delete_object(tkey)
+        except Exception:  # noqa: BLE001
+            logger.warning("R2 thumb purge failed for prefix %s", prefix)
+
+
 def signed_catalog_url(
     storage_path: str | None,
     *,

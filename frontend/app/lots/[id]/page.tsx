@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, Save, Trash2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -17,8 +17,6 @@ import {
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
-import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../../../lib/lotPhotoReplace";
-import { rotateImageBlob } from "../../../lib/photoEdit";
 
 type LotVideo = {
   id: string;
@@ -226,6 +224,7 @@ export default function LotDetailPage() {
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [thumbCacheBust, setThumbCacheBust] = useState<Record<string, number>>({});
   const [quickRotatingId, setQuickRotatingId] = useState<string | null>(null);
+  const [batchRotating, setBatchRotating] = useState(false);
   const [zipDownloading, setZipDownloading] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
@@ -616,18 +615,56 @@ export default function LotDetailPage() {
   }
 
   async function quickRotatePhoto(photo: LotPhoto, degrees: 90 | -90) {
-    if (!lot || !token || photo.file_on_disk === false) return;
-    setQuickRotatingId(photo.id);
+    await rotateLotPhotos(degrees, [photo.id], { confirmAll: false });
+  }
+
+  async function rotateLotPhotos(
+    degrees: 90 | -90,
+    photoIds: string[] | null,
+    opts?: { confirmAll?: boolean }
+  ) {
+    if (!lot || !token) return;
+    const confirmAll = opts?.confirmAll !== false;
+    const rotatable = catalogPhotos.filter((p) => p.file_on_disk !== false);
+    const ids =
+      photoIds && photoIds.length > 0
+        ? photoIds.filter((id) => rotatable.some((p) => p.id === id))
+        : rotatable.map((p) => p.id);
+    if (ids.length === 0) {
+      setError("No photos on disk to rotate.");
+      return;
+    }
+    const rotatingAllOnLot = ids.length === rotatable.length && rotatable.length > 1;
+    if (confirmAll && rotatingAllOnLot && selectedPhotoIds.size === 0) {
+      const dir = degrees === 90 ? "clockwise" : "counter-clockwise";
+      if (
+        !window.confirm(
+          `Rotate all ${ids.length} photos on this lot 90° ${dir}?\n\nGroup shots that are already upright will turn sideways. Check only the sideways photos first if you do not want that.`
+        )
+      ) {
+        return;
+      }
+    }
+    const single = ids.length === 1 ? ids[0] : null;
+    if (single) setQuickRotatingId(single);
+    else setBatchRotating(true);
     setError("");
     try {
-      const blob = await fetchLotPhotoBlob(lot.id, photo.id, token);
-      const rotated = await rotateImageBlob(blob, degrees);
-      await replaceLotPhotoBlob(lot.id, photo.id, token, rotated, photo.original_name);
-      handlePhotoSaved(photo.id);
+      await apiFetch(`/lots/${encodeURIComponent(lot.id)}/photos/rotate`, token, {
+        method: "POST",
+        body: JSON.stringify({ degrees, photo_ids: ids })
+      });
+      const bustAt = Date.now();
+      setThumbCacheBust((prev) => {
+        const next = { ...prev };
+        for (const id of ids) next[id] = bustAt;
+        return next;
+      });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not rotate photo");
+      setError(e instanceof Error ? e.message : "Could not rotate photos");
     } finally {
       setQuickRotatingId(null);
+      setBatchRotating(false);
     }
   }
 
@@ -1933,6 +1970,77 @@ export default function LotDetailPage() {
                 </button>
               </div>
             ) : null}
+            {catalogPhotos.length > 0 ? (
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <RotateCw size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">
+                    {selectedPhotoIds.size > 0
+                      ? `Rotate ${selectedPhotoIds.size} selected`
+                      : "Rotate all photos"}
+                  </span>
+                  <span className="ct-upload-option__desc">
+                    {selectedPhotoIds.size > 0
+                      ? "Turns checked photos 90°. Uncheck to rotate every photo on this lot instead."
+                      : "Turns every photo on this lot 90°. Check only the sideways ones if group shots are already upright."}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="ct-btn ct-upload-option__btn"
+                    disabled={
+                      batchRotating ||
+                      quickRotatingId !== null ||
+                      organizeBusy ||
+                      reorderBusy ||
+                      addPhotosBusy ||
+                      catalogPhotos.every((p) => p.file_on_disk === false)
+                    }
+                    title="Rotate 90° counter-clockwise"
+                    onClick={() =>
+                      void rotateLotPhotos(
+                        -90,
+                        selectedPhotoIds.size > 0 ? Array.from(selectedPhotoIds) : null
+                      )
+                    }
+                  >
+                    {batchRotating ? "Rotating…" : (
+                      <>
+                        <RotateCcw size={16} strokeWidth={2} aria-hidden /> ↺
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    disabled={
+                      batchRotating ||
+                      quickRotatingId !== null ||
+                      organizeBusy ||
+                      reorderBusy ||
+                      addPhotosBusy ||
+                      catalogPhotos.every((p) => p.file_on_disk === false)
+                    }
+                    title="Rotate 90° clockwise"
+                    onClick={() =>
+                      void rotateLotPhotos(
+                        90,
+                        selectedPhotoIds.size > 0 ? Array.from(selectedPhotoIds) : null
+                      )
+                    }
+                  >
+                    {batchRotating ? "Rotating…" : (
+                      <>
+                        <RotateCw size={16} strokeWidth={2} aria-hidden /> ↻
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
           <details className="ct-help-details">
             <summary>Photo guide</summary>
@@ -1949,8 +2057,9 @@ export default function LotDetailPage() {
                 </li>
                 <li>Order is saved for ZIP downloads, CT Bids posting, and AI.</li>
                 <li>
-                  Use <strong>↺ ↻</strong> on a thumbnail for a quick rotate; click the image for crop and other edits
-                  in the full viewer.
+                  Use <strong>↺ ↻</strong> on a thumbnail for a quick rotate, or{" "}
+                  <strong>Rotate all photos</strong> (or rotate checked ones) to flip many at once.
+                  Click the image for crop and other edits in the full viewer.
                 </li>
                 <li>
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle
@@ -2112,6 +2221,7 @@ export default function LotDetailPage() {
                       disabled={
                         organizeBusy ||
                         reorderBusy ||
+                        batchRotating ||
                         quickRotatingId !== null ||
                         p.file_on_disk === false
                       }
@@ -2136,6 +2246,7 @@ export default function LotDetailPage() {
                       disabled={
                         organizeBusy ||
                         reorderBusy ||
+                        batchRotating ||
                         quickRotatingId !== null ||
                         p.file_on_disk === false
                       }
@@ -2299,6 +2410,68 @@ export default function LotDetailPage() {
               </div>
             ) : null}
             <div className="ct-upload-options ct-upload-options--stacked">
+              {catalogPhotos.length > 0 ? (
+                <div className="ct-upload-option ct-upload-option--stacked-card">
+                  <div className="ct-upload-option__head">
+                    <span className="ct-upload-option__icon" aria-hidden>
+                      <RotateCw size={20} strokeWidth={1.75} />
+                    </span>
+                    <div className="ct-upload-option__text">
+                      <span className="ct-upload-option__title">
+                        {selectedPhotoIds.size > 0
+                          ? `Rotate ${selectedPhotoIds.size} selected`
+                          : "Rotate all photos"}
+                      </span>
+                      <span className="ct-upload-option__desc">
+                        Rewrites the files on the server (same 90° as the thumbnail arrows). Confirm if nothing is
+                        checked — upright group shots would turn sideways too.
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__field-btn"
+                      disabled={
+                        organizeBusy ||
+                        reorderBusy ||
+                        saving ||
+                        batchRotating ||
+                        quickRotatingId !== null ||
+                        catalogPhotos.length === 0
+                      }
+                      onClick={() =>
+                        void rotateLotPhotos(
+                          -90,
+                          selectedPhotoIds.size > 0 ? Array.from(selectedPhotoIds) : null
+                        )
+                      }
+                    >
+                      {batchRotating ? "Rotating…" : "↺ Left"}
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--primary ct-upload-option__field-btn"
+                      disabled={
+                        organizeBusy ||
+                        reorderBusy ||
+                        saving ||
+                        batchRotating ||
+                        quickRotatingId !== null ||
+                        catalogPhotos.length === 0
+                      }
+                      onClick={() =>
+                        void rotateLotPhotos(
+                          90,
+                          selectedPhotoIds.size > 0 ? Array.from(selectedPhotoIds) : null
+                        )
+                      }
+                    >
+                      {batchRotating ? "Rotating…" : "↻ Right"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {catalogPhotos.length > 0 ? (
                 <div className="ct-upload-option ct-upload-option--stacked-card">
                   <div className="ct-upload-option__head">

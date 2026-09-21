@@ -189,7 +189,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
           alt=""
           width={size}
           height={size}
-          style={{ ...box, objectFit: "cover", display: "block" }}
+          style={{ ...box, objectFit: "cover", display: "block", imageOrientation: "from-image" }}
         />
       )}
     </div>

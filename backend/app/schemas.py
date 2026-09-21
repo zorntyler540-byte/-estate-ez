@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -629,6 +630,24 @@ class DeleteLotPhotosIn(BaseModel):
     """Remove selected catalog photos from this lot (files removed after DB commit)."""
 
     photo_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class RotateLotPhotosIn(BaseModel):
+    """Rotate catalog files on disk (90 clockwise, -90 counter-clockwise, or 180)."""
+
+    degrees: Literal[90, -90, 180]
+    photo_ids: list[str] | None = Field(
+        default=None,
+        max_length=200,
+        description="When omitted or empty, rotate every catalog photo on this lot.",
+    )
+
+
+class RotateLotPhotosOut(BaseModel):
+    rotated: int
+    failed: int = 0
+    photos: list[LotPhotoOut]
+    errors: list[str] = Field(default_factory=list)
 
 
 class TransferPhotosIn(BaseModel):
