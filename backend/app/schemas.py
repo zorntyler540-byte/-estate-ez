@@ -217,6 +217,19 @@ class SaleMergeOut(BaseModel):
     duplicate_sku_count: int = 0
 
 
+class RemoveSaleIn(BaseModel):
+    """Must match the sale name exactly (trimmed) so a mis-click cannot wipe a catalog."""
+
+    confirm_name: str = Field(min_length=1, max_length=255)
+
+
+class RemoveSaleOut(BaseModel):
+    deleted_sale_id: str
+    deleted_sale_name: str
+    lots_deleted: int
+    jobs_deleted: int
+
+
 class LotOut(BaseModel):
     id: str
     account_id: str
