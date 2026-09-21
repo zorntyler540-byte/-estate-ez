@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { useAuth } from "@/context/AuthContext";
-import { listSales } from "@/lib/api";
+import { listSales, syncSalesFromCtSeller } from "@/lib/api";
 import { saleNameNeedsUpdate, saleRowsUnchanged } from "@/lib/lotsReload";
 import { backfillDraftSaleNames } from "@/lib/queue/db";
 import type { Sale } from "@/lib/types";
@@ -56,6 +56,29 @@ export function SalesProvider({ children }: { children: ReactNode }) {
           await setSelectedSale(current.id, current.name);
         }
       }
+
+      void (async () => {
+        try {
+          const sync = await syncSalesFromCtSeller(token);
+          const created = Number(sync.created || 0);
+          const renamed = Number(sync.renamed || 0);
+          if (created < 1 && renamed < 1) return;
+          const synced = Array.isArray(sync.sales) ? sync.sales : await listSales(token);
+          const nextOpen = synced.filter((s) => !s.closed_at);
+          setSales((prev) => (saleRowsUnchanged(prev, nextOpen) ? prev : nextOpen));
+          const names = new Map(nextOpen.map((s) => [s.id, s.name]));
+          await backfillDraftSaleNames(names);
+          const still = selectedSaleIdRef.current;
+          if (still) {
+            const match = nextOpen.find((s) => s.id === still);
+            if (match && saleNameNeedsUpdate(selectedSaleNameRef.current, match.name)) {
+              await setSelectedSale(match.id, match.name);
+            }
+          }
+        } catch {
+          /* offline / CT Seller down — keep the /sales list */
+        }
+      })();
     } catch {
       /* keep cached names for offline queue display */
     } finally {

@@ -1125,6 +1125,14 @@ type CTSellerRemoteSale = {
   endtime?: string | null;
 };
 
+type CtsellerSaleSync = {
+  connected?: boolean;
+  created?: number;
+  renamed?: number;
+  remote_sales?: CTSellerRemoteSale[];
+  sales?: Sale[];
+};
+
 type LotPhotoHealthRow = {
   lot_id: string;
   sku: string | null;
@@ -2985,13 +2993,42 @@ export default function DashboardPage() {
     // Defer so first-paint /sales + /lots are not competing with CT Seller HTTP for the API pool
     // while the phone is uploading.
     const timer = window.setTimeout(() => {
-      void apiFetch("/integrations/ctseller/sales", token)
-        .then((rows) => {
+      void apiFetch("/sales/sync-from-ctseller", token, { method: "POST" })
+        .then((raw) => {
           if (cancelled) return;
-          setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+          const out = raw as CtsellerSaleSync;
+          if (Array.isArray(out.remote_sales)) {
+            setCtSellerRemoteSales(out.remote_sales);
+          }
+          if (Array.isArray(out.sales) && out.sales.length >= 0) {
+            const arr = out.sales;
+            setSales(arr);
+            if (arr.length) {
+              setSelectedSaleId((prev) => {
+                if (prev && arr.some((s) => s.id === prev)) return prev;
+                const stored = localStorage.getItem(SALE_STORAGE_KEY);
+                if (stored && arr.some((s) => s.id === stored)) return stored;
+                return arr[0]!.id;
+              });
+            }
+          }
+          const created = Number(out.created || 0);
+          if (created > 0) {
+            setPullCtSellerSalesMsg(
+              `Added ${created} sale${created === 1 ? "" : "s"} from CT Seller.`
+            );
+          }
         })
         .catch(() => {
-          if (!cancelled) setCtSellerRemoteSales([]);
+          if (cancelled) return;
+          void apiFetch("/integrations/ctseller/sales", token)
+            .then((rows) => {
+              if (cancelled) return;
+              setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+            })
+            .catch(() => {
+              if (!cancelled) setCtSellerRemoteSales([]);
+            });
         });
     }, 2500);
     return () => {
@@ -5156,65 +5193,47 @@ export default function DashboardPage() {
     setPullCtSellerSalesMsg("");
     setError("");
     try {
-      let remote = ctSellerRemoteSales;
-      try {
-        const rows = (await apiFetch("/integrations/ctseller/sales", token)) as CTSellerRemoteSale[];
-        remote = Array.isArray(rows) ? rows : [];
-        setCtSellerRemoteSales(remote);
-      } catch (e) {
+      const out = (await apiFetch("/sales/sync-from-ctseller", token, {
+        method: "POST"
+      })) as CtsellerSaleSync;
+      if (Array.isArray(out.remote_sales)) {
+        setCtSellerRemoteSales(out.remote_sales);
+      }
+      const arr = Array.isArray(out.sales) ? out.sales : [];
+      if (arr.length) {
+        setSales(arr);
+        setSelectedSaleId((prev) => {
+          if (prev && arr.some((s) => s.id === prev)) return prev;
+          const stored = localStorage.getItem(SALE_STORAGE_KEY);
+          if (stored && arr.some((s) => s.id === stored)) return stored;
+          return arr[0]!.id;
+        });
+      }
+      if (out.connected === false) {
         setError(
-          e instanceof Error
-            ? e.message
-            : "Could not load CT Seller auctions. If you already connected on Account, try Refresh — we re-sign in automatically. Update the saved password only if CT Seller changed it."
+          "Connect your CT Seller account on Account first, then sales created on CT Bids will show up here."
         );
         return;
       }
-      if (!remote.length) {
+      const created = Number(out.created || 0);
+      const renamed = Number(out.renamed || 0);
+      const remoteN = Array.isArray(out.remote_sales) ? out.remote_sales.length : 0;
+      if (created > 0) {
+        setPullCtSellerSalesMsg(`Added ${created} sale${created === 1 ? "" : "s"} from CT Seller.`);
+      } else if (renamed > 0) {
+        setPullCtSellerSalesMsg(
+          `Updated ${renamed} sale name${renamed === 1 ? "" : "s"} from CT Seller.`
+        );
+      } else if (remoteN === 0) {
         setPullCtSellerSalesMsg("No open or upcoming CT Seller auctions found.");
-        return;
-      }
-      const mapped = new Set(
-        sales
-          .map((s) => s.ctseller_sale_id)
-          .filter((id): id is number => typeof id === "number" && Number.isFinite(id) && id > 0)
-      );
-      const missing = remote.filter((r) => !mapped.has(r.id));
-      if (!missing.length) {
+      } else {
         setPullCtSellerSalesMsg("All up to date — every open CT Seller auction is already in Change sale.");
-        return;
       }
-      const createdRows: Sale[] = [];
-      for (const auction of missing) {
-        const title = (auction.title || "").trim() || `CT Seller #${auction.id}`;
-        try {
-          const created = (await apiFetch("/sales", token, {
-            method: "POST",
-            body: JSON.stringify({ name: title.slice(0, 255), ctseller_sale_id: auction.id })
-          })) as Sale;
-          createdRows.push(created);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : "Create failed";
-          // Race or already mapped: skip and continue.
-          if (!/409|already mapped/i.test(msg)) {
-            setError(msg);
-            break;
-          }
-        }
-      }
-      if (createdRows.length) {
-        setSales((prev) => {
-          const seen = new Set(prev.map((s) => s.id));
-          const next = [...prev];
-          for (const row of createdRows) {
-            if (!seen.has(row.id)) next.push(row);
-          }
-          return next;
-        });
-      }
-      setPullCtSellerSalesMsg(
-        createdRows.length
-          ? `Added ${createdRows.length} sale${createdRows.length === 1 ? "" : "s"} from CT Seller.`
-          : "All up to date — every open CT Seller auction is already in Change sale."
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Could not load CT Seller auctions. If you already connected on Account, try Refresh — we re-sign in automatically. Update the saved password only if CT Seller changed it."
       );
     } finally {
       setPullingCtSellerSales(false);
@@ -6247,10 +6266,10 @@ export default function DashboardPage() {
               type="button"
               className="ct-btn"
               disabled={pullingCtSellerSales || creatingSale || !token}
-              title="Create catalog sales for open/upcoming CT Seller auctions (skips ones already linked)"
+              title="Refresh now: add missing CT Bids auctions and update names (also runs when you open the dashboard)"
               onClick={() => void pullCtSellerSalesIntoCatalog()}
             >
-              {pullingCtSellerSales ? "Pulling…" : "Pull CT Seller sales"}
+              {pullingCtSellerSales ? "Syncing…" : "Sync CT Seller sales"}
             </button>
             <button
               type="button"
@@ -6293,7 +6312,7 @@ export default function DashboardPage() {
           ) : null}
           {!sales.length && !pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
-              Add a sale to start cataloging lots and photos, or pull open auctions from CT Seller.
+              Add a sale to start cataloging, or connect CT Seller — open CT Bids auctions show up here automatically.
             </p>
           ) : null}
         </section>

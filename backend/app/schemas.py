@@ -318,6 +318,18 @@ class CTSellerRemoteSaleOut(BaseModel):
     endtime: str | None = None
 
 
+class CtsellerSaleSyncOut(BaseModel):
+    """Open CT Seller auctions mirrored into Estate-EZ Change sale tabs."""
+
+    connected: bool = True
+    created: int = 0
+    renamed: int = 0
+    already_mapped: int = 0
+    remote_count: int = 0
+    remote_sales: list[CTSellerRemoteSaleOut] = Field(default_factory=list)
+    sales: list[SaleOut] = Field(default_factory=list)
+
+
 class CTSellerPostedRefreshIn(BaseModel):
     ctseller_sale_id: int | None = None
 

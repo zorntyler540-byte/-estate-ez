@@ -82,6 +82,18 @@ export async function listSales(token: string): Promise<Sale[]> {
   return apiFetch<Sale[]>("/sales", token);
 }
 
+export type CtSellerSaleSync = {
+  connected?: boolean;
+  created?: number;
+  renamed?: number;
+  sales?: Sale[];
+};
+
+/** Mirror open CT Bids auctions into Estate-EZ sales (create missing, refresh names). */
+export async function syncSalesFromCtSeller(token: string): Promise<CtSellerSaleSync> {
+  return apiFetch<CtSellerSaleSync>("/sales/sync-from-ctseller", token, { method: "POST" });
+}
+
 export async function listLots(
   token: string,
   saleId: string,
