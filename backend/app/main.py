@@ -69,6 +69,8 @@ from app.schemas import (
     CatalogMediaUrlOut,
     SaleLotCoverUrlsOut,
     DeleteLotPhotosIn,
+    RotateLotPhotosIn,
+    RotateLotPhotosOut,
     HealthResponse,
     JobOut,
     LoginRequest,
@@ -229,6 +231,7 @@ from app.catalog_storage import (
     migrate_local_photos_to_r2,
     persist_catalog_photo,
     persist_catalog_video,
+    purge_catalog_photo_thumbs,
     resolve_catalog_storage_path,
     signed_catalog_url,
     upload_root,
@@ -236,6 +239,7 @@ from app.catalog_storage import (
 from app.object_storage import r2_configured as catalog_r2_configured
 from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
+from app.services.photo_rotate import rotate_image_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
@@ -3915,6 +3919,7 @@ async def replace_lot_photo(
     tmp_path = Path(tempfile.mkstemp(suffix=Path(stor_name).suffix or ".jpg")[1])
     try:
         tmp_path.write_bytes(body)
+        purge_catalog_photo_thumbs(row.storage_path)
         _, storage_path = persist_catalog_photo(current.account_id, tmp_path, photo_id=row.id)
         row.storage_path = storage_path
         if stor_name:
@@ -3924,6 +3929,86 @@ async def replace_lot_photo(
     finally:
         tmp_path.unlink(missing_ok=True)
     return lot_photo_out(row, lot_id=lot_id)
+
+
+@app.post("/lots/{lot_id}/photos/rotate", response_model=RotateLotPhotosOut)
+def rotate_lot_photos(
+    lot_id: str,
+    body: RotateLotPhotosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RotateLotPhotosOut:
+    """Bake EXIF then rotate selected catalog files (or every photo on the lot)."""
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    _assert_sale_editable_for_lot_moves(db, lot.sale_id, current)
+    existing = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+    if not existing:
+        raise HTTPException(status_code=400, detail="This lot has no catalog photos to rotate.")
+    want_ids = list(dict.fromkeys(body.photo_ids or []))
+    if want_ids:
+        by_id = {p.id: p for p in existing}
+        missing = [pid for pid in want_ids if pid not in by_id]
+        if missing:
+            preview = ", ".join(missing[:5])
+            more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+            raise HTTPException(
+                status_code=400,
+                detail=f"Photo id(s) not on this lot: {preview}{more}",
+            )
+        targets = [by_id[pid] for pid in want_ids]
+    else:
+        targets = existing
+
+    jpeg_q = int(settings.catalog_upload_jpeg_quality)
+    rotated = 0
+    failed = 0
+    errors: list[str] = []
+    for row in targets:
+        src = resolve_catalog_storage_path(row.storage_path)
+        if not src.is_file():
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: file missing")
+            continue
+        try:
+            out = rotate_image_bytes(src.read_bytes(), int(body.degrees), quality=jpeg_q)
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: {exc}")
+            continue
+        tmp_path = Path(tempfile.mkstemp(suffix=".jpg")[1])
+        try:
+            tmp_path.write_bytes(out)
+            purge_catalog_photo_thumbs(row.storage_path)
+            _, storage_path = persist_catalog_photo(current.account_id, tmp_path, photo_id=row.id)
+            row.storage_path = storage_path
+            stem = Path(row.original_name or "photo").stem or "photo"
+            row.original_name = f"{stem}.jpg"
+            rotated += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: {exc}")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    db.commit()
+    for row in targets:
+        db.refresh(row)
+    return RotateLotPhotosOut(
+        rotated=rotated,
+        failed=failed,
+        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        errors=errors,
+    )
 
 
 def _zip_entry_basename(original_name: str, index: int, used: set[str]) -> str:
