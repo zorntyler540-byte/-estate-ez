@@ -548,6 +548,14 @@ def _ensure_sale_zip_kind_column() -> None:
         )
 
 
+def nullable_datetime_ddl(dialect_name: str | None = None) -> str:
+    """Postgres has no DATETIME type; SQLite accepts DATETIME."""
+    name = (dialect_name or engine.dialect.name or "").lower()
+    if name.startswith("postgres"):
+        return "TIMESTAMP WITH TIME ZONE"
+    return "DATETIME"
+
+
 def _ensure_lot_audience_columns() -> None:
     """Local SQLite ``create_all`` does not ALTER existing lots tables."""
     from sqlalchemy import inspect, text
@@ -560,7 +568,7 @@ def _ensure_lot_audience_columns() -> None:
     if "audience_hold" not in cols:
         stmts.append("ALTER TABLE lots ADD COLUMN audience_hold BOOLEAN DEFAULT 0 NOT NULL")
     if "audience_hunting_at" not in cols:
-        stmts.append("ALTER TABLE lots ADD COLUMN audience_hunting_at DATETIME")
+        stmts.append(f"ALTER TABLE lots ADD COLUMN audience_hunting_at {nullable_datetime_ddl()}")
     if "audience_hunt_error" not in cols:
         stmts.append("ALTER TABLE lots ADD COLUMN audience_hunt_error TEXT")
     if "audience_json" not in cols:
@@ -592,7 +600,7 @@ def _ensure_photo_listing_columns() -> None:
     if "label_legibility" not in cols:
         stmts.append("ALTER TABLE photos ADD COLUMN label_legibility VARCHAR(16)")
     if "captured_at" not in cols:
-        stmts.append("ALTER TABLE photos ADD COLUMN captured_at DATETIME")
+        stmts.append(f"ALTER TABLE photos ADD COLUMN captured_at {nullable_datetime_ddl()}")
     if not stmts:
         return
     with engine.begin() as conn:
