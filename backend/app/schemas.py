@@ -53,6 +53,18 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class TeamActivityLotOut(BaseModel):
+    lot_id: str
+    sale_id: str
+    sku: str | None = None
+    auction_title: str = ""
+    photo_count: int
+    capture_minutes: float | None = None
+    first_photo_at: datetime
+    last_photo_at: datetime
+    has_thumbnail: bool = True
+
+
 class TeamActivityMemberOut(BaseModel):
     user_id: str
     email: EmailStr
@@ -63,9 +75,19 @@ class TeamActivityMemberOut(BaseModel):
     active_hours: float = 0
     photos_per_hour: float = 0
     lots_per_hour: float = 0
+    lots_posted: int = 0
+    lots_sold: int = 0
+    lots_unsold: int = 0
+    lots_live: int = 0
+    lots_pulled: int = 0
+    sold_revenue: float = 0
     first_photo_at: datetime | None = None
     last_photo_at: datetime | None = None
     last_lot_at: datetime | None = None
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
+    lots: list[TeamActivityLotOut] = Field(default_factory=list)
 
 
 class TeamActivityTotalsOut(BaseModel):
@@ -76,6 +98,15 @@ class TeamActivityTotalsOut(BaseModel):
     active_hours: float = 0
     photos_per_hour: float = 0
     lots_per_hour: float = 0
+    lots_posted: int = 0
+    lots_sold: int = 0
+    lots_unsold: int = 0
+    lots_live: int = 0
+    lots_pulled: int = 0
+    sold_revenue: float = 0
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
 
 
 class TeamActivityOut(BaseModel):
@@ -114,6 +145,12 @@ class AdminUsageAccountOut(BaseModel):
     jobs_in_progress: int = 0
     photos_uploaded: int
     lots_created: int
+    lots_posted: int = 0
+    lots_sold: int = 0
+    lots_unsold: int = 0
+    lots_live: int = 0
+    lots_pulled: int = 0
+    sold_revenue: float = 0.0
     avg_photos_per_job: float
     avg_job_duration_seconds: float
     # completed / (completed + failed), 0..1; 0 when no finished jobs.

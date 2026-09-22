@@ -10,16 +10,18 @@ import {
   View
 } from "react-native";
 
+import { TeamActivityPanel } from "@/components/TeamActivityPanel";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 
 export default function SaleScreen() {
-  const { selectedSaleId, setSelectedSale } = useAuth();
+  const { selectedSaleId, setSelectedSale, token, signedInRole } = useAuth();
   const { sales, loading, refreshSales } = useSales();
   const lastFocusRefreshAtRef = useRef(0);
   const salesLenRef = useRef(0);
   salesLenRef.current = sales.length;
+  const isOwner = (signedInRole || "").toLowerCase() === "owner";
 
   useFocusEffect(
     useCallback(() => {
@@ -46,6 +48,9 @@ export default function SaleScreen() {
           keyExtractor={(item) => item.id}
           refreshControl={
             <RefreshControl refreshing={loading} onRefresh={() => void refreshSales()} tintColor="#ff4d1a" />
+          }
+          ListHeaderComponent={
+            isOwner && token ? <TeamActivityPanel token={token} /> : null
           }
           ListEmptyComponent={<Text style={styles.empty}>No open sales.</Text>}
           renderItem={({ item }) => {

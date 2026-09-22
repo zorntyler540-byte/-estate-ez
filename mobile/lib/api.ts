@@ -1,6 +1,7 @@
 import { parseApiError } from "./apiError";
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
+import { teamActivityQuery } from "./teamActivity";
 import { videoMimeType } from "./mediaKind";
 import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types";
 import {
@@ -80,6 +81,73 @@ export async function login(email: string, password: string): Promise<TokenRespo
 
 export async function listSales(token: string): Promise<Sale[]> {
   return apiFetch<Sale[]>("/sales", token);
+}
+
+export type AuthMe = {
+  id: string;
+  account_id: string;
+  email: string;
+  role: string;
+};
+
+export async function getAuthMe(token: string): Promise<AuthMe> {
+  return apiFetch<AuthMe>("/auth/me", token);
+}
+
+export type TeamActivityLot = {
+  lot_id: string;
+  sale_id: string;
+  sku?: string | null;
+  auction_title?: string;
+  photo_count: number;
+  capture_minutes?: number | null;
+  first_photo_at?: string;
+  last_photo_at?: string;
+  has_thumbnail?: boolean;
+};
+
+export type TeamActivityMember = {
+  user_id: string;
+  email: string;
+  role: string;
+  photos_uploaded: number;
+  lots_created: number;
+  jobs_started: number;
+  active_hours: number;
+  photos_per_hour: number;
+  lots_per_hour: number;
+  lots_posted?: number;
+  lots_sold?: number;
+  lots_unsold?: number;
+  lots_live?: number;
+  sold_revenue?: number;
+  lots_photographed?: number;
+  median_minutes_per_lot?: number | null;
+  lots?: TeamActivityLot[];
+};
+
+export type TeamActivity = {
+  since: string;
+  until: string;
+  members: TeamActivityMember[];
+  totals: {
+    photos_uploaded: number;
+    lots_created: number;
+    jobs_started: number;
+    member_count: number;
+    active_hours: number;
+    lots_posted?: number;
+    lots_sold?: number;
+    lots_unsold?: number;
+    lots_live?: number;
+    sold_revenue?: number;
+    lots_photographed?: number;
+    median_minutes_per_lot?: number | null;
+  };
+};
+
+export async function getTeamActivity(token: string, sinceDays: number): Promise<TeamActivity> {
+  return apiFetch<TeamActivity>(`/team/activity?${teamActivityQuery(sinceDays)}`, token);
 }
 
 export type CtSellerSaleSync = {

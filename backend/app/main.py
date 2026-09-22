@@ -114,6 +114,7 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    TeamActivityLotOut,
     TeamActivityMemberOut,
     TeamActivityOut,
     TeamActivityTotalsOut,
@@ -211,6 +212,7 @@ from app.services.roles import (
 )
 from app.services.team_activity import (
     ActivityWindowError,
+    posted_lot_stats_for_account,
     resolve_activity_window,
     summarize_team_activity,
 )
@@ -830,16 +832,19 @@ def team_activity(
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     since_days: int = Query(7, ge=1, le=366),
+    include_lots: bool = Query(True),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TeamActivityOut:
-    """Photos / lots / catalog jobs per teammate in a time window. Owners only."""
+    """Photos, lots, catalog jobs, CT Bids posted/sold, and per-lot shoot time. Owners only."""
     _require_owner(current)
     try:
         start, end = resolve_activity_window(since=since, until=until, since_days=since_days)
     except ActivityWindowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    summary = summarize_team_activity(db, current.account_id, start, end)
+    summary = summarize_team_activity(
+        db, current.account_id, start, end, include_lots=include_lots
+    )
     return TeamActivityOut(
         since=summary.since,
         until=summary.until,
@@ -854,9 +859,32 @@ def team_activity(
                 active_hours=m.active_hours,
                 photos_per_hour=m.photos_per_hour,
                 lots_per_hour=m.lots_per_hour,
+                lots_posted=m.lots_posted,
+                lots_sold=m.lots_sold,
+                lots_unsold=m.lots_unsold,
+                lots_live=m.lots_live,
+                lots_pulled=m.lots_pulled,
+                sold_revenue=m.sold_revenue,
                 first_photo_at=m.first_photo_at,
                 last_photo_at=m.last_photo_at,
                 last_lot_at=m.last_lot_at,
+                lots_photographed=m.lots_photographed,
+                median_minutes_per_lot=m.median_minutes_per_lot,
+                mean_minutes_per_lot=m.mean_minutes_per_lot,
+                lots=[
+                    TeamActivityLotOut(
+                        lot_id=lot.lot_id,
+                        sale_id=lot.sale_id,
+                        sku=lot.sku,
+                        auction_title=lot.auction_title,
+                        photo_count=lot.photo_count,
+                        capture_minutes=lot.capture_minutes,
+                        first_photo_at=lot.first_photo_at,
+                        last_photo_at=lot.last_photo_at,
+                        has_thumbnail=lot.has_thumbnail,
+                    )
+                    for lot in m.lots
+                ],
             )
             for m in summary.members
         ],
@@ -868,6 +896,15 @@ def team_activity(
             active_hours=summary.active_hours,
             photos_per_hour=summary.photos_per_hour,
             lots_per_hour=summary.lots_per_hour,
+            lots_posted=summary.lots_posted,
+            lots_sold=summary.lots_sold,
+            lots_unsold=summary.lots_unsold,
+            lots_live=summary.lots_live,
+            lots_pulled=summary.lots_pulled,
+            sold_revenue=summary.sold_revenue,
+            lots_photographed=summary.lots_photographed,
+            median_minutes_per_lot=summary.median_minutes_per_lot,
+            mean_minutes_per_lot=summary.mean_minutes_per_lot,
         ),
     )
 
@@ -1213,6 +1250,7 @@ def admin_analytics(
         return (tokens / 1_000_000.0) * rate_per_million
 
     since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
+    until_dt = datetime.now(timezone.utc)
     in_progress_statuses = {JobStatus.receiving, JobStatus.queued, JobStatus.processing}
     from app.services.audience_hunt import hunt_pro_cost_usd, summarize_hunt_events
 
@@ -1251,6 +1289,7 @@ def admin_analytics(
             db.query(func.count()).select_from(Lot)
             .filter(Lot.account_id == account_id, Lot.created_at >= since_dt).scalar() or 0
         )
+        posted = posted_lot_stats_for_account(db, account_id, since_dt, until_dt)
 
         # Prefer real metered usage (response.usage_metadata) per job; fall back to the estimate
         # model for jobs cataloged before metering existed. Priced per tier (Flash vs Pro).
@@ -1302,6 +1341,12 @@ def admin_analytics(
             jobs_in_progress=jobs_in_progress,
             photos_uploaded=photos_uploaded,
             lots_created=lots_created,
+            lots_posted=posted.posted,
+            lots_sold=posted.sold,
+            lots_unsold=posted.unsold,
+            lots_live=posted.live,
+            lots_pulled=posted.pulled,
+            sold_revenue=posted.sold_revenue,
             avg_photos_per_job=round(photos_uploaded / jobs_started, 2) if jobs_started else 0.0,
             avg_job_duration_seconds=round(mean(durations), 1) if durations else 0.0,
             success_rate=round(jobs_completed / finished, 3) if finished else 0.0,
@@ -1376,6 +1421,12 @@ def admin_analytics(
         jobs_in_progress=_sum("jobs_in_progress"),
         photos_uploaded=total_photos,
         lots_created=total_lots,
+        lots_posted=_sum("lots_posted"),
+        lots_sold=_sum("lots_sold"),
+        lots_unsold=_sum("lots_unsold"),
+        lots_live=_sum("lots_live"),
+        lots_pulled=_sum("lots_pulled"),
+        sold_revenue=round(sum(r.sold_revenue for r in rows), 2),
         avg_photos_per_job=round(total_photos / total_jobs, 2) if total_jobs else 0.0,
         avg_job_duration_seconds=round(mean(total_durations), 1) if total_durations else 0.0,
         success_rate=round(total_completed / total_finished, 3) if total_finished else 0.0,
