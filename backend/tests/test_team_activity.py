@@ -12,6 +12,7 @@ from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, User
 from app.services.team_activity import (
     ActivityWindowError,
     active_hours_for_timestamps,
+    lot_ctbids_outcome,
     per_active_hour,
     resolve_activity_window,
     summarize_team_activity,
@@ -154,6 +155,10 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
                 sale_id="sale-a",
                 auction_title="Lamp",
                 created_at=inside,
+                ctseller_item_id=101,
+                ctseller_posted_at=inside,
+                ctseller_item_status="Sold",
+                ctseller_sold_price=42.5,
             ),
             Lot(
                 id="lot-maria-later",
@@ -162,6 +167,9 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
                 sale_id="sale-a",
                 auction_title="Chair",
                 created_at=inside + timedelta(minutes=8),
+                ctseller_item_id=102,
+                ctseller_posted_at=inside + timedelta(minutes=9),
+                ctseller_item_status="Pending",
             ),
             Lot(
                 id="lot-old",
@@ -170,6 +178,10 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
                 sale_id="sale-a",
                 auction_title="Old",
                 created_at=outside,
+                ctseller_item_id=99,
+                ctseller_posted_at=outside,
+                ctseller_item_status="Sold",
+                ctseller_sold_price=9.0,
             ),
             ProcessingJob(
                 id="job-maria",
@@ -202,6 +214,11 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert by_email["maria@ct.test"].active_hours == 1.0
     assert by_email["maria@ct.test"].photos_per_hour == 2.0
     assert by_email["maria@ct.test"].lots_per_hour == 2.0
+    assert by_email["maria@ct.test"].lots_posted == 2
+    assert by_email["maria@ct.test"].lots_sold == 1
+    assert by_email["maria@ct.test"].lots_live == 1
+    assert by_email["maria@ct.test"].lots_unsold == 0
+    assert by_email["maria@ct.test"].sold_revenue == 42.5
     assert by_email["owner@ct.test"].photos_uploaded == 1
     assert by_email["owner@ct.test"].jobs_started == 0
     assert by_email["owner@ct.test"].active_hours == 1.0
@@ -225,6 +242,10 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert summary.active_hours == 2.0
     assert summary.photos_per_hour == 1.5
     assert summary.lots_per_hour == 1.0
+    assert summary.lots_posted == 2
+    assert summary.lots_sold == 1
+    assert summary.lots_live == 1
+    assert summary.sold_revenue == 42.5
     assert summary.members[0].email == "maria@ct.test"
 
 
@@ -319,3 +340,60 @@ def test_team_activity_endpoint_rejects_inverted_window() -> None:
             db=None,
         )
     assert ei.value.status_code == 400
+
+
+def test_lot_ctbids_outcome_sold_unsold_live() -> None:
+    sold = SimpleNamespace(
+        ctseller_item_id=1,
+        ctseller_posted_at=T0,
+        ctseller_item_status="Sold",
+        ctseller_sold_price=12,
+    )
+    unsold = SimpleNamespace(
+        ctseller_item_id=2,
+        ctseller_posted_at=T0,
+        ctseller_item_status="Unsold",
+        ctseller_sold_price=None,
+    )
+    live = SimpleNamespace(
+        ctseller_item_id=3,
+        ctseller_posted_at=T0,
+        ctseller_item_status="Ready",
+        ctseller_sold_price=None,
+    )
+    unposted = SimpleNamespace(
+        ctseller_item_id=None,
+        ctseller_posted_at=None,
+        ctseller_item_status=None,
+        ctseller_sold_price=None,
+    )
+    assert lot_ctbids_outcome(sold) == "sold"
+    assert lot_ctbids_outcome(unsold) == "unsold"
+    assert lot_ctbids_outcome(live) == "live"
+    assert lot_ctbids_outcome(unposted) == "unposted"
+
+
+def test_legacy_item_id_without_posted_at_counts_in_created_window(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    owner = _user(db, user_id="owner-a", account_id="acct-a", email="owner@ct.test", role="owner")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=owner.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-legacy",
+            account_id="acct-a",
+            user_id=owner.id,
+            sale_id="sale-a",
+            auction_title="Legacy",
+            created_at=T0 - timedelta(hours=1),
+            ctseller_item_id=55,
+            ctseller_posted_at=None,
+            ctseller_item_status="Unsold",
+        )
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    row = summary.members[0]
+    assert row.lots_posted == 1
+    assert row.lots_unsold == 1
+    assert row.lots_sold == 0

@@ -9,7 +9,7 @@ import {
   type ReactNode
 } from "react";
 
-import { login as apiLogin } from "@/lib/api";
+import { login as apiLogin, getAuthMe } from "@/lib/api";
 import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
 import { selectedSaleUnchanged } from "@/lib/lotsReload";
 import { normalizeSaleName } from "@/lib/selectedSale";
@@ -32,6 +32,8 @@ type AuthContextValue = {
   ready: boolean;
   /** Email used to sign in — shown on Capture so staff know whose session this is. */
   signedInEmail: string | null;
+  /** Account role from ``GET /auth/me`` — owners see team activity on Sale. */
+  signedInRole: string | null;
   selectedSaleId: string | null;
   /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
   selectedSaleName: string | null;
@@ -77,6 +79,7 @@ async function readStoredCredentials(): Promise<StoredCredentials | null> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [signedInRole, setSignedInRole] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleIdState] = useState<string | null>(null);
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -169,6 +172,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [persistToken, silentRefresh]);
 
   useEffect(() => {
+    if (!token) {
+      setSignedInRole(null);
+      return;
+    }
+    let cancelled = false;
+    void getAuthMe(token)
+      .then((me) => {
+        if (cancelled) return;
+        setSignedInRole(me.role || null);
+        if (me.email) setSignedInEmail(me.email);
+      })
+      .catch(() => {
+        if (!cancelled) setSignedInRole(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
     registerSessionRefresher(async () => silentRefresh());
     return () => registerSessionRefresher(null);
   }, [silentRefresh]);
@@ -190,6 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenRef.current = null;
     setToken(null);
     setSignedInEmail(null);
+    setSignedInRole(null);
     setSelectedSaleIdState(null);
     setSelectedSaleNameState(null);
   }, []);
@@ -223,13 +247,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       ready,
       signedInEmail,
+      signedInRole,
       selectedSaleId,
       selectedSaleName,
       signIn,
       signOut,
       setSelectedSale
     }),
-    [token, ready, signedInEmail, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
+    [token, ready, signedInEmail, signedInRole, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

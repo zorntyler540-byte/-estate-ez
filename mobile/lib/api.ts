@@ -1,7 +1,7 @@
 import { parseApiError } from "./apiError";
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
-import { videoMimeType } from "./mediaKind";
+import { teamActivityQuery } from "./teamActivity";
 import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types";
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,
@@ -80,6 +80,56 @@ export async function login(email: string, password: string): Promise<TokenRespo
 
 export async function listSales(token: string): Promise<Sale[]> {
   return apiFetch<Sale[]>("/sales", token);
+}
+
+export type AuthMe = {
+  id: string;
+  account_id: string;
+  email: string;
+  role: string;
+};
+
+export async function getAuthMe(token: string): Promise<AuthMe> {
+  return apiFetch<AuthMe>("/auth/me", token);
+}
+
+export type TeamActivityMember = {
+  user_id: string;
+  email: string;
+  role: string;
+  photos_uploaded: number;
+  lots_created: number;
+  jobs_started: number;
+  active_hours: number;
+  photos_per_hour: number;
+  lots_per_hour: number;
+  lots_posted?: number;
+  lots_sold?: number;
+  lots_unsold?: number;
+  lots_live?: number;
+  sold_revenue?: number;
+};
+
+export type TeamActivity = {
+  since: string;
+  until: string;
+  members: TeamActivityMember[];
+  totals: {
+    photos_uploaded: number;
+    lots_created: number;
+    jobs_started: number;
+    member_count: number;
+    active_hours: number;
+    lots_posted?: number;
+    lots_sold?: number;
+    lots_unsold?: number;
+    lots_live?: number;
+    sold_revenue?: number;
+  };
+};
+
+export async function getTeamActivity(token: string, sinceDays: number): Promise<TeamActivity> {
+  return apiFetch<TeamActivity>(`/team/activity?${teamActivityQuery(sinceDays)}`, token);
 }
 
 export type CtSellerSaleSync = {

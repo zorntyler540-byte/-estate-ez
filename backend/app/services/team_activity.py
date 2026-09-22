@@ -4,6 +4,11 @@ Counts surviving ``photos`` / ``lots`` / ``processing_jobs`` rows stamped with
 ``user_id`` and ``created_at``. Deleted photos drop off. Credit is the login
 that uploaded or started the job, not the person holding the camera.
 
+Posted / sold / unsold / live are lots that login created and that went to
+CT Bids in the window (``ctseller_posted_at``, or ``created_at`` when the
+item id exists but the post stamp is missing). Outcomes use the current
+CT Seller item status, same mapping as the dashboard chips.
+
 Active hours (for photos/hr and lots/hr) use photo and lot timestamps only.
 Each UTC calendar day with activity is the span from that person's first
 event to their last that day, floored at one hour so a short burst does
@@ -16,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models import Lot, Photo, ProcessingJob, User
@@ -148,6 +153,136 @@ def per_active_hour(count: int, hours: float) -> float:
     return round(count / hours, 2)
 
 
+def lot_is_posted_to_ctbids(lot: Lot) -> bool:
+    return bool(lot.ctseller_item_id or lot.ctseller_posted_at)
+
+
+def lot_ctbids_outcome(lot: Lot) -> str:
+    """Match dashboard sold/unsold/live chips: current CT Seller item status."""
+    if not lot_is_posted_to_ctbids(lot):
+        return "unposted"
+    raw = (lot.ctseller_item_status or "").strip().lower()
+    s = " ".join(raw.replace("_", " ").replace("-", " ").split())
+    compact = s.replace(" ", "")
+    if compact in {"pulled", "withdrawn", "deleted", "removed", "cancelled", "canceled"}:
+        return "pulled"
+    if compact.startswith("sold") or compact in {"paid", "invoiced", "awarded"}:
+        return "sold"
+    if (
+        "unsold" in compact
+        or compact in {"nosale", "notsold"}
+        or s in {"no sale", "not sold"}
+        or "did not sell" in s
+        or "didn't sell" in s
+        or "reserve not met" in s
+    ):
+        return "unsold"
+    price = lot.ctseller_sold_price
+    if price is not None and float(price) > 0:
+        return "sold"
+    if compact in {"closed", "complete", "completed", "ended", "finished"}:
+        return "unsold"
+    if compact in {"pending", "ready", "live", "started", "approved", "active", "open", "published"}:
+        return "live"
+    return "unknown"
+
+
+@dataclass(frozen=True)
+class PostedLotStats:
+    posted: int = 0
+    sold: int = 0
+    unsold: int = 0
+    live: int = 0
+    pulled: int = 0
+    sold_revenue: float = 0.0
+
+
+def _empty_posted_stats() -> PostedLotStats:
+    return PostedLotStats()
+
+
+def _posted_lots_in_window(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> list[Lot]:
+    """Lots posted to CT Bids in ``[start, end)``.
+
+    Prefer ``ctseller_posted_at``. Legacy rows with an item id but no stamp
+    use ``created_at`` so they still show in the window they were cataloged.
+    """
+    return (
+        db.query(Lot)
+        .filter(
+            Lot.account_id == account_id,
+            or_(
+                and_(Lot.ctseller_posted_at >= start, Lot.ctseller_posted_at < end),
+                and_(
+                    Lot.ctseller_posted_at.is_(None),
+                    Lot.ctseller_item_id.isnot(None),
+                    Lot.created_at >= start,
+                    Lot.created_at < end,
+                ),
+            ),
+        )
+        .all()
+    )
+
+
+def summarize_posted_lots(lots: list[Lot]) -> PostedLotStats:
+    posted = sold = unsold = live = pulled = 0
+    revenue = 0.0
+    for lot in lots:
+        if not lot_is_posted_to_ctbids(lot):
+            continue
+        posted += 1
+        outcome = lot_ctbids_outcome(lot)
+        if outcome == "sold":
+            sold += 1
+            price = lot.ctseller_sold_price
+            if price is not None and float(price) > 0:
+                revenue += float(price)
+        elif outcome == "unsold":
+            unsold += 1
+        elif outcome == "live":
+            live += 1
+        elif outcome == "pulled":
+            pulled += 1
+    return PostedLotStats(
+        posted=posted,
+        sold=sold,
+        unsold=unsold,
+        live=live,
+        pulled=pulled,
+        sold_revenue=round(revenue, 2),
+    )
+
+
+def posted_lot_stats_by_user(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, PostedLotStats]:
+    out: dict[str, list[Lot]] = {}
+    for lot in _posted_lots_in_window(db, account_id, start, end):
+        uid = str(lot.user_id) if lot.user_id else ""
+        if not uid:
+            continue
+        out.setdefault(uid, []).append(lot)
+    return {uid: summarize_posted_lots(rows) for uid, rows in out.items()}
+
+
+def posted_lot_stats_for_account(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> PostedLotStats:
+    return summarize_posted_lots(_posted_lots_in_window(db, account_id, start, end))
+
+
 @dataclass(frozen=True)
 class TeamActivityMember:
     user_id: str
@@ -159,6 +294,12 @@ class TeamActivityMember:
     active_hours: float
     photos_per_hour: float
     lots_per_hour: float
+    lots_posted: int = 0
+    lots_sold: int = 0
+    lots_unsold: int = 0
+    lots_live: int = 0
+    lots_pulled: int = 0
+    sold_revenue: float = 0.0
     first_photo_at: datetime | None = None
     last_photo_at: datetime | None = None
     last_lot_at: datetime | None = None
@@ -175,6 +316,12 @@ class TeamActivitySummary:
     active_hours: float
     photos_per_hour: float
     lots_per_hour: float
+    lots_posted: int = 0
+    lots_sold: int = 0
+    lots_unsold: int = 0
+    lots_live: int = 0
+    lots_pulled: int = 0
+    sold_revenue: float = 0.0
 
 
 def summarize_team_activity(
@@ -194,6 +341,7 @@ def summarize_team_activity(
     photos = _counts_by_user(db, Photo, account_id, start, end)
     lots = _counts_by_user(db, Lot, account_id, start, end)
     jobs = _counts_by_user(db, ProcessingJob, account_id, start, end)
+    posted = posted_lot_stats_by_user(db, account_id, start, end)
     times = _event_times_by_user(db, account_id, start, end)
     photo_bounds = _created_at_bounds_by_user(db, Photo, account_id, start, end)
     lot_bounds = _created_at_bounds_by_user(db, Lot, account_id, start, end)
@@ -202,6 +350,7 @@ def summarize_team_activity(
         hours = active_hours_for_timestamps(times.get(row.id, []))
         photo_n = photos.get(row.id, 0)
         lot_n = lots.get(row.id, 0)
+        post = posted.get(row.id, _empty_posted_stats())
         photo_first, photo_last = photo_bounds.get(row.id, (None, None))
         _, lot_last = lot_bounds.get(row.id, (None, None))
         members.append(
@@ -215,6 +364,12 @@ def summarize_team_activity(
                 active_hours=hours,
                 photos_per_hour=per_active_hour(photo_n, hours),
                 lots_per_hour=per_active_hour(lot_n, hours),
+                lots_posted=post.posted,
+                lots_sold=post.sold,
+                lots_unsold=post.unsold,
+                lots_live=post.live,
+                lots_pulled=post.pulled,
+                sold_revenue=post.sold_revenue,
                 first_photo_at=photo_first,
                 last_photo_at=photo_last,
                 last_lot_at=lot_last,
@@ -236,4 +391,10 @@ def summarize_team_activity(
         active_hours=hour_total,
         photos_per_hour=per_active_hour(photo_total, hour_total),
         lots_per_hour=per_active_hour(lot_total, hour_total),
+        lots_posted=sum(m.lots_posted for m in members),
+        lots_sold=sum(m.lots_sold for m in members),
+        lots_unsold=sum(m.lots_unsold for m in members),
+        lots_live=sum(m.lots_live for m in members),
+        lots_pulled=sum(m.lots_pulled for m in members),
+        sold_revenue=round(sum(m.sold_revenue for m in members), 2),
     )

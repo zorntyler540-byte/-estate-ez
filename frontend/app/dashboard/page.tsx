@@ -1041,6 +1041,12 @@ type AdminUsageAccount = {
   jobs_in_progress: number;
   photos_uploaded: number;
   lots_created: number;
+  lots_posted?: number;
+  lots_sold?: number;
+  lots_unsold?: number;
+  lots_live?: number;
+  lots_pulled?: number;
+  sold_revenue?: number;
   avg_photos_per_job: number;
   avg_job_duration_seconds: number;
   success_rate: number;
@@ -2043,6 +2049,7 @@ export default function DashboardPage() {
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
+  const [adminUsageDays, setAdminUsageDays] = useState(30);
   const [lots, setLots] = useState<Lot[]>([]);
   /** ``lot_id`` → count of catalog photos whose files are missing on the API host (from ``GET /sales/{id}/photo-health``). */
   const [photoHealthMissing, setPhotoHealthMissing] = useState<Record<string, number>>({});
@@ -2983,7 +2990,7 @@ export default function DashboardPage() {
         setAdminNameDraftById(nameDrafts);
         setAdminPlanDraftById(drafts);
         setAdminUsageLoading(true);
-        void apiFetch("/admin/analytics?since_days=30", token)
+        void apiFetch(`/admin/analytics?since_days=${adminUsageDays}`, token)
           .then((u) => {
             if (!cancelled) setAdminUsage(u as AdminUsageSummary);
           })
@@ -5434,7 +5441,7 @@ export default function DashboardPage() {
       setIsMasterAdmin(true);
       setAdminUsageLoading(true);
       try {
-        const usage = (await apiFetch("/admin/analytics?since_days=30", token)) as AdminUsageSummary;
+        const usage = (await apiFetch(`/admin/analytics?since_days=${adminUsageDays}`, token)) as AdminUsageSummary;
         setAdminUsage(usage);
       } catch {
         setAdminUsage(null);
@@ -6546,7 +6553,27 @@ export default function DashboardPage() {
           ) : null}
           {isMasterAdmin ? (
             <div className="ct-dash-admin__stats">
-              <h3 className="ct-dash-admin__stats-title">Analytics (last 30 days)</h3>
+              <h3 className="ct-dash-admin__stats-title">Analytics</h3>
+              <div className="ct-seg" role="group" aria-label="Analytics timeframe" style={{ marginBottom: "0.65rem" }}>
+                {([7, 30, 90] as const).map((days) => (
+                  <button
+                    key={days}
+                    type="button"
+                    disabled={adminUsageLoading || adminUsageDays === days}
+                    onClick={() => {
+                      setAdminUsageDays(days);
+                      if (!token) return;
+                      setAdminUsageLoading(true);
+                      void apiFetch(`/admin/analytics?since_days=${days}`, token)
+                        .then((u) => setAdminUsage(u as AdminUsageSummary))
+                        .catch(() => setAdminUsage(null))
+                        .finally(() => setAdminUsageLoading(false));
+                    }}
+                  >
+                    Last {days} days
+                  </button>
+                ))}
+              </div>
               {adminUsageLoading ? (
                 <p className="ct-muted" style={{ margin: 0 }}>
                   Loading analytics…
@@ -6557,7 +6584,15 @@ export default function DashboardPage() {
                   {adminUsage.totals.jobs_failed} failed
                   {adminUsage.totals.jobs_in_progress ? `, ${adminUsage.totals.jobs_in_progress} in progress` : ""}) ·{" "}
                   {(adminUsage.totals.success_rate * 100).toFixed(0)}% success · {adminUsage.totals.photos_uploaded} photos ·{" "}
-                  {adminUsage.totals.lots_created} lots ·{" "}
+                  {adminUsage.totals.lots_created} lots
+                  {adminUsage.totals.lots_posted
+                    ? ` · ${adminUsage.totals.lots_posted} posted · ${adminUsage.totals.lots_sold ?? 0} sold · ${adminUsage.totals.lots_unsold ?? 0} unsold`
+                    : ""}
+                  {adminUsage.totals.sold_revenue
+                    ? ` · $${Number(adminUsage.totals.sold_revenue).toFixed(0)} hammer`
+                    : ""}
+                  {" "}
+                  ·{" "}
                   {adminUsage.totals.metered_jobs >= adminUsage.totals.jobs_started && adminUsage.totals.jobs_started > 0
                     ? "measured "
                     : adminUsage.totals.metered_jobs > 0
@@ -6653,8 +6688,11 @@ export default function DashboardPage() {
                           {usage ? (
                             <>
                               <br />
-                              30d: {usage.photos_uploaded} photos · {usage.lots_created} lots ·{" "}
-                              {(usage.success_rate * 100).toFixed(0)}% success
+                              {adminUsage.since_days}d: {usage.photos_uploaded} photos · {usage.lots_created} lots
+                              {usage.lots_posted
+                                ? ` · ${usage.lots_posted} posted · ${usage.lots_sold ?? 0} sold`
+                                : ""}{" "}
+                              · {(usage.success_rate * 100).toFixed(0)}% success
                               {usage.jobs_in_progress ? ` · ${usage.jobs_in_progress} in progress` : ""} · est $
                               {usage.est_total_cost_usd.toFixed(2)} (Flash ${usage.est_flash_cost_usd.toFixed(2)} + Pro $
                               {usage.est_pro_cost_usd.toFixed(2)}) · ${usage.est_cost_per_lot_usd.toFixed(3)}/lot
