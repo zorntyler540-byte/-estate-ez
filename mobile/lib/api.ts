@@ -2,6 +2,7 @@ import { parseApiError } from "./apiError";
 import { API_BASE } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import { teamActivityQuery } from "./teamActivity";
+import { videoMimeType } from "./mediaKind";
 import type { Job, Lot, LotPhoto, LotVideo, Sale, TokenResponse } from "./types";
 import {
   UPLOAD_PER_FILE_TIMEOUT_MS,

@@ -397,3 +397,61 @@ def test_legacy_item_id_without_posted_at_counts_in_created_window(tmp_path: Pat
     assert row.lots_posted == 1
     assert row.lots_unsold == 1
     assert row.lots_sold == 0
+
+
+def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import get_db
+    from app.main import app
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'team-activity-http.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db = Session()
+    db.add(Account(id="acct-a", name="CT LV"))
+    owner = _user(db, user_id="owner-a", account_id="acct-a", email="owner@example.com", role="owner")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=owner.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-sold",
+            account_id="acct-a",
+            user_id=owner.id,
+            sale_id="sale-a",
+            auction_title="Lamp",
+            created_at=T0 - timedelta(hours=1),
+            ctseller_item_id=7,
+            ctseller_posted_at=T0 - timedelta(hours=1),
+            ctseller_item_status="Sold",
+            ctseller_sold_price=25,
+        )
+    )
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    client = TestClient(app)
+    try:
+        res = client.get(
+            "/team/activity",
+            params={"since": (T0 - timedelta(days=1)).isoformat(), "until": T0.isoformat()},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["totals"]["lots_posted"] == 1
+        assert body["totals"]["lots_sold"] == 1
+        assert body["totals"]["sold_revenue"] == 25
+        member = next(m for m in body["members"] if m["email"] == "owner@example.com")
+        assert member["lots_posted"] == 1
+        assert member["lots_sold"] == 1
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
