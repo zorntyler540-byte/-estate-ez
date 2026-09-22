@@ -114,6 +114,7 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    TeamActivityLotOut,
     TeamActivityMemberOut,
     TeamActivityOut,
     TeamActivityTotalsOut,
@@ -831,16 +832,19 @@ def team_activity(
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     since_days: int = Query(7, ge=1, le=366),
+    include_lots: bool = Query(True),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TeamActivityOut:
-    """Photos, lots, catalog jobs, and CT Bids posted/sold per teammate. Owners only."""
+    """Photos, lots, catalog jobs, CT Bids posted/sold, and per-lot shoot time. Owners only."""
     _require_owner(current)
     try:
         start, end = resolve_activity_window(since=since, until=until, since_days=since_days)
     except ActivityWindowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    summary = summarize_team_activity(db, current.account_id, start, end)
+    summary = summarize_team_activity(
+        db, current.account_id, start, end, include_lots=include_lots
+    )
     return TeamActivityOut(
         since=summary.since,
         until=summary.until,
@@ -864,6 +868,23 @@ def team_activity(
                 first_photo_at=m.first_photo_at,
                 last_photo_at=m.last_photo_at,
                 last_lot_at=m.last_lot_at,
+                lots_photographed=m.lots_photographed,
+                median_minutes_per_lot=m.median_minutes_per_lot,
+                mean_minutes_per_lot=m.mean_minutes_per_lot,
+                lots=[
+                    TeamActivityLotOut(
+                        lot_id=lot.lot_id,
+                        sale_id=lot.sale_id,
+                        sku=lot.sku,
+                        auction_title=lot.auction_title,
+                        photo_count=lot.photo_count,
+                        capture_minutes=lot.capture_minutes,
+                        first_photo_at=lot.first_photo_at,
+                        last_photo_at=lot.last_photo_at,
+                        has_thumbnail=lot.has_thumbnail,
+                    )
+                    for lot in m.lots
+                ],
             )
             for m in summary.members
         ],
@@ -881,6 +902,9 @@ def team_activity(
             lots_live=summary.lots_live,
             lots_pulled=summary.lots_pulled,
             sold_revenue=summary.sold_revenue,
+            lots_photographed=summary.lots_photographed,
+            median_minutes_per_lot=summary.median_minutes_per_lot,
+            mean_minutes_per_lot=summary.mean_minutes_per_lot,
         ),
     )
 

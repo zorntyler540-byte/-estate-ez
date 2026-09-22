@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
 import { accountRoleLabel } from "../../lib/roles";
 
@@ -28,6 +29,18 @@ type TeamMember = {
   created_at: string;
 };
 
+type TeamActivityLot = {
+  lot_id: string;
+  sale_id: string;
+  sku?: string | null;
+  auction_title?: string;
+  photo_count: number;
+  capture_minutes?: number | null;
+  first_photo_at?: string;
+  last_photo_at?: string;
+  has_thumbnail?: boolean;
+};
+
 type TeamActivityMember = {
   user_id: string;
   email: string;
@@ -47,6 +60,10 @@ type TeamActivityMember = {
   first_photo_at?: string | null;
   last_photo_at?: string | null;
   last_lot_at?: string | null;
+  lots_photographed?: number;
+  median_minutes_per_lot?: number | null;
+  mean_minutes_per_lot?: number | null;
+  lots?: TeamActivityLot[];
 };
 
 type TeamActivity = {
@@ -67,6 +84,9 @@ type TeamActivity = {
     lots_live?: number;
     lots_pulled?: number;
     sold_revenue?: number;
+    lots_photographed?: number;
+    median_minutes_per_lot?: number | null;
+    mean_minutes_per_lot?: number | null;
   };
 };
 
@@ -112,6 +132,13 @@ function formatActivityWhen(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
+}
+
+function formatActivityMinutes(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
+  if (n < 10) return `${n.toFixed(1)} min`;
+  return `${Math.round(n)} min`;
 }
 
 function formatActivityHours(n: number | undefined): string {
@@ -164,7 +191,9 @@ function teamActivityCsv(row: TeamActivity): string {
     "Jobs",
     "Active hrs",
     "Photos/hr",
-    "Lots/hr"
+    "Lots/hr",
+    "Photographed",
+    "Median min/lot"
   ];
   const lines = [headers.map(csvCell).join(",")];
   for (const m of row.members) {
@@ -185,7 +214,9 @@ function teamActivityCsv(row: TeamActivity): string {
         m.jobs_started,
         m.active_hours,
         m.photos_per_hour,
-        m.lots_per_hour
+        m.lots_per_hour,
+        m.lots_photographed ?? 0,
+        m.median_minutes_per_lot ?? ""
       ]
         .map(csvCell)
         .join(",")
@@ -209,11 +240,37 @@ function teamActivityCsv(row: TeamActivity): string {
       t.jobs_started,
       t.active_hours,
       t.photos_per_hour,
-      t.lots_per_hour
+      t.lots_per_hour,
+      t.lots_photographed ?? 0,
+      t.median_minutes_per_lot ?? ""
     ]
       .map(csvCell)
       .join(",")
   );
+  return lines.join("\n");
+}
+
+function teamActivityLotsCsv(row: TeamActivity): string {
+  const headers = ["Person", "SKU", "Title", "Photos", "Minutes", "First photo", "Last photo", "Lot ID"];
+  const lines = [headers.map(csvCell).join(",")];
+  for (const m of row.members) {
+    for (const lot of m.lots || []) {
+      lines.push(
+        [
+          m.email,
+          lot.sku || "",
+          lot.auction_title || "",
+          lot.photo_count,
+          lot.capture_minutes ?? "",
+          lot.first_photo_at || "",
+          lot.last_photo_at || "",
+          lot.lot_id
+        ]
+          .map(csvCell)
+          .join(",")
+      );
+    }
+  }
   return lines.join("\n");
 }
 
@@ -755,8 +812,8 @@ export default function AccountPage() {
             Team activity
           </h2>
           <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
-            Photos, lots, catalog jobs, CT Bids posted/sold, and active-hour pace each login created
-            in this window.
+            Photos, lots, catalog jobs, CT Bids posted/sold, and time-per-lot for pictures each
+            login actually uploaded.
           </p>
           <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
             <summary>How this is counted</summary>
@@ -772,7 +829,11 @@ export default function AccountPage() {
               Lots/hr use <strong>active hours</strong>: each UTC day with a photo or lot is the
               time from that person&apos;s first event to their last that day, at least one hour.
               Totals divide team counts by the sum of those person-hours. This is cataloging pace,
-              not hours on the clock.
+              not hours on the clock. <strong>Min/lot</strong> is first-to-last photo upload on that
+              lot (the densest cluster; a gap over 15 minutes is a later add-on, not one shoot).
+              One photo cannot measure duration. Time is upload time, not the camera shutter — a
+              whole lot uploaded together looks like seconds. Thumbnails are lots that login
+              photographed in this window.
             </div>
           </details>
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -805,6 +866,7 @@ export default function AccountPage() {
               {activityLoading ? "Refreshing…" : "Refresh"}
             </button>
             {activity ? (
+              <>
               <button
                 type="button"
                 className="ct-btn ct-btn--ghost"
@@ -820,6 +882,22 @@ export default function AccountPage() {
               >
                 Download CSV
               </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() => {
+                  const blob = new Blob([teamActivityLotsCsv(activity)], { type: "text/csv;charset=utf-8" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `team-activity-lots-${activityPreset}.csv`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Download lots CSV
+              </button>
+              </>
             ) : null}
           </div>
           {activityPreset === "custom" ? (
@@ -863,6 +941,9 @@ export default function AccountPage() {
                 {activity.totals.sold_revenue
                   ? ` · ${formatActivityMoney(activity.totals.sold_revenue)} hammer`
                   : ""}
+                {activity.totals.median_minutes_per_lot != null
+                  ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)}/lot`
+                  : ""}
               </p>
               <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
                 <table className="ct-table">
@@ -883,6 +964,8 @@ export default function AccountPage() {
                       <th className="ct-table__num">Active hrs</th>
                       <th className="ct-table__num">Photos/hr</th>
                       <th className="ct-table__num">Lots/hr</th>
+                      <th className="ct-table__num">Shot</th>
+                      <th className="ct-table__num">Min/lot</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -909,6 +992,8 @@ export default function AccountPage() {
                         <td className="ct-table__num">{formatActivityHours(m.active_hours)}</td>
                         <td className="ct-table__num">{formatActivityRate(m.photos_per_hour)}</td>
                         <td className="ct-table__num">{formatActivityRate(m.lots_per_hour)}</td>
+                        <td className="ct-table__num">{m.lots_photographed ?? 0}</td>
+                        <td className="ct-table__num">{formatActivityMinutes(m.median_minutes_per_lot)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -932,10 +1017,72 @@ export default function AccountPage() {
                       <th className="ct-table__num">{formatActivityHours(activity.totals.active_hours)}</th>
                       <th className="ct-table__num">{formatActivityRate(activity.totals.photos_per_hour)}</th>
                       <th className="ct-table__num">{formatActivityRate(activity.totals.lots_per_hour)}</th>
+                      <th className="ct-table__num">{activity.totals.lots_photographed ?? 0}</th>
+                      <th className="ct-table__num">
+                        {formatActivityMinutes(activity.totals.median_minutes_per_lot)}
+                      </th>
                     </tr>
                   </tfoot>
                 </table>
               </div>
+              {activity.members.some((m) => (m.lots || []).length > 0) ? (
+                <div style={{ marginTop: "1rem" }}>
+                  {activity.members
+                    .filter((m) => (m.lots_photographed || 0) > 0)
+                    .map((m) => (
+                      <details key={m.user_id} open style={{ marginBottom: "0.85rem" }}>
+                        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                          {m.email} · {m.lots_photographed}{" "}
+                          {(m.lots_photographed || 0) === 1 ? "lot" : "lots"} photographed
+                          {m.median_minutes_per_lot != null
+                            ? ` · median ${formatActivityMinutes(m.median_minutes_per_lot)}`
+                            : ""}
+                        </summary>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "0.65rem",
+                            marginTop: "0.65rem"
+                          }}
+                        >
+                          {(m.lots || []).map((lot) => (
+                            <Link
+                              key={lot.lot_id}
+                              href={`/lots/${lot.lot_id}`}
+                              style={{
+                                width: 112,
+                                textDecoration: "none",
+                                color: "inherit"
+                              }}
+                            >
+                              <LotThumbnail
+                                lotId={lot.lot_id}
+                                token={token}
+                                hasThumbnail={Boolean(lot.has_thumbnail)}
+                                size={112}
+                                maxPx={220}
+                              />
+                              <div style={{ fontWeight: 700, fontSize: "0.82rem", marginTop: 4 }}>
+                                {lot.sku?.trim() || "No SKU"}
+                              </div>
+                              <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
+                                {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
+                                {formatActivityMinutes(lot.capture_minutes)}
+                              </div>
+                            </Link>
+                          ))}
+                        </div>
+                        {(m.lots_photographed || 0) > (m.lots || []).length ? (
+                          <p className="ct-muted" style={{ fontSize: "0.8rem", margin: "0.5rem 0 0" }}>
+                            Showing {(m.lots || []).length} of {m.lots_photographed}. Narrow the dates
+                            to see the rest.
+                          </p>
+                        ) : null}
+                      </details>
+                    ))}
+                </div>
+              ) : null}
             </>
           ) : activityLoading ? (
             <p className="ct-muted" style={{ marginBottom: 0 }}>

@@ -53,6 +53,18 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class TeamActivityLotOut(BaseModel):
+    lot_id: str
+    sale_id: str
+    sku: str | None = None
+    auction_title: str = ""
+    photo_count: int
+    capture_minutes: float | None = None
+    first_photo_at: datetime
+    last_photo_at: datetime
+    has_thumbnail: bool = True
+
+
 class TeamActivityMemberOut(BaseModel):
     user_id: str
     email: EmailStr
@@ -72,6 +84,10 @@ class TeamActivityMemberOut(BaseModel):
     first_photo_at: datetime | None = None
     last_photo_at: datetime | None = None
     last_lot_at: datetime | None = None
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
+    lots: list[TeamActivityLotOut] = Field(default_factory=list)
 
 
 class TeamActivityTotalsOut(BaseModel):
@@ -88,6 +104,9 @@ class TeamActivityTotalsOut(BaseModel):
     lots_live: int = 0
     lots_pulled: int = 0
     sold_revenue: float = 0
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
 
 
 class TeamActivityOut(BaseModel):

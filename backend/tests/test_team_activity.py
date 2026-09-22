@@ -12,6 +12,7 @@ from app.models import Account, JobStatus, Lot, Photo, ProcessingJob, Sale, User
 from app.services.team_activity import (
     ActivityWindowError,
     active_hours_for_timestamps,
+    capture_minutes_for_timestamps,
     lot_ctbids_outcome,
     per_active_hour,
     resolve_activity_window,
@@ -59,6 +60,27 @@ def test_per_active_hour() -> None:
     assert per_active_hour(8, 4) == 2.0
     assert per_active_hour(0, 4) == 0.0
     assert per_active_hour(8, 0) == 0.0
+
+
+def test_capture_minutes_needs_two_photos() -> None:
+    assert capture_minutes_for_timestamps([]) is None
+    assert capture_minutes_for_timestamps([T0]) is None
+
+
+def test_capture_minutes_same_session_span() -> None:
+    start = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 9, 5, 10, 6, tzinfo=UTC)
+    assert capture_minutes_for_timestamps([start, end]) == 6.0
+
+
+def test_capture_minutes_ignores_later_add_photos_gap() -> None:
+    shoot = [
+        datetime(2026, 9, 5, 10, 0, tzinfo=UTC),
+        datetime(2026, 9, 5, 10, 2, tzinfo=UTC),
+        datetime(2026, 9, 5, 10, 4, tzinfo=UTC),
+    ]
+    later = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+    assert capture_minutes_for_timestamps(shoot + [later]) == 4.0
 
 
 def test_resolve_activity_window_rejects_inverted_and_too_long() -> None:
@@ -399,6 +421,81 @@ def test_legacy_item_id_without_posted_at_counts_in_created_window(tmp_path: Pat
     assert row.lots_sold == 0
 
 
+def test_summarize_photographed_lots_and_capture_minutes(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-lamp",
+            account_id="acct-a",
+            user_id=maria.id,
+            sale_id="sale-a",
+            sku="T100",
+            auction_title="Brass lamp",
+            created_at=T0 - timedelta(hours=1),
+        )
+    )
+    first = T0 - timedelta(hours=3)
+    db.add_all(
+        [
+            Photo(
+                id="p1",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-lamp",
+                original_name="1.jpg",
+                storage_path="/1.jpg",
+                created_at=first,
+            ),
+            Photo(
+                id="p2",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-lamp",
+                original_name="2.jpg",
+                storage_path="/2.jpg",
+                created_at=first + timedelta(minutes=3),
+            ),
+            Photo(
+                id="p3",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-lamp",
+                original_name="3.jpg",
+                storage_path="/3.jpg",
+                created_at=first + timedelta(minutes=8),
+            ),
+            Photo(
+                id="p-later",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-lamp",
+                original_name="later.jpg",
+                storage_path="/later.jpg",
+                created_at=first + timedelta(hours=2),
+            ),
+        ]
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    row = next(m for m in summary.members if m.email == "maria@ct.test")
+    assert row.lots_photographed == 1
+    assert row.median_minutes_per_lot == 8.0
+    assert len(row.lots) == 1
+    assert row.lots[0].sku == "T100"
+    assert row.lots[0].photo_count == 4
+    assert row.lots[0].capture_minutes == 8.0
+    assert row.lots[0].has_thumbnail is True
+    hidden = summarize_team_activity(
+        db, "acct-a", T0 - timedelta(days=1), T0, include_lots=False
+    )
+    hidden_row = next(m for m in hidden.members if m.email == "maria@ct.test")
+    assert hidden_row.lots == []
+    assert hidden_row.median_minutes_per_lot == 8.0
+
+
 def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 
@@ -420,12 +517,35 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
             user_id=owner.id,
             sale_id="sale-a",
             auction_title="Lamp",
+            sku="JL0101",
             created_at=T0 - timedelta(hours=1),
             ctseller_item_id=7,
             ctseller_posted_at=T0 - timedelta(hours=1),
             ctseller_item_status="Sold",
             ctseller_sold_price=25,
         )
+    )
+    db.add_all(
+        [
+            Photo(
+                id="p-sold-1",
+                account_id="acct-a",
+                user_id=owner.id,
+                lot_id="lot-sold",
+                original_name="a.jpg",
+                storage_path="/a.jpg",
+                created_at=T0 - timedelta(minutes=12),
+            ),
+            Photo(
+                id="p-sold-2",
+                account_id="acct-a",
+                user_id=owner.id,
+                lot_id="lot-sold",
+                original_name="b.jpg",
+                storage_path="/b.jpg",
+                created_at=T0 - timedelta(minutes=7),
+            ),
+        ]
     )
     db.commit()
 
@@ -452,6 +572,12 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
         member = next(m for m in body["members"] if m["email"] == "owner@example.com")
         assert member["lots_posted"] == 1
         assert member["lots_sold"] == 1
+        assert member["lots_photographed"] == 1
+        assert member["median_minutes_per_lot"] == 5.0
+        assert member["lots"][0]["sku"] == "JL0101"
+        assert member["lots"][0]["photo_count"] == 2
+        assert member["lots"][0]["capture_minutes"] == 5.0
+        assert member["lots"][0]["has_thumbnail"] is True
     finally:
         app.dependency_overrides.clear()
         db.close()

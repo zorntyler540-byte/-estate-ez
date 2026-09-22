@@ -1,10 +1,13 @@
+import { Image } from "expo-image";
+import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { theme } from "@/constants/theme";
-import { getTeamActivity, type TeamActivity } from "@/lib/api";
+import { getTeamActivity, lotThumbnailSource, type TeamActivity, type TeamActivityLot } from "@/lib/api";
 
 type Days = 1 | 7 | 30;
+const PHONE_LOT_CAP = 12;
 
 function fmtHours(n: number | undefined): string {
   if (!n) return "—";
@@ -14,6 +17,32 @@ function fmtHours(n: number | undefined): string {
 function fmtMoney(n: number | undefined): string {
   if (!n) return "—";
   return `$${Math.round(n)}`;
+}
+
+function fmtMinutes(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
+  if (n < 10) return `${n.toFixed(1)} min`;
+  return `${Math.round(n)} min`;
+}
+
+function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
+  const source = lot.has_thumbnail === false ? null : lotThumbnailSource(lot.lot_id, token, 160);
+  return (
+    <Pressable style={styles.lotChip} onPress={() => router.push(`/lot/${lot.lot_id}`)}>
+      {source ? (
+        <Image source={source} style={styles.lotThumb} contentFit="cover" cachePolicy="memory-disk" />
+      ) : (
+        <View style={[styles.lotThumb, styles.lotThumbEmpty]} />
+      )}
+      <Text style={styles.lotSku} numberOfLines={1}>
+        {lot.sku?.trim() || "No SKU"}
+      </Text>
+      <Text style={styles.lotMeta} numberOfLines={1}>
+        {lot.photo_count}ph · {fmtMinutes(lot.capture_minutes)}
+      </Text>
+    </Pressable>
+  );
 }
 
 export function TeamActivityPanel({ token }: { token: string }) {
@@ -51,8 +80,8 @@ export function TeamActivityPanel({ token }: { token: string }) {
     <View style={styles.box}>
       <Text style={styles.title}>Team activity</Text>
       <Text style={styles.hint}>
-        Photos, lots, and CT Bids posted/sold for each login. Owners only. Credit is the upload
-        login, not who held the camera.
+        Photos, lots, CT Bids posted/sold, and minutes per lot (first-to-last photo upload). Owners
+        only. Credit is the upload login.
       </Text>
       <View style={styles.chips}>
         {(
@@ -85,6 +114,9 @@ export function TeamActivityPanel({ token }: { token: string }) {
             {row.totals.photos_uploaded} photos · {row.totals.lots_created} lots ·{" "}
             {row.totals.lots_posted ?? 0} posted · {row.totals.lots_sold ?? 0} sold
             {row.totals.sold_revenue ? ` · ${fmtMoney(row.totals.sold_revenue)} hammer` : ""}
+            {row.totals.median_minutes_per_lot != null
+              ? ` · median ${fmtMinutes(row.totals.median_minutes_per_lot)}/lot`
+              : ""}
           </Text>
           {row.members.map((m) => (
             <View key={m.user_id} style={styles.person}>
@@ -97,8 +129,18 @@ export function TeamActivityPanel({ token }: { token: string }) {
               </Text>
               <Text style={styles.meta}>
                 {fmtHours(m.active_hours)} active hrs · {m.photos_per_hour || 0} photos/hr
+                {m.median_minutes_per_lot != null
+                  ? ` · median ${fmtMinutes(m.median_minutes_per_lot)}/lot`
+                  : ""}
                 {m.sold_revenue ? ` · ${fmtMoney(m.sold_revenue)}` : ""}
               </Text>
+              {(m.lots || []).length > 0 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.lotRow}>
+                  {(m.lots || []).slice(0, PHONE_LOT_CAP).map((lot) => (
+                    <LotChip key={lot.lot_id} lot={lot} token={token} />
+                  ))}
+                </ScrollView>
+              ) : null}
             </View>
           ))}
         </>
@@ -138,5 +180,16 @@ const styles = StyleSheet.create({
     borderTopColor: "#1c1917"
   },
   email: { color: "#f5f5f4", fontSize: 14, fontWeight: "600" },
-  counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 }
+  counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 },
+  lotRow: { marginTop: 10, marginHorizontal: -4 },
+  lotChip: { width: 88, marginRight: 8 },
+  lotThumb: {
+    width: 88,
+    height: 88,
+    borderRadius: 8,
+    backgroundColor: "#1c1917"
+  },
+  lotThumbEmpty: { borderWidth: 1, borderColor: "#292524" },
+  lotSku: { color: "#f5f5f4", fontSize: 12, fontWeight: "700", marginTop: 4 },
+  lotMeta: { color: "#78716c", fontSize: 11, marginTop: 2 }
 });

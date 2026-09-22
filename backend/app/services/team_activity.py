@@ -17,8 +17,9 @@ not look like an impossible pace.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from statistics import median
 from typing import Any
 
 from sqlalchemy import and_, func, or_
@@ -28,6 +29,9 @@ from app.models import Lot, Photo, ProcessingJob, User
 
 MAX_ACTIVITY_DAYS = 366
 MIN_ACTIVE_HOURS_PER_DAY = 1.0
+# Photos more than this apart on the same lot are a later add-on, not one shoot.
+CAPTURE_SESSION_GAP = timedelta(minutes=15)
+MAX_ACTIVITY_LOTS_PER_MEMBER = 80
 
 
 class ActivityWindowError(ValueError):
@@ -151,6 +155,46 @@ def per_active_hour(count: int, hours: float) -> float:
     if hours <= 0 or count <= 0:
         return 0.0
     return round(count / hours, 2)
+
+
+def capture_minutes_for_timestamps(
+    times: list[datetime],
+    gap: timedelta = CAPTURE_SESSION_GAP,
+) -> float | None:
+    """Minutes from first to last photo in the densest shoot on one lot.
+
+    Upload ``created_at`` is what we have (not camera EXIF). A single photo
+    cannot measure duration. Clusters split when the gap exceeds ``gap`` so a
+    later ``Add photos`` pass does not look like a three-hour shoot.
+    """
+    if len(times) < 2:
+        return None
+    ordered = sorted(aware_utc(t) for t in times)
+    clusters: list[list[datetime]] = []
+    current = [ordered[0]]
+    for ts in ordered[1:]:
+        if ts - current[-1] > gap:
+            clusters.append(current)
+            current = [ts]
+        else:
+            current.append(ts)
+    clusters.append(current)
+    densest = max(clusters, key=lambda c: (len(c), (c[-1] - c[0]).total_seconds()))
+    if len(densest) < 2:
+        return None
+    return round((densest[-1] - densest[0]).total_seconds() / 60.0, 2)
+
+
+def median_minutes(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(float(median(values)), 2)
+
+
+def mean_minutes(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
 
 
 def lot_is_posted_to_ctbids(lot: Lot) -> bool:
@@ -284,6 +328,90 @@ def posted_lot_stats_for_account(
 
 
 @dataclass(frozen=True)
+class TeamActivityLot:
+    lot_id: str
+    sale_id: str
+    sku: str | None
+    auction_title: str
+    photo_count: int
+    capture_minutes: float | None
+    first_photo_at: datetime
+    last_photo_at: datetime
+    has_thumbnail: bool
+
+
+def _photographed_lots_by_user(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+    *,
+    include_lots: bool,
+) -> dict[str, tuple[list[TeamActivityLot], list[float], int]]:
+    """Lots this login actually photographed in the window.
+
+    Returns user_id -> (lots slice for the UI, all capture-minute samples, total lot count).
+    """
+    rows = (
+        db.query(Photo.user_id, Photo.lot_id, Photo.created_at)
+        .filter(
+            Photo.account_id == account_id,
+            Photo.lot_id.isnot(None),
+            Photo.created_at >= start,
+            Photo.created_at < end,
+        )
+        .all()
+    )
+    times_by_user_lot: dict[tuple[str, str], list[datetime]] = {}
+    for uid, lot_id, ts in rows:
+        if not uid or not lot_id or ts is None:
+            continue
+        times_by_user_lot.setdefault((str(uid), str(lot_id)), []).append(ts)
+    if not times_by_user_lot:
+        return {}
+
+    lot_ids = {lot_id for _, lot_id in times_by_user_lot}
+    lots = (
+        db.query(Lot)
+        .filter(Lot.account_id == account_id, Lot.id.in_(lot_ids))
+        .all()
+    )
+    lot_by_id = {row.id: row for row in lots}
+
+    grouped: dict[str, list[TeamActivityLot]] = {}
+    minutes_by_user: dict[str, list[float]] = {}
+    for (uid, lot_id), stamps in times_by_user_lot.items():
+        lot = lot_by_id.get(lot_id)
+        if lot is None:
+            continue
+        ordered = sorted(aware_utc(t) for t in stamps)
+        mins = capture_minutes_for_timestamps(ordered)
+        if mins is not None:
+            minutes_by_user.setdefault(uid, []).append(mins)
+        grouped.setdefault(uid, []).append(
+            TeamActivityLot(
+                lot_id=lot.id,
+                sale_id=lot.sale_id,
+                sku=(lot.sku or None),
+                auction_title=(lot.auction_title or "")[:120],
+                photo_count=len(stamps),
+                capture_minutes=mins,
+                first_photo_at=ordered[0],
+                last_photo_at=ordered[-1],
+                has_thumbnail=True,
+            )
+        )
+
+    out: dict[str, tuple[list[TeamActivityLot], list[float], int]] = {}
+    for uid, lot_rows in grouped.items():
+        lot_rows.sort(key=lambda r: r.last_photo_at, reverse=True)
+        total = len(lot_rows)
+        shown = lot_rows[:MAX_ACTIVITY_LOTS_PER_MEMBER] if include_lots else []
+        out[uid] = (shown, minutes_by_user.get(uid, []), total)
+    return out
+
+
+@dataclass(frozen=True)
 class TeamActivityMember:
     user_id: str
     email: str
@@ -303,6 +431,10 @@ class TeamActivityMember:
     first_photo_at: datetime | None = None
     last_photo_at: datetime | None = None
     last_lot_at: datetime | None = None
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
+    lots: list[TeamActivityLot] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -322,6 +454,9 @@ class TeamActivitySummary:
     lots_live: int = 0
     lots_pulled: int = 0
     sold_revenue: float = 0.0
+    lots_photographed: int = 0
+    median_minutes_per_lot: float | None = None
+    mean_minutes_per_lot: float | None = None
 
 
 def summarize_team_activity(
@@ -329,6 +464,8 @@ def summarize_team_activity(
     account_id: str,
     start: datetime,
     end: datetime,
+    *,
+    include_lots: bool = True,
 ) -> TeamActivitySummary:
     start = aware_utc(start)
     end = aware_utc(end)
@@ -342,6 +479,9 @@ def summarize_team_activity(
     lots = _counts_by_user(db, Lot, account_id, start, end)
     jobs = _counts_by_user(db, ProcessingJob, account_id, start, end)
     posted = posted_lot_stats_by_user(db, account_id, start, end)
+    photographed = _photographed_lots_by_user(
+        db, account_id, start, end, include_lots=include_lots
+    )
     times = _event_times_by_user(db, account_id, start, end)
     photo_bounds = _created_at_bounds_by_user(db, Photo, account_id, start, end)
     lot_bounds = _created_at_bounds_by_user(db, Lot, account_id, start, end)
@@ -353,6 +493,7 @@ def summarize_team_activity(
         post = posted.get(row.id, _empty_posted_stats())
         photo_first, photo_last = photo_bounds.get(row.id, (None, None))
         _, lot_last = lot_bounds.get(row.id, (None, None))
+        lot_rows, minute_samples, photographed_n = photographed.get(row.id, ([], [], 0))
         members.append(
             TeamActivityMember(
                 user_id=row.id,
@@ -373,6 +514,10 @@ def summarize_team_activity(
                 first_photo_at=photo_first,
                 last_photo_at=photo_last,
                 last_lot_at=lot_last,
+                lots_photographed=photographed_n,
+                median_minutes_per_lot=median_minutes(minute_samples),
+                mean_minutes_per_lot=mean_minutes(minute_samples),
+                lots=lot_rows,
             )
         )
     members.sort(
@@ -381,6 +526,11 @@ def summarize_team_activity(
     photo_total = sum(m.photos_uploaded for m in members)
     lot_total = sum(m.lots_created for m in members)
     hour_total = round(sum(m.active_hours for m in members), 2)
+    sample_minutes: list[float] = []
+    photographed_total = 0
+    for _shown, samples, total in photographed.values():
+        sample_minutes.extend(samples)
+        photographed_total += total
     return TeamActivitySummary(
         since=start,
         until=end,
@@ -397,4 +547,7 @@ def summarize_team_activity(
         lots_live=sum(m.lots_live for m in members),
         lots_pulled=sum(m.lots_pulled for m in members),
         sold_revenue=round(sum(m.sold_revenue for m in members), 2),
+        lots_photographed=photographed_total,
+        median_minutes_per_lot=median_minutes(sample_minutes),
+        mean_minutes_per_lot=mean_minutes(sample_minutes),
     )
