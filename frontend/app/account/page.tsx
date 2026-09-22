@@ -1047,30 +1047,48 @@ export default function AccountPage() {
                           }}
                         >
                           {(m.lots || []).map((lot) => (
-                            <Link
+                            <div
                               key={lot.lot_id}
-                              href={`/lots/${lot.lot_id}`}
                               style={{
-                                width: 112,
-                                textDecoration: "none",
-                                color: "inherit"
+                                width: 128,
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4
                               }}
                             >
-                              <LotThumbnail
-                                lotId={lot.lot_id}
-                                token={token}
-                                hasThumbnail={Boolean(lot.has_thumbnail)}
-                                size={112}
-                                maxPx={220}
-                              />
-                              <div style={{ fontWeight: 700, fontSize: "0.82rem", marginTop: 4 }}>
-                                {lot.sku?.trim() || "No SKU"}
-                              </div>
-                              <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
-                                {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
-                                {formatActivityMinutes(lot.capture_minutes)}
-                              </div>
-                            </Link>
+                              <Link
+                                href={`/lots/${lot.lot_id}`}
+                                style={{ textDecoration: "none", color: "inherit" }}
+                              >
+                                <LotThumbnail
+                                  lotId={lot.lot_id}
+                                  token={token}
+                                  hasThumbnail={Boolean(lot.has_thumbnail)}
+                                  size={128}
+                                  maxPx={220}
+                                />
+                                <div style={{ fontWeight: 700, fontSize: "0.82rem", marginTop: 4 }}>
+                                  {lot.sku?.trim() || "No SKU"}
+                                </div>
+                                <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
+                                  {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
+                                  {formatActivityMinutes(lot.capture_minutes)}
+                                </div>
+                              </Link>
+                              <Link
+                                href={`/lots/${lot.lot_id}`}
+                                className="ct-btn ct-btn--ghost"
+                                style={{
+                                  display: "inline-flex",
+                                  justifyContent: "center",
+                                  width: "100%",
+                                  padding: "0.28rem 0.4rem",
+                                  fontSize: "0.78rem"
+                                }}
+                              >
+                                Open lot
+                              </Link>
+                            </div>
                           ))}
                         </div>
                         {(m.lots_photographed || 0) > (m.lots || []).length ? (

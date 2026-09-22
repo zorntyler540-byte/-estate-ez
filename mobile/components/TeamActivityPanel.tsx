@@ -28,20 +28,28 @@ function fmtMinutes(n: number | null | undefined): string {
 
 function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
   const source = lot.has_thumbnail === false ? null : lotThumbnailSource(lot.lot_id, token, 160);
+  function openLot() {
+    router.push(`/lot/${lot.lot_id}`);
+  }
   return (
-    <Pressable style={styles.lotChip} onPress={() => router.push(`/lot/${lot.lot_id}`)}>
-      {source ? (
-        <Image source={source} style={styles.lotThumb} contentFit="cover" cachePolicy="memory-disk" />
-      ) : (
-        <View style={[styles.lotThumb, styles.lotThumbEmpty]} />
-      )}
-      <Text style={styles.lotSku} numberOfLines={1}>
-        {lot.sku?.trim() || "No SKU"}
-      </Text>
-      <Text style={styles.lotMeta} numberOfLines={1}>
-        {lot.photo_count}ph · {fmtMinutes(lot.capture_minutes)}
-      </Text>
-    </Pressable>
+    <View style={styles.lotChip}>
+      <Pressable onPress={openLot}>
+        {source ? (
+          <Image source={source} style={styles.lotThumb} contentFit="cover" cachePolicy="memory-disk" />
+        ) : (
+          <View style={[styles.lotThumb, styles.lotThumbEmpty]} />
+        )}
+        <Text style={styles.lotSku} numberOfLines={1}>
+          {lot.sku?.trim() || "No SKU"}
+        </Text>
+        <Text style={styles.lotMeta} numberOfLines={1}>
+          {lot.photo_count}ph · {fmtMinutes(lot.capture_minutes)}
+        </Text>
+      </Pressable>
+      <Pressable style={styles.lotOpen} onPress={openLot} accessibilityRole="button" accessibilityLabel="Open lot">
+        <Text style={styles.lotOpenText}>Open lot</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -182,14 +190,24 @@ const styles = StyleSheet.create({
   email: { color: "#f5f5f4", fontSize: 14, fontWeight: "600" },
   counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 },
   lotRow: { marginTop: 10, marginHorizontal: -4 },
-  lotChip: { width: 88, marginRight: 8 },
+  lotChip: { width: 96, marginRight: 8 },
   lotThumb: {
-    width: 88,
-    height: 88,
+    width: 96,
+    height: 96,
     borderRadius: 8,
     backgroundColor: "#1c1917"
   },
   lotThumbEmpty: { borderWidth: 1, borderColor: "#292524" },
   lotSku: { color: "#f5f5f4", fontSize: 12, fontWeight: "700", marginTop: 4 },
-  lotMeta: { color: "#78716c", fontSize: 11, marginTop: 2 }
+  lotMeta: { color: "#78716c", fontSize: 11, marginTop: 2 },
+  lotOpen: {
+    marginTop: 6,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#292524",
+    backgroundColor: "#141416",
+    alignItems: "center"
+  },
+  lotOpenText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" }
 });
