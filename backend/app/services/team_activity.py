@@ -32,6 +32,8 @@ MIN_ACTIVE_HOURS_PER_DAY = 1.0
 # Photos more than this apart on the same lot are a later add-on, not one shoot.
 CAPTURE_SESSION_GAP = timedelta(minutes=15)
 MAX_ACTIVITY_LOTS_PER_MEMBER = 80
+# Server ingest of a whole lot is often a few seconds. Do not report that as shoot time.
+UPLOAD_BURST_MAX = timedelta(seconds=45)
 
 
 class ActivityWindowError(ValueError):
@@ -163,9 +165,9 @@ def capture_minutes_for_timestamps(
 ) -> float | None:
     """Minutes from first to last photo in the densest shoot on one lot.
 
-    Upload ``created_at`` is what we have (not camera EXIF). A single photo
-    cannot measure duration. Clusters split when the gap exceeds ``gap`` so a
-    later ``Add photos`` pass does not look like a three-hour shoot.
+    Prefer camera ``captured_at`` when the caller supplies those stamps.
+    A single photo cannot measure duration. Clusters split when the gap
+    exceeds ``gap`` so a later ``Add photos`` pass is not one shoot.
     """
     if len(times) < 2:
         return None
@@ -338,6 +340,7 @@ class TeamActivityLot:
     first_photo_at: datetime
     last_photo_at: datetime
     has_thumbnail: bool
+    timing_source: str = "upload"
 
 
 def _photographed_lots_by_user(
@@ -353,7 +356,7 @@ def _photographed_lots_by_user(
     Returns user_id -> (lots slice for the UI, all capture-minute samples, total lot count).
     """
     rows = (
-        db.query(Photo.user_id, Photo.lot_id, Photo.created_at)
+        db.query(Photo.user_id, Photo.lot_id, Photo.created_at, Photo.captured_at)
         .filter(
             Photo.account_id == account_id,
             Photo.lot_id.isnot(None),
@@ -362,11 +365,11 @@ def _photographed_lots_by_user(
         )
         .all()
     )
-    times_by_user_lot: dict[tuple[str, str], list[datetime]] = {}
-    for uid, lot_id, ts in rows:
-        if not uid or not lot_id or ts is None:
+    times_by_user_lot: dict[tuple[str, str], list[tuple[datetime, datetime | None]]] = {}
+    for uid, lot_id, created, captured in rows:
+        if not uid or not lot_id or created is None:
             continue
-        times_by_user_lot.setdefault((str(uid), str(lot_id)), []).append(ts)
+        times_by_user_lot.setdefault((str(uid), str(lot_id)), []).append((created, captured))
     if not times_by_user_lot:
         return {}
 
@@ -384,9 +387,24 @@ def _photographed_lots_by_user(
         lot = lot_by_id.get(lot_id)
         if lot is None:
             continue
-        ordered = sorted(aware_utc(t) for t in stamps)
-        mins = capture_minutes_for_timestamps(ordered)
-        if mins is not None:
+        camera = [aware_utc(c) for _created, c in stamps if c is not None]
+        uploaded = [aware_utc(c) for c, _cap in stamps]
+        if len(camera) >= 2:
+            ordered = sorted(camera)
+            mins = capture_minutes_for_timestamps(ordered)
+            source = "camera"
+        else:
+            ordered = sorted(uploaded)
+            mins = capture_minutes_for_timestamps(ordered)
+            source = "upload"
+            if (
+                mins is not None
+                and len(ordered) >= 2
+                and (ordered[-1] - ordered[0]) <= UPLOAD_BURST_MAX
+            ):
+                mins = None
+                source = "upload_burst"
+        if mins is not None and source != "upload_burst":
             minutes_by_user.setdefault(uid, []).append(mins)
         grouped.setdefault(uid, []).append(
             TeamActivityLot(
@@ -399,6 +417,7 @@ def _photographed_lots_by_user(
                 first_photo_at=ordered[0],
                 last_photo_at=ordered[-1],
                 has_thumbnail=True,
+                timing_source=source,
             )
         )
 

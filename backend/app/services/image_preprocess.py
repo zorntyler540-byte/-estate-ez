@@ -21,7 +21,10 @@ def bytes_to_gemini_jpeg(
     """Decode image bytes, downscale to fit max_edge, return JPEG bytes for Gemini."""
     from PIL import Image, ImageOps
 
+    from app.services.photo_captured_at import captured_at_from_pil, exif_bytes_with_datetime
+
     with Image.open(BytesIO(data)) as im:
+        captured = captured_at_from_pil(im)
         # Phone JPEGs often rely on EXIF Orientation; without this, saved catalog bytes stay sideways.
         im = ImageOps.exif_transpose(im)
         if im.mode in ("RGBA", "P"):
@@ -35,7 +38,13 @@ def bytes_to_gemini_jpeg(
             im_rgb = im
         im_rgb.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
         out = BytesIO()
-        im_rgb.save(out, format="JPEG", quality=quality, optimize=True)
+        save_kw: dict = {"format": "JPEG", "quality": quality, "optimize": True}
+        if captured is not None:
+            try:
+                save_kw["exif"] = exif_bytes_with_datetime(captured)
+            except Exception:
+                pass
+        im_rgb.save(out, **save_kw)
         return out.getvalue()
 
 

@@ -245,6 +245,7 @@ from app.catalog_storage import (
 from app.object_storage import r2_configured as catalog_r2_configured
 from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_appraisal_storage_path
 from app.services.image_preprocess import compress_upload_bytes_if_image
+from app.services.photo_captured_at import captured_at_from_epoch_ms, captured_at_from_path
 from app.services.photo_rotate import rotate_image_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
@@ -590,6 +591,8 @@ def _ensure_photo_listing_columns() -> None:
         stmts.append("ALTER TABLE photos ADD COLUMN shows_measuring_scale BOOLEAN")
     if "label_legibility" not in cols:
         stmts.append("ALTER TABLE photos ADD COLUMN label_legibility VARCHAR(16)")
+    if "captured_at" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN captured_at DATETIME")
     if not stmts:
         return
     with engine.begin() as conn:
@@ -882,6 +885,7 @@ def team_activity(
                         first_photo_at=lot.first_photo_at,
                         last_photo_at=lot.last_photo_at,
                         has_thumbnail=lot.has_thumbnail,
+                        timing_source=lot.timing_source,
                     )
                     for lot in m.lots
                 ],
@@ -3289,6 +3293,7 @@ async def upload_lot_photos(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     files: list[UploadFile] = File(),
+    captured_at_ms: str | None = Form(None),
 ) -> list[LotPhotoOut]:
     """
     Append new catalog images to an existing lot (same sale must be open).
@@ -3313,7 +3318,7 @@ async def upload_lot_photos(
         raise HTTPException(status_code=400, detail=err)
     dest = new_batch_dir(current.account_id)
     try:
-        await save_uploaded_files(dest, files)
+        await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
         paths = list_catalog_image_files_sorted(dest)
         if not paths:
             raise HTTPException(
@@ -3347,6 +3352,7 @@ async def upload_lot_photos(
                 original_name=path.name,
                 storage_path=storage_path,
                 sort_order=base + i,
+                captured_at=captured_at_from_path(path) or captured_at_from_epoch_ms(captured_at_ms),
             )
         )
     renormalize_photo_sort_orders(db, lot_id, current.account_id)
@@ -4686,6 +4692,7 @@ async def create_job_from_upload(
     single_lot_mode: bool = Form(False),
     single_lot_manual_sku: str = Form(""),
     listing_channel: str = Form("ctseller"),
+    captured_at_ms: str | None = Form(None),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     account_id = current.account_id
@@ -4714,7 +4721,7 @@ async def create_job_from_upload(
     dest = new_batch_dir(account_id)
     # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O
     # (auth used a short-lived session so multipart receive also does not hold a connection).
-    await save_uploaded_files(dest, files)
+    await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
     with SessionLocal() as db2:
         job = ProcessingJob(
             account_id=account_id,
@@ -4760,6 +4767,7 @@ async def append_files_to_queued_job(
     job_id: str,
     current: User = Depends(get_current_user_sse),
     files: list[UploadFile] = File(),
+    captured_at_ms: str | None = Form(None),
 ) -> JobOut:
     """Append more images to a **receiving** (or legacy queued) upload job."""
     if not files:
@@ -4790,7 +4798,7 @@ async def append_files_to_queued_job(
                     ),
                 )
     # Compress + R2 per photo while the phone is still shooting — no pool connection during body I/O.
-    await save_uploaded_files(dest, files)
+    await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
     with SessionLocal() as db2:
         job = _owned_processing_job(db2, job_id, account_id)
         if not job:

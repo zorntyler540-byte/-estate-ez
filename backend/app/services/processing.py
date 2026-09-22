@@ -171,6 +171,8 @@ def _add_catalog_photo(
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
     photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
     listing = attrs or PhotoListingAttrs(photo_role=photo_role)
+    from app.services.photo_captured_at import captured_at_from_path
+
     row = Photo(
         id=photo_id,
         account_id=job.account_id,
@@ -184,6 +186,7 @@ def _add_catalog_photo(
         shows_whole_lot=listing.shows_whole_lot,
         shows_measuring_scale=listing.shows_measuring_scale,
         label_legibility=listing.label_legibility,
+        captured_at=captured_at_from_path(photo_path),
     )
     db.add(row)
     db.flush()

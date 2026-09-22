@@ -30,6 +30,7 @@ import {
   type CameraAspectId
 } from "@/lib/cameraAspect";
 import { uploadLotPhotos, uploadLotVideos } from "@/lib/api";
+import { capturedAtMsFromUri } from "@/lib/uploadPrepare";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
 import {
@@ -655,7 +656,8 @@ export default function CaptureSessionScreen() {
           appendLotId,
           images.map((uri, i) => ({
             uri,
-            name: `append-${String(i + 1).padStart(2, "0")}.jpg`
+            name: `append-${String(i + 1).padStart(2, "0")}.jpg`,
+            capturedAtMs: capturedAtMsFromUri(uri)
           }))
         );
       }
