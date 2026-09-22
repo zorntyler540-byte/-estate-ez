@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from app.main import nullable_datetime_ddl
 from app.services.image_preprocess import bytes_to_gemini_jpeg
 from app.services.photo_captured_at import (
     captured_at_from_epoch_ms,
@@ -14,6 +15,23 @@ from app.services.photo_captured_at import (
     parse_exif_datetime,
     write_captured_at_sidecar,
 )
+
+
+def test_postgres_captured_at_ddl_is_timestamp() -> None:
+    assert nullable_datetime_ddl("postgresql") == "TIMESTAMP WITH TIME ZONE"
+    assert nullable_datetime_ddl("postgres") == "TIMESTAMP WITH TIME ZONE"
+    assert nullable_datetime_ddl("sqlite") == "DATETIME"
+    from sqlalchemy import Column, DateTime
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import CreateColumn
+
+    compiled = str(
+        CreateColumn(Column("captured_at", DateTime(timezone=True))).compile(
+            dialect=postgresql.dialect()
+        )
+    ).upper()
+    assert "DATETIME" not in compiled
+    assert "TIMESTAMP" in compiled
 
 
 def test_parse_exif_datetime() -> None:
