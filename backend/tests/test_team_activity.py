@@ -496,6 +496,96 @@ def test_summarize_photographed_lots_and_capture_minutes(tmp_path: Path) -> None
     assert hidden_row.median_minutes_per_lot == 8.0
 
 
+def test_upload_burst_is_not_reported_as_shoot_time(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-fast",
+            account_id="acct-a",
+            user_id=maria.id,
+            sale_id="sale-a",
+            sku="T4S",
+            auction_title="Fast upload",
+            created_at=T0 - timedelta(minutes=5),
+        )
+    )
+    start = T0 - timedelta(minutes=2)
+    db.add_all(
+        [
+            Photo(
+                id=f"pb-{i}",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-fast",
+                original_name=f"{i}.jpg",
+                storage_path=f"/{i}.jpg",
+                created_at=start + timedelta(seconds=i),
+            )
+            for i in range(8)
+        ]
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    row = next(m for m in summary.members if m.email == "maria@ct.test")
+    assert row.lots[0].photo_count == 8
+    assert row.lots[0].capture_minutes is None
+    assert row.lots[0].timing_source == "upload_burst"
+    assert row.median_minutes_per_lot is None
+
+
+def test_camera_captured_at_beats_upload_burst(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-cam",
+            account_id="acct-a",
+            user_id=maria.id,
+            sale_id="sale-a",
+            sku="CAM1",
+            auction_title="Real shoot",
+            created_at=T0 - timedelta(minutes=1),
+        )
+    )
+    upload = T0 - timedelta(seconds=10)
+    shoot = T0 - timedelta(minutes=20)
+    db.add_all(
+        [
+            Photo(
+                id="pc-1",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-cam",
+                original_name="1.jpg",
+                storage_path="/1.jpg",
+                created_at=upload,
+                captured_at=shoot,
+            ),
+            Photo(
+                id="pc-2",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-cam",
+                original_name="2.jpg",
+                storage_path="/2.jpg",
+                created_at=upload + timedelta(seconds=2),
+                captured_at=shoot + timedelta(minutes=6),
+            ),
+        ]
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    row = next(m for m in summary.members if m.email == "maria@ct.test")
+    assert row.lots[0].capture_minutes == 6.0
+    assert row.lots[0].timing_source == "camera"
+    assert row.median_minutes_per_lot == 6.0
+
+
 def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 
@@ -577,6 +667,7 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
         assert member["lots"][0]["sku"] == "JL0101"
         assert member["lots"][0]["photo_count"] == 2
         assert member["lots"][0]["capture_minutes"] == 5.0
+        assert member["lots"][0]["timing_source"] == "upload"
         assert member["lots"][0]["has_thumbnail"] is True
     finally:
         app.dependency_overrides.clear()

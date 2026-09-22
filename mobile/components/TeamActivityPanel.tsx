@@ -19,11 +19,14 @@ function fmtMoney(n: number | undefined): string {
   return `$${Math.round(n)}`;
 }
 
-function fmtMinutes(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
-  if (n < 10) return `${n.toFixed(1)} min`;
-  return `${Math.round(n)} min`;
+function fmtLotTime(lot: TeamActivityLot): string {
+  if (lot.timing_source === "upload_burst") return "uploaded together";
+  if (lot.timing_source !== "camera" && lot.capture_minutes != null && lot.capture_minutes <= 0.75) {
+    return "uploaded together";
+  }
+  if (lot.capture_minutes == null) return lot.photo_count >= 2 ? "uploaded together" : "—";
+  const core = fmtMinutes(lot.capture_minutes);
+  return lot.timing_source === "camera" ? core : `${core} (upload)`;
 }
 
 function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
@@ -43,7 +46,7 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
           {lot.sku?.trim() || "No SKU"}
         </Text>
         <Text style={styles.lotMeta} numberOfLines={1}>
-          {lot.photo_count}ph · {fmtMinutes(lot.capture_minutes)}
+          {lot.photo_count}ph · {fmtLotTime(lot)}
         </Text>
       </Pressable>
       <Pressable style={styles.lotOpen} onPress={openLot} accessibilityRole="button" accessibilityLabel="Open lot">
@@ -88,8 +91,8 @@ export function TeamActivityPanel({ token }: { token: string }) {
     <View style={styles.box}>
       <Text style={styles.title}>Team activity</Text>
       <Text style={styles.hint}>
-        Photos, lots, CT Bids posted/sold, and minutes per lot (first-to-last photo upload). Owners
-        only. Credit is the upload login.
+        Photos, lots, CT Bids posted/sold, and minutes per lot. Phone Sync in a few seconds is
+        upload, not the shoot — those lots say uploaded together. Owners only.
       </Text>
       <View style={styles.chips}>
         {(

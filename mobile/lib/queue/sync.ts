@@ -469,7 +469,8 @@ export async function syncPendingLots(
       const rows = images.map((p, i) => ({
         id: p.id,
         uri: p.file_uri,
-        name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`
+        name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`,
+        capturedAtMs: p.captured_at && p.captured_at > 0 ? p.captured_at : undefined
       }));
       const rowChunks = chunkPhotos(rows, UPLOAD_CHUNK_SIZE);
 

@@ -63,6 +63,7 @@ class TeamActivityLotOut(BaseModel):
     first_photo_at: datetime
     last_photo_at: datetime
     has_thumbnail: bool = True
+    timing_source: str = "upload"
 
 
 class TeamActivityMemberOut(BaseModel):

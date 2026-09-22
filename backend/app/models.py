@@ -145,6 +145,8 @@ class Photo(Base):
     shows_whole_lot: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     shows_measuring_scale: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     label_legibility: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Camera / shutter time when known (EXIF or phone capture). created_at is server ingest.
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lot: Mapped["Lot"] = relationship(back_populates="photos")

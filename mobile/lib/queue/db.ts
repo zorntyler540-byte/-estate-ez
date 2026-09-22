@@ -60,6 +60,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!photoCols.some((c) => c.name === "uploaded")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN uploaded INTEGER NOT NULL DEFAULT 0");
       }
+      if (!photoCols.some((c) => c.name === "captured_at")) {
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN captured_at INTEGER");
+      }
       return db;
     })();
   }
@@ -118,8 +121,8 @@ export async function addPhotoToDraft(
   const sortOrder = Number(row?.c ?? 0);
   const kind = mediaKind === "video" ? "video" : "image";
   await db.runAsync(
-    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded) VALUES (?, ?, ?, ?, ?, 0)",
-    [id, draftId, fileUri, sortOrder, kind]
+    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded, captured_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+    [id, draftId, fileUri, sortOrder, kind, capturedAtFromPhotoRow({ file_uri: fileUri, captured_at: 0 }) || Date.now()]
   );
   await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
   return id;
@@ -187,6 +190,22 @@ export async function findOpenDraft(
   return rowToDraft(row, Number(pc?.c ?? 0));
 }
 
+function capturedAtFromPhotoRow(r: Record<string, unknown>): number {
+  const col = Number(r.captured_at);
+  if (Number.isFinite(col) && col > 0) return col;
+  const base =
+    String(r.file_uri || "")
+      .split("?")[0]
+      .split("/")
+      .pop()
+      ?.replace(/\.[^.]+$/, "") || "";
+  if (/^\d{12,16}$/.test(base)) {
+    const n = Number(base);
+    if (n > 1_000_000_000_000 && n < 20_000_000_000_000) return n;
+  }
+  return 0;
+}
+
 export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Record<string, unknown>>(
@@ -199,7 +218,8 @@ export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
     file_uri: String(r.file_uri),
     sort_order: Number(r.sort_order),
     media_kind: String(r.media_kind || "image") === "video" ? "video" : "image",
-    uploaded: Number(r.uploaded || 0) === 1
+    uploaded: Number(r.uploaded || 0) === 1,
+    captured_at: capturedAtFromPhotoRow(r)
   }));
 }
 

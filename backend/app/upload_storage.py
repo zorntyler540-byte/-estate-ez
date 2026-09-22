@@ -4,11 +4,14 @@ import asyncio
 import uuid
 from pathlib import Path
 
+from datetime import datetime
+
 from fastapi import HTTPException, UploadFile
 
 from app.catalog_storage import upload_root
 from app.job_batch_storage import mirror_local_file_to_r2
 from app.services.image_preprocess import compress_upload_bytes_if_image
+from app.services.photo_captured_at import captured_at_from_image_bytes, write_captured_at_sidecar
 
 UPLOAD_ROOT = upload_root()
 
@@ -25,6 +28,7 @@ async def save_uploaded_files(
     files: list[UploadFile],
     *,
     concurrency: int = 12,
+    captured_at: datetime | None = None,
 ) -> None:
     """
     Save uploaded parts under dest_root in parallel (bounded by ``concurrency``).
@@ -40,6 +44,7 @@ async def save_uploaded_files(
     async def _save_one(uf: UploadFile) -> None:
         async with sem:
             body = await uf.read()
+            cap = captured_at_from_image_bytes(body) or captured_at
             try:
                 body, stor_name = await asyncio.to_thread(
                     compress_upload_bytes_if_image,
@@ -75,6 +80,9 @@ async def save_uploaded_files(
                     detail=f"Empty image file: {raw_name!r} (retake or re-export the photo).",
                 )
             target.write_bytes(body)
+            if cap is not None:
+                side = write_captured_at_sidecar(target, cap)
+                await asyncio.to_thread(mirror_local_file_to_r2, side, root)
             await asyncio.to_thread(mirror_local_file_to_r2, target, root)
 
     await asyncio.gather(*[_save_one(uf) for uf in files])

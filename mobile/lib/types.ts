@@ -97,6 +97,7 @@ export type LotPhotoRow = {
   sort_order: number;
   media_kind: LotMediaKind;
   uploaded: boolean;
+  captured_at?: number;
 };
 
 export type LotVideo = {

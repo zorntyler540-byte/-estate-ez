@@ -101,8 +101,7 @@ export type TeamActivityLot = {
   auction_title?: string;
   photo_count: number;
   capture_minutes?: number | null;
-  first_photo_at?: string;
-  last_photo_at?: string;
+  timing_source?: string;
   has_thumbnail?: boolean;
 };
 
@@ -348,6 +347,9 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
   if (opts.manualSku?.trim()) {
     parameters.single_lot_manual_sku = opts.manualSku.trim();
   }
+  if (first?.capturedAtMs && first.capturedAtMs > 0) {
+    parameters.captured_at_ms = String(first.capturedAtMs);
+  }
 
   const text = await nativeMultipartUpload({
     path: "/jobs/upload",
@@ -378,7 +380,11 @@ export async function appendFilesToQueuedJob(
       path: `/jobs/${encodeURIComponent(jobId)}/upload-files`,
       token,
       fileUri: photo.uri,
-      fileName: photo.name
+      fileName: photo.name,
+      parameters:
+        photo.capturedAtMs && photo.capturedAtMs > 0
+          ? { captured_at_ms: String(photo.capturedAtMs) }
+          : undefined
     });
   }
   return JSON.parse(lastText) as Job;
@@ -399,7 +405,11 @@ export async function uploadLotPhotos(
       path: `/lots/${encodeURIComponent(lotId)}/photos/upload`,
       token,
       fileUri: photo.uri,
-      fileName: photo.name
+      fileName: photo.name,
+      parameters:
+        photo.capturedAtMs && photo.capturedAtMs > 0
+          ? { captured_at_ms: String(photo.capturedAtMs) }
+          : undefined
     });
     const raw = text ? (JSON.parse(text) as unknown) : null;
     if (Array.isArray(raw)) {

@@ -39,6 +39,7 @@ type TeamActivityLot = {
   first_photo_at?: string;
   last_photo_at?: string;
   has_thumbnail?: boolean;
+  timing_source?: string;
 };
 
 type TeamActivityMember = {
@@ -139,6 +140,23 @@ function formatActivityMinutes(n: number | null | undefined): string {
   if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
   if (n < 10) return `${n.toFixed(1)} min`;
   return `${Math.round(n)} min`;
+}
+
+function formatLotShootTime(lot: {
+  capture_minutes?: number | null;
+  photo_count?: number;
+  timing_source?: string;
+}): string {
+  if (lot.timing_source === "upload_burst") return "uploaded together";
+  if (lot.timing_source !== "camera" && lot.capture_minutes != null && lot.capture_minutes <= 0.75) {
+    return "uploaded together";
+  }
+  if (lot.capture_minutes == null) {
+    return (lot.photo_count || 0) < 2 ? "—" : "uploaded together";
+  }
+  const core = formatActivityMinutes(lot.capture_minutes);
+  if (lot.timing_source === "camera") return core;
+  return `${core} (upload)`;
 }
 
 function formatActivityHours(n: number | undefined): string {
@@ -261,7 +279,11 @@ function teamActivityLotsCsv(row: TeamActivity): string {
           lot.sku || "",
           lot.auction_title || "",
           lot.photo_count,
-          lot.capture_minutes ?? "",
+          lot.timing_source === "upload_burst" || lot.capture_minutes == null
+            ? lot.photo_count >= 2
+              ? "uploaded together"
+              : ""
+            : lot.capture_minutes,
           lot.first_photo_at || "",
           lot.last_photo_at || "",
           lot.lot_id
@@ -831,9 +853,10 @@ export default function AccountPage() {
               Totals divide team counts by the sum of those person-hours. This is cataloging pace,
               not hours on the clock. <strong>Min/lot</strong> is first-to-last photo upload on that
               lot (the densest cluster; a gap over 15 minutes is a later add-on, not one shoot).
-              One photo cannot measure duration. Time is upload time, not the camera shutter — a
-              whole lot uploaded together looks like seconds. Thumbnails are lots that login
-              photographed in this window.
+              One photo cannot measure duration. Phone Sync often writes the whole lot in a few
+              seconds — that is upload time, not the shoot, so those lots say{" "}
+              <strong>uploaded together</strong> until the phone sends shutter time. Folder
+              JPEGs with camera EXIF use that clock.
             </div>
           </details>
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -1072,7 +1095,7 @@ export default function AccountPage() {
                                 </div>
                                 <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
                                   {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
-                                  {formatActivityMinutes(lot.capture_minutes)}
+                                  {formatLotShootTime(lot)}
                                 </div>
                               </Link>
                               <Link

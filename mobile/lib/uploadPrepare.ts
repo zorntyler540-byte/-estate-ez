@@ -13,7 +13,21 @@ export const UPLOAD_CHUNK_SIZE = 1;
 export const UPLOAD_PER_FILE_TIMEOUT_MS = 5 * 60_000;
 const COMPRESS_TIMEOUT_MS = 25_000;
 
-export type UploadPhotoUri = { uri: string; name: string };
+export type UploadPhotoUri = { uri: string; name: string; capturedAtMs?: number };
+
+/** Phone capture dest is ``{Date.now()}.jpg`` after EXIF is stripped. */
+export function capturedAtMsFromUri(uri: string): number | undefined {
+  const base =
+    String(uri || "")
+      .split("?")[0]
+      .split("/")
+      .pop()
+      ?.replace(/\.[^.]+$/, "") || "";
+  if (!/^\d{12,16}$/.test(base)) return undefined;
+  const n = Number(base);
+  if (n > 1_000_000_000_000 && n < 20_000_000_000_000) return n;
+  return undefined;
+}
 
 export type PreparePhotosResult = {
   photos: UploadPhotoUri[];
@@ -178,7 +192,7 @@ export async function resolveUploadVideoUri(uri: string): Promise<string> {
  * Prepare queue photos for upload.
  */
 export async function preparePhotosForUpload(
-  photos: { id: string; uri: string; name: string }[]
+  photos: { id: string; uri: string; name: string; capturedAtMs?: number }[]
 ): Promise<PreparePhotosResult> {
   const out: UploadPhotoUri[] = [];
   const skippedIds: string[] = [];
@@ -187,7 +201,7 @@ export async function preparePhotosForUpload(
     const name = photo.name.replace(/\.[^.]+$/, "") + ".jpg";
     try {
       const uri = await resolveUploadFileUri({ uri: photo.uri, name });
-      out.push({ uri, name });
+      out.push({ uri, name, capturedAtMs: photo.capturedAtMs });
     } catch {
       skippedIds.push(photo.id);
     }
