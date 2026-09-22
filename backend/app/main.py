@@ -45,6 +45,7 @@ from app.models import (
     Account,
     AppraisalCheck,
     AudienceHuntEvent,
+    JobSseEvent,
     JobStatus,
     Lot,
     LotVideo,
@@ -90,6 +91,8 @@ from app.schemas import (
     SaleCreate,
     SaleMergeIn,
     SaleMergeOut,
+    RemoveSaleIn,
+    RemoveSaleOut,
     SaleCoverCandidateOut,
     SaleCoverCandidatesOut,
     SaleCoverPhotoSlotOut,
@@ -2241,6 +2244,72 @@ def delete_sale(
     db.delete(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/sales/{sale_id}/remove", response_model=RemoveSaleOut)
+def remove_sale(
+    sale_id: str,
+    payload: RemoveSaleIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RemoveSaleOut:
+    """
+    Remove one Estate-EZ catalog sale from Change sale.
+
+    Deletes that sale's lots, photos, videos, and jobs on this website only.
+    Does not change CT Bids / CT Seller auctions. Requires the owner to type the sale name.
+    """
+    _require_owner(current)
+    row = _sale_for_user(sale_id, current, db)
+    want = (payload.confirm_name or "").strip()
+    have = (row.name or "").strip()
+    if not want or want != have:
+        raise HTTPException(
+            status_code=400,
+            detail="Sale name did not match — nothing was deleted.",
+        )
+    busy = (
+        db.query(func.count())
+        .select_from(ProcessingJob)
+        .where(
+            ProcessingJob.sale_id == row.id,
+            ProcessingJob.account_id == current.account_id,
+            ProcessingJob.status.in_((JobStatus.receiving, JobStatus.queued, JobStatus.processing)),
+        )
+        .scalar()
+    )
+    if int(busy or 0) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait until uploads for this sale finish (or cancel them) before removing it.",
+        )
+    lot_n = int(
+        db.query(func.count())
+        .select_from(Lot)
+        .where(Lot.sale_id == row.id, Lot.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    job_n = int(
+        db.query(func.count())
+        .select_from(ProcessingJob)
+        .where(ProcessingJob.sale_id == row.id, ProcessingJob.account_id == current.account_id)
+        .scalar()
+        or 0
+    )
+    name = have
+    sid = row.id
+    _purge_catalog_data(db, account_id=current.account_id, sale_id=sid)
+    leftover = db.query(Sale).filter(Sale.id == sid, Sale.account_id == current.account_id).first()
+    if leftover:
+        db.delete(leftover)
+        db.commit()
+    return RemoveSaleOut(
+        deleted_sale_id=sid,
+        deleted_sale_name=name,
+        lots_deleted=lot_n,
+        jobs_deleted=job_n,
+    )
 
 
 @app.post("/sales/{target_sale_id}/merge", response_model=SaleMergeOut)
@@ -4479,7 +4548,7 @@ def _purge_catalog_data(
     sale_id: str | None = None,
 ) -> None:
     """
-    Delete lots, photos, jobs, and sale ZIP exports for an account or one sale.
+    Delete lots, photos, videos, jobs, appraisals, hunts, and sale ZIP exports for an account or one sale.
 
     Does not delete ``Sale`` rows. Does **not** remove catalog JPEGs on disk — photos are stored
     inside job upload batch folders; deleting those folders would permanently destroy images even
@@ -4488,12 +4557,17 @@ def _purge_catalog_data(
     lot_filter = [Lot.account_id == account_id]
     job_filter = [ProcessingJob.account_id == account_id]
     zip_filter = [SalePhotoZipExport.account_id == account_id]
+    appraisal_filter = [AppraisalCheck.account_id == account_id]
+    hunt_filter = [AudienceHuntEvent.account_id == account_id]
     if sale_id is not None:
         lot_filter.append(Lot.sale_id == sale_id)
         job_filter.append(ProcessingJob.sale_id == sale_id)
         zip_filter.append(SalePhotoZipExport.sale_id == sale_id)
+        appraisal_filter.append(AppraisalCheck.sale_id == sale_id)
+        hunt_filter.append(AudienceHuntEvent.sale_id == sale_id)
 
     lot_ids = [row[0] for row in db.query(Lot.id).filter(*lot_filter).all()]
+    job_ids = [row[0] for row in db.query(ProcessingJob.id).filter(*job_filter).all()]
 
     for ex in db.query(SalePhotoZipExport).filter(*zip_filter).all():
         if ex.zip_path:
@@ -4501,12 +4575,27 @@ def _purge_catalog_data(
     db.query(SalePhotoZipExport).filter(*zip_filter).delete(synchronize_session=False)
 
     if lot_ids:
+        db.query(LotVideo).filter(
+            LotVideo.account_id == account_id,
+            LotVideo.lot_id.in_(lot_ids),
+        ).delete(synchronize_session=False)
         db.query(Photo).filter(
             Photo.account_id == account_id,
             Photo.lot_id.in_(lot_ids),
         ).delete(synchronize_session=False)
     elif sale_id is None:
+        db.query(LotVideo).filter(LotVideo.account_id == account_id).delete(synchronize_session=False)
         db.query(Photo).filter(Photo.account_id == account_id).delete(synchronize_session=False)
+
+    db.query(AppraisalCheck).filter(*appraisal_filter).delete(synchronize_session=False)
+    db.query(AudienceHuntEvent).filter(*hunt_filter).delete(synchronize_session=False)
+    if job_ids:
+        db.query(JobSseEvent).filter(
+            JobSseEvent.account_id == account_id,
+            JobSseEvent.job_id.in_(job_ids),
+        ).delete(synchronize_session=False)
+    elif sale_id is None:
+        db.query(JobSseEvent).filter(JobSseEvent.account_id == account_id).delete(synchronize_session=False)
 
     db.query(Lot).filter(*lot_filter).delete(synchronize_session=False)
     db.query(ProcessingJob).filter(*job_filter).delete(synchronize_session=False)

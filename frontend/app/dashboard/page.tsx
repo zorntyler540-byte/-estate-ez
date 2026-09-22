@@ -73,6 +73,7 @@ import {
 } from "../../lib/stagedUploadPath";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
+const SHOW_CLOSED_SALES_KEY = "ct_show_closed_sales";
 /** Staged upload waits for Gemini per-photo; upload box clears after all frames are analyzed (not full job done). */
 const STAGING_AWAIT_GEMINI_JOB_KEY = "ct_staging_await_gemini_job";
 const STAGING_AWAIT_GEMINI_TOTAL_KEY = "ct_staging_await_gemini_total";
@@ -970,6 +971,15 @@ function readStoredToken(): string {
 function readStoredSaleId(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem(SALE_STORAGE_KEY) || "";
+}
+
+function readShowClosedSales(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(SHOW_CLOSED_SALES_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function isAuthFailureMessage(message: string): boolean {
@@ -2020,6 +2030,8 @@ export default function DashboardPage() {
   const [mergeSourceSaleId, setMergeSourceSaleId] = useState("");
   const [mergingSale, setMergingSale] = useState(false);
   const [closingSale, setClosingSale] = useState(false);
+  const [removingSale, setRemovingSale] = useState(false);
+  const [showClosedSales, setShowClosedSales] = useState(readShowClosedSales);
   const [isMasterAdmin, setIsMasterAdmin] = useState(false);
   const [adminLoadAttempted, setAdminLoadAttempted] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -2198,6 +2210,10 @@ export default function DashboardPage() {
   }, [jobs, lots]);
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
+  const salesForPicker = useMemo(
+    () => (showClosedSales ? sales : sales.filter((s) => !s.closed_at)),
+    [sales, showClosedSales]
+  );
   const ctSellerUnpostedEligible = useMemo(
     () => lots.filter((l) => lotEligibleForCtSellerPost(l)).length,
     [lots]
@@ -2800,6 +2816,22 @@ export default function DashboardPage() {
         }
       });
   }, [router, dataReloadNonce]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_CLOSED_SALES_KEY, showClosedSales ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  }, [showClosedSales]);
+
+  useEffect(() => {
+    if (showClosedSales || !sales.length) return;
+    const current = sales.find((s) => s.id === selectedSaleId);
+    if (current && !current.closed_at) return;
+    const open = sales.find((s) => !s.closed_at);
+    setSelectedSaleId(open?.id || "");
+  }, [showClosedSales, sales, selectedSaleId]);
 
   useEffect(() => {
     if (!token || !selectedSaleId) {
@@ -5333,6 +5365,57 @@ export default function DashboardPage() {
     }
   }
 
+  async function removeSelectedSale() {
+    if (!token || !selectedSaleId || !selectedSale || !isAccountOwner) return;
+    const target = (selectedSale.name || "").trim();
+    if (!target) return;
+    const lotN = lots.length;
+    const mapped = Boolean(selectedSale.ctseller_sale_id);
+    const typed = window.prompt(
+      `Remove "${target}" from Change sale?\n\nThis deletes the Estate-EZ catalog for that sale only (${lotN} lot${lotN === 1 ? "" : "s"} on this website). CT Bids is not changed.\n\n${
+        mapped
+          ? "This tab is linked to a CT Bids auction. If that auction is still open, an empty tab with the same name can come back on the next sync — End sale instead if you only want it hidden.\n\n"
+          : ""
+      }Type the sale name exactly to confirm. Leave blank to cancel.`
+    );
+    if (typed == null) return;
+    if (typed.trim() !== target) {
+      if (typed.trim()) setError("Sale name did not match — nothing was deleted.");
+      return;
+    }
+    if (lotN > 0) {
+      if (
+        !window.confirm(
+          `Permanently delete ${lotN} lot${lotN === 1 ? "" : "s"} and their photos from Estate-EZ for "${target}"?\n\nThis cannot be undone. CT Bids listings stay up.`
+        )
+      ) {
+        return;
+      }
+    }
+    setRemovingSale(true);
+    setError("");
+    try {
+      await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/remove`, token, {
+        method: "POST",
+        body: JSON.stringify({ confirm_name: target })
+      });
+      const removedId = selectedSaleId;
+      const nextSales = sales.filter((s) => s.id !== removedId);
+      setSales(nextSales);
+      const visible = showClosedSales ? nextSales : nextSales.filter((s) => !s.closed_at);
+      const pool = visible.length ? visible : nextSales;
+      setSelectedSaleId(pool[0]?.id || "");
+      setLots([]);
+      setJobs([]);
+      setPhotoHealthMissing({});
+      setPullCtSellerSalesMsg(`Removed "${target}" from Change sale.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not remove sale");
+    } finally {
+      setRemovingSale(false);
+    }
+  }
+
   async function refreshAdminAccounts() {
     if (!token || !adminLoadAttempted) return;
     setAdminError("");
@@ -5903,11 +5986,13 @@ export default function DashboardPage() {
           setSelectedSaleId(e.target.value);
           setError("");
         }}
-        disabled={!sales.length}
+        disabled={!salesForPicker.length && !showClosedSales}
         aria-label="Select sale"
       >
-        {!sales.length ? <option value="">No sales yet</option> : null}
-        {sales.map((s) => (
+        {!salesForPicker.length ? (
+          <option value="">{showClosedSales ? "No sales yet" : "No open sales"}</option>
+        ) : null}
+        {salesForPicker.map((s) => (
           <option key={s.id} value={s.id}>
             {s.name}
             {s.closed_at ? " (Closed)" : ""}
@@ -6298,12 +6383,34 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className="ct-btn"
-                disabled={!selectedSaleId || selectedSaleClosed || closingSale || busyProcessing}
+                disabled={!selectedSaleId || selectedSaleClosed || closingSale || removingSale || busyProcessing}
                 onClick={() => void endSelectedSale()}
               >
                 {closingSale ? "Closing…" : "End sale"}
               </button>
             ) : null}
+            {isAccountOwner ? (
+              <button
+                type="button"
+                className="ct-btn ct-btn--danger-outline"
+                disabled={!selectedSaleId || removingSale || closingSale || busyProcessing}
+                title="Type the sale name to remove this Estate-EZ tab. CT Bids is not changed."
+                onClick={() => void removeSelectedSale()}
+              >
+                {removingSale ? "Removing…" : "Remove sale"}
+              </button>
+            ) : null}
+            <label
+              className="ct-muted"
+              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88rem" }}
+            >
+              <input
+                type="checkbox"
+                checked={showClosedSales}
+                onChange={(e) => setShowClosedSales(e.target.checked)}
+              />
+              Show closed
+            </label>
           </div>
           {pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
