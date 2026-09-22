@@ -9,6 +9,13 @@ import { getTeamActivity, lotThumbnailSource, type TeamActivity, type TeamActivi
 type Days = 1 | 7 | 30;
 const PHONE_LOT_CAP = 12;
 
+function fmtMinutes(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
+  if (n < 10) return `${n.toFixed(1)} min`;
+  return `${Math.round(n)} min`;
+}
+
 function fmtHours(n: number | undefined): string {
   if (!n) return "—";
   return n.toFixed(n >= 10 ? 1 : 2);
@@ -162,7 +169,7 @@ export function TeamActivityPanel({ token }: { token: string }) {
 
 const styles = StyleSheet.create({
   box: {
-    marginBottom: 16,
+    marginBottom: 0,
     padding: 12,
     borderRadius: 10,
     backgroundColor: "#0e0e10",
