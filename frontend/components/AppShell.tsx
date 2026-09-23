@@ -15,41 +15,46 @@ type AppShellProps = {
   mobileBottomBar?: ReactNode;
 };
 
-const NAV = [
+const NAV_GROUPS = [
   {
-    href: "/dashboard",
-    label: "Sales dashboard",
-    shortLabel: "Dashboard",
-    icon: LayoutDashboard,
-    match: (p: string) => p.startsWith("/dashboard")
+    label: "Catalog",
+    items: [
+      {
+        href: "/dashboard",
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        match: (p: string) => p.startsWith("/dashboard")
+      },
+      {
+        href: "/facebook",
+        label: "Facebook",
+        icon: Store,
+        match: (p: string) => p.startsWith("/facebook")
+      }
+    ]
   },
   {
-    href: "/facebook",
-    label: "Facebook",
-    shortLabel: "Facebook",
-    icon: Store,
-    match: (p: string) => p.startsWith("/facebook")
-  },
-  {
-    href: "/appraiser",
-    label: "Appraiser",
-    shortLabel: "Appraiser",
-    icon: ClipboardList,
-    match: (p: string) => p.startsWith("/appraiser")
-  },
-  {
-    href: "/tools",
-    label: "Desktop tools",
-    shortLabel: "Tools",
-    icon: Monitor,
-    match: (p: string) => p.startsWith("/tools")
-  },
-  {
-    href: "/account",
-    label: "Settings",
-    shortLabel: "Settings",
-    icon: Settings,
-    match: (p: string) => p.startsWith("/account")
+    label: "More",
+    items: [
+      {
+        href: "/appraiser",
+        label: "Appraiser",
+        icon: ClipboardList,
+        match: (p: string) => p.startsWith("/appraiser")
+      },
+      {
+        href: "/tools",
+        label: "Tools",
+        icon: Monitor,
+        match: (p: string) => p.startsWith("/tools")
+      },
+      {
+        href: "/account",
+        label: "Settings",
+        icon: Settings,
+        match: (p: string) => p.startsWith("/account")
+      }
+    ]
   }
 ] as const;
 
@@ -65,12 +70,12 @@ function BrandMark() {
         className="ct-app-sidebar__logo"
         src="/zortron-logo.jpg"
         alt="Zortron Tech Solutions"
-        width={220}
-        height={220}
+        width={56}
+        height={56}
       />
       <span className="ct-app-sidebar__brand-text">
-        <span className="ct-app-sidebar__eyebrow">Zortron</span>
         <span className="ct-app-sidebar__title">Estate-EZ</span>
+        <span className="ct-app-sidebar__eyebrow">Zortron</span>
       </span>
     </Link>
   );
@@ -85,20 +90,25 @@ type ShellNavLinksProps = {
 function ShellNavLinks({ pathname, onNavigate, linkClass = "ct-app-sidebar__link" }: ShellNavLinksProps) {
   return (
     <>
-      {NAV.map(({ href, label, icon: Icon, match }) => {
-        const active = isNavActive(pathname, href, match);
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={`${linkClass}${active ? ` ${linkClass}--active` : ""}`}
-            onClick={onNavigate}
-          >
-            <Icon size={18} aria-hidden className="ct-app-sidebar__link-icon" />
-            {label}
-          </Link>
-        );
-      })}
+      {NAV_GROUPS.map((group) => (
+        <div key={group.label} className="ct-app-nav-group">
+          <p className="ct-app-nav-group__label">{group.label}</p>
+          {group.items.map(({ href, label, icon: Icon, match }) => {
+            const active = isNavActive(pathname, href, match);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`${linkClass}${active ? ` ${linkClass}--active` : ""}`}
+                onClick={onNavigate}
+              >
+                <Icon size={18} aria-hidden className="ct-app-sidebar__link-icon" />
+                {label}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </>
   );
 }

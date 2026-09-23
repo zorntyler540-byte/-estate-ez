@@ -6297,127 +6297,139 @@ export default function DashboardPage() {
         </div>
 
         <section className="ct-dash-panel ct-dash-sale-manage">
-          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              className="ct-input"
-              style={{ maxWidth: 320, width: "100%", flex: "1 1 200px" }}
-              placeholder="New sale name — e.g. Oak Street estate"
-              value={newSaleName}
-              onChange={(e) => setNewSaleName(e.target.value)}
-              disabled={creatingSale}
-            />
-            <button
-              type="button"
-              className="ct-btn ct-btn--primary"
-              disabled={creatingSale || !newSaleName.trim() || !token}
-              onClick={() => void createSale()}
-            >
-              {creatingSale ? "Creating…" : "Add sale"}
-            </button>
-            {isAccountOwner && sales.filter((s) => s.id !== selectedSaleId && !s.closed_at).length > 0 ? (
-              <>
-                <label className="ct-label" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                  <span className="ct-muted" style={{ fontSize: "0.8rem" }}>
-                    Merge into {selectedSale?.name || "this sale"}
-                  </span>
-                  <select
-                    className="ct-input"
-                    style={{ minWidth: 200 }}
-                    value={mergeSourceSaleId}
-                    disabled={mergingSale || !selectedSaleId || selectedSaleClosed}
-                    onChange={(e) => setMergeSourceSaleId(e.target.value)}
-                    aria-label="Sale to merge into the selected sale"
-                  >
-                    <option value="">Choose a sale to merge in…</option>
-                    {sales
-                      .filter((s) => s.id !== selectedSaleId && !s.closed_at)
-                      .map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="ct-btn"
-                  disabled={
-                    mergingSale ||
-                    !mergeSourceSaleId ||
-                    !selectedSaleId ||
-                    selectedSaleClosed
-                  }
-                  title="Move lots and jobs from the chosen sale into the selected sale, then remove the empty sale"
-                  onClick={() => void mergeCatalogSaleIntoSelected()}
-                >
-                  {mergingSale ? "Merging…" : "Merge sales"}
-                </button>
-              </>
-            ) : null}
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={pullingCtSellerSales || creatingSale || !token}
-              title="Refresh now: add missing CT Bids auctions and update names (also runs when you open the dashboard)"
-              onClick={() => void pullCtSellerSalesIntoCatalog()}
-            >
-              {pullingCtSellerSales ? "Syncing…" : "Sync CT Seller sales"}
-            </button>
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={
-                pullingCtSellerSales ||
-                !token ||
-                !selectedSaleId ||
-                lots.every((l) => Boolean((l.condition_text || "").trim()))
-              }
-              title="Set CT Seller condition GOOD on lots that have no condition yet"
-              onClick={() => void fillBlankLotConditions()}
-            >
-              Fill blank conditions
-            </button>
-            <button
-              type="button"
-              className="ct-btn"
-              disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
-              title="Sort every lot: group shots, then each item with its angles, then labels, then measurements"
-              onClick={() => void sortSalePhotosForListing()}
-            >
-              Sort for listing
-            </button>
-            {isAccountOwner ? (
+          <h2 className="ct-dash-panel__title">Sale</h2>
+          <div className="ct-toolbar">
+            <div className="ct-toolbar__cluster">
+              <span className="ct-toolbar__label">New sale</span>
+              <input
+                className="ct-input"
+                style={{ maxWidth: 280, width: "100%", flex: "1 1 180px" }}
+                placeholder="e.g. Oak Street estate"
+                value={newSaleName}
+                onChange={(e) => setNewSaleName(e.target.value)}
+                disabled={creatingSale}
+              />
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={creatingSale || !newSaleName.trim() || !token}
+                onClick={() => void createSale()}
+              >
+                {creatingSale ? "Creating…" : "Add sale"}
+              </button>
+            </div>
+            <div className="ct-toolbar__cluster">
+              <span className="ct-toolbar__label">This catalog</span>
               <button
                 type="button"
                 className="ct-btn"
-                disabled={!selectedSaleId || selectedSaleClosed || closingSale || removingSale || busyProcessing}
-                onClick={() => void endSelectedSale()}
+                disabled={pullingCtSellerSales || creatingSale || !token}
+                title="Refresh now: add missing CT Bids auctions and update names (also runs when you open the dashboard)"
+                onClick={() => void pullCtSellerSalesIntoCatalog()}
               >
-                {closingSale ? "Closing…" : "End sale"}
+                {pullingCtSellerSales ? "Syncing…" : "Sync CT Seller sales"}
               </button>
-            ) : null}
-            {isAccountOwner ? (
               <button
                 type="button"
-                className="ct-btn ct-btn--danger-outline"
-                disabled={!selectedSaleId || removingSale || closingSale || busyProcessing}
-                title="Type the sale name to remove this Estate-EZ tab. CT Bids is not changed."
-                onClick={() => void removeSelectedSale()}
+                className="ct-btn"
+                disabled={
+                  pullingCtSellerSales ||
+                  !token ||
+                  !selectedSaleId ||
+                  lots.every((l) => Boolean((l.condition_text || "").trim()))
+                }
+                title="Set CT Seller condition GOOD on lots that have no condition yet"
+                onClick={() => void fillBlankLotConditions()}
               >
-                {removingSale ? "Removing…" : "Remove sale"}
+                Fill blank conditions
               </button>
+              <button
+                type="button"
+                className="ct-btn"
+                disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
+                title="Sort every lot: group shots, then each item with its angles, then labels, then measurements"
+                onClick={() => void sortSalePhotosForListing()}
+              >
+                Sort for listing
+              </button>
+            </div>
+            <div className="ct-toolbar__cluster ct-toolbar__cluster--check">
+              <label
+                className="ct-muted"
+                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88rem" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showClosedSales}
+                  onChange={(e) => setShowClosedSales(e.target.checked)}
+                />
+                Show closed
+              </label>
+            </div>
+            {isAccountOwner ? (
+              <details className="ct-toolbar__more">
+                <summary>Sale options</summary>
+                <div className="ct-toolbar__more-body">
+                  {sales.filter((s) => s.id !== selectedSaleId && !s.closed_at).length > 0 ? (
+                    <>
+                      <label className="ct-label" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                          Merge into {selectedSale?.name || "this sale"}
+                        </span>
+                        <select
+                          className="ct-input"
+                          style={{ minWidth: 200 }}
+                          value={mergeSourceSaleId}
+                          disabled={mergingSale || !selectedSaleId || selectedSaleClosed}
+                          onChange={(e) => setMergeSourceSaleId(e.target.value)}
+                          aria-label="Sale to merge into the selected sale"
+                        >
+                          <option value="">Choose a sale to merge in…</option>
+                          {sales
+                            .filter((s) => s.id !== selectedSaleId && !s.closed_at)
+                            .map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="ct-btn"
+                        disabled={
+                          mergingSale ||
+                          !mergeSourceSaleId ||
+                          !selectedSaleId ||
+                          selectedSaleClosed
+                        }
+                        title="Move lots and jobs from the chosen sale into the selected sale, then remove the empty sale"
+                        onClick={() => void mergeCatalogSaleIntoSelected()}
+                      >
+                        {mergingSale ? "Merging…" : "Merge sales"}
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    disabled={!selectedSaleId || selectedSaleClosed || closingSale || removingSale || busyProcessing}
+                    onClick={() => void endSelectedSale()}
+                  >
+                    {closingSale ? "Closing…" : "End sale"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--danger-outline"
+                    disabled={!selectedSaleId || removingSale || closingSale || busyProcessing}
+                    title="Type the sale name to remove this Estate-EZ tab. CT Bids is not changed."
+                    onClick={() => void removeSelectedSale()}
+                  >
+                    {removingSale ? "Removing…" : "Remove sale"}
+                  </button>
+                </div>
+              </details>
             ) : null}
-            <label
-              className="ct-muted"
-              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.88rem" }}
-            >
-              <input
-                type="checkbox"
-                checked={showClosedSales}
-                onChange={(e) => setShowClosedSales(e.target.checked)}
-              />
-              Show closed
-            </label>
           </div>
           {pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
@@ -7276,7 +7288,9 @@ export default function DashboardPage() {
             </label>
           </div>
           {isAccountOwner ? (
-            <div className="ct-dash-lots__toolbar-actions">
+            <details className="ct-toolbar__more">
+              <summary>Clear catalog</summary>
+              <div className="ct-toolbar__more-body">
               <button
                 type="button"
                 className="ct-btn ct-btn--danger-outline"
@@ -7299,13 +7313,12 @@ export default function DashboardPage() {
               >
                 Clear entire account…
               </button>
-            </div>
+              </div>
+            </details>
           ) : null}
         </div>
-        <div
-          className="ct-row ct-row--gap-lg"
-          style={{ flexWrap: "wrap", alignItems: "flex-end", marginTop: "0.75rem", gap: "0.65rem" }}
-        >
+        <div className="ct-dash-strip">
+          <span className="ct-toolbar__label">CT Bids</span>
           <div style={{ minWidth: 200, flex: "1 1 220px" }}>
             <label className="ct-label" htmlFor="dash-ctseller-sale">
               CT Seller auction
