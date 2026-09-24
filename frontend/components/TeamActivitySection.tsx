@@ -236,15 +236,41 @@ function formatPhotoShutterList(lot: TeamActivityLot): string {
   return `Between photos: ${gaps.join(" · ")}`;
 }
 
-function formatSaleWindowSummary(activity: TeamActivity): string {
+function formatSaleRange(since: string, until: string): string {
+  const a = new Date(since);
+  const b = new Date(until);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) {
+    return `${since} – ${until}`;
+  }
+  const spanMs = b.getTime() - a.getTime();
+  if (spanMs > 2 * 86400000) {
+    return `${a.toLocaleDateString()} – ${b.toLocaleDateString()}`;
+  }
+  return `${formatActivityWhen(since)} – ${formatActivityWhen(until)}`;
+}
+
+function saleWindowStats(activity: TeamActivity): {
+  posted: number;
+  sold: number;
+  unsold: number;
+  live: number;
+  hammer: number;
+  history: number;
+} {
   const items = activity.sold_items || [];
   const sold = items.filter((i) => (i.outcome || "").toLowerCase() === "sold");
   const unsold = items.filter((i) => (i.outcome || "").toLowerCase() === "unsold");
   const live = items.filter((i) => (i.outcome || "").toLowerCase() === "live");
   const hammer = sold.reduce((sum, i) => sum + (Number(i.sold_price) || 0), 0);
   const history = items.filter((i) => (i.source || "") === "ctseller").length;
-  const extra = history ? ` · ${history} from CT Seller history` : "";
-  return ` · ${items.length} posted · ${sold.length} sold · ${unsold.length} unsold · ${live.length} live${hammer ? ` · ${formatHammer(hammer)} hammer` : ""}${extra}`;
+  return {
+    posted: items.length,
+    sold: sold.length,
+    unsold: unsold.length,
+    live: live.length,
+    hammer,
+    history
+  };
 }
 
 function formatSaleSource(source?: string): string {
@@ -296,6 +322,32 @@ function formatHammer(n: number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
+}
+
+function SaleWindowHeadline({ activity, historyNote }: { activity: TeamActivity; historyNote: string }) {
+  const stats = saleWindowStats(activity);
+  const cards: Array<{ label: string; value: string; tone?: string }> = [
+    { label: "Posted", value: stats.posted.toLocaleString() },
+    { label: "Sold", value: stats.sold.toLocaleString(), tone: "sold" },
+    { label: "Unsold", value: stats.unsold.toLocaleString() },
+    { label: "Live", value: stats.live.toLocaleString() },
+    { label: "Hammer", value: formatHammer(stats.hammer), tone: "hammer" },
+    { label: "From history", value: stats.history.toLocaleString() }
+  ];
+  return (
+    <div className="ct-sale-kpis">
+      <p className="ct-sale-kpis__range">{formatSaleRange(activity.since, activity.until)}</p>
+      <div className="ct-sale-kpis__grid" role="group" aria-label="Sale totals">
+        {cards.map((card) => (
+          <div key={card.label} className={`ct-sale-kpi${card.tone ? ` ct-sale-kpi--${card.tone}` : ""}`}>
+            <div className="ct-sale-kpi__value">{card.value}</div>
+            <div className="ct-sale-kpi__label">{card.label}</div>
+          </div>
+        ))}
+      </div>
+      {historyNote ? <p className="ct-sale-kpis__note">{historyNote}</p> : null}
+    </div>
+  );
 }
 
 function soldDocketCsv(row: TeamActivity): string {
@@ -719,18 +771,17 @@ export function TeamActivitySection({
       {activityError ? <div className="ct-banner ct-banner--error">{activityError}</div> : null}
       {activity ? (
         <>
-          <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
-            {formatActivityWhen(activity.since)} – {formatActivityWhen(activity.until)}
-            {panel === "sales" ? formatSaleWindowSummary(activity) : ""}
-            {panel === "catalog"
-              ? `${activity.totals.photos_uploaded} photos · ${activity.totals.lots_photographed ?? 0} lots shot${activity.totals.median_minutes_per_lot != null ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)} shutter/lot` : ""}`
-              : ""}
-          </p>
-          {historyNote && panel === "sales" ? (
-            <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
-              {historyNote}
+          {panel === "sales" ? (
+            <SaleWindowHeadline activity={activity} historyNote={historyNote} />
+          ) : (
+            <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+              {formatActivityWhen(activity.since)} – {formatActivityWhen(activity.until)} ·{" "}
+              {activity.totals.photos_uploaded} photos · {activity.totals.lots_photographed ?? 0} lots shot
+              {activity.totals.median_minutes_per_lot != null
+                ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)} shutter/lot`
+                : ""}
             </p>
-          ) : null}
+          )}
           {panel === "catalog" ? (
             <>
               <div className="ct-table-wrap" style={{ marginBottom: 0 }}>

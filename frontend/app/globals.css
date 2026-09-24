@@ -679,8 +679,64 @@ a.ct-btn:hover {
   text-align: left;
 }
 
-.ct-table-row--picked td {
-  background: rgba(251, 191, 36, 0.08);
+.ct-sale-kpis {
+  margin: 0 0 1rem;
+}
+
+.ct-sale-kpis__range {
+  margin: 0 0 0.65rem;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--ct-text);
+  letter-spacing: -0.01em;
+}
+
+.ct-sale-kpis__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.6rem;
+}
+
+.ct-sale-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+  border: 1px solid var(--ct-border);
+}
+
+.ct-sale-kpi__value {
+  font-size: 1.55rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--ct-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-sale-kpi--sold .ct-sale-kpi__value {
+  color: var(--ct-success);
+}
+
+.ct-sale-kpi--hammer .ct-sale-kpi__value {
+  color: var(--ct-primary);
+}
+
+.ct-sale-kpi__label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ct-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ct-sale-kpis__note {
+  margin: 0.7rem 0 0;
+  font-size: 0.98rem;
+  font-weight: 500;
+  color: var(--ct-text);
 }
 
 .ct-table tfoot th,
