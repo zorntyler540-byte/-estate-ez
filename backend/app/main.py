@@ -40,7 +40,7 @@ from app.auth import (
 from app.config import cors_allow_origins, public_job_input_folder, settings
 from app.security_middleware import SecurityHeadersMiddleware
 from app.db import Base, engine, get_db, SessionLocal
-from app import appraisal_tasks, audience_tasks, export_tasks, job_tasks, regeneration_tasks
+from app import appraisal_tasks, audience_tasks, ctseller_post_tasks, export_tasks, job_tasks, regeneration_tasks
 from app.models import (
     Account,
     AppraisalCheck,
@@ -106,6 +106,7 @@ from app.schemas import (
     SalePostToCTSellerIn,
     SalePostToCTSellerLotResult,
     SalePostToCTSellerOut,
+    SalePostToCTSellerStatusOut,
     SaleReservePriceIn,
     SaleReservePriceLotResult,
     SaleReservePriceOut,
@@ -220,6 +221,7 @@ from app.services.team_activity import (
     resolve_activity_window,
     summarize_team_activity,
 )
+from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.listing_channels import (
     LISTING_CHANNEL_CTSELLER,
     LISTING_CHANNEL_FACEBOOK,
@@ -2711,171 +2713,59 @@ def refresh_ctseller_posted_auctions(
     )
 
 
-def _search_tags_for_lot_row(lot: Lot) -> list[str]:
-    from app.services.search_tags import parse_search_tags_json, search_tags_for_lot_fields
-
-    try:
-        specs = json.loads(lot.specification_lines_json or "[]")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        specs = []
-    try:
-        brands = json.loads(lot.brands_json or "[]")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        brands = []
-    try:
-        labels = json.loads(lot.labels_and_tags_json or "[]")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        labels = []
-    if not isinstance(specs, list):
-        specs = []
-    if not isinstance(brands, list):
-        brands = []
-    if not isinstance(labels, list):
-        labels = []
-    return search_tags_for_lot_fields(
-        stored=parse_search_tags_json(getattr(lot, "search_tags_json", None)),
-        title=lot.auction_title or "",
-        description=lot.professional_description or "",
-        brands=brands,
-        specification_lines=specs,
-        labels_and_tags=labels,
-        category=lot.ct_category,
-    )
+from app.services.ctseller_post import search_tags_for_lot_row as _search_tags_for_lot_row
 
 
-def _post_one_lot_to_ctseller(
+def _queue_lots_for_ctseller_post(
     *,
-    db: Session,
-    lot: Lot,
-    client: CTSellerClient,
-    remote_sale_id: int,
-    location_id: object,
-    item_receipt_method: object,
-    force: bool = False,
-    allowed_areas: list[str] | None = None,
-    tax: object = None,
-    buyers_premium: object = None,
-) -> LotPostToCTSellerOut:
-    """Create one CT Seller item + photos for a catalog lot. Raises HTTPException or CTSellerError."""
-    if lot.ctseller_item_id and not force:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Already posted to CT Seller as item {lot.ctseller_item_id}. Pass force=true to post again.",
-        )
-    sku = (lot.sku or "").strip()
-    if not sku:
-        raise HTTPException(status_code=400, detail="Lot needs a SKU before posting to CT Seller")
-    if not (lot.auction_title or "").strip():
-        raise HTTPException(status_code=400, detail="Lot needs an auction title before posting")
-    if is_facebook_listing_channel(getattr(lot, "listing_channel", None)):
-        raise HTTPException(
-            status_code=400,
-            detail="This lot is marked for Facebook Marketplace — it cannot be posted to CT Seller",
-        )
-    if lot_is_held_from_ctseller(lot) and not force:
-        raise HTTPException(
-            status_code=400,
-            detail="This lot is held for collector groups — turn off Hold for groups, or pass force=true",
-        )
-
-    photos = (
-        db.query(Photo)
-        .filter(Photo.lot_id == lot.id, Photo.account_id == lot.account_id)
-        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
-        .all()
-    )
-    listing_photos = photos_for_ctbids_listing(photos)
-    if photos and not listing_photos:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only SKU tape photos on this lot — add a product photo before posting to CT Seller"
-            ),
-        )
-    photo_paths: list[tuple[Photo, Path]] = []
-    for ph in listing_photos:
-        path = resolve_catalog_storage_path(ph.storage_path)
-        if path is not None and path.is_file():
-            photo_paths.append((ph, path))
-    if listing_photos and not photo_paths:
-        raise HTTPException(
-            status_code=400,
-            detail="Lot photos are missing on disk — cannot post to CT Seller",
-        )
-
-    areas = allowed_areas
-    if areas is None:
-        try:
-            areas = client.list_areas()
-        except CTSellerError:
-            areas = None
-
-    material: str | None = None
-    try:
-        specs = json.loads(lot.specification_lines_json or "[]")
-        if isinstance(specs, list):
-            for line in specs:
-                s = str(line or "").strip()
-                if s.lower().startswith("material:"):
-                    material = s.split(":", 1)[-1].strip() or None
-                    break
-    except (TypeError, ValueError, json.JSONDecodeError):
-        material = None
-
-    item = build_item_payload(
-        sale_id=int(remote_sale_id),
-        location_id=location_id,
-        sku=sku,
-        title=lot.auction_title or sku,
-        description=lot.professional_description or "",
-        category=(lot.ct_category or "").strip() or "Household Goods Other",
-        condition=(lot.condition_text or "").strip() or "GOOD",
-        starting_price=lot.starting_price,
-        item_receipt_method=item_receipt_method,  # type: ignore[arg-type]
-        allowed_areas=areas,
-        tax=tax if tax is not None else None,
-        buyers_premium=buyers_premium if buyers_premium is not None else None,
-        material=material,
-        tag=_search_tags_for_lot_row(lot),
-        reserve_price=resolve_lot_reserve_price(
-            lot,
-            db.query(Sale).filter(Sale.id == lot.sale_id, Sale.account_id == lot.account_id).first(),
-        ),
-    )
-    resolved_tags = _search_tags_for_lot_row(lot)
-    if resolved_tags:
-        lot.search_tags_json = json.dumps(resolved_tags, ensure_ascii=True)
-    item_id = client.create_item(item)
-    uploaded = 0
-    for idx, (ph, path) in enumerate(photo_paths):
-        raw = path.read_bytes()
-        name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
-        client.add_item_image(
-            item_id=item_id,
-            image_bytes=raw,
-            name=name[:80],
-            display_order=idx + 1,
-            is_display_image=(idx == 0),
-        )
-        uploaded += 1
-
-    now = datetime.now(timezone.utc)
-    lot.ctseller_item_id = int(item_id)
-    lot.ctseller_posted_at = now
-    lot.ctseller_sale_id = int(remote_sale_id)
-    lot.ctseller_item_status = "Pending"
-    lot.ctseller_sold_price = None
-    db.add(lot)
-    db.commit()
-    db.refresh(lot)
-
-    return LotPostToCTSellerOut(
-        lot_id=lot.id,
-        ctseller_item_id=int(item_id),
-        ctseller_sale_id=int(remote_sale_id),
-        photos_uploaded=uploaded,
-        ctseller_posted_at=now,
-    )
+    lots: list[Lot],
+    limit: int,
+    force: bool,
+) -> tuple[list[str], list[SalePostToCTSellerLotResult]]:
+    queued: list[str] = []
+    results: list[SalePostToCTSellerLotResult] = []
+    for lot in lots:
+        if len(queued) >= limit:
+            break
+        sku = (lot.sku or "").strip() or None
+        already = bool(lot.ctseller_item_id)
+        if already and not force:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error=f"Already posted as item {lot.ctseller_item_id}",
+                    ctseller_item_id=lot.ctseller_item_id,
+                )
+            )
+            continue
+        if lot_is_held_from_ctseller(lot) and not force:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Held for collector groups",
+                )
+            )
+            continue
+        if not sku or not (lot.auction_title or "").strip():
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Missing SKU or auction title",
+                )
+            )
+            continue
+        queued.append(lot.id)
+        results.append(SalePostToCTSellerLotResult(lot_id=lot.id, sku=sku, ok=True, error="queued"))
+    return queued, results
 
 
 @app.post("/lots/{lot_id}/post-to-ctseller", response_model=LotPostToCTSellerOut)
@@ -2886,10 +2776,8 @@ def post_lot_to_ctseller(
     db: Session = Depends(get_db),
 ) -> LotPostToCTSellerOut:
     """
-    Create the lot as an item on seller.ctbids.com (title, description, category, photos).
-
-    Uses unofficial CT Seller APIs — same endpoints the Seller SPA uses. Requires CT Seller
-    credentials on the account and a mapped CT Seller sale id.
+    Queue this lot for CT Seller (item + photos). Returns immediately; photos upload
+    in a background thread so Railway does not cut off the request.
     """
     body = payload or LotPostToCTSellerIn()
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
@@ -2908,37 +2796,45 @@ def post_lot_to_ctseller(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    try:
-        client = _ctseller_client_for_account(account, db)
-        try:
-            detail = client.sale_detail(int(remote_sale_id))
-        except CTSellerError as exc:
-            if exc.status_code not in (401, 403):
-                raise
-            client = _ctseller_client_for_account(account, db, force=True)
-            detail = client.sale_detail(int(remote_sale_id))
-        out = _post_one_lot_to_ctseller(
-            db=db,
-            lot=lot,
-            client=client,
-            remote_sale_id=int(remote_sale_id),
-            location_id=detail.get("locationid"),
-            item_receipt_method=detail.get("saleitemreceiptmethod"),
-            force=body.force,
-            tax=detail.get("tax"),
-            buyers_premium=detail.get("buyerspremium"),
+    if ctseller_post_tasks.sale_post_is_active(sale.id):
+        raise HTTPException(
+            status_code=409,
+            detail="A CT Seller post is already running for this sale. Wait for it to finish.",
         )
+
+    queued, skipped = _queue_lots_for_ctseller_post(lots=[lot], limit=1, force=body.force)
+    if not queued:
+        err = skipped[0].error if skipped else "Lot is not eligible to post"
+        raise HTTPException(status_code=400, detail=err or "Lot is not eligible to post")
+
+    # Cheap auth check so a missing CT Seller login fails on the click, not in the thread.
+    try:
+        _ctseller_client_for_account(account, db, probe=False)
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read lot photos: {exc}") from exc
 
     if body.save_sale_mapping and sale.ctseller_sale_id != int(remote_sale_id):
         sale.ctseller_sale_id = int(remote_sale_id)
         db.add(sale)
         db.commit()
 
-    return out
+    sku = (lot.sku or "").strip() or None
+    ctseller_post_tasks.start_sale_post_in_background(
+        account_id=current.account_id,
+        sale_id=sale.id,
+        lot_ids=queued,
+        skus={lot.id: sku},
+        remote_sale_id=int(remote_sale_id),
+        force=body.force,
+    )
+    return LotPostToCTSellerOut(
+        lot_id=lot.id,
+        ctseller_item_id=None,
+        ctseller_sale_id=int(remote_sale_id),
+        photos_uploaded=0,
+        ctseller_posted_at=None,
+        queued=True,
+    )
 
 
 @app.post("/sales/{sale_id}/post-to-ctseller", response_model=SalePostToCTSellerOut)
@@ -2949,11 +2845,8 @@ def post_sale_lots_to_ctseller(
     db: Session = Depends(get_db),
 ) -> SalePostToCTSellerOut:
     """
-    Bulk-post catalog lots in this sale to CT Seller (sequential).
-
-    Default: lots that have SKU + title and are not yet posted (``only_unposted``).
-    Up to ``limit`` lots per request (default 1, max 5) so photo uploads stay under
-    the reverse-proxy HTTP timeout. Already-posted lots are skipped unless ``force``.
+    Queue catalog lots in this sale for CT Seller. The HTTP response returns as soon as
+    the work is queued; photos upload in a background thread.
     """
     body = payload or SalePostToCTSellerIn()
     sale = _sale_for_user(sale_id, current, db)
@@ -2968,8 +2861,13 @@ def post_sale_lots_to_ctseller(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    if ctseller_post_tasks.sale_post_is_active(sale.id):
+        raise HTTPException(
+            status_code=409,
+            detail="A CT Seller post is already running for this sale. Wait for it to finish.",
+        )
+
     q = db.query(Lot).filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
-    # Never bulk-post Facebook Marketplace furniture into CT Bids.
     q = q.filter(Lot.listing_channel != LISTING_CHANNEL_FACEBOOK)
     if body.lot_ids:
         wanted = {x.strip() for x in body.lot_ids if (x or "").strip()}
@@ -2982,20 +2880,7 @@ def post_sale_lots_to_ctseller(
         lots = [by_id[i] for i in body.lot_ids if i in by_id]
 
     try:
-        client = _ctseller_client_for_account(account, db)
-        try:
-            detail = client.sale_detail(int(remote_sale_id))
-        except CTSellerError as exc:
-            if exc.status_code not in (401, 403):
-                raise
-            client = _ctseller_client_for_account(account, db, force=True)
-            detail = client.sale_detail(int(remote_sale_id))
-        location_id = detail.get("locationid")
-        irm = detail.get("saleitemreceiptmethod")
-        try:
-            allowed_areas = client.list_areas()
-        except CTSellerError:
-            allowed_areas = None
+        _ctseller_client_for_account(account, db, probe=False)
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3004,102 +2889,55 @@ def post_sale_lots_to_ctseller(
         db.add(sale)
         db.commit()
 
-    results: list[SalePostToCTSellerLotResult] = []
-    posted = failed = skipped = 0
-    processed = 0
-
-    for lot in lots:
-        if processed >= body.limit:
-            break
-        sku = (lot.sku or "").strip() or None
-        already = bool(lot.ctseller_item_id)
-        if already and not body.force:
-            results.append(
-                SalePostToCTSellerLotResult(
-                    lot_id=lot.id,
-                    sku=sku,
-                    ok=False,
-                    skipped=True,
-                    error=f"Already posted as item {lot.ctseller_item_id}",
-                    ctseller_item_id=lot.ctseller_item_id,
-                )
-            )
-            skipped += 1
-            continue
-        if lot_is_held_from_ctseller(lot) and not body.force:
-            results.append(
-                SalePostToCTSellerLotResult(
-                    lot_id=lot.id,
-                    sku=sku,
-                    ok=False,
-                    skipped=True,
-                    error="Held for collector groups",
-                )
-            )
-            skipped += 1
-            continue
-        if not sku or not (lot.auction_title or "").strip():
-            results.append(
-                SalePostToCTSellerLotResult(
-                    lot_id=lot.id,
-                    sku=sku,
-                    ok=False,
-                    skipped=True,
-                    error="Missing SKU or auction title",
-                )
-            )
-            skipped += 1
-            continue
-
-        processed += 1
+    queued_ids, results = _queue_lots_for_ctseller_post(lots=lots, limit=body.limit, force=body.force)
+    skipped = sum(1 for r in results if r.skipped)
+    if queued_ids:
+        sku_map = {
+            lid: ((next((x.sku for x in lots if x.id == lid), None) or "").strip() or None)
+            for lid in queued_ids
+        }
         try:
-            out = _post_one_lot_to_ctseller(
-                db=db,
-                lot=lot,
-                client=client,
+            ctseller_post_tasks.start_sale_post_in_background(
+                account_id=current.account_id,
+                sale_id=sale.id,
+                lot_ids=queued_ids,
+                skus=sku_map,
                 remote_sale_id=int(remote_sale_id),
-                location_id=location_id,
-                item_receipt_method=irm,
                 force=body.force,
-                allowed_areas=allowed_areas,
-                tax=detail.get("tax"),
-                buyers_premium=detail.get("buyerspremium"),
             )
-            results.append(
-                SalePostToCTSellerLotResult(
-                    lot_id=lot.id,
-                    sku=sku,
-                    ok=True,
-                    ctseller_item_id=out.ctseller_item_id,
-                    photos_uploaded=out.photos_uploaded,
-                )
-            )
-            posted += 1
-        except HTTPException as exc:
-            detail_msg = exc.detail
-            msg = detail_msg if isinstance(detail_msg, str) else str(detail_msg)
-            results.append(
-                SalePostToCTSellerLotResult(lot_id=lot.id, sku=sku, ok=False, error=msg)
-            )
-            failed += 1
-        except CTSellerError as exc:
-            results.append(
-                SalePostToCTSellerLotResult(lot_id=lot.id, sku=sku, ok=False, error=str(exc))
-            )
-            failed += 1
-        except OSError as exc:
-            results.append(
-                SalePostToCTSellerLotResult(
-                    lot_id=lot.id, sku=sku, ok=False, error=f"Photo read failed: {exc}"
-                )
-            )
-            failed += 1
-
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     return SalePostToCTSellerOut(
         ctseller_sale_id=int(remote_sale_id),
-        posted=posted,
-        failed=failed,
+        posted=0,
+        failed=0,
         skipped=skipped,
+        queued=len(queued_ids),
+        results=results,
+    )
+
+
+@app.get("/sales/{sale_id}/post-to-ctseller", response_model=SalePostToCTSellerStatusOut)
+def sale_ctseller_post_status(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SalePostToCTSellerStatusOut:
+    _sale_for_user(sale_id, current, db)
+    raw = ctseller_post_tasks.sale_post_status(sale_id)
+    results = [SalePostToCTSellerLotResult(**row) for row in (raw.get("results") or []) if row.get("lot_id")]
+    return SalePostToCTSellerStatusOut(
+        active=bool(raw.get("active")),
+        ctseller_sale_id=raw.get("ctseller_sale_id"),
+        total=int(raw.get("total") or 0),
+        done=int(raw.get("done") or 0),
+        posted=int(raw.get("posted") or 0),
+        failed=int(raw.get("failed") or 0),
+        skipped=int(raw.get("skipped") or 0),
+        queued=int(raw.get("queued") or 0),
+        current_lot_id=raw.get("current_lot_id"),
+        current_sku=raw.get("current_sku"),
+        current_phase=raw.get("current_phase"),
         results=results,
     )
 

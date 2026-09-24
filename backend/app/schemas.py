@@ -460,10 +460,11 @@ class LotPostToCTSellerIn(BaseModel):
 
 class LotPostToCTSellerOut(BaseModel):
     lot_id: str
-    ctseller_item_id: int
+    ctseller_item_id: int | None = None
     ctseller_sale_id: int
-    photos_uploaded: int
-    ctseller_posted_at: datetime
+    photos_uploaded: int = 0
+    ctseller_posted_at: datetime | None = None
+    queued: bool = False
 
 
 class SalePostToCTSellerIn(BaseModel):
@@ -474,8 +475,8 @@ class SalePostToCTSellerIn(BaseModel):
     ctseller_sale_id: int | None = None
     save_sale_mapping: bool = True
     force: bool = False
-    # One lot per request keeps photo uploads under the ~60s Railway HTTP timeout.
-    limit: int = Field(default=1, ge=1, le=5)
+    # Queue size only — posting runs in a background thread (not the HTTP request).
+    limit: int = Field(default=100, ge=1, le=200)
 
 
 class SalePostToCTSellerLotResult(BaseModel):
@@ -490,10 +491,28 @@ class SalePostToCTSellerLotResult(BaseModel):
 
 class SalePostToCTSellerOut(BaseModel):
     ctseller_sale_id: int
-    posted: int
-    failed: int
-    skipped: int
+    posted: int = 0
+    failed: int = 0
+    skipped: int = 0
+    queued: int = 0
     results: list[SalePostToCTSellerLotResult]
+
+
+class SalePostToCTSellerStatusOut(BaseModel):
+    """Live progress for a background CT Seller post (photos upload after the HTTP response)."""
+
+    active: bool = False
+    ctseller_sale_id: int | None = None
+    total: int = 0
+    done: int = 0
+    posted: int = 0
+    failed: int = 0
+    skipped: int = 0
+    queued: int = 0
+    current_lot_id: str | None = None
+    current_sku: str | None = None
+    current_phase: str | None = None
+    results: list[SalePostToCTSellerLotResult] = Field(default_factory=list)
 
 
 class SaleCoverPhotoSlotOut(BaseModel):

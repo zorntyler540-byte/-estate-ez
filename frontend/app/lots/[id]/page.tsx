@@ -904,28 +904,89 @@ export default function LotDetailPage() {
           force
         })
       })) as {
-        ctseller_item_id: number;
+        ctseller_item_id?: number | null;
         photos_uploaded: number;
         ctseller_sale_id: number;
+        queued?: boolean;
       };
       setMappedCtSellerSaleId(res.ctseller_sale_id);
       setCtSellerPickId(String(res.ctseller_sale_id));
-      setLot((prev) =>
-        prev
-          ? {
-              ...prev,
-              ctseller_item_id: res.ctseller_item_id,
-              ctseller_posted_at: new Date().toISOString(),
-              ctseller_sale_id: res.ctseller_sale_id,
-              ctseller_item_status: "Pending",
-              ctseller_sold_price: null
-            }
-          : prev
-      );
-      setCtSellerMsg(
-        `Posted to CT Seller as item #${res.ctseller_item_id}` +
-          (res.photos_uploaded ? ` (${res.photos_uploaded} photo${res.photos_uploaded === 1 ? "" : "s"})` : "")
-      );
+      if (res.queued && lot.sale_id) {
+        setCtSellerMsg("Queued — creating the CT Bids item, then uploading photos…");
+        let active = true;
+        let lastErr = "";
+        while (active) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const st = (await apiFetch(
+            `/sales/${encodeURIComponent(lot.sale_id)}/post-to-ctseller`,
+            token
+          )) as {
+            active: boolean;
+            current_phase?: string | null;
+            results: Array<{
+              lot_id: string;
+              ok: boolean;
+              skipped?: boolean;
+              error?: string | null;
+              ctseller_item_id?: number | null;
+              photos_uploaded?: number | null;
+            }>;
+          };
+          const row = (st.results || []).find((r) => r.lot_id === lot.id);
+          if (st.current_phase) {
+            setCtSellerMsg(`Posting… ${st.current_phase}`);
+          }
+          if (row?.ok && row.ctseller_item_id) {
+            setLot((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    ctseller_item_id: row.ctseller_item_id,
+                    ctseller_posted_at: new Date().toISOString(),
+                    ctseller_sale_id: res.ctseller_sale_id,
+                    ctseller_item_status: "Pending",
+                    ctseller_sold_price: null
+                  }
+                : prev
+            );
+            setCtSellerMsg(
+              `Posted to CT Seller as item #${row.ctseller_item_id}` +
+                (row.photos_uploaded
+                  ? ` (${row.photos_uploaded} photo${row.photos_uploaded === 1 ? "" : "s"})`
+                  : "")
+            );
+            active = false;
+            break;
+          }
+          if (row && !row.ok && !st.active) {
+            lastErr = row.error || "Post to CT Seller failed";
+            active = false;
+            break;
+          }
+          active = Boolean(st.active);
+          if (!active && !row?.ok) {
+            lastErr = row?.error || "Post to CT Seller failed";
+          }
+        }
+        if (lastErr) setCtSellerErr(lastErr);
+      } else if (res.ctseller_item_id) {
+        setLot((prev) =>
+          prev
+            ? {
+                ...prev,
+                ctseller_item_id: res.ctseller_item_id,
+                ctseller_posted_at: new Date().toISOString(),
+                ctseller_sale_id: res.ctseller_sale_id,
+                ctseller_item_status: "Pending",
+                ctseller_sold_price: null
+              }
+            : prev
+        );
+        setCtSellerMsg(
+          `Posted to CT Seller as item #${res.ctseller_item_id}` +
+            (res.photos_uploaded ? ` (${res.photos_uploaded} photo${res.photos_uploaded === 1 ? "" : "s"})` : "")
+        );
+      }
     } catch (e) {
       setCtSellerErr(e instanceof Error ? e.message : "Post to CT Seller failed");
     } finally {

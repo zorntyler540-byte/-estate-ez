@@ -4,15 +4,13 @@ import pytest
 from app.schemas import SalePostToCTSellerIn
 
 
-def test_sale_post_limit_defaults_to_one_lot() -> None:
+def test_sale_post_limit_queues_many_lots() -> None:
     body = SalePostToCTSellerIn()
-    assert body.limit == 1
+    assert body.limit == 100
+    ok = SalePostToCTSellerIn(limit=100)
+    assert ok.limit == 100
 
 
-def test_sale_post_limit_rejects_old_ten_lot_batches() -> None:
+def test_sale_post_limit_rejects_oversized_queue() -> None:
     with pytest.raises(ValidationError):
-        SalePostToCTSellerIn(limit=10)
-    with pytest.raises(ValidationError):
-        SalePostToCTSellerIn(limit=50)
-    ok = SalePostToCTSellerIn(limit=5)
-    assert ok.limit == 5
+        SalePostToCTSellerIn(limit=500)

@@ -5610,43 +5610,102 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         useSelection
-          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nLots are posted one at a time so photo-heavy lots stay under the server time limit.\nSKU-tape photos are not uploaded.`
-          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nLots are posted one at a time so photo-heavy lots stay under the server time limit. Already-posted lots are skipped.\nSKU-tape photos are not uploaded.\n\nTip: check rows to post only some of them.`
+          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. SKU-tape photos are not uploaded.`
+          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. Already-posted lots are skipped.\nSKU-tape photos are not uploaded.\n\nTip: check rows to post only some of them.`
       )
     ) {
       return;
     }
     setCtSellerBulkBusy(true);
     setCtSellerBulkErr("");
-    setCtSellerBulkMsg(useSelection ? `Starting post of ${targetCount} selected…` : "Starting bulk post…");
-    let posted = 0;
-    let failed = 0;
-    let skipped = 0;
-    const failSamples: string[] = [];
+    setCtSellerBulkMsg(useSelection ? `Queueing ${targetCount} selected…` : "Queueing bulk post…");
     const postedIds = new Set<string>();
+    const failSamples: string[] = [];
+    const applyRows = (
+      rows: Array<{
+        lot_id: string;
+        ok: boolean;
+        skipped?: boolean;
+        error?: string | null;
+        ctseller_item_id?: number | null;
+        sku?: string | null;
+      }>
+    ) => {
+      for (const row of rows) {
+        if (row.ok && row.ctseller_item_id) {
+          postedIds.add(row.lot_id);
+          setLots((prev) =>
+            prev.map((l) =>
+              l.id === row.lot_id
+                ? {
+                    ...l,
+                    ctseller_item_id: row.ctseller_item_id,
+                    ctseller_posted_at: new Date().toISOString()
+                  }
+                : l
+            )
+          );
+        } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
+          const sample = `${row.sku || row.lot_id}: ${row.error}`;
+          if (!failSamples.includes(sample)) failSamples.push(sample);
+        }
+      }
+    };
     try {
-      for (let i = 0; i < idsToPost.length; i++) {
-        const lotId = idsToPost[i];
+      const kick = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          ctseller_sale_id: pick,
+          save_sale_mapping: true,
+          only_unposted: true,
+          force: false,
+          lot_ids: idsToPost,
+          limit: idsToPost.length
+        })
+      })) as {
+        queued?: number;
+        posted: number;
+        failed: number;
+        skipped: number;
+        results: Array<{
+          lot_id: string;
+          ok: boolean;
+          skipped?: boolean;
+          error?: string | null;
+          ctseller_item_id?: number | null;
+          sku?: string | null;
+        }>;
+      };
+      applyRows(kick.results || []);
+      setSales((prev) => prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s)));
+      if ((kick.queued || 0) < 1) {
         setCtSellerBulkMsg(
-          `Posting… ${posted} done` +
-            (failed ? `, ${failed} failed` : "") +
-            (skipped ? `, ${skipped} skipped` : "") +
-            ` (lot ${i + 1} of ${idsToPost.length})`
+          `Nothing queued` +
+            (kick.skipped ? ` — ${kick.skipped} skipped` : "") +
+            "."
         );
-        const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
-          method: "POST",
-          body: JSON.stringify({
-            ctseller_sale_id: pick,
-            save_sale_mapping: true,
-            only_unposted: true,
-            force: false,
-            lot_ids: [lotId],
-            limit: 1
-          })
-        })) as {
+        if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+        return;
+      }
+      setCtSellerBulkMsg(`Queued ${kick.queued} lot(s). Uploading photos in the background…`);
+      let active = true;
+      let posted = 0;
+      let failed = 0;
+      let skipped = kick.skipped || 0;
+      while (active) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = (await apiFetch(
+          `/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`,
+          token
+        )) as {
+          active: boolean;
+          total: number;
+          done: number;
           posted: number;
           failed: number;
           skipped: number;
+          current_sku?: string | null;
+          current_phase?: string | null;
           results: Array<{
             lot_id: string;
             ok: boolean;
@@ -5656,30 +5715,27 @@ export default function DashboardPage() {
             sku?: string | null;
           }>;
         };
-        posted += res.posted || 0;
-        failed += res.failed || 0;
-        skipped += res.skipped || 0;
-        for (const row of res.results || []) {
-          if (row.ok && row.ctseller_item_id) {
-            postedIds.add(row.lot_id);
-            setLots((prev) =>
-              prev.map((l) =>
-                l.id === row.lot_id
-                  ? {
-                      ...l,
-                      ctseller_item_id: row.ctseller_item_id,
-                      ctseller_posted_at: new Date().toISOString()
-                    }
-                  : l
-              )
-            );
-          } else if (!row.ok && !row.skipped && row.error && failSamples.length < 3) {
-            failSamples.push(`${row.sku || row.lot_id}: ${row.error}`);
-          }
-        }
-        setSales((prev) =>
-          prev.map((s) => (s.id === selectedSaleId ? { ...s, ctseller_sale_id: pick } : s))
+        posted = st.posted || 0;
+        failed = st.failed || 0;
+        skipped = st.skipped || 0;
+        applyRows(st.results || []);
+        const skuBit = st.current_sku ? ` ${st.current_sku}` : "";
+        const phaseBit = st.current_phase ? ` — ${st.current_phase}` : "";
+        setCtSellerBulkMsg(
+          `Posting… ${posted} done` +
+            (failed ? `, ${failed} failed` : "") +
+            (skipped ? `, ${skipped} skipped` : "") +
+            ` (lot ${Math.min(st.total, st.done + (st.active ? 1 : 0))} of ${st.total}${skuBit}${phaseBit})`
         );
+        active = Boolean(st.active);
+        if (!active) {
+          setCtSellerBulkMsg(
+            `Bulk post finished: ${posted} posted` +
+              (failed ? `, ${failed} failed` : "") +
+              (skipped ? `, ${skipped} skipped` : "") +
+              "."
+          );
+        }
       }
       if (postedIds.size) {
         setCtSellerPostSelected((prev) => {
@@ -5689,26 +5745,12 @@ export default function DashboardPage() {
           return next;
         });
       }
-      setCtSellerBulkMsg(
-        `Bulk post finished: ${posted} posted` +
-          (failed ? `, ${failed} failed` : "") +
-          (skipped ? `, ${skipped} skipped` : "") +
-          "."
-      );
       if (failSamples.length) {
         setCtSellerBulkErr(failSamples.join(" · "));
       }
       setDataReloadNonce((n) => n + 1);
     } catch (e) {
       setCtSellerBulkErr(e instanceof Error ? e.message : "Bulk post failed");
-      if (posted || failed || skipped) {
-        setCtSellerBulkMsg(
-          `Stopped early after ${posted} posted` +
-            (failed ? `, ${failed} failed` : "") +
-            (skipped ? `, ${skipped} skipped` : "") +
-            "."
-        );
-      }
     } finally {
       setCtSellerBulkBusy(false);
     }
