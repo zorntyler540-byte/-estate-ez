@@ -709,7 +709,7 @@ a.ct-btn:hover {
 
 .ct-sale-kpi__value {
   font-size: 1.55rem;
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.1;
   color: var(--ct-text);
@@ -737,6 +737,185 @@ a.ct-btn:hover {
   font-size: 0.98rem;
   font-weight: 500;
   color: var(--ct-text);
+}
+
+.ct-sale-charts {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.9fr) minmax(18rem, 1.4fr);
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.ct-sale-chart {
+  background: var(--ct-bg-elevated);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  padding: 0.85rem 0.95rem 0.95rem;
+  min-width: 0;
+}
+
+.ct-sale-chart--wide {
+  grid-column: 1 / -1;
+}
+
+.ct-sale-chart__title {
+  margin: 0 0 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ct-text-muted);
+}
+
+.ct-sale-chart__donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.ct-sale-chart__donut {
+  width: 8.5rem;
+  height: 8.5rem;
+  flex: 0 0 auto;
+}
+
+.ct-sale-chart__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  color: var(--ct-text);
+}
+
+.ct-sale-chart__legend strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-sale-chart__swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  margin-right: 0.45rem;
+  vertical-align: -0.05rem;
+}
+
+.ct-sale-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+.ct-sale-bar {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 8rem) 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.ct-sale-bar:disabled {
+  cursor: default;
+}
+
+.ct-sale-bar:hover:not(:disabled) .ct-sale-bar__fill,
+.ct-sale-bar.is-active .ct-sale-bar__fill {
+  filter: brightness(1.12);
+}
+
+.ct-sale-bar.is-active .ct-sale-bar__label {
+  color: var(--ct-primary);
+}
+
+.ct-sale-bar__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ct-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-sale-bar__track {
+  height: 0.72rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.ct-sale-bar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ff7347, var(--ct-primary));
+}
+
+.ct-sale-bar__value {
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ct-text-muted);
+  min-width: 4.4rem;
+  text-align: right;
+}
+
+.ct-sale-colbars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+  height: 10.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.ct-sale-colbar {
+  flex: 1 0 2.1rem;
+  max-width: 4.2rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 2.1rem;
+}
+
+.ct-sale-colbar__track {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.ct-sale-colbar__fill {
+  width: 70%;
+  max-width: 2rem;
+  border-radius: 6px 6px 2px 2px;
+  background: linear-gradient(180deg, #ff7347, var(--ct-primary));
+}
+
+.ct-sale-colbar__label {
+  margin-top: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ct-text-muted);
+  text-align: center;
+  line-height: 1.2;
+}
+
+@media (max-width: 900px) {
+  .ct-sale-charts {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ct-table tfoot th,

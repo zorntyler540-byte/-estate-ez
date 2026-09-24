@@ -1,0 +1,175 @@
+"use client";
+
+import { useMemo } from "react";
+import {
+  donutArcs,
+  hammerTimeBuckets,
+  outcomeSlices,
+  topHammerBars,
+  type HammerBar,
+  type OutcomeSlice,
+  type TimeBucket
+} from "../lib/saleResultsCharts";
+
+function money(n: number): string {
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  });
+}
+
+function OutcomeDonut({ slices }: { slices: OutcomeSlice[] }) {
+  const total = slices.reduce((s, x) => s + x.count, 0);
+  const r = 42;
+  const c = 2 * Math.PI * r;
+  const arcs = donutArcs(slices, c);
+  return (
+    <div className="ct-sale-chart">
+      <h3 className="ct-sale-chart__title">Results mix</h3>
+      <div className="ct-sale-chart__donut-wrap">
+        <svg viewBox="0 0 120 120" className="ct-sale-chart__donut" aria-hidden="true">
+          <circle cx="60" cy="60" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="14" />
+          {arcs.map((arc) => (
+            <circle
+              key={arc.key}
+              cx="60"
+              cy="60"
+              r={r}
+              fill="none"
+              stroke={arc.color}
+              strokeWidth="14"
+              strokeDasharray={`${arc.dash} ${c - arc.dash}`}
+              strokeDashoffset={arc.offset}
+              strokeLinecap="butt"
+              transform="rotate(-90 60 60)"
+            />
+          ))}
+          <text x="60" y="56" textAnchor="middle" fill="#f4f4f5" fontSize="16" fontWeight="700">
+            {total.toLocaleString()}
+          </text>
+          <text x="60" y="72" textAnchor="middle" fill="#a1a1aa" fontSize="9">
+            posted
+          </text>
+        </svg>
+        <ul className="ct-sale-chart__legend">
+          {slices.map((s) => (
+            <li key={s.key}>
+              <span className="ct-sale-chart__swatch" style={{ background: s.color }} />
+              <span>
+                {s.label} · <strong>{s.count.toLocaleString()}</strong>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function HammerBars({
+  bars,
+  picked,
+  onPick
+}: {
+  bars: HammerBar[];
+  picked: string | null;
+  onPick: (category: string) => void;
+}) {
+  const max = Math.max(...bars.map((b) => b.hammer), 1);
+  return (
+    <div className="ct-sale-chart">
+      <h3 className="ct-sale-chart__title">Hammer by category</h3>
+      <div className="ct-sale-bars" role="list">
+        {bars.map((bar) => {
+          const pct = Math.max(2, (bar.hammer / max) * 100);
+          const active = picked === bar.category;
+          const clickable = bar.category !== "Other";
+          return (
+            <button
+              key={bar.category}
+              type="button"
+              role="listitem"
+              className={`ct-sale-bar${active ? " is-active" : ""}`}
+              disabled={!clickable}
+              onClick={() => clickable && onPick(bar.category)}
+              title={`${bar.category}: ${money(bar.hammer)} hammer · ${bar.sold} sold`}
+            >
+              <span className="ct-sale-bar__label">{bar.category}</span>
+              <span className="ct-sale-bar__track">
+                <span className="ct-sale-bar__fill" style={{ width: `${pct}%` }} />
+              </span>
+              <span className="ct-sale-bar__value">{money(bar.hammer)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MonthBars({ buckets }: { buckets: TimeBucket[] }) {
+  const max = Math.max(...buckets.map((b) => b.hammer), 1);
+  return (
+    <div className="ct-sale-chart ct-sale-chart--wide">
+      <h3 className="ct-sale-chart__title">Hammer over time</h3>
+      <div className="ct-sale-colbars" role="img" aria-label="Hammer by period">
+        {buckets.map((b) => {
+          const h = Math.max(6, (b.hammer / max) * 100);
+          return (
+            <div key={b.key} className="ct-sale-colbar" title={`${b.label}: ${money(b.hammer)} · ${b.sold} sold`}>
+              <div className="ct-sale-colbar__track">
+                <div className="ct-sale-colbar__fill" style={{ height: `${h}%` }} />
+              </div>
+              <div className="ct-sale-colbar__label">{b.label}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function SaleResultsCharts({
+  items,
+  categories,
+  since,
+  until,
+  pickedCategory,
+  onPickCategory
+}: {
+  items: Array<{
+    outcome?: string;
+    sold_price?: number;
+    posted_at?: string | null;
+    category?: string;
+  }>;
+  categories: Array<{
+    category: string;
+    revenue: number;
+    sold_count: number;
+    posted_count?: number;
+  }>;
+  since: string;
+  until: string;
+  pickedCategory: string | null;
+  onPickCategory: (category: string | null) => void;
+}) {
+  const slices = useMemo(() => outcomeSlices(items), [items]);
+  const bars = useMemo(() => topHammerBars(categories, 10), [categories]);
+  const times = useMemo(() => hammerTimeBuckets(items, since, until), [items, since, until]);
+  if (!items.length) return null;
+  return (
+    <div className="ct-sale-charts">
+      <OutcomeDonut slices={slices} />
+      {bars.length ? (
+        <HammerBars
+          bars={bars}
+          picked={pickedCategory}
+          onPick={(cat) => onPickCategory(pickedCategory === cat ? null : cat)}
+        />
+      ) : null}
+      {times.length >= 2 ? <MonthBars buckets={times} /> : null}
+    </div>
+  );
+}

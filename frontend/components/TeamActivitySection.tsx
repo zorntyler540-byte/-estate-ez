@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LotThumbnail } from "./LotThumbnail";
+import { SaleResultsCharts } from "./SaleResultsCharts";
 import { apiFetch } from "../lib/api";
 import { accountRoleLabel } from "../lib/roles";
 import {
@@ -638,8 +639,8 @@ export function TeamActivitySection({
               Sale results are lots posted to CT Bids in this date range, with the current CT Seller
               status. <strong>Sold</strong> includes hammer. <strong>Unsold</strong> did not sell.{" "}
               <strong>Live</strong> is still bidding. Categories show sell-through (sold ÷ posted)
-              and hammer stats for sold lots. Click a column header (Hammer, Average, Sell-through)
-              to sort. Click a category name to list only those lots. Pull <strong>CT Seller history</strong> to include
+              and hammer stats for sold lots.               Click a column header (Hammer, Average, Sell-through)
+              to sort. Click a category name or a hammer bar to list only those lots. Pull <strong>CT Seller history</strong> to include
               closed auctions from seller.ctbids.com (sold, unsold, category, hammer), not only lots
               already in this catalog. <strong>All time</strong> runs from 2000 through now. The first
               history pull can take a minute; pull again if older auctions are still missing. Today is
@@ -1080,9 +1081,17 @@ function SaleResultsPanel({
         </p>
       ) : (
         <p className="ct-muted" style={{ margin: "0 0 0.65rem" }}>
-          Click a column header to sort. Click a category name to list only those lots.
+          Click a column header to sort. Click a category name or a hammer bar to list only those lots.
         </p>
       )}
+      <SaleResultsCharts
+        items={items}
+        categories={categories}
+        since={activity.since}
+        until={activity.until}
+        pickedCategory={pickedCategory}
+        onPickCategory={setPickedCategory}
+      />
       {categories.length ? (
         <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>
           <table className="ct-table">
