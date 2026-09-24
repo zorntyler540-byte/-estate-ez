@@ -5,6 +5,7 @@ import {
   donutArcs,
   hammerTimeBuckets,
   outcomeSlices,
+  topAvgBars,
   topHammerBars,
   type HammerBar,
   type OutcomeSlice,
@@ -15,7 +16,7 @@ function money(n: number): string {
   return n.toLocaleString(undefined, {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0
+    maximumFractionDigits: n >= 100 ? 0 : 2
   });
 }
 
@@ -67,22 +68,29 @@ function OutcomeDonut({ slices }: { slices: OutcomeSlice[] }) {
   );
 }
 
-function HammerBars({
+function CategoryMetricBars({
+  title,
   bars,
+  metric,
   picked,
-  onPick
+  onPick,
+  wide
 }: {
+  title: string;
   bars: HammerBar[];
+  metric: "hammer" | "avg";
   picked: string | null;
   onPick: (category: string) => void;
+  wide?: boolean;
 }) {
-  const max = Math.max(...bars.map((b) => b.hammer), 1);
+  const max = Math.max(...bars.map((b) => (metric === "avg" ? b.avg : b.hammer)), 1);
   return (
-    <div className="ct-sale-chart">
-      <h3 className="ct-sale-chart__title">Hammer by category</h3>
+    <div className={`ct-sale-chart${wide ? " ct-sale-chart--wide" : ""}`}>
+      <h3 className="ct-sale-chart__title">{title}</h3>
       <div className="ct-sale-bars" role="list">
         {bars.map((bar) => {
-          const pct = Math.max(2, (bar.hammer / max) * 100);
+          const value = metric === "avg" ? bar.avg : bar.hammer;
+          const pct = Math.max(2, (value / max) * 100);
           const active = picked === bar.category;
           const clickable = bar.category !== "Other";
           return (
@@ -93,13 +101,16 @@ function HammerBars({
               className={`ct-sale-bar${active ? " is-active" : ""}`}
               disabled={!clickable}
               onClick={() => clickable && onPick(bar.category)}
-              title={`${bar.category}: ${money(bar.hammer)} hammer · ${bar.sold} sold`}
+              title={`${bar.category}: ${money(value)} ${metric === "avg" ? "avg" : "hammer"} · ${bar.sold} sold`}
             >
               <span className="ct-sale-bar__label">{bar.category}</span>
               <span className="ct-sale-bar__track">
-                <span className="ct-sale-bar__fill" style={{ width: `${pct}%` }} />
+                <span
+                  className={`ct-sale-bar__fill${metric === "avg" ? " ct-sale-bar__fill--avg" : ""}`}
+                  style={{ width: `${pct}%` }}
+                />
               </span>
-              <span className="ct-sale-bar__value">{money(bar.hammer)}</span>
+              <span className="ct-sale-bar__value">{money(value)}</span>
             </button>
           );
         })}
@@ -108,18 +119,29 @@ function HammerBars({
   );
 }
 
-function MonthBars({ buckets }: { buckets: TimeBucket[] }) {
-  const max = Math.max(...buckets.map((b) => b.hammer), 1);
+function MonthBars({
+  buckets,
+  metric
+}: {
+  buckets: TimeBucket[];
+  metric: "hammer" | "avg";
+}) {
+  const max = Math.max(...buckets.map((b) => (metric === "avg" ? b.avg : b.hammer)), 1);
+  const title = metric === "avg" ? "Average over time" : "Hammer over time";
   return (
-    <div className="ct-sale-chart ct-sale-chart--wide">
-      <h3 className="ct-sale-chart__title">Hammer over time</h3>
-      <div className="ct-sale-colbars" role="img" aria-label="Hammer by period">
+    <div className="ct-sale-chart">
+      <h3 className="ct-sale-chart__title">{title}</h3>
+      <div className="ct-sale-colbars" role="img" aria-label={title}>
         {buckets.map((b) => {
-          const h = Math.max(6, (b.hammer / max) * 100);
+          const value = metric === "avg" ? b.avg : b.hammer;
+          const h = Math.max(6, (value / max) * 100);
           return (
-            <div key={b.key} className="ct-sale-colbar" title={`${b.label}: ${money(b.hammer)} · ${b.sold} sold`}>
+            <div key={b.key} className="ct-sale-colbar" title={`${b.label}: ${money(value)} · ${b.sold} sold`}>
               <div className="ct-sale-colbar__track">
-                <div className="ct-sale-colbar__fill" style={{ height: `${h}%` }} />
+                <div
+                  className={`ct-sale-colbar__fill${metric === "avg" ? " ct-sale-colbar__fill--avg" : ""}`}
+                  style={{ height: `${h}%` }}
+                />
               </div>
               <div className="ct-sale-colbar__label">{b.label}</div>
             </div>
@@ -149,6 +171,7 @@ export function SaleResultsCharts({
     revenue: number;
     sold_count: number;
     posted_count?: number;
+    avg_price?: number;
   }>;
   since: string;
   until: string;
@@ -157,19 +180,34 @@ export function SaleResultsCharts({
 }) {
   const slices = useMemo(() => outcomeSlices(items), [items]);
   const bars = useMemo(() => topHammerBars(categories, 10), [categories]);
+  const avgBars = useMemo(() => topAvgBars(categories, 10), [categories]);
   const times = useMemo(() => hammerTimeBuckets(items, since, until), [items, since, until]);
   if (!items.length) return null;
+  const pick = (cat: string) => onPickCategory(pickedCategory === cat ? null : cat);
   return (
     <div className="ct-sale-charts">
       <OutcomeDonut slices={slices} />
       {bars.length ? (
-        <HammerBars
+        <CategoryMetricBars
+          title="Hammer by category"
           bars={bars}
+          metric="hammer"
           picked={pickedCategory}
-          onPick={(cat) => onPickCategory(pickedCategory === cat ? null : cat)}
+          onPick={pick}
         />
       ) : null}
-      {times.length >= 2 ? <MonthBars buckets={times} /> : null}
+      {avgBars.length ? (
+        <CategoryMetricBars
+          title="Average by category"
+          bars={avgBars}
+          metric="avg"
+          picked={pickedCategory}
+          onPick={pick}
+          wide
+        />
+      ) : null}
+      {times.length >= 2 ? <MonthBars buckets={times} metric="hammer" /> : null}
+      {times.length >= 2 ? <MonthBars buckets={times} metric="avg" /> : null}
     </div>
   );
 }

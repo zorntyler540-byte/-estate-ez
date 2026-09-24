@@ -741,7 +741,7 @@ a.ct-btn:hover {
 
 .ct-sale-charts {
   display: grid;
-  grid-template-columns: minmax(14rem, 0.9fr) minmax(18rem, 1.4fr);
+  grid-template-columns: minmax(14rem, 1fr) minmax(18rem, 1.3fr);
   gap: 0.75rem;
   margin: 0 0 1rem;
 }
@@ -860,6 +860,10 @@ a.ct-btn:hover {
   background: linear-gradient(90deg, #ff7347, var(--ct-primary));
 }
 
+.ct-sale-bar__fill--avg {
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+}
+
 .ct-sale-bar__value {
   font-size: 0.78rem;
   font-weight: 700;
@@ -901,6 +905,10 @@ a.ct-btn:hover {
   max-width: 2rem;
   border-radius: 6px 6px 2px 2px;
   background: linear-gradient(180deg, #ff7347, var(--ct-primary));
+}
+
+.ct-sale-colbar__fill--avg {
+  background: linear-gradient(180deg, #fbbf24, #f59e0b);
 }
 
 .ct-sale-colbar__label {
