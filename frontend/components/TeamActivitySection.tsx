@@ -6,6 +6,11 @@ import { LotThumbnail } from "./LotThumbnail";
 import { apiFetch } from "../lib/api";
 import { accountRoleLabel } from "../lib/roles";
 
+export type TeamActivityPhotoTime = {
+  at: string;
+  source?: string;
+};
+
 export type TeamActivityLot = {
   lot_id: string;
   sale_id: string;
@@ -17,6 +22,7 @@ export type TeamActivityLot = {
   last_photo_at?: string;
   has_thumbnail?: boolean;
   timing_source?: string;
+  photo_times?: TeamActivityPhotoTime[];
 };
 
 export type TeamActivityMember = {
@@ -123,21 +129,66 @@ function formatActivityMinutes(n: number | null | undefined): string {
   return `${Math.round(n)} min`;
 }
 
+function formatClockTime(iso: string, withSeconds: boolean): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {})
+  });
+}
+
+function formatClockRange(first?: string, last?: string): string {
+  if (!first) return "";
+  const a = new Date(first);
+  const b = new Date(last || first);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return "";
+  const withSeconds = Math.abs(b.getTime() - a.getTime()) < 2 * 60 * 1000;
+  const start = formatClockTime(first, withSeconds);
+  const end = formatClockTime(last || first, withSeconds);
+  if (!start) return "";
+  if (!end || start === end) return start;
+  return `${start}–${end}`;
+}
+
 function formatLotShootTime(lot: {
   capture_minutes?: number | null;
   photo_count?: number;
   timing_source?: string;
+  first_photo_at?: string;
+  last_photo_at?: string;
 }): string {
-  if (lot.timing_source === "upload_burst") return "uploaded together";
-  if (lot.timing_source !== "camera" && lot.capture_minutes != null && lot.capture_minutes <= 0.75) {
-    return "uploaded together";
+  const range = formatClockRange(lot.first_photo_at, lot.last_photo_at);
+  const n = lot.photo_count || 0;
+  if (lot.timing_source === "camera") {
+    const dur =
+      lot.capture_minutes == null ? (n < 2 ? "1 photo" : "") : formatActivityMinutes(lot.capture_minutes);
+    return [dur, range].filter(Boolean).join(" · ");
   }
   if (lot.capture_minutes == null) {
-    return (lot.photo_count || 0) < 2 ? "—" : "uploaded together";
+    return [n < 2 ? "1 photo" : "uploaded", range].filter(Boolean).join(" · ");
   }
-  const core = formatActivityMinutes(lot.capture_minutes);
-  if (lot.timing_source === "camera") return core;
-  return `${core} (upload)`;
+  const dur = formatActivityMinutes(lot.capture_minutes);
+  const label = lot.timing_source === "upload_burst" || lot.capture_minutes <= 0.75 ? `${dur} upload` : `${dur} (upload)`;
+  return [label, range].filter(Boolean).join(" · ");
+}
+
+function formatPhotoShutterList(lot: TeamActivityLot): string {
+  const times = lot.photo_times || [];
+  if (!times.length) return "";
+  const spanMs = (() => {
+    if (!lot.first_photo_at || !lot.last_photo_at) return 0;
+    const a = new Date(lot.first_photo_at).getTime();
+    const b = new Date(lot.last_photo_at).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+    return Math.abs(b - a);
+  })();
+  const withSeconds = spanMs < 2 * 60 * 1000 || times.length <= 4;
+  const clocks = times.map((t) => formatClockTime(t.at, withSeconds)).filter(Boolean);
+  if (!clocks.length) return "";
+  const prefix = times[0]?.source === "camera" ? "Shutter" : "Uploaded";
+  return `${prefix}: ${clocks.join(", ")}`;
 }
 
 function formatActivityHours(n: number | undefined): string {
@@ -250,7 +301,18 @@ function teamActivityCsv(row: TeamActivity): string {
 }
 
 function teamActivityLotsCsv(row: TeamActivity): string {
-  const headers = ["Person", "SKU", "Title", "Photos", "Minutes", "First photo", "Last photo", "Lot ID"];
+  const headers = [
+    "Person",
+    "SKU",
+    "Title",
+    "Photos",
+    "Minutes",
+    "Timing",
+    "Photo times",
+    "First photo",
+    "Last photo",
+    "Lot ID"
+  ];
   const lines = [headers.map(csvCell).join(",")];
   for (const m of row.members) {
     for (const lot of m.lots || []) {
@@ -260,11 +322,13 @@ function teamActivityLotsCsv(row: TeamActivity): string {
           lot.sku || "",
           lot.auction_title || "",
           lot.photo_count,
-          lot.timing_source === "upload_burst" || lot.capture_minutes == null
-            ? lot.photo_count >= 2
-              ? "uploaded together"
-              : ""
-            : lot.capture_minutes,
+          lot.timing_source === "camera"
+            ? lot.capture_minutes ?? ""
+            : lot.capture_minutes != null
+              ? lot.capture_minutes
+              : "",
+          lot.timing_source || "",
+          (lot.photo_times || []).map((t) => t.at).join("; "),
           lot.first_photo_at || "",
           lot.last_photo_at || "",
           lot.lot_id
@@ -353,9 +417,10 @@ export function TeamActivitySection({
           day, at least one hour. Totals divide team counts by the sum of those person-hours. This is
           cataloging pace, not hours on the clock. <strong>Min/lot</strong> is first-to-last photo on
           that lot (the densest cluster; a gap over 15 minutes is a later add-on, not one shoot). One
-          photo cannot measure duration. Phone Sync often writes the whole lot in a few seconds —
-          that is upload time, not the shoot, so those lots say <strong>uploaded together</strong>{" "}
-          until the phone sends shutter time. Folder JPEGs with camera EXIF use that clock.
+          photo cannot measure duration. Each card shows first-to-last clock time and every photo
+          stamp. <strong>Shutter</strong> is camera EXIF or the phone shutter. If those are missing,
+          the times are when the files hit the server (<strong>upload</strong>) — a whole lot in a
+          few seconds is Sync, not the shoot.
         </div>
       </details>
       <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -558,7 +623,7 @@ export function TeamActivitySection({
                         <div
                           key={lot.lot_id}
                           style={{
-                            width: 128,
+                            width: 148,
                             display: "flex",
                             flexDirection: "column",
                             gap: 4
@@ -582,6 +647,14 @@ export function TeamActivitySection({
                               {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
                               {formatLotShootTime(lot)}
                             </div>
+                            {formatPhotoShutterList(lot) ? (
+                              <div
+                                className="ct-muted"
+                                style={{ fontSize: "0.68rem", lineHeight: 1.35, marginTop: 2 }}
+                              >
+                                {formatPhotoShutterList(lot)}
+                              </div>
+                            ) : null}
                           </Link>
                           <Link
                             href={`/lots/${lot.lot_id}`}
