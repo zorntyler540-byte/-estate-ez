@@ -61,6 +61,7 @@ from app.schemas import (
     CTSellerConditionOut,
     CTSellerRemoteSaleOut,
     CtsellerSaleSyncOut,
+    CtSellerHistorySyncOut,
     CTSellerPostedAuctionOut,
     CTSellerPostedAuctionsOut,
     CTSellerPostedRefreshIn,
@@ -938,6 +939,8 @@ def team_activity(
                 sold_price=item.sold_price,
                 posted_at=item.posted_at,
                 user_email=item.user_email,
+                source=item.source,
+                ctseller_item_id=item.ctseller_item_id,
             )
             for item in summary.sold_items
         ],
@@ -956,6 +959,57 @@ def team_activity(
             )
             for row in summary.sold_by_category
         ],
+    )
+
+
+@app.post("/team/activity/ctseller-history", response_model=CtSellerHistorySyncOut)
+def pull_team_ctseller_history(
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    since_days: int = Query(7, ge=1, le=366),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CtSellerHistorySyncOut:
+    """Pull closed (and currently open) CT Seller auctions into Sale results. Owners only."""
+    _require_owner(current)
+    try:
+        start, end = resolve_activity_window(since=since, until=until, since_days=since_days)
+    except ActivityWindowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    from app.db import SessionLocal
+    from app.services.ctseller_history import pull_ctseller_sale_history
+
+    account_id = account.id
+    try:
+        client = _ctseller_client_for_account(account, db, probe=False)
+        db.close()
+        try:
+            inner = SessionLocal()
+            try:
+                result = pull_ctseller_sale_history(inner, account_id, client, start, end)
+                inner.commit()
+            finally:
+                inner.close()
+        except CTSellerError as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            client = _ctseller_after_expired_session(account_id)
+            inner = SessionLocal()
+            try:
+                result = pull_ctseller_sale_history(inner, account_id, client, start, end)
+                inner.commit()
+            finally:
+                inner.close()
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CtSellerHistorySyncOut(
+        ended_sales=result.ended_sales,
+        open_sales=result.open_sales,
+        items_upserted=result.items_upserted,
+        matched_lots=result.matched_lots,
     )
 
 

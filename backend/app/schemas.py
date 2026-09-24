@@ -137,6 +137,8 @@ class SoldDocketItemOut(BaseModel):
     sold_price: float = 0
     posted_at: datetime | None = None
     user_email: str = ""
+    source: str = "catalog"
+    ctseller_item_id: int | None = None
 
 
 class SoldCategoryRollupOut(BaseModel):
@@ -414,6 +416,13 @@ class CtsellerSaleSyncOut(BaseModel):
     remote_count: int = 0
     remote_sales: list[CTSellerRemoteSaleOut] = Field(default_factory=list)
     sales: list[SaleOut] = Field(default_factory=list)
+
+
+class CtSellerHistorySyncOut(BaseModel):
+    ended_sales: int = 0
+    open_sales: int = 0
+    items_upserted: int = 0
+    matched_lots: int = 0
 
 
 class CTSellerPostedRefreshIn(BaseModel):

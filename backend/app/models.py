@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -274,6 +274,31 @@ class SalePhotoZipExport(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class CtSellerHistoryItem(Base):
+    """One CT Seller item from a pulled sale-history snapshot (closed or still open)."""
+
+    __tablename__ = "ctseller_history_items"
+    __table_args__ = (
+        UniqueConstraint("account_id", "ctseller_item_id", name="uq_ctseller_history_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    ctseller_sale_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    ctseller_item_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    sale_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    sale_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    sale_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sku: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(120), nullable=False, default="Uncategorized")
+    subcategory: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    item_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    sold_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lot_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AudienceHuntEvent(Base):

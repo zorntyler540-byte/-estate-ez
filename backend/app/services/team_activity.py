@@ -34,7 +34,7 @@ MIN_ACTIVE_HOURS_PER_DAY = 1.0
 # Photos more than this apart on the same lot are a later add-on, not one shoot.
 CAPTURE_SESSION_GAP = timedelta(minutes=15)
 MAX_ACTIVITY_LOTS_PER_MEMBER = 80
-MAX_SOLD_DOCKET = 400
+MAX_SOLD_DOCKET = 800
 # Server ingest of a whole lot is often a few seconds. Do not report that as shoot time.
 UPLOAD_BURST_MAX = timedelta(seconds=45)
 
@@ -345,6 +345,8 @@ class SoldDocketItem:
     sold_price: float
     posted_at: datetime | None
     user_email: str
+    source: str = "catalog"
+    ctseller_item_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -374,70 +376,7 @@ def _lot_sold_price(lot: Lot) -> float:
         return 0.0
 
 
-def build_sold_docket(
-    db: Session,
-    account_id: str,
-    start: datetime,
-    end: datetime,
-) -> tuple[list[SoldDocketItem], list[SoldCategoryRollup]]:
-    """Posted lots in the window with current sold/unsold/live outcome, hammer, category."""
-    posted = [lot for lot in _posted_lots_in_window(db, account_id, start, end) if lot_is_posted_to_ctbids(lot)]
-    if not posted:
-        return [], []
-
-    sale_ids = {lot.sale_id for lot in posted if lot.sale_id}
-    sales = (
-        db.query(Sale.id, Sale.name).filter(Sale.account_id == account_id, Sale.id.in_(sale_ids)).all()
-        if sale_ids
-        else []
-    )
-    sale_name = {str(sid): (name or "").strip() or "Sale" for sid, name in sales}
-
-    user_ids = {str(lot.user_id) for lot in posted if lot.user_id}
-    emails = (
-        {
-            str(uid): email
-            for uid, email in db.query(User.id, User.email)
-            .filter(User.account_id == account_id, User.id.in_(user_ids))
-            .all()
-        }
-        if user_ids
-        else {}
-    )
-
-    items: list[SoldDocketItem] = []
-    for lot in posted:
-        outcome = lot_ctbids_outcome(lot)
-        if outcome == "unposted":
-            continue
-        cat = (lot.ct_category or "").strip() or "Uncategorized"
-        sub = (lot.ct_subcategory or "").strip() or None
-        posted_at = lot.ctseller_posted_at or lot.created_at
-        price = _lot_sold_price(lot) if outcome == "sold" else 0.0
-        items.append(
-            SoldDocketItem(
-                lot_id=lot.id,
-                sale_id=lot.sale_id,
-                sale_name=sale_name.get(str(lot.sale_id), "Sale"),
-                sku=(lot.sku or None),
-                auction_title=(lot.auction_title or "")[:160],
-                category=cat,
-                subcategory=sub,
-                outcome=outcome,
-                sold_price=price,
-                posted_at=aware_utc(posted_at) if posted_at is not None else None,
-                user_email=emails.get(str(lot.user_id or ""), ""),
-            )
-        )
-    items.sort(
-        key=lambda row: (
-            _OUTCOME_RANK.get(row.outcome, 9),
-            -row.sold_price,
-            (row.sku or "").lower(),
-            row.lot_id,
-        )
-    )
-
+def _roll_sold_categories(items: list[SoldDocketItem]) -> list[SoldCategoryRollup]:
     buckets: dict[str, list[SoldDocketItem]] = {}
     for row in items:
         buckets.setdefault(row.category, []).append(row)
@@ -462,7 +401,115 @@ def build_sold_docket(
             )
         )
     categories.sort(key=lambda row: (-row.revenue, -row.sold_count, row.category.lower()))
-    return items[:MAX_SOLD_DOCKET], categories
+    return categories
+
+
+def build_sold_docket(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[SoldDocketItem], list[SoldCategoryRollup]]:
+    """Posted lots plus pulled CT Seller history in the window (sold/unsold/live)."""
+    posted = [lot for lot in _posted_lots_in_window(db, account_id, start, end) if lot_is_posted_to_ctbids(lot)]
+
+    sale_ids = {lot.sale_id for lot in posted if lot.sale_id}
+    sales = (
+        db.query(Sale.id, Sale.name).filter(Sale.account_id == account_id, Sale.id.in_(sale_ids)).all()
+        if sale_ids
+        else []
+    )
+    sale_name = {str(sid): (name or "").strip() or "Sale" for sid, name in sales}
+
+    user_ids = {str(lot.user_id) for lot in posted if lot.user_id}
+    emails = (
+        {
+            str(uid): email
+            for uid, email in db.query(User.id, User.email)
+            .filter(User.account_id == account_id, User.id.in_(user_ids))
+            .all()
+        }
+        if user_ids
+        else {}
+    )
+
+    items: list[SoldDocketItem] = []
+    seen_item_ids: set[int] = set()
+    for lot in posted:
+        outcome = lot_ctbids_outcome(lot)
+        if outcome == "unposted":
+            continue
+        cat = (lot.ct_category or "").strip() or "Uncategorized"
+        sub = (lot.ct_subcategory or "").strip() or None
+        posted_at = lot.ctseller_posted_at or lot.created_at
+        price = _lot_sold_price(lot) if outcome == "sold" else 0.0
+        try:
+            remote_id = int(lot.ctseller_item_id) if lot.ctseller_item_id is not None else 0
+        except (TypeError, ValueError):
+            remote_id = 0
+        if remote_id > 0:
+            seen_item_ids.add(remote_id)
+        items.append(
+            SoldDocketItem(
+                lot_id=lot.id,
+                sale_id=lot.sale_id,
+                sale_name=sale_name.get(str(lot.sale_id), "Sale"),
+                sku=(lot.sku or None),
+                auction_title=(lot.auction_title or "")[:160],
+                category=cat,
+                subcategory=sub,
+                outcome=outcome,
+                sold_price=price,
+                posted_at=aware_utc(posted_at) if posted_at is not None else None,
+                user_email=emails.get(str(lot.user_id or ""), ""),
+                source="catalog",
+                ctseller_item_id=remote_id or None,
+            )
+        )
+
+    from app.services.ctseller_history import history_item_outcome, history_rows_in_window
+
+    for row in history_rows_in_window(db, account_id, start, end):
+        remote_id = int(row.ctseller_item_id)
+        if remote_id in seen_item_ids:
+            continue
+        seen_item_ids.add(remote_id)
+        fake = {
+            "itemstatus": row.item_status,
+            "soldprice": row.sold_price,
+        }
+        outcome, price = history_item_outcome(fake, sale_open=bool(row.sale_open))
+        if outcome in {"unposted", "unknown"}:
+            continue
+        items.append(
+            SoldDocketItem(
+                lot_id=row.lot_id or "",
+                sale_id=f"ctseller:{row.ctseller_sale_id}",
+                sale_name=(row.sale_name or f"Sale {row.ctseller_sale_id}")[:160],
+                sku=(row.sku or None),
+                auction_title=(row.title or "")[:160],
+                category=(row.category or "").strip() or "Uncategorized",
+                subcategory=(row.subcategory or None),
+                outcome=outcome,
+                sold_price=price,
+                posted_at=aware_utc(row.sale_ended_at) if row.sale_ended_at is not None else None,
+                user_email="",
+                source="ctseller",
+                ctseller_item_id=remote_id,
+            )
+        )
+
+    if not items:
+        return [], []
+    items.sort(
+        key=lambda row: (
+            _OUTCOME_RANK.get(row.outcome, 9),
+            -row.sold_price,
+            (row.sku or "").lower(),
+            row.lot_id,
+        )
+    )
+    return items[:MAX_SOLD_DOCKET], _roll_sold_categories(items[:MAX_SOLD_DOCKET])
 
 
 @dataclass(frozen=True)

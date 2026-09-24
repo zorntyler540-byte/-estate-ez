@@ -88,6 +88,8 @@ export type SoldDocketItem = {
   sold_price: number;
   posted_at?: string | null;
   user_email?: string;
+  source?: string;
+  ctseller_item_id?: number | null;
 };
 
 export type SoldCategoryRollup = {
@@ -222,6 +224,22 @@ function formatPhotoShutterList(lot: TeamActivityLot): string {
   return `Between photos: ${gaps.join(" · ")}`;
 }
 
+function formatSaleWindowSummary(activity: TeamActivity): string {
+  const items = activity.sold_items || [];
+  const sold = items.filter((i) => (i.outcome || "").toLowerCase() === "sold");
+  const unsold = items.filter((i) => (i.outcome || "").toLowerCase() === "unsold");
+  const live = items.filter((i) => (i.outcome || "").toLowerCase() === "live");
+  const hammer = sold.reduce((sum, i) => sum + (Number(i.sold_price) || 0), 0);
+  const history = items.filter((i) => (i.source || "") === "ctseller").length;
+  const extra = history ? ` · ${history} from CT Seller history` : "";
+  return ` · ${items.length} posted · ${sold.length} sold · ${unsold.length} unsold · ${live.length} live${hammer ? ` · ${formatHammer(hammer)} hammer` : ""}${extra}`;
+}
+
+function formatSaleSource(source?: string): string {
+  if ((source || "").toLowerCase() === "ctseller") return "CT Seller";
+  return "Catalog";
+}
+
 function formatSaleOutcome(outcome?: string): string {
   const o = (outcome || "").toLowerCase();
   if (o === "sold") return "Sold";
@@ -275,10 +293,11 @@ function soldDocketCsv(row: TeamActivity): string {
     "Category",
     "Outcome",
     "Hammer",
-    "Sale",
-    "Posted",
-    "Catalogger",
-    "Lot ID"
+        "Sale",
+        "Source",
+        "Posted",
+        "Catalogger",
+        "Lot ID"
   ];
   const lines = [headers.map(csvCell).join(",")];
   for (const item of row.sold_items || []) {
@@ -290,6 +309,7 @@ function soldDocketCsv(row: TeamActivity): string {
         item.outcome || "",
         item.outcome === "sold" ? item.sold_price : "",
         item.sale_name || "",
+        item.source || "",
         item.posted_at || "",
         item.user_email || "",
         item.lot_id
@@ -468,6 +488,8 @@ export function TeamActivitySection({
   const [activityError, setActivityError] = useState("");
   const [panel, setPanel] = useState<"catalog" | "sales">("catalog");
   const [saleOutcome, setSaleOutcome] = useState<"all" | "sold" | "unsold" | "live">("all");
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyNote, setHistoryNote] = useState("");
 
   const refreshTeamActivity = useCallback(async () => {
     if (!token) return;
@@ -491,6 +513,31 @@ export function TeamActivitySection({
     }
   }, [token, activityPreset, activitySinceDate, activityUntilDate]);
 
+  const pullCtSellerHistory = useCallback(async () => {
+    if (!token) return;
+    const { since, until } = activityWindowIso(activityPreset, activitySinceDate, activityUntilDate);
+    setHistoryBusy(true);
+    setHistoryNote("");
+    setActivityError("");
+    try {
+      const qs = new URLSearchParams({ since, until });
+      const sync = (await apiFetch(`/team/activity/ctseller-history?${qs.toString()}`, token, {
+        method: "POST"
+      })) as { ended_sales?: number; open_sales?: number; items_upserted?: number };
+      await refreshTeamActivity();
+      const ended = sync.ended_sales ?? 0;
+      const open = sync.open_sales ?? 0;
+      const items = sync.items_upserted ?? 0;
+      setHistoryNote(
+        `Pulled ${ended} closed sale${ended === 1 ? "" : "s"}${open ? ` · ${open} live` : ""} · ${items} items from CT Seller.`
+      );
+    } catch (e) {
+      setActivityError(e instanceof Error ? e.message : "Could not pull CT Seller history");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }, [token, activityPreset, activitySinceDate, activityUntilDate, refreshTeamActivity]);
+
   useEffect(() => {
     if (!token) return;
     if (activityPreset === "custom") return;
@@ -504,7 +551,7 @@ export function TeamActivitySection({
       </h2>
       <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
         {panel === "sales"
-          ? "Every posted lot in this date range: sold, unsold, or still live — hammer and CT Bids category."
+          ? "Sold, unsold, and hammer by CT Bids category — including closed auctions after you pull CT Seller history."
           : "Photos, lots, and shutter time between pictures. Upload clock is not used here."}
       </p>
       <div className="ct-seg" role="group" aria-label="Team analytics view" style={{ marginBottom: "0.75rem" }}>
@@ -523,8 +570,10 @@ export function TeamActivitySection({
               Sale results are lots posted to CT Bids in this date range, with the current CT Seller
               status. <strong>Sold</strong> includes hammer. <strong>Unsold</strong> did not sell.{" "}
               <strong>Live</strong> is still bidding. Categories show sell-through (sold ÷ posted)
-              and hammer stats for sold lots. Today is often empty until a sale closes — use Last 7
-              or 30 days, then Refresh after statuses sync.
+              and hammer stats for sold lots. Pull <strong>CT Seller history</strong> to include
+              closed auctions from seller.ctbids.com (sold, unsold, category, hammer), not only lots
+              already in this catalog. Today is often empty until a sale closes — use Last 7 or 30
+              days, then pull history.
             </>
           ) : (
             <>
@@ -570,6 +619,14 @@ export function TeamActivitySection({
         {activity ? (
           panel === "sales" ? (
             <>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() => void pullCtSellerHistory()}
+                disabled={historyBusy || activityLoading}
+              >
+                {historyBusy ? "Pulling CT Seller…" : "Pull CT Seller history"}
+              </button>
               <button
                 type="button"
                 className="ct-btn ct-btn--ghost"
@@ -644,10 +701,16 @@ export function TeamActivitySection({
         <>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
             {formatActivityWhen(activity.since)} – {formatActivityWhen(activity.until)}
-            {panel === "sales"
-              ? `${activity.totals.lots_posted ? ` · ${activity.totals.lots_posted} posted` : " · 0 posted"} · ${activity.totals.lots_sold ?? 0} sold · ${activity.totals.lots_unsold ?? 0} unsold · ${activity.totals.lots_live ?? 0} live${activity.totals.sold_revenue ? ` · ${formatHammer(activity.totals.sold_revenue)} hammer` : ""}`
-              : `${activity.totals.photos_uploaded} photos · ${activity.totals.lots_photographed ?? 0} lots shot${activity.totals.median_minutes_per_lot != null ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)} shutter/lot` : ""}`}
+            {panel === "sales" ? formatSaleWindowSummary(activity) : ""}
+            {panel === "catalog"
+              ? `${activity.totals.photos_uploaded} photos · ${activity.totals.lots_photographed ?? 0} lots shot${activity.totals.median_minutes_per_lot != null ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)} shutter/lot` : ""}`
+              : ""}
           </p>
+          {historyNote && panel === "sales" ? (
+            <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
+              {historyNote}
+            </p>
+          ) : null}
           {panel === "catalog" ? (
             <>
               <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
@@ -816,6 +879,8 @@ export function TeamActivitySection({
               activity={activity}
               saleOutcome={saleOutcome}
               setSaleOutcome={setSaleOutcome}
+              historyBusy={historyBusy}
+              onPullHistory={() => void pullCtSellerHistory()}
             />
           )}
         </>
@@ -835,11 +900,15 @@ export function TeamActivitySection({
 function SaleResultsPanel({
   activity,
   saleOutcome,
-  setSaleOutcome
+  setSaleOutcome,
+  historyBusy,
+  onPullHistory
 }: {
   activity: TeamActivity;
   saleOutcome: "all" | "sold" | "unsold" | "live";
   setSaleOutcome: (next: "all" | "sold" | "unsold" | "live") => void;
+  historyBusy: boolean;
+  onPullHistory: () => void;
 }) {
   const items = activity.sold_items || [];
   const categories = activity.sold_by_category || [];
@@ -849,11 +918,19 @@ function SaleResultsPanel({
   if (!items.length) {
     return (
       <div className="ct-banner" style={{ marginBottom: 0 }}>
-        <p style={{ margin: 0 }}>
-          No posted lots in this date range yet. Today is often empty until a sale closes and CT
-          Seller statuses sync. Switch to <strong>Last 7 days</strong> or <strong>Last 30 days</strong>
-          , then Refresh.
+        <p style={{ margin: "0 0 0.75rem" }}>
+          No lots in this date range yet. Closed CT Seller auctions are not in this catalog until you
+          pull them. Switch to <strong>Last 7 days</strong> or <strong>Last 30 days</strong>, then
+          Pull CT Seller history (needs CT Seller connected on Account).
         </p>
+        <button
+          type="button"
+          className="ct-btn ct-btn--primary"
+          onClick={onPullHistory}
+          disabled={historyBusy}
+        >
+          {historyBusy ? "Pulling CT Seller…" : "Pull CT Seller history"}
+        </button>
       </div>
     );
   }
@@ -920,6 +997,7 @@ function SaleResultsPanel({
               <th>Outcome</th>
               <th className="ct-table__num">Hammer</th>
               <th>Sale</th>
+              <th>Source</th>
               <th>Posted</th>
               <th>Catalogger</th>
               <th></th>
@@ -928,7 +1006,7 @@ function SaleResultsPanel({
           <tbody>
             {filtered.length ? (
               filtered.map((item) => (
-                <tr key={item.lot_id}>
+                <tr key={`${item.source || "catalog"}-${item.ctseller_item_id || item.lot_id}`}>
                   <td style={{ fontWeight: 600 }}>{item.sku?.trim() || "—"}</td>
                   <td>{item.auction_title || "—"}</td>
                   <td>
@@ -944,18 +1022,23 @@ function SaleResultsPanel({
                     {item.outcome === "sold" ? formatHammer(item.sold_price) : "—"}
                   </td>
                   <td>{item.sale_name || "—"}</td>
+                  <td>{formatSaleSource(item.source)}</td>
                   <td>{formatActivityStamp(item.posted_at)}</td>
                   <td>{item.user_email || "—"}</td>
                   <td>
-                    <Link href={`/lots/${item.lot_id}`} className="ct-btn ct-btn--ghost">
-                      Open
-                    </Link>
+                    {item.lot_id ? (
+                      <Link href={`/lots/${item.lot_id}`} className="ct-btn ct-btn--ghost">
+                        Open
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan={9} className="ct-muted">
+                <td colSpan={10} className="ct-muted">
                   No {saleOutcome} lots in this window.
                 </td>
               </tr>

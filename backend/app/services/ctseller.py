@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any
+from datetime import datetime
 
 import requests
 from PIL import Image, ImageOps
@@ -229,31 +230,33 @@ class CTSellerClient:
         self.set_token(new_token)
         return CTSellerTokens(access_token=new_token, refresh_token=new_refresh)
 
-    def list_open_sales(self) -> list[CTSellerSaleRow]:
-        """
-        Sales still open for cataloging — same idea as CT Seller Sales list \"active\":
-        not deleted and endtime still in the future (includes Pending / not-yet-started).
-        """
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    def _list_sales(
+        self,
+        *,
+        extra_filters: list[dict[str, Any]],
+        sort_field: str,
+        sort_direction: str,
+        skip_statuses: set[str] | None = None,
+        max_pages: int = 15,
+    ) -> list[CTSellerSaleRow]:
+        """Paginate ``POST /sale/list`` with the same filter language as the CT Seller SPA."""
         base_filter = [
             {"field": "isDeleted", "value": 1, "op": "!=", "join": "AND"},
-            # Match SaleList \"active\" tab: endtime > now (Pending + Started).
-            {"field": "endtime", "value": now, "op": ">", "join": "AND"},
+            *extra_filters,
         ]
         fields = ["id", "title", "status", "starttime", "endtime", "tax", "buyerspremium"]
+        skip = {s.lower() for s in (skip_statuses or set())}
         out: list[CTSellerSaleRow] = []
         seen: set[int] = set()
         next_key: str | None = None
-        for _ in range(15):
+        for _ in range(max_pages):
             page: dict[str, Any] = {"size": 100}
             if next_key:
                 page["next"] = next_key
             payload: dict[str, Any] = {
                 "filter": base_filter,
                 "field": fields,
-                "sort": [{"field": "starttime", "direction": "asc"}],
+                "sort": [{"field": sort_field, "direction": sort_direction}],
                 "page": page,
             }
             body = self._post_raw("/sale/list", payload)
@@ -270,8 +273,7 @@ class CTSellerClient:
                     continue
                 seen.add(sid)
                 status = str(row.get("status") or "").strip() or None
-                # Skip fully closed/inactive if API still returns them.
-                if status and status.lower() in ("closed", "inactive"):
+                if status and status.lower() in skip:
                     continue
                 out.append(
                     CTSellerSaleRow(
@@ -292,6 +294,66 @@ class CTSellerClient:
                 break
             next_key = str(nxt)
         return out
+
+    def list_open_sales(self) -> list[CTSellerSaleRow]:
+        """
+        Sales still open for cataloging — same idea as CT Seller Sales list \"active\":
+        not deleted and endtime still in the future (includes Pending / not-yet-started).
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        return self._list_sales(
+            extra_filters=[
+                # Match SaleList \"active\" tab: endtime > now (Pending + Started).
+                {"field": "endtime", "value": now, "op": ">", "join": "AND"},
+            ],
+            sort_field="starttime",
+            sort_direction="asc",
+            skip_statuses={"closed", "inactive"},
+        )
+
+    def list_ended_sales(
+        self,
+        *,
+        ended_after: datetime | None = None,
+        ended_before: datetime | None = None,
+        limit: int = 30,
+    ) -> list[CTSellerSaleRow]:
+        """Closed / ended auctions from the CT Seller Sales history list (endtime in range)."""
+        from datetime import datetime, timezone
+
+        end = ended_before or datetime.now(timezone.utc)
+        extra: list[dict[str, Any]] = [
+            {
+                "field": "endtime",
+                "value": end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                if end.tzinfo
+                else end.strftime("%Y-%m-%d %H:%M:%S"),
+                "op": "<=",
+                "join": "AND",
+            }
+        ]
+        if ended_after is not None:
+            start = ended_after
+            extra.append(
+                {
+                    "field": "endtime",
+                    "value": start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if start.tzinfo
+                    else start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "op": ">=",
+                    "join": "AND",
+                }
+            )
+        rows = self._list_sales(
+            extra_filters=extra,
+            sort_field="endtime",
+            sort_direction="desc",
+            max_pages=8,
+        )
+        cap = max(1, min(int(limit), 80))
+        return rows[:cap]
 
     def sale_detail(self, sale_id: int) -> dict[str, Any]:
         payload = {
@@ -423,6 +485,7 @@ class CTSellerClient:
             "winningbid",
             "soldprice",
             "reserveprice",
+            "category",
         ]
         out: list[dict[str, Any]] = []
         seen: set[int] = set()
