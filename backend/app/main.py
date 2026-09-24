@@ -2952,7 +2952,8 @@ def post_sale_lots_to_ctseller(
     Bulk-post catalog lots in this sale to CT Seller (sequential).
 
     Default: lots that have SKU + title and are not yet posted (``only_unposted``).
-    Up to ``limit`` lots per request (max 100). Already-posted lots are skipped unless ``force``.
+    Up to ``limit`` lots per request (default 1, max 5) so photo uploads stay under
+    the reverse-proxy HTTP timeout. Already-posted lots are skipped unless ``force``.
     """
     body = payload or SalePostToCTSellerIn()
     sale = _sale_for_user(sale_id, current, db)
