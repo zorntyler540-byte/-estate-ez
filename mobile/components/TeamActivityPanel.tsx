@@ -161,6 +161,21 @@ export function TeamActivityPanel({ token }: { token: string }) {
               ) : null}
             </View>
           ))}
+          {(row.sold_by_category || []).length > 0 ? (
+            <View style={styles.person}>
+              <Text style={styles.email}>Sold by category</Text>
+              {(row.sold_by_category || []).slice(0, 8).map((cat) => (
+                <Text key={cat.category} style={styles.counts}>
+                  {cat.category} · {cat.sold_count} sold · {fmtMoney(cat.revenue)} · avg {fmtMoney(cat.avg_price)}
+                </Text>
+              ))}
+              {(row.sold_items || []).slice(0, 8).map((item) => (
+                <Text key={item.lot_id} style={styles.meta} numberOfLines={2}>
+                  {item.sku?.trim() || "No SKU"} · {fmtMoney(item.sold_price)} · {item.category}
+                </Text>
+              ))}
+            </View>
+          ) : null}
         </>
       ) : null}
     </View>

@@ -143,6 +143,19 @@ export type TeamActivity = {
     lots_photographed?: number;
     median_minutes_per_lot?: number | null;
   };
+  sold_items?: {
+    lot_id: string;
+    sku?: string | null;
+    auction_title?: string;
+    category: string;
+    sold_price: number;
+  }[];
+  sold_by_category?: {
+    category: string;
+    sold_count: number;
+    revenue: number;
+    avg_price: number;
+  }[];
 };
 
 export async function getTeamActivity(token: string, sinceDays: number): Promise<TeamActivity> {

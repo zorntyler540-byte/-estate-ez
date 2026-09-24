@@ -25,13 +25,14 @@ from typing import Any
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
-from app.models import Lot, Photo, ProcessingJob, User
+from app.models import Lot, Photo, ProcessingJob, Sale, User
 
 MAX_ACTIVITY_DAYS = 366
 MIN_ACTIVE_HOURS_PER_DAY = 1.0
 # Photos more than this apart on the same lot are a later add-on, not one shoot.
 CAPTURE_SESSION_GAP = timedelta(minutes=15)
 MAX_ACTIVITY_LOTS_PER_MEMBER = 80
+MAX_SOLD_DOCKET = 400
 # Server ingest of a whole lot is often a few seconds. Do not report that as shoot time.
 UPLOAD_BURST_MAX = timedelta(seconds=45)
 
@@ -330,6 +331,114 @@ def posted_lot_stats_for_account(
 
 
 @dataclass(frozen=True)
+class SoldDocketItem:
+    lot_id: str
+    sale_id: str
+    sale_name: str
+    sku: str | None
+    auction_title: str
+    category: str
+    subcategory: str | None
+    sold_price: float
+    posted_at: datetime | None
+    user_email: str
+
+
+@dataclass(frozen=True)
+class SoldCategoryRollup:
+    category: str
+    sold_count: int
+    revenue: float
+    avg_price: float
+    min_price: float
+    max_price: float
+
+
+def _lot_sold_price(lot: Lot) -> float:
+    raw = lot.ctseller_sold_price
+    if raw is None:
+        return 0.0
+    try:
+        return round(float(raw), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_sold_docket(
+    db: Session,
+    account_id: str,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[SoldDocketItem], list[SoldCategoryRollup]]:
+    """Sold lots posted in the window: hammer, CT category, sale — what moved."""
+    posted = _posted_lots_in_window(db, account_id, start, end)
+    sold_lots = [lot for lot in posted if lot_ctbids_outcome(lot) == "sold"]
+    if not sold_lots:
+        return [], []
+
+    sale_ids = {lot.sale_id for lot in sold_lots if lot.sale_id}
+    sales = (
+        db.query(Sale.id, Sale.name).filter(Sale.account_id == account_id, Sale.id.in_(sale_ids)).all()
+        if sale_ids
+        else []
+    )
+    sale_name = {str(sid): (name or "").strip() or "Sale" for sid, name in sales}
+
+    user_ids = {str(lot.user_id) for lot in sold_lots if lot.user_id}
+    emails = (
+        {
+            str(uid): email
+            for uid, email in db.query(User.id, User.email)
+            .filter(User.account_id == account_id, User.id.in_(user_ids))
+            .all()
+        }
+        if user_ids
+        else {}
+    )
+
+    items: list[SoldDocketItem] = []
+    for lot in sold_lots:
+        cat = (lot.ct_category or "").strip() or "Uncategorized"
+        sub = (lot.ct_subcategory or "").strip() or None
+        posted_at = lot.ctseller_posted_at or lot.created_at
+        items.append(
+            SoldDocketItem(
+                lot_id=lot.id,
+                sale_id=lot.sale_id,
+                sale_name=sale_name.get(str(lot.sale_id), "Sale"),
+                sku=(lot.sku or None),
+                auction_title=(lot.auction_title or "")[:160],
+                category=cat,
+                subcategory=sub,
+                sold_price=_lot_sold_price(lot),
+                posted_at=aware_utc(posted_at) if posted_at is not None else None,
+                user_email=emails.get(str(lot.user_id or ""), ""),
+            )
+        )
+    items.sort(key=lambda row: (-row.sold_price, (row.sku or "").lower(), row.lot_id))
+
+    prices_by_cat: dict[str, list[float]] = {}
+    for row in items:
+        prices_by_cat.setdefault(row.category, []).append(row.sold_price)
+    categories: list[SoldCategoryRollup] = []
+    for cat, prices in prices_by_cat.items():
+        n = len(prices)
+        revenue = round(sum(prices), 2)
+        categories.append(
+            SoldCategoryRollup(
+                category=cat,
+                sold_count=n,
+                revenue=revenue,
+                avg_price=round(revenue / n, 2) if n else 0.0,
+                min_price=round(min(prices), 2),
+                max_price=round(max(prices), 2),
+            )
+        )
+    categories.sort(key=lambda row: (-row.revenue, -row.sold_count, row.category.lower()))
+    return items[:MAX_SOLD_DOCKET], categories
+
+
+@dataclass(frozen=True)
 class TeamActivityLot:
     lot_id: str
     sale_id: str
@@ -476,6 +585,8 @@ class TeamActivitySummary:
     lots_photographed: int = 0
     median_minutes_per_lot: float | None = None
     mean_minutes_per_lot: float | None = None
+    sold_items: list[SoldDocketItem] = field(default_factory=list)
+    sold_by_category: list[SoldCategoryRollup] = field(default_factory=list)
 
 
 def summarize_team_activity(
@@ -550,6 +661,7 @@ def summarize_team_activity(
     for _shown, samples, total in photographed.values():
         sample_minutes.extend(samples)
         photographed_total += total
+    sold_items, sold_by_category = build_sold_docket(db, account_id, start, end)
     return TeamActivitySummary(
         since=start,
         until=end,
@@ -569,4 +681,6 @@ def summarize_team_activity(
         lots_photographed=photographed_total,
         median_minutes_per_lot=median_minutes(sample_minutes),
         mean_minutes_per_lot=mean_minutes(sample_minutes),
+        sold_items=sold_items,
+        sold_by_category=sold_by_category,
     )
