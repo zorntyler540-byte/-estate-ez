@@ -52,6 +52,28 @@ export function parseApiErrorMessage(raw: string, fallback = "Request failed"): 
   return t.length > 280 ? `${t.slice(0, 277)}…` : t;
 }
 
+/**
+ * Browser ``fetch`` TypeError (Failed to fetch / connection dropped).
+ * CT Seller posts upload many photos sequentially; Railway often closes the HTTP
+ * request around a minute, which looks like the API is down.
+ */
+export function unreachableServerMessage(apiBase: string, path: string, hostname?: string): string {
+  if (path.includes("/post-to-ctseller")) {
+    return (
+      `Cannot reach the server at ${apiBase} while posting to CT Seller. ` +
+      `Photo uploads often run longer than the proxy allows. Refresh this page — ` +
+      `lots already on CT Seller are skipped — then post again. ` +
+      `Do not keep retrying a lot that already appeared on CT Seller.`
+    );
+  }
+  const host = hostname ?? (typeof window !== "undefined" ? window.location.hostname : "");
+  const hint =
+    host && isApiBaseMisconfiguredForHost(host)
+      ? " This site is trying to reach a localhost API — redeploy the web app with NEXT_PUBLIC_API_BASE set to your public API URL."
+      : " Check Wi‑Fi/cellular, VPN, and that the API service is up.";
+  return `Cannot reach the server at ${apiBase}.${hint}`;
+}
+
 /** True when the built API URL points at localhost but the page is opened on a real host (common deploy mistake). */
 export function isApiBaseMisconfiguredForHost(hostname: string): boolean {
   if (!hostname || hostname === "localhost" || hostname === "127.0.0.1") return false;
@@ -178,12 +200,8 @@ export async function apiFetch(path: string, token?: string, init?: RequestInit)
       cache: "no-store"
     });
   } catch (e) {
-    const hint =
-      typeof window !== "undefined" && isApiBaseMisconfiguredForHost(window.location.hostname)
-        ? " This site is trying to reach a localhost API — redeploy the web app with NEXT_PUBLIC_API_BASE set to your public API URL."
-        : " Check Wi‑Fi/cellular, VPN, and that the API service is up.";
     if (e instanceof TypeError) {
-      throw new Error(`Cannot reach the server at ${API_BASE}.${hint}`);
+      throw new Error(unreachableServerMessage(API_BASE, path));
     }
     throw e;
   }

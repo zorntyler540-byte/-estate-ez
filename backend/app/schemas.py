@@ -474,7 +474,8 @@ class SalePostToCTSellerIn(BaseModel):
     ctseller_sale_id: int | None = None
     save_sale_mapping: bool = True
     force: bool = False
-    limit: int = Field(default=50, ge=1, le=100)
+    # One lot per request keeps photo uploads under the ~60s Railway HTTP timeout.
+    limit: int = Field(default=1, ge=1, le=5)
 
 
 class SalePostToCTSellerLotResult(BaseModel):
