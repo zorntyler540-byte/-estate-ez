@@ -32,7 +32,7 @@ type AuthContextValue = {
   ready: boolean;
   /** Email used to sign in — shown on Capture so staff know whose session this is. */
   signedInEmail: string | null;
-  /** Account role from ``GET /auth/me`` — owners see team activity on Sale. */
+  /** Account role from ``GET /auth/me`` — owners see the Team tab. */
   signedInRole: string | null;
   selectedSaleId: string | null;
   /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
