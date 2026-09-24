@@ -156,6 +156,21 @@ class CTSellerSaleRow:
     endtime: str | None = None
 
 
+def _parse_sale_endtime(raw: str | None) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    from datetime import timezone as tz
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text[:19] if fmt != "%Y-%m-%d" else text[:10], fmt)
+            return dt.replace(tzinfo=tz.utc)
+        except ValueError:
+            continue
+    return None
+
+
 class CTSellerClient:
     def __init__(self, access_token: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.timeout = timeout
@@ -334,26 +349,29 @@ class CTSellerClient:
                 "join": "AND",
             }
         ]
-        if ended_after is not None:
-            start = ended_after
-            extra.append(
-                {
-                    "field": "endtime",
-                    "value": start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-                    if start.tzinfo
-                    else start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "op": ">=",
-                    "join": "AND",
-                }
-            )
         rows = self._list_sales(
             extra_filters=extra,
             sort_field="endtime",
             sort_direction="desc",
-            max_pages=8,
+            max_pages=20,
         )
-        cap = max(1, min(int(limit), 80))
-        return rows[:cap]
+        parsed: list[CTSellerSaleRow] = []
+        after = None
+        if ended_after is not None:
+            after = (
+                ended_after.astimezone(timezone.utc)
+                if ended_after.tzinfo
+                else ended_after.replace(tzinfo=timezone.utc)
+            )
+        for row in rows:
+            if after is None:
+                parsed.append(row)
+                continue
+            ended_at = _parse_sale_endtime(row.endtime)
+            if ended_at is None or ended_at >= after:
+                parsed.append(row)
+        cap = max(1, min(int(limit), 400))
+        return parsed[:cap]
 
     def sale_detail(self, sale_id: int) -> dict[str, Any]:
         payload = {

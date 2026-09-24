@@ -170,3 +170,51 @@ def test_history_does_not_duplicate_catalog_lot(tmp_path: Path) -> None:
     assert sold_rows[0].source == "catalog"
     assert sold_rows[0].lot_id == "lot-sold"
     assert sold_rows[0].sku == "JL1"
+
+
+def test_history_pull_skips_already_synced_closed_sale(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    db.add(
+        User(
+            id="owner-a",
+            account_id="acct-a",
+            email="owner@ct.test",
+            password_hash="x",
+            role="owner",
+        )
+    )
+    db.commit()
+    listed: list[int] = []
+
+    class Client:
+        def list_ended_sales(self, **_kwargs):
+            return [
+                SimpleNamespace(id=99, title="Old", status="Closed", endtime="2026-09-04 18:00:00"),
+                SimpleNamespace(id=100, title="Older", status="Closed", endtime="2026-08-01 18:00:00"),
+            ]
+
+        def list_open_sales(self):
+            return []
+
+        def list_sale_items(self, sale_id: int):
+            listed.append(sale_id)
+            return [
+                {
+                    "id": 1000 + sale_id,
+                    "SKU": f"S{sale_id}",
+                    "title": "Lot",
+                    "itemstatus": "Sold",
+                    "soldprice": 10,
+                    "category": "Decor",
+                }
+            ]
+
+    client = Client()
+    pull_ctseller_sale_history(db, "acct-a", client, T0 - timedelta(days=90), T0)
+    db.commit()
+    assert listed == [99, 100]
+    listed.clear()
+    pull_ctseller_sale_history(db, "acct-a", client, T0 - timedelta(days=90), T0)
+    db.commit()
+    assert listed == []
