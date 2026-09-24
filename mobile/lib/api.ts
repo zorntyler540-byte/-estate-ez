@@ -94,6 +94,11 @@ export async function getAuthMe(token: string): Promise<AuthMe> {
   return apiFetch<AuthMe>("/auth/me", token);
 }
 
+export type TeamActivityPhotoTime = {
+  at: string;
+  source?: string;
+};
+
 export type TeamActivityLot = {
   lot_id: string;
   sale_id: string;
@@ -101,8 +106,11 @@ export type TeamActivityLot = {
   auction_title?: string;
   photo_count: number;
   capture_minutes?: number | null;
+  first_photo_at?: string;
+  last_photo_at?: string;
   timing_source?: string;
   has_thumbnail?: boolean;
+  photo_times?: TeamActivityPhotoTime[];
 };
 
 export type TeamActivityMember = {
@@ -143,6 +151,19 @@ export type TeamActivity = {
     lots_photographed?: number;
     median_minutes_per_lot?: number | null;
   };
+  sold_items?: {
+    lot_id: string;
+    sku?: string | null;
+    auction_title?: string;
+    category: string;
+    sold_price: number;
+  }[];
+  sold_by_category?: {
+    category: string;
+    sold_count: number;
+    revenue: number;
+    avg_price: number;
+  }[];
 };
 
 export async function getTeamActivity(token: string, sinceDays: number): Promise<TeamActivity> {

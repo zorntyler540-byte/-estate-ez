@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ClipboardList, LayoutDashboard, Menu, Monitor, Settings, Store, X } from "lucide-react";
+import { Activity, ClipboardList, LayoutDashboard, Menu, Monitor, Settings, Store, X } from "lucide-react";
 
 type AppShellProps = {
   children: ReactNode;
@@ -47,6 +47,12 @@ const NAV_GROUPS = [
         label: "Tools",
         icon: Monitor,
         match: (p: string) => p.startsWith("/tools")
+      },
+      {
+        href: "/activity",
+        label: "Team",
+        icon: Activity,
+        match: (p: string) => p.startsWith("/activity")
       },
       {
         href: "/account",

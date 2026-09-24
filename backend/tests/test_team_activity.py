@@ -181,6 +181,7 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
                 ctseller_posted_at=inside,
                 ctseller_item_status="Sold",
                 ctseller_sold_price=42.5,
+                ct_category="Lamps",
             ),
             Lot(
                 id="lot-maria-later",
@@ -269,6 +270,12 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert summary.lots_live == 1
     assert summary.sold_revenue == 42.5
     assert summary.members[0].email == "maria@ct.test"
+    assert len(summary.sold_items) == 1
+    assert summary.sold_items[0].sold_price == 42.5
+    assert summary.sold_items[0].category == "Lamps"
+    assert summary.sold_items[0].sale_name == "Sale A"
+    assert summary.sold_by_category[0].sold_count == 1
+    assert summary.sold_by_category[0].revenue == 42.5
 
 
 def test_summarize_active_rate_uses_first_to_last_same_day(tmp_path: Path) -> None:
@@ -393,6 +400,85 @@ def test_lot_ctbids_outcome_sold_unsold_live() -> None:
     assert lot_ctbids_outcome(unsold) == "unsold"
     assert lot_ctbids_outcome(live) == "live"
     assert lot_ctbids_outcome(unposted) == "unposted"
+
+
+def test_sold_docket_ranks_categories_by_revenue(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Henderson"))
+    posted = T0 - timedelta(hours=3)
+    db.add_all(
+        [
+            Lot(
+                id="lot-ring",
+                account_id="acct-a",
+                user_id=maria.id,
+                sale_id="sale-a",
+                sku="TG1",
+                auction_title="Gold ring",
+                ct_category="Jewelry",
+                created_at=posted,
+                ctseller_item_id=1,
+                ctseller_posted_at=posted,
+                ctseller_item_status="Sold",
+                ctseller_sold_price=120,
+            ),
+            Lot(
+                id="lot-pin",
+                account_id="acct-a",
+                user_id=maria.id,
+                sale_id="sale-a",
+                sku="TG2",
+                auction_title="Costume pin",
+                ct_category="Jewelry",
+                created_at=posted,
+                ctseller_item_id=2,
+                ctseller_posted_at=posted,
+                ctseller_item_status="Sold",
+                ctseller_sold_price=18,
+            ),
+            Lot(
+                id="lot-lamp",
+                account_id="acct-a",
+                user_id=maria.id,
+                sale_id="sale-a",
+                sku="TG3",
+                auction_title="Table lamp",
+                ct_category="Lamps",
+                created_at=posted,
+                ctseller_item_id=3,
+                ctseller_posted_at=posted,
+                ctseller_item_status="Sold",
+                ctseller_sold_price=40,
+            ),
+            Lot(
+                id="lot-live",
+                account_id="acct-a",
+                user_id=maria.id,
+                sale_id="sale-a",
+                sku="TG4",
+                auction_title="Still live",
+                ct_category="Jewelry",
+                created_at=posted,
+                ctseller_item_id=4,
+                ctseller_posted_at=posted,
+                ctseller_item_status="Ready",
+            ),
+        ]
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    assert [row.sku for row in summary.sold_items] == ["TG1", "TG3", "TG2"]
+    assert [row.category for row in summary.sold_by_category] == ["Jewelry", "Lamps"]
+    jewelry = summary.sold_by_category[0]
+    assert jewelry.sold_count == 2
+    assert jewelry.revenue == 138
+    assert jewelry.avg_price == 69
+    assert jewelry.max_price == 120
+    assert jewelry.min_price == 18
+    assert summary.sold_items[0].sale_name == "Henderson"
+    assert summary.sold_items[0].user_email == "maria@ct.test"
 
 
 def test_legacy_item_id_without_posted_at_counts_in_created_window(tmp_path: Path) -> None:
@@ -531,9 +617,11 @@ def test_upload_burst_is_not_reported_as_shoot_time(tmp_path: Path) -> None:
     summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
     row = next(m for m in summary.members if m.email == "maria@ct.test")
     assert row.lots[0].photo_count == 8
-    assert row.lots[0].capture_minutes is None
+    assert row.lots[0].capture_minutes == 0.12
     assert row.lots[0].timing_source == "upload_burst"
     assert row.median_minutes_per_lot is None
+    assert len(row.lots[0].photo_times) == 8
+    assert row.lots[0].photo_times[0].source == "upload"
 
 
 def test_camera_captured_at_beats_upload_burst(tmp_path: Path) -> None:
@@ -584,6 +672,57 @@ def test_camera_captured_at_beats_upload_burst(tmp_path: Path) -> None:
     assert row.lots[0].capture_minutes == 6.0
     assert row.lots[0].timing_source == "camera"
     assert row.median_minutes_per_lot == 6.0
+    assert [pt.source for pt in row.lots[0].photo_times] == ["camera", "camera"]
+    assert row.lots[0].photo_times[0].at == shoot
+
+
+def test_epoch_filename_counts_as_camera_shutter(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Sale A"))
+    db.add(
+        Lot(
+            id="lot-fn",
+            account_id="acct-a",
+            user_id=maria.id,
+            sale_id="sale-a",
+            sku="FN1",
+            auction_title="Named files",
+            created_at=T0 - timedelta(minutes=1),
+        )
+    )
+    first_ms = int((T0 - timedelta(minutes=8)).timestamp() * 1000)
+    second_ms = int((T0 - timedelta(minutes=3)).timestamp() * 1000)
+    upload = T0 - timedelta(seconds=5)
+    db.add_all(
+        [
+            Photo(
+                id="pfn-1",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-fn",
+                original_name=f"{first_ms}.jpg",
+                storage_path="/fn1.jpg",
+                created_at=upload,
+            ),
+            Photo(
+                id="pfn-2",
+                account_id="acct-a",
+                user_id=maria.id,
+                lot_id="lot-fn",
+                original_name=f"{second_ms}.jpg",
+                storage_path="/fn2.jpg",
+                created_at=upload + timedelta(seconds=1),
+            ),
+        ]
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    row = next(m for m in summary.members if m.email == "maria@ct.test")
+    assert row.lots[0].timing_source == "camera"
+    assert row.lots[0].capture_minutes == 5.0
+    assert [pt.source for pt in row.lots[0].photo_times] == ["camera", "camera"]
 
 
 def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
@@ -608,6 +747,7 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
             sale_id="sale-a",
             auction_title="Lamp",
             sku="JL0101",
+            ct_category="Jewelry",
             created_at=T0 - timedelta(hours=1),
             ctseller_item_id=7,
             ctseller_posted_at=T0 - timedelta(hours=1),
@@ -669,6 +809,13 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
         assert member["lots"][0]["capture_minutes"] == 5.0
         assert member["lots"][0]["timing_source"] == "upload"
         assert member["lots"][0]["has_thumbnail"] is True
+        assert len(member["lots"][0]["photo_times"]) == 2
+        assert member["lots"][0]["photo_times"][0]["source"] == "upload"
+        assert body["sold_items"][0]["sku"] == "JL0101"
+        assert body["sold_items"][0]["category"] == "Jewelry"
+        assert body["sold_items"][0]["sold_price"] == 25
+        assert body["sold_by_category"][0]["category"] == "Jewelry"
+        assert body["sold_by_category"][0]["revenue"] == 25
     finally:
         app.dependency_overrides.clear()
         db.close()

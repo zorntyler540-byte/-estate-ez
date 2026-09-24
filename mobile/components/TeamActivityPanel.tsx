@@ -9,6 +9,13 @@ import { getTeamActivity, lotThumbnailSource, type TeamActivity, type TeamActivi
 type Days = 1 | 7 | 30;
 const PHONE_LOT_CAP = 12;
 
+function fmtMinutes(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
+  if (n < 10) return `${n.toFixed(1)} min`;
+  return `${Math.round(n)} min`;
+}
+
 function fmtHours(n: number | undefined): string {
   if (!n) return "—";
   return n.toFixed(n >= 10 ? 1 : 2);
@@ -19,14 +26,62 @@ function fmtMoney(n: number | undefined): string {
   return `$${Math.round(n)}`;
 }
 
+function fmtMinutes(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
+  if (n < 10) return `${n.toFixed(1)} min`;
+  return `${Math.round(n)} min`;
+}
+
+function fmtClock(iso: string, withSeconds: boolean): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {})
+  });
+}
+
 function fmtLotTime(lot: TeamActivityLot): string {
-  if (lot.timing_source === "upload_burst") return "uploaded together";
-  if (lot.timing_source !== "camera" && lot.capture_minutes != null && lot.capture_minutes <= 0.75) {
-    return "uploaded together";
+  const first = lot.first_photo_at;
+  const last = lot.last_photo_at;
+  let range = "";
+  if (first) {
+    const a = new Date(first).getTime();
+    const b = new Date(last || first).getTime();
+    const withSeconds = Number.isFinite(a) && Number.isFinite(b) && Math.abs(b - a) < 2 * 60 * 1000;
+    const start = fmtClock(first, withSeconds);
+    const end = fmtClock(last || first, withSeconds);
+    range = start && end && start !== end ? `${start}–${end}` : start;
   }
-  if (lot.capture_minutes == null) return lot.photo_count >= 2 ? "uploaded together" : "—";
-  const core = fmtMinutes(lot.capture_minutes);
-  return lot.timing_source === "camera" ? core : `${core} (upload)`;
+  const n = lot.photo_count || 0;
+  if (lot.timing_source === "camera") {
+    const dur =
+      lot.capture_minutes == null ? (n < 2 ? "1ph" : "") : fmtMinutes(lot.capture_minutes);
+    return [dur, range].filter(Boolean).join(" · ");
+  }
+  if (lot.capture_minutes == null) {
+    return [n < 2 ? "1ph" : "upl", range].filter(Boolean).join(" · ");
+  }
+  const dur = fmtMinutes(lot.capture_minutes);
+  const label =
+    lot.timing_source === "upload_burst" || lot.capture_minutes <= 0.75 ? `${dur} upl` : `${dur} upl`;
+  return [label, range].filter(Boolean).join(" · ");
+}
+
+function fmtPhotoTimes(lot: TeamActivityLot): string {
+  const times = lot.photo_times || [];
+  if (!times.length) return "";
+  const first = times[0]?.at;
+  const last = times[times.length - 1]?.at;
+  const a = first ? new Date(first).getTime() : 0;
+  const b = last ? new Date(last).getTime() : 0;
+  const withSeconds = Math.abs(b - a) < 2 * 60 * 1000 || times.length <= 4;
+  const clocks = times.map((t) => fmtClock(t.at, withSeconds)).filter(Boolean);
+  if (!clocks.length) return "";
+  const prefix = times[0]?.source === "camera" ? "Shutter" : "Uploaded";
+  return `${prefix}: ${clocks.join(", ")}`;
 }
 
 function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
@@ -45,9 +100,14 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
         <Text style={styles.lotSku} numberOfLines={1}>
           {lot.sku?.trim() || "No SKU"}
         </Text>
-        <Text style={styles.lotMeta} numberOfLines={1}>
+        <Text style={styles.lotMeta} numberOfLines={3}>
           {lot.photo_count}ph · {fmtLotTime(lot)}
         </Text>
+        {fmtPhotoTimes(lot) ? (
+          <Text style={styles.lotTimes} numberOfLines={6}>
+            {fmtPhotoTimes(lot)}
+          </Text>
+        ) : null}
       </Pressable>
       <Pressable style={styles.lotOpen} onPress={openLot} accessibilityRole="button" accessibilityLabel="Open lot">
         <Text style={styles.lotOpenText}>Open lot</Text>
@@ -91,8 +151,8 @@ export function TeamActivityPanel({ token }: { token: string }) {
     <View style={styles.box}>
       <Text style={styles.title}>Team activity</Text>
       <Text style={styles.hint}>
-        Photos, lots, CT Bids posted/sold, and minutes per lot. Phone Sync in a few seconds is
-        upload, not the shoot — those lots say uploaded together. Owners only.
+        Photos, lots, CT Bids posted/sold, and minutes per lot. Each lot shows clock time and
+        per-photo stamps (shutter when the phone sent it, otherwise upload). Owners only.
       </Text>
       <View style={styles.chips}>
         {(
@@ -154,6 +214,21 @@ export function TeamActivityPanel({ token }: { token: string }) {
               ) : null}
             </View>
           ))}
+          {(row.sold_by_category || []).length > 0 ? (
+            <View style={styles.person}>
+              <Text style={styles.email}>Sold by category</Text>
+              {(row.sold_by_category || []).slice(0, 8).map((cat) => (
+                <Text key={cat.category} style={styles.counts}>
+                  {cat.category} · {cat.sold_count} sold · {fmtMoney(cat.revenue)} · avg {fmtMoney(cat.avg_price)}
+                </Text>
+              ))}
+              {(row.sold_items || []).slice(0, 8).map((item) => (
+                <Text key={item.lot_id} style={styles.meta} numberOfLines={2}>
+                  {item.sku?.trim() || "No SKU"} · {fmtMoney(item.sold_price)} · {item.category}
+                </Text>
+              ))}
+            </View>
+          ) : null}
         </>
       ) : null}
     </View>
@@ -162,7 +237,7 @@ export function TeamActivityPanel({ token }: { token: string }) {
 
 const styles = StyleSheet.create({
   box: {
-    marginBottom: 16,
+    marginBottom: 0,
     padding: 12,
     borderRadius: 10,
     backgroundColor: "#0e0e10",
@@ -193,16 +268,17 @@ const styles = StyleSheet.create({
   email: { color: "#f5f5f4", fontSize: 14, fontWeight: "600" },
   counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 },
   lotRow: { marginTop: 10, marginHorizontal: -4 },
-  lotChip: { width: 96, marginRight: 8 },
+  lotChip: { width: 120, marginRight: 8 },
   lotThumb: {
-    width: 96,
-    height: 96,
+    width: 120,
+    height: 120,
     borderRadius: 8,
     backgroundColor: "#1c1917"
   },
   lotThumbEmpty: { borderWidth: 1, borderColor: "#292524" },
   lotSku: { color: "#f5f5f4", fontSize: 12, fontWeight: "700", marginTop: 4 },
   lotMeta: { color: "#78716c", fontSize: 11, marginTop: 2 },
+  lotTimes: { color: "#78716c", fontSize: 10, marginTop: 2, lineHeight: 13 },
   lotOpen: {
     marginTop: 6,
     paddingVertical: 6,
