@@ -30,11 +30,13 @@ from app.models import Lot, Photo, ProcessingJob, Sale, User
 from app.services.photo_captured_at import captured_at_from_filename
 
 MAX_ACTIVITY_DAYS = 366
+# Explicit since/until (All time) — CT Seller history goes back years.
+MAX_ACTIVITY_SPAN_DAYS = 12000
 MIN_ACTIVE_HOURS_PER_DAY = 1.0
 # Photos more than this apart on the same lot are a later add-on, not one shoot.
 CAPTURE_SESSION_GAP = timedelta(minutes=15)
 MAX_ACTIVITY_LOTS_PER_MEMBER = 80
-MAX_SOLD_DOCKET = 800
+MAX_SOLD_DOCKET = 5000
 # Server ingest of a whole lot is often a few seconds. Do not report that as shoot time.
 UPLOAD_BURST_MAX = timedelta(seconds=45)
 
@@ -61,13 +63,15 @@ def resolve_activity_window(
     end = aware_utc(until) if until is not None else now_utc
     if since is not None:
         start = aware_utc(since)
+        max_span = MAX_ACTIVITY_SPAN_DAYS
     else:
         days = max(1, min(int(since_days), MAX_ACTIVITY_DAYS))
         start = end - timedelta(days=days)
+        max_span = MAX_ACTIVITY_DAYS
     if start >= end:
         raise ActivityWindowError("Start must be before end")
-    if end - start > timedelta(days=MAX_ACTIVITY_DAYS):
-        raise ActivityWindowError(f"Range cannot exceed {MAX_ACTIVITY_DAYS} days")
+    if end - start > timedelta(days=max_span):
+        raise ActivityWindowError(f"Range cannot exceed {max_span} days")
     return start, end
 
 
@@ -509,7 +513,7 @@ def build_sold_docket(
             row.lot_id,
         )
     )
-    return items[:MAX_SOLD_DOCKET], _roll_sold_categories(items[:MAX_SOLD_DOCKET])
+    return items[:MAX_SOLD_DOCKET], _roll_sold_categories(items)
 
 
 @dataclass(frozen=True)

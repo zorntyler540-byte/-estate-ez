@@ -16,7 +16,9 @@ from app.services.ctseller_posted import (
     parse_sold_price,
 )
 
-MAX_ENDED_SALES = 20
+MAX_ENDED_SALES = 40
+MAX_ENDED_SALES_LONG = 120
+MAX_ENDED_SALES_LIST = 400
 MAX_OPEN_SALES = 8
 
 
@@ -189,7 +191,30 @@ def pull_ctseller_sale_history(
     """Fetch ended (and currently open) CT Seller auctions and store item outcomes."""
     start_utc = _aware_utc(start)
     end_utc = _aware_utc(end)
-    ended = list(client.list_ended_sales(ended_after=start_utc, ended_before=end_utc, limit=MAX_ENDED_SALES))
+    span_days = max(0, (end_utc - start_utc).days)
+    fetch_cap = MAX_ENDED_SALES_LONG if span_days > 120 else MAX_ENDED_SALES
+    ended = list(
+        client.list_ended_sales(
+            ended_after=start_utc, ended_before=end_utc, limit=MAX_ENDED_SALES_LIST
+        )
+    )
+    already = {
+        int(sid)
+        for (sid,) in db.query(CtSellerHistoryItem.ctseller_sale_id)
+        .filter(CtSellerHistoryItem.account_id == account_id)
+        .distinct()
+        .all()
+        if sid
+    }
+    pending_ended = []
+    for sale in ended:
+        try:
+            sid = int(sale.id)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if sid > 0 and sid not in already:
+            pending_ended.append(sale)
+    pending_ended = pending_ended[:fetch_cap]
     open_sales = list(client.list_open_sales())[:MAX_OPEN_SALES]
     seen: set[int] = set()
     ended_n = 0
@@ -225,7 +250,7 @@ def pull_ctseller_sale_history(
             else:
                 ended_n += 1
 
-    walk(ended, sale_open=False)
+    walk(pending_ended, sale_open=False)
     window_includes_now = end_utc >= datetime.now(timezone.utc) - timedelta(hours=12)
     if window_includes_now:
         walk(open_sales, sale_open=True)

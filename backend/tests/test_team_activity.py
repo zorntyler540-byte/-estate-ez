@@ -86,8 +86,20 @@ def test_capture_minutes_ignores_later_add_photos_gap() -> None:
 def test_resolve_activity_window_rejects_inverted_and_too_long() -> None:
     with pytest.raises(ActivityWindowError, match="before end"):
         resolve_activity_window(since=T0, until=T0)
-    with pytest.raises(ActivityWindowError, match="366"):
-        resolve_activity_window(since=T0 - timedelta(days=400), until=T0)
+    with pytest.raises(ActivityWindowError, match="12000"):
+        resolve_activity_window(since=T0 - timedelta(days=13000), until=T0)
+
+
+def test_since_days_still_clamps_to_one_year() -> None:
+    start, end = resolve_activity_window(since_days=400, now=T0)
+    assert end == T0
+    assert start == T0 - timedelta(days=366)
+
+
+def test_resolve_activity_window_all_time_span() -> None:
+    start, end = resolve_activity_window(since=datetime(2000, 1, 1, tzinfo=UTC), until=T0)
+    assert start == datetime(2000, 1, 1, tzinfo=UTC)
+    assert end == T0
 
 
 def _session(tmp_path: Path):

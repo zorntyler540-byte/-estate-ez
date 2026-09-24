@@ -105,7 +105,7 @@ export type SoldCategoryRollup = {
   sell_through?: number;
 };
 
-type ActivityPreset = "today" | "7d" | "30d" | "90d" | "custom";
+type ActivityPreset = "today" | "7d" | "30d" | "90d" | "all" | "custom";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -136,6 +136,9 @@ function activityWindowIso(
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
     return { since: start.toISOString(), until: now.toISOString() };
+  }
+  if (preset === "all") {
+    return { since: new Date(Date.UTC(2000, 0, 1, 0, 0, 0)).toISOString(), until: now.toISOString() };
   }
   if (preset === "7d" || preset === "30d" || preset === "90d") {
     const days = preset === "7d" ? 7 : preset === "30d" ? 30 : 90;
@@ -529,7 +532,11 @@ export function TeamActivitySection({
       const open = sync.open_sales ?? 0;
       const items = sync.items_upserted ?? 0;
       setHistoryNote(
-        `Pulled ${ended} closed sale${ended === 1 ? "" : "s"}${open ? ` · ${open} live` : ""} · ${items} items from CT Seller.`
+        `Pulled ${ended} closed sale${ended === 1 ? "" : "s"}${open ? ` · ${open} live` : ""} · ${items} items from CT Seller.${
+          activityPreset === "all" && ended >= 120
+            ? " Pull again to load older auctions."
+            : ""
+        }`
       );
     } catch (e) {
       setActivityError(e instanceof Error ? e.message : "Could not pull CT Seller history");
@@ -572,8 +579,10 @@ export function TeamActivitySection({
               <strong>Live</strong> is still bidding. Categories show sell-through (sold ÷ posted)
               and hammer stats for sold lots. Pull <strong>CT Seller history</strong> to include
               closed auctions from seller.ctbids.com (sold, unsold, category, hammer), not only lots
-              already in this catalog. Today is often empty until a sale closes — use Last 7 or 30
-              days, then pull history.
+              already in this catalog. <strong>All time</strong> runs from 2000 through now. The first
+              history pull can take a minute; pull again if older auctions are still missing. Today is
+              often empty until a sale closes — use Last 7 / 30 / 90 days or All time, then pull
+              history.
             </>
           ) : (
             <>
@@ -595,6 +604,7 @@ export function TeamActivitySection({
               ["7d", "Last 7 days"],
               ["30d", "Last 30 days"],
               ["90d", "Last 90 days"],
+              ["all", "All time"],
               ["custom", "Custom"]
             ] as const
           ).map(([id, label]) => (
@@ -920,8 +930,8 @@ function SaleResultsPanel({
       <div className="ct-banner" style={{ marginBottom: 0 }}>
         <p style={{ margin: "0 0 0.75rem" }}>
           No lots in this date range yet. Closed CT Seller auctions are not in this catalog until you
-          pull them. Switch to <strong>Last 7 days</strong> or <strong>Last 30 days</strong>, then
-          Pull CT Seller history (needs CT Seller connected on Account).
+          pull them. Switch to <strong>Last 7 days</strong>, <strong>Last 30 days</strong>, or{" "}
+          <strong>All time</strong>, then Pull CT Seller history (needs CT Seller connected on Account).
         </p>
         <button
           type="button"
