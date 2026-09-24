@@ -11,7 +11,11 @@ from fastapi import HTTPException, UploadFile
 from app.catalog_storage import upload_root
 from app.job_batch_storage import mirror_local_file_to_r2
 from app.services.image_preprocess import compress_upload_bytes_if_image
-from app.services.photo_captured_at import captured_at_from_image_bytes, write_captured_at_sidecar
+from app.services.photo_captured_at import (
+    captured_at_from_filename,
+    captured_at_from_image_bytes,
+    write_captured_at_sidecar,
+)
 
 UPLOAD_ROOT = upload_root()
 
@@ -44,7 +48,11 @@ async def save_uploaded_files(
     async def _save_one(uf: UploadFile) -> None:
         async with sem:
             body = await uf.read()
-            cap = captured_at_from_image_bytes(body) or captured_at
+            cap = (
+                captured_at_from_image_bytes(body)
+                or captured_at_from_filename(Path(uf.filename or ""))
+                or captured_at
+            )
             try:
                 body, stor_name = await asyncio.to_thread(
                     compress_upload_bytes_if_image,

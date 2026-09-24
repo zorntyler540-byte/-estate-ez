@@ -53,6 +53,11 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
 
 
+class TeamActivityPhotoTimeOut(BaseModel):
+    at: datetime
+    source: str = "upload"
+
+
 class TeamActivityLotOut(BaseModel):
     lot_id: str
     sale_id: str
@@ -64,6 +69,7 @@ class TeamActivityLotOut(BaseModel):
     last_photo_at: datetime
     has_thumbnail: bool = True
     timing_source: str = "upload"
+    photo_times: list[TeamActivityPhotoTimeOut] = []
 
 
 class TeamActivityMemberOut(BaseModel):
