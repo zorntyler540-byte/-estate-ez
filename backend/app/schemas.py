@@ -121,6 +121,30 @@ class TeamActivityOut(BaseModel):
     until: datetime
     members: list[TeamActivityMemberOut]
     totals: TeamActivityTotalsOut
+    sold_items: list[SoldDocketItemOut] = Field(default_factory=list)
+    sold_by_category: list[SoldCategoryRollupOut] = Field(default_factory=list)
+
+
+class SoldDocketItemOut(BaseModel):
+    lot_id: str
+    sale_id: str
+    sale_name: str = ""
+    sku: str | None = None
+    auction_title: str = ""
+    category: str = "Uncategorized"
+    subcategory: str | None = None
+    sold_price: float = 0
+    posted_at: datetime | None = None
+    user_email: str = ""
+
+
+class SoldCategoryRollupOut(BaseModel):
+    category: str
+    sold_count: int
+    revenue: float
+    avg_price: float
+    min_price: float
+    max_price: float
 
 
 class AdminAccountOut(BaseModel):

@@ -119,6 +119,8 @@ from app.schemas import (
     TeamActivityOut,
     TeamActivityPhotoTimeOut,
     TeamActivityTotalsOut,
+    SoldDocketItemOut,
+    SoldCategoryRollupOut,
     AdminAccountOut,
     AdminAccountUpdateIn,
     AdminUsageAccountOut,
@@ -923,6 +925,32 @@ def team_activity(
             median_minutes_per_lot=summary.median_minutes_per_lot,
             mean_minutes_per_lot=summary.mean_minutes_per_lot,
         ),
+        sold_items=[
+            SoldDocketItemOut(
+                lot_id=item.lot_id,
+                sale_id=item.sale_id,
+                sale_name=item.sale_name,
+                sku=item.sku,
+                auction_title=item.auction_title,
+                category=item.category,
+                subcategory=item.subcategory,
+                sold_price=item.sold_price,
+                posted_at=item.posted_at,
+                user_email=item.user_email,
+            )
+            for item in summary.sold_items
+        ],
+        sold_by_category=[
+            SoldCategoryRollupOut(
+                category=row.category,
+                sold_count=row.sold_count,
+                revenue=row.revenue,
+                avg_price=row.avg_price,
+                min_price=row.min_price,
+                max_price=row.max_price,
+            )
+            for row in summary.sold_by_category
+        ],
     )
 
 

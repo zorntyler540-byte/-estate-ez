@@ -72,6 +72,30 @@ export type TeamActivity = {
     median_minutes_per_lot?: number | null;
     mean_minutes_per_lot?: number | null;
   };
+  sold_items?: SoldDocketItem[];
+  sold_by_category?: SoldCategoryRollup[];
+};
+
+export type SoldDocketItem = {
+  lot_id: string;
+  sale_id: string;
+  sale_name?: string;
+  sku?: string | null;
+  auction_title?: string;
+  category: string;
+  subcategory?: string | null;
+  sold_price: number;
+  posted_at?: string | null;
+  user_email?: string;
+};
+
+export type SoldCategoryRollup = {
+  category: string;
+  sold_count: number;
+  revenue: number;
+  avg_price: number;
+  min_price: number;
+  max_price: number;
 };
 
 type ActivityPreset = "today" | "7d" | "30d" | "90d" | "custom";
@@ -216,6 +240,51 @@ function formatActivityStamp(iso: string | null | undefined): string {
 function formatActivityMoney(n: number | undefined): string {
   if (!n) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function formatHammer(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function soldDocketCsv(row: TeamActivity): string {
+  const headers = ["SKU", "Title", "Category", "Hammer", "Sale", "Posted", "Catalogger", "Lot ID"];
+  const lines = [headers.map(csvCell).join(",")];
+  for (const item of row.sold_items || []) {
+    lines.push(
+      [
+        item.sku || "",
+        item.auction_title || "",
+        item.category || "",
+        item.sold_price,
+        item.sale_name || "",
+        item.posted_at || "",
+        item.user_email || "",
+        item.lot_id
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+  return lines.join("\n");
+}
+
+function soldCategoryCsv(row: TeamActivity): string {
+  const headers = ["Category", "Sold", "Hammer", "Average", "Low", "High"];
+  const lines = [headers.map(csvCell).join(",")];
+  for (const cat of row.sold_by_category || []) {
+    lines.push(
+      [cat.category, cat.sold_count, cat.revenue, cat.avg_price, cat.min_price, cat.max_price]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+  return lines.join("\n");
 }
 
 function csvCell(value: string | number): string {
@@ -420,7 +489,10 @@ export function TeamActivitySection({
           photo cannot measure duration. Each card shows first-to-last clock time and every photo
           stamp. <strong>Shutter</strong> is camera EXIF or the phone shutter. If those are missing,
           the times are when the files hit the server (<strong>upload</strong>) — a whole lot in a
-          few seconds is Sync, not the shoot.
+          few seconds is Sync, not the shoot. The <strong>sold docket</strong> lists every lot posted
+          in this window that CT Seller now reports as sold — hammer price and CT Bids category —
+          so you can see what actually moved. Refresh after a sale closes so statuses and prices
+          catch up.
         </div>
       </details>
       <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -470,6 +542,26 @@ export function TeamActivitySection({
             >
               Download lots CSV
             </button>
+            {(activity.sold_items || []).length > 0 ? (
+              <>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() => downloadCsv(soldDocketCsv(activity), `sold-docket-${activityPreset}.csv`)}
+                >
+                  Download sold CSV
+                </button>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() =>
+                    downloadCsv(soldCategoryCsv(activity), `sold-categories-${activityPreset}.csv`)
+                  }
+                >
+                  Download categories CSV
+                </button>
+              </>
+            ) : null}
           </>
         ) : null}
       </div>
@@ -598,6 +690,101 @@ export function TeamActivitySection({
               </tfoot>
             </table>
           </div>
+          {(activity.sold_by_category || []).length > 0 || (activity.sold_items || []).length > 0 ? (
+            <div style={{ marginTop: "1.25rem" }}>
+              <h3 className="ct-section-title" style={{ fontSize: "1.05rem", marginBottom: "0.35rem" }}>
+                Sold docket
+              </h3>
+              <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
+                {(activity.sold_items || []).length} sold
+                {activity.totals.sold_revenue
+                  ? ` · ${formatHammer(activity.totals.sold_revenue)} hammer`
+                  : ""}
+                . Categories ranked by hammer. Item list is highest hammer first.
+              </p>
+              {(activity.sold_by_category || []).length > 0 ? (
+                <div className="ct-table-wrap" style={{ marginBottom: "0.85rem" }}>
+                  <table className="ct-table">
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th className="ct-table__num">Sold</th>
+                        <th className="ct-table__num">Hammer</th>
+                        <th className="ct-table__num">Avg</th>
+                        <th className="ct-table__num">Low</th>
+                        <th className="ct-table__num">High</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(activity.sold_by_category || []).map((cat) => (
+                        <tr key={cat.category}>
+                          <td style={{ fontWeight: 600 }}>{cat.category}</td>
+                          <td className="ct-table__num">{cat.sold_count}</td>
+                          <td className="ct-table__num">{formatHammer(cat.revenue)}</td>
+                          <td className="ct-table__num">{formatHammer(cat.avg_price)}</td>
+                          <td className="ct-table__num">{formatHammer(cat.min_price)}</td>
+                          <td className="ct-table__num">{formatHammer(cat.max_price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {(activity.sold_items || []).length > 0 ? (
+                <div className="ct-table-wrap">
+                  <table className="ct-table">
+                    <thead>
+                      <tr>
+                        <th>SKU</th>
+                        <th>Item</th>
+                        <th>Category</th>
+                        <th className="ct-table__num">Hammer</th>
+                        <th>Sale</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(activity.sold_items || []).map((item) => (
+                        <tr key={item.lot_id}>
+                          <td style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
+                            {item.sku?.trim() || "—"}
+                          </td>
+                          <td>{item.auction_title || "—"}</td>
+                          <td>
+                            {item.category}
+                            {item.subcategory ? (
+                              <div className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                                {item.subcategory}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="ct-table__num">{formatHammer(item.sold_price)}</td>
+                          <td>
+                            {item.sale_name || "—"}
+                            {item.posted_at ? (
+                              <div className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                                {formatActivityStamp(item.posted_at)}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td>
+                            <Link href={`/lots/${item.lot_id}`} className="ct-btn ct-btn--ghost">
+                              Open
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : activity.totals.lots_posted ? (
+            <p className="ct-muted" style={{ marginTop: "1rem", marginBottom: 0 }}>
+              No sold lots in this window yet. After the sale closes and CT Seller statuses
+              sync, they land here with hammer and category.
+            </p>
+          ) : null}
           {activity.members.some((m) => (m.lots || []).length > 0) ? (
             <div style={{ marginTop: "1rem" }}>
               {activity.members
