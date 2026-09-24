@@ -156,11 +156,15 @@ export type TeamActivity = {
     sku?: string | null;
     auction_title?: string;
     category: string;
+    outcome?: string;
     sold_price: number;
   }[];
   sold_by_category?: {
     category: string;
+    posted_count?: number;
     sold_count: number;
+    unsold_count?: number;
+    live_count?: number;
     revenue: number;
     avg_price: number;
   }[];

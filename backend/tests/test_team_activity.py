@@ -270,12 +270,14 @@ def test_summarize_counts_photos_lots_jobs_in_window(tmp_path: Path) -> None:
     assert summary.lots_live == 1
     assert summary.sold_revenue == 42.5
     assert summary.members[0].email == "maria@ct.test"
-    assert len(summary.sold_items) == 1
-    assert summary.sold_items[0].sold_price == 42.5
-    assert summary.sold_items[0].category == "Lamps"
-    assert summary.sold_items[0].sale_name == "Sale A"
+    assert len(summary.sold_items) == 2
+    sold_row = next(i for i in summary.sold_items if i.outcome == "sold")
+    assert sold_row.sold_price == 42.5
+    assert sold_row.category == "Lamps"
+    assert sold_row.sale_name == "Sale A"
     assert summary.sold_by_category[0].sold_count == 1
     assert summary.sold_by_category[0].revenue == 42.5
+    assert {row.outcome for row in summary.sold_items} == {"sold", "live"}
 
 
 def test_summarize_active_rate_uses_first_to_last_same_day(tmp_path: Path) -> None:
@@ -469,14 +471,19 @@ def test_sold_docket_ranks_categories_by_revenue(tmp_path: Path) -> None:
     )
     db.commit()
     summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
-    assert [row.sku for row in summary.sold_items] == ["TG1", "TG3", "TG2"]
+    assert [row.sku for row in summary.sold_items] == ["TG1", "TG3", "TG2", "TG4"]
+    assert [row.outcome for row in summary.sold_items] == ["sold", "sold", "sold", "live"]
     assert [row.category for row in summary.sold_by_category] == ["Jewelry", "Lamps"]
     jewelry = summary.sold_by_category[0]
     assert jewelry.sold_count == 2
+    assert jewelry.posted_count == 3
+    assert jewelry.live_count == 1
+    assert jewelry.unsold_count == 0
     assert jewelry.revenue == 138
     assert jewelry.avg_price == 69
     assert jewelry.max_price == 120
     assert jewelry.min_price == 18
+    assert jewelry.sell_through == round(2 / 3, 4)
     assert summary.sold_items[0].sale_name == "Henderson"
     assert summary.sold_items[0].user_email == "maria@ct.test"
 
@@ -534,6 +541,7 @@ def test_summarize_photographed_lots_and_capture_minutes(tmp_path: Path) -> None
                 original_name="1.jpg",
                 storage_path="/1.jpg",
                 created_at=first,
+                captured_at=first,
             ),
             Photo(
                 id="p2",
@@ -543,6 +551,7 @@ def test_summarize_photographed_lots_and_capture_minutes(tmp_path: Path) -> None
                 original_name="2.jpg",
                 storage_path="/2.jpg",
                 created_at=first + timedelta(minutes=3),
+                captured_at=first + timedelta(minutes=3),
             ),
             Photo(
                 id="p3",
@@ -552,6 +561,7 @@ def test_summarize_photographed_lots_and_capture_minutes(tmp_path: Path) -> None
                 original_name="3.jpg",
                 storage_path="/3.jpg",
                 created_at=first + timedelta(minutes=8),
+                captured_at=first + timedelta(minutes=8),
             ),
             Photo(
                 id="p-later",
@@ -617,11 +627,10 @@ def test_upload_burst_is_not_reported_as_shoot_time(tmp_path: Path) -> None:
     summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
     row = next(m for m in summary.members if m.email == "maria@ct.test")
     assert row.lots[0].photo_count == 8
-    assert row.lots[0].capture_minutes == 0.12
+    assert row.lots[0].capture_minutes is None
     assert row.lots[0].timing_source == "upload_burst"
     assert row.median_minutes_per_lot is None
-    assert len(row.lots[0].photo_times) == 8
-    assert row.lots[0].photo_times[0].source == "upload"
+    assert row.lots[0].photo_times == ()
 
 
 def test_camera_captured_at_beats_upload_burst(tmp_path: Path) -> None:
@@ -803,19 +812,60 @@ def test_team_activity_http_includes_posted_sold_fields(tmp_path: Path) -> None:
         assert member["lots_posted"] == 1
         assert member["lots_sold"] == 1
         assert member["lots_photographed"] == 1
-        assert member["median_minutes_per_lot"] == 5.0
+        assert member["median_minutes_per_lot"] is None
         assert member["lots"][0]["sku"] == "JL0101"
         assert member["lots"][0]["photo_count"] == 2
         assert member["lots"][0]["capture_minutes"] == 5.0
         assert member["lots"][0]["timing_source"] == "upload"
         assert member["lots"][0]["has_thumbnail"] is True
-        assert len(member["lots"][0]["photo_times"]) == 2
-        assert member["lots"][0]["photo_times"][0]["source"] == "upload"
+        assert member["lots"][0]["photo_times"] == []
         assert body["sold_items"][0]["sku"] == "JL0101"
+        assert body["sold_items"][0]["outcome"] == "sold"
         assert body["sold_items"][0]["category"] == "Jewelry"
         assert body["sold_items"][0]["sold_price"] == 25
         assert body["sold_by_category"][0]["category"] == "Jewelry"
         assert body["sold_by_category"][0]["revenue"] == 25
+        assert body["sold_by_category"][0]["posted_count"] == 1
+        assert body["sold_by_category"][0]["unsold_count"] == 0
+        assert body["sold_by_category"][0]["sell_through"] == 1.0
     finally:
         app.dependency_overrides.clear()
         db.close()
+
+
+def test_sold_docket_includes_unsold_with_zero_hammer(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    db.add(Account(id="acct-a", name="CT LV"))
+    maria = _user(db, user_id="maria-a", account_id="acct-a", email="maria@ct.test")
+    db.add(Sale(id="sale-a", account_id="acct-a", user_id=maria.id, name="Sale A"))
+    posted = T0 - timedelta(hours=2)
+    db.add(
+        Lot(
+            id="lot-unsold",
+            account_id="acct-a",
+            user_id=maria.id,
+            sale_id="sale-a",
+            sku="NS1",
+            auction_title="Did not sell",
+            ct_category="Toys",
+            created_at=posted,
+            ctseller_item_id=9,
+            ctseller_posted_at=posted,
+            ctseller_item_status="Unsold",
+            ctseller_sold_price=None,
+        )
+    )
+    db.commit()
+    summary = summarize_team_activity(db, "acct-a", T0 - timedelta(days=1), T0)
+    assert len(summary.sold_items) == 1
+    row = summary.sold_items[0]
+    assert row.outcome == "unsold"
+    assert row.sold_price == 0.0
+    assert row.sku == "NS1"
+    cat = summary.sold_by_category[0]
+    assert cat.category == "Toys"
+    assert cat.posted_count == 1
+    assert cat.sold_count == 0
+    assert cat.unsold_count == 1
+    assert cat.revenue == 0.0
+    assert cat.sell_through == 0.0

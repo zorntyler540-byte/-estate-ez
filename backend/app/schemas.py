@@ -133,6 +133,7 @@ class SoldDocketItemOut(BaseModel):
     auction_title: str = ""
     category: str = "Uncategorized"
     subcategory: str | None = None
+    outcome: str = "sold"
     sold_price: float = 0
     posted_at: datetime | None = None
     user_email: str = ""
@@ -140,11 +141,15 @@ class SoldDocketItemOut(BaseModel):
 
 class SoldCategoryRollupOut(BaseModel):
     category: str
+    posted_count: int = 0
     sold_count: int
+    unsold_count: int = 0
+    live_count: int = 0
     revenue: float
     avg_price: float
     min_price: float
     max_price: float
+    sell_through: float = 0
 
 
 class AdminAccountOut(BaseModel):

@@ -341,6 +341,7 @@ class SoldDocketItem:
     auction_title: str
     category: str
     subcategory: str | None
+    outcome: str
     sold_price: float
     posted_at: datetime | None
     user_email: str
@@ -349,11 +350,18 @@ class SoldDocketItem:
 @dataclass(frozen=True)
 class SoldCategoryRollup:
     category: str
+    posted_count: int
     sold_count: int
+    unsold_count: int
+    live_count: int
     revenue: float
     avg_price: float
     min_price: float
     max_price: float
+    sell_through: float
+
+
+_OUTCOME_RANK = {"sold": 0, "unsold": 1, "live": 2, "pulled": 3, "unknown": 4, "unposted": 5}
 
 
 def _lot_sold_price(lot: Lot) -> float:
@@ -372,13 +380,12 @@ def build_sold_docket(
     start: datetime,
     end: datetime,
 ) -> tuple[list[SoldDocketItem], list[SoldCategoryRollup]]:
-    """Sold lots posted in the window: hammer, CT category, sale — what moved."""
-    posted = _posted_lots_in_window(db, account_id, start, end)
-    sold_lots = [lot for lot in posted if lot_ctbids_outcome(lot) == "sold"]
-    if not sold_lots:
+    """Posted lots in the window with current sold/unsold/live outcome, hammer, category."""
+    posted = [lot for lot in _posted_lots_in_window(db, account_id, start, end) if lot_is_posted_to_ctbids(lot)]
+    if not posted:
         return [], []
 
-    sale_ids = {lot.sale_id for lot in sold_lots if lot.sale_id}
+    sale_ids = {lot.sale_id for lot in posted if lot.sale_id}
     sales = (
         db.query(Sale.id, Sale.name).filter(Sale.account_id == account_id, Sale.id.in_(sale_ids)).all()
         if sale_ids
@@ -386,7 +393,7 @@ def build_sold_docket(
     )
     sale_name = {str(sid): (name or "").strip() or "Sale" for sid, name in sales}
 
-    user_ids = {str(lot.user_id) for lot in sold_lots if lot.user_id}
+    user_ids = {str(lot.user_id) for lot in posted if lot.user_id}
     emails = (
         {
             str(uid): email
@@ -399,10 +406,14 @@ def build_sold_docket(
     )
 
     items: list[SoldDocketItem] = []
-    for lot in sold_lots:
+    for lot in posted:
+        outcome = lot_ctbids_outcome(lot)
+        if outcome == "unposted":
+            continue
         cat = (lot.ct_category or "").strip() or "Uncategorized"
         sub = (lot.ct_subcategory or "").strip() or None
         posted_at = lot.ctseller_posted_at or lot.created_at
+        price = _lot_sold_price(lot) if outcome == "sold" else 0.0
         items.append(
             SoldDocketItem(
                 lot_id=lot.id,
@@ -412,28 +423,42 @@ def build_sold_docket(
                 auction_title=(lot.auction_title or "")[:160],
                 category=cat,
                 subcategory=sub,
-                sold_price=_lot_sold_price(lot),
+                outcome=outcome,
+                sold_price=price,
                 posted_at=aware_utc(posted_at) if posted_at is not None else None,
                 user_email=emails.get(str(lot.user_id or ""), ""),
             )
         )
-    items.sort(key=lambda row: (-row.sold_price, (row.sku or "").lower(), row.lot_id))
+    items.sort(
+        key=lambda row: (
+            _OUTCOME_RANK.get(row.outcome, 9),
+            -row.sold_price,
+            (row.sku or "").lower(),
+            row.lot_id,
+        )
+    )
 
-    prices_by_cat: dict[str, list[float]] = {}
+    buckets: dict[str, list[SoldDocketItem]] = {}
     for row in items:
-        prices_by_cat.setdefault(row.category, []).append(row.sold_price)
+        buckets.setdefault(row.category, []).append(row)
     categories: list[SoldCategoryRollup] = []
-    for cat, prices in prices_by_cat.items():
-        n = len(prices)
-        revenue = round(sum(prices), 2)
+    for cat, rows in buckets.items():
+        sold_prices = [r.sold_price for r in rows if r.outcome == "sold"]
+        sold_n = len(sold_prices)
+        posted_n = len(rows)
+        revenue = round(sum(sold_prices), 2)
         categories.append(
             SoldCategoryRollup(
                 category=cat,
-                sold_count=n,
+                posted_count=posted_n,
+                sold_count=sold_n,
+                unsold_count=sum(1 for r in rows if r.outcome == "unsold"),
+                live_count=sum(1 for r in rows if r.outcome == "live"),
                 revenue=revenue,
-                avg_price=round(revenue / n, 2) if n else 0.0,
-                min_price=round(min(prices), 2),
-                max_price=round(max(prices), 2),
+                avg_price=round(revenue / sold_n, 2) if sold_n else 0.0,
+                min_price=round(min(sold_prices), 2) if sold_prices else 0.0,
+                max_price=round(max(sold_prices), 2) if sold_prices else 0.0,
+                sell_through=round(sold_n / posted_n, 4) if posted_n else 0.0,
             )
         )
     categories.sort(key=lambda row: (-row.revenue, -row.sold_count, row.category.lower()))
@@ -525,28 +550,25 @@ def _photographed_lots_by_user(
             else:
                 resolved.append((aware_utc(created), "upload"))
         camera = [ts for ts, src in resolved if src == "camera"]
-        distinct_camera = {ts.isoformat() for ts in camera}
-        if len(distinct_camera) >= 2:
+        uploaded = sorted(uploaded)
+        if camera:
             ordered = sorted(camera)
-            stamp_source = "camera"
-            photo_times = tuple(
-                TeamActivityPhotoTime(at=ts, source="camera") for ts, src in resolved if src == "camera"
-            )
+            photo_times = tuple(TeamActivityPhotoTime(at=ts, source="camera") for ts in ordered)
+            source = "camera"
+            mins = capture_minutes_for_timestamps(ordered)
         else:
-            ordered = sorted(uploaded)
-            stamp_source = "upload"
-            photo_times = tuple(TeamActivityPhotoTime(at=ts, source="upload") for ts in ordered)
-        photo_times = tuple(sorted(photo_times, key=lambda row: row.at))
-        mins = capture_minutes_for_timestamps(ordered)
-        source = stamp_source
-        if (
-            source == "upload"
-            and mins is not None
-            and len(ordered) >= 2
-            and (ordered[-1] - ordered[0]) <= UPLOAD_BURST_MAX
-        ):
-            source = "upload_burst"
-        if mins is not None and source != "upload_burst":
+            ordered = uploaded
+            photo_times = ()
+            mins = capture_minutes_for_timestamps(uploaded)
+            source = "upload"
+            if (
+                mins is not None
+                and len(uploaded) >= 2
+                and (uploaded[-1] - uploaded[0]) <= UPLOAD_BURST_MAX
+            ):
+                source = "upload_burst"
+                mins = None
+        if mins is not None and source == "camera":
             minutes_by_user.setdefault(uid, []).append(mins)
         grouped.setdefault(uid, []).append(
             TeamActivityLot(

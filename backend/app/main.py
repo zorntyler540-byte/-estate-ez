@@ -934,6 +934,7 @@ def team_activity(
                 auction_title=item.auction_title,
                 category=item.category,
                 subcategory=item.subcategory,
+                outcome=item.outcome,
                 sold_price=item.sold_price,
                 posted_at=item.posted_at,
                 user_email=item.user_email,
@@ -943,11 +944,15 @@ def team_activity(
         sold_by_category=[
             SoldCategoryRollupOut(
                 category=row.category,
+                posted_count=row.posted_count,
                 sold_count=row.sold_count,
+                unsold_count=row.unsold_count,
+                live_count=row.live_count,
                 revenue=row.revenue,
                 avg_price=row.avg_price,
                 min_price=row.min_price,
                 max_price=row.max_price,
+                sell_through=row.sell_through,
             )
             for row in summary.sold_by_category
         ],

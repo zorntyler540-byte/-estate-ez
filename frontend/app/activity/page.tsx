@@ -93,8 +93,8 @@ export default function TeamActivityPage() {
               Team
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Catalog pace, CT Bids posted/sold, and minutes per lot. Password and invites stay in
-              Settings.
+              Cataloging is shutter time between photos. Sale results are sold, unsold, and hammer.
+              Password and invites stay in Settings.
             </p>
           </div>
         </header>

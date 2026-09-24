@@ -3,10 +3,15 @@ import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { theme } from "@/constants/theme";
-import { getTeamActivity, lotThumbnailSource, type TeamActivity, type TeamActivityLot } from "@/lib/api";
+import {
+  getTeamActivity,
+  lotThumbnailSource,
+  type TeamActivity,
+  type TeamActivityLot
+} from "@/lib/api";
 
 type Days = 1 | 7 | 30;
+type Panel = "catalog" | "sales";
 const PHONE_LOT_CAP = 12;
 
 function fmtMinutes(n: number | null | undefined): string {
@@ -21,16 +26,14 @@ function fmtHours(n: number | undefined): string {
   return n.toFixed(n >= 10 ? 1 : 2);
 }
 
-function fmtMoney(n: number | undefined): string {
-  if (!n) return "—";
-  return `$${Math.round(n)}`;
-}
-
-function fmtMinutes(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  if (n < 1) return `${Math.max(1, Math.round(n * 60))}s`;
-  if (n < 10) return `${n.toFixed(1)} min`;
-  return `${Math.round(n)} min`;
+function fmtHammer(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n) || n <= 0) return "—";
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 function fmtClock(iso: string, withSeconds: boolean): string {
@@ -43,7 +46,18 @@ function fmtClock(iso: string, withSeconds: boolean): string {
   });
 }
 
+function fmtGap(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = sec / 60;
+  if (min < 10) return `${min.toFixed(1)} min`;
+  return `${Math.round(min)} min`;
+}
+
 function fmtLotTime(lot: TeamActivityLot): string {
+  const n = lot.photo_count || 0;
+  const photos = `${n} ${n === 1 ? "photo" : "photos"}`;
+  if (lot.timing_source !== "camera") return `${photos} · no shutter time`;
   const first = lot.first_photo_at;
   const last = lot.last_photo_at;
   let range = "";
@@ -55,33 +69,23 @@ function fmtLotTime(lot: TeamActivityLot): string {
     const end = fmtClock(last || first, withSeconds);
     range = start && end && start !== end ? `${start}–${end}` : start;
   }
-  const n = lot.photo_count || 0;
-  if (lot.timing_source === "camera") {
-    const dur =
-      lot.capture_minutes == null ? (n < 2 ? "1ph" : "") : fmtMinutes(lot.capture_minutes);
-    return [dur, range].filter(Boolean).join(" · ");
-  }
-  if (lot.capture_minutes == null) {
-    return [n < 2 ? "1ph" : "upl", range].filter(Boolean).join(" · ");
-  }
-  const dur = fmtMinutes(lot.capture_minutes);
-  const label =
-    lot.timing_source === "upload_burst" || lot.capture_minutes <= 0.75 ? `${dur} upl` : `${dur} upl`;
-  return [label, range].filter(Boolean).join(" · ");
+  const dur = lot.capture_minutes == null ? "" : `${fmtMinutes(lot.capture_minutes)} shoot`;
+  return [photos, dur, range].filter(Boolean).join(" · ");
 }
 
 function fmtPhotoTimes(lot: TeamActivityLot): string {
-  const times = lot.photo_times || [];
-  if (!times.length) return "";
-  const first = times[0]?.at;
-  const last = times[times.length - 1]?.at;
-  const a = first ? new Date(first).getTime() : 0;
-  const b = last ? new Date(last).getTime() : 0;
-  const withSeconds = Math.abs(b - a) < 2 * 60 * 1000 || times.length <= 4;
-  const clocks = times.map((t) => fmtClock(t.at, withSeconds)).filter(Boolean);
-  if (!clocks.length) return "";
-  const prefix = times[0]?.source === "camera" ? "Shutter" : "Uploaded";
-  return `${prefix}: ${clocks.join(", ")}`;
+  const times = (lot.photo_times || []).filter((t) => (t.source || "camera") === "camera");
+  if (lot.timing_source !== "camera" || !times.length) return "";
+  if (times.length === 1) return `Shutter ${fmtClock(times[0].at, true)}`;
+  const gaps: string[] = [];
+  for (let i = 1; i < times.length; i += 1) {
+    const a = new Date(times[i - 1].at).getTime();
+    const b = new Date(times[i].at).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b)) continue;
+    gaps.push(fmtGap(b - a));
+  }
+  if (!gaps.length) return "";
+  return `Between photos: ${gaps.join(" · ")}`;
 }
 
 function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
@@ -101,7 +105,7 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
           {lot.sku?.trim() || "No SKU"}
         </Text>
         <Text style={styles.lotMeta} numberOfLines={3}>
-          {lot.photo_count}ph · {fmtLotTime(lot)}
+          {fmtLotTime(lot)}
         </Text>
         {fmtPhotoTimes(lot) ? (
           <Text style={styles.lotTimes} numberOfLines={6}>
@@ -118,6 +122,7 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
 
 export function TeamActivityPanel({ token }: { token: string }) {
   const [days, setDays] = useState<Days>(1);
+  const [panel, setPanel] = useState<Panel>("catalog");
   const [row, setRow] = useState<TeamActivity | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -149,11 +154,28 @@ export function TeamActivityPanel({ token }: { token: string }) {
 
   return (
     <View style={styles.box}>
-      <Text style={styles.title}>Team activity</Text>
+      <Text style={styles.title}>{panel === "sales" ? "Sale results" : "Cataloging"}</Text>
       <Text style={styles.hint}>
-        Photos, lots, CT Bids posted/sold, and minutes per lot. Each lot shows clock time and
-        per-photo stamps (shutter when the phone sent it, otherwise upload). Owners only.
+        {panel === "sales"
+          ? "Posted lots in this window: sold, unsold, or still live, with hammer. Today is often empty until a sale closes."
+          : "Photos, lots, and shutter time between pictures. Upload clock is not used here."}
       </Text>
+      <View style={styles.chips}>
+        {(
+          [
+            ["catalog", "Cataloging"],
+            ["sales", "Sale results"]
+          ] as const
+        ).map(([id, label]) => (
+          <Pressable
+            key={id}
+            style={[styles.chip, panel === id && styles.chipOn]}
+            onPress={() => setPanel(id)}
+          >
+            <Text style={[styles.chipText, panel === id && styles.chipTextOn]}>{label}</Text>
+          </Pressable>
+        ))}
+      </View>
       <View style={styles.chips}>
         {(
           [
@@ -179,14 +201,12 @@ export function TeamActivityPanel({ token }: { token: string }) {
       {!row && !loading && !error ? (
         <Text style={styles.meta}>No activity in this window.</Text>
       ) : null}
-      {row ? (
+      {row && panel === "catalog" ? (
         <>
           <Text style={styles.meta}>
-            {row.totals.photos_uploaded} photos · {row.totals.lots_created} lots ·{" "}
-            {row.totals.lots_posted ?? 0} posted · {row.totals.lots_sold ?? 0} sold
-            {row.totals.sold_revenue ? ` · ${fmtMoney(row.totals.sold_revenue)} hammer` : ""}
+            {row.totals.photos_uploaded} photos · {row.totals.lots_photographed ?? 0} lots shot
             {row.totals.median_minutes_per_lot != null
-              ? ` · median ${fmtMinutes(row.totals.median_minutes_per_lot)}/lot`
+              ? ` · median ${fmtMinutes(row.totals.median_minutes_per_lot)} shutter/lot`
               : ""}
           </Text>
           {row.members.map((m) => (
@@ -195,15 +215,13 @@ export function TeamActivityPanel({ token }: { token: string }) {
                 {m.email}
               </Text>
               <Text style={styles.counts}>
-                {m.photos_uploaded} photos · {m.lots_created} lots · {m.lots_posted ?? 0} posted ·{" "}
-                {m.lots_sold ?? 0} sold / {m.lots_unsold ?? 0} unsold / {m.lots_live ?? 0} live
+                {m.photos_uploaded} photos · {m.lots_created} lots · {m.lots_photographed ?? 0} shot
               </Text>
               <Text style={styles.meta}>
                 {fmtHours(m.active_hours)} active hrs · {m.photos_per_hour || 0} photos/hr
                 {m.median_minutes_per_lot != null
-                  ? ` · median ${fmtMinutes(m.median_minutes_per_lot)}/lot`
+                  ? ` · median ${fmtMinutes(m.median_minutes_per_lot)} shutter/lot`
                   : ""}
-                {m.sold_revenue ? ` · ${fmtMoney(m.sold_revenue)}` : ""}
               </Text>
               {(m.lots || []).length > 0 ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.lotRow}>
@@ -214,21 +232,47 @@ export function TeamActivityPanel({ token }: { token: string }) {
               ) : null}
             </View>
           ))}
-          {(row.sold_by_category || []).length > 0 ? (
-            <View style={styles.person}>
-              <Text style={styles.email}>Sold by category</Text>
-              {(row.sold_by_category || []).slice(0, 8).map((cat) => (
+        </>
+      ) : null}
+      {row && panel === "sales" ? (
+        <>
+          <Text style={styles.meta}>
+            {row.totals.lots_posted ?? 0} posted · {row.totals.lots_sold ?? 0} sold ·{" "}
+            {row.totals.lots_unsold ?? 0} unsold · {row.totals.lots_live ?? 0} live
+            {row.totals.sold_revenue ? ` · ${fmtHammer(row.totals.sold_revenue)} hammer` : ""}
+          </Text>
+          {(row.sold_items || []).length === 0 ? (
+            <Text style={styles.meta}>
+              No posted lots in this date range yet. Try 7 or 30 days after a sale closes, then
+              Refresh.
+            </Text>
+          ) : (
+            <>
+              {(row.sold_by_category || []).map((cat) => (
                 <Text key={cat.category} style={styles.counts}>
-                  {cat.category} · {cat.sold_count} sold · {fmtMoney(cat.revenue)} · avg {fmtMoney(cat.avg_price)}
+                  {cat.category} · {cat.posted_count ?? cat.sold_count} posted · {cat.sold_count}{" "}
+                  sold · {cat.unsold_count ?? 0} unsold
+                  {cat.revenue ? ` · ${fmtHammer(cat.revenue)}` : ""}
                 </Text>
               ))}
-              {(row.sold_items || []).slice(0, 8).map((item) => (
-                <Text key={item.lot_id} style={styles.meta} numberOfLines={2}>
-                  {item.sku?.trim() || "No SKU"} · {fmtMoney(item.sold_price)} · {item.category}
-                </Text>
+              {(row.sold_items || []).slice(0, 40).map((item) => (
+                <Pressable
+                  key={item.lot_id}
+                  onPress={() => router.push(`/lot/${item.lot_id}`)}
+                  style={styles.saleRow}
+                >
+                  <Text style={styles.email} numberOfLines={1}>
+                    {item.sku?.trim() || "No SKU"} · {item.outcome || "—"}
+                    {item.outcome === "sold" ? ` · ${fmtHammer(item.sold_price)}` : ""}
+                  </Text>
+                  <Text style={styles.meta} numberOfLines={2}>
+                    {item.category}
+                    {item.auction_title ? ` · ${item.auction_title}` : ""}
+                  </Text>
+                </Pressable>
               ))}
-            </View>
-          ) : null}
+            </>
+          )}
         </>
       ) : null}
     </View>
@@ -267,6 +311,12 @@ const styles = StyleSheet.create({
   },
   email: { color: "#f5f5f4", fontSize: 14, fontWeight: "600" },
   counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 },
+  saleRow: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#1c1917"
+  },
   lotRow: { marginTop: 10, marginHorizontal: -4 },
   lotChip: { width: 120, marginRight: 8 },
   lotThumb: {

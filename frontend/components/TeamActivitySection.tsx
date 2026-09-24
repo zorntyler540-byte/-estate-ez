@@ -84,6 +84,7 @@ export type SoldDocketItem = {
   auction_title?: string;
   category: string;
   subcategory?: string | null;
+  outcome?: string;
   sold_price: number;
   posted_at?: string | null;
   user_email?: string;
@@ -91,11 +92,15 @@ export type SoldDocketItem = {
 
 export type SoldCategoryRollup = {
   category: string;
+  posted_count?: number;
   sold_count: number;
+  unsold_count?: number;
+  live_count?: number;
   revenue: number;
   avg_price: number;
   min_price: number;
   max_price: number;
+  sell_through?: number;
 };
 
 type ActivityPreset = "today" | "7d" | "30d" | "90d" | "custom";
@@ -183,36 +188,52 @@ function formatLotShootTime(lot: {
   first_photo_at?: string;
   last_photo_at?: string;
 }): string {
-  const range = formatClockRange(lot.first_photo_at, lot.last_photo_at);
   const n = lot.photo_count || 0;
-  if (lot.timing_source === "camera") {
-    const dur =
-      lot.capture_minutes == null ? (n < 2 ? "1 photo" : "") : formatActivityMinutes(lot.capture_minutes);
-    return [dur, range].filter(Boolean).join(" · ");
+  const photos = `${n} ${n === 1 ? "photo" : "photos"}`;
+  if (lot.timing_source !== "camera") {
+    return `${photos} · no shutter time`;
   }
-  if (lot.capture_minutes == null) {
-    return [n < 2 ? "1 photo" : "uploaded", range].filter(Boolean).join(" · ");
-  }
-  const dur = formatActivityMinutes(lot.capture_minutes);
-  const label = lot.timing_source === "upload_burst" || lot.capture_minutes <= 0.75 ? `${dur} upload` : `${dur} (upload)`;
-  return [label, range].filter(Boolean).join(" · ");
+  const range = formatClockRange(lot.first_photo_at, lot.last_photo_at);
+  const dur =
+    lot.capture_minutes == null ? (n < 2 ? "" : "") : formatActivityMinutes(lot.capture_minutes);
+  return [photos, dur ? `${dur} shoot` : "", range].filter(Boolean).join(" · ");
+}
+
+function formatGapLabel(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = sec / 60;
+  if (min < 10) return `${min.toFixed(1)} min`;
+  return `${Math.round(min)} min`;
 }
 
 function formatPhotoShutterList(lot: TeamActivityLot): string {
-  const times = lot.photo_times || [];
-  if (!times.length) return "";
-  const spanMs = (() => {
-    if (!lot.first_photo_at || !lot.last_photo_at) return 0;
-    const a = new Date(lot.first_photo_at).getTime();
-    const b = new Date(lot.last_photo_at).getTime();
-    if (Number.isNaN(a) || Number.isNaN(b)) return 0;
-    return Math.abs(b - a);
-  })();
-  const withSeconds = spanMs < 2 * 60 * 1000 || times.length <= 4;
-  const clocks = times.map((t) => formatClockTime(t.at, withSeconds)).filter(Boolean);
-  if (!clocks.length) return "";
-  const prefix = times[0]?.source === "camera" ? "Shutter" : "Uploaded";
-  return `${prefix}: ${clocks.join(", ")}`;
+  const times = (lot.photo_times || []).filter((t) => (t.source || "camera") === "camera");
+  if (lot.timing_source !== "camera" || !times.length) return "";
+  if (times.length === 1) return `Shutter ${formatClockTime(times[0].at, true)}`;
+  const gaps: string[] = [];
+  for (let i = 1; i < times.length; i += 1) {
+    const a = new Date(times[i - 1].at).getTime();
+    const b = new Date(times[i].at).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b)) continue;
+    gaps.push(formatGapLabel(b - a));
+  }
+  if (!gaps.length) return "";
+  return `Between photos: ${gaps.join(" · ")}`;
+}
+
+function formatSaleOutcome(outcome?: string): string {
+  const o = (outcome || "").toLowerCase();
+  if (o === "sold") return "Sold";
+  if (o === "unsold") return "Unsold";
+  if (o === "live") return "Live";
+  if (o === "pulled") return "Pulled";
+  return outcome || "—";
+}
+
+function formatPercent(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${Math.round(n * 100)}%`;
 }
 
 function formatActivityHours(n: number | undefined): string {
@@ -237,11 +258,6 @@ function formatActivityStamp(iso: string | null | undefined): string {
   });
 }
 
-function formatActivityMoney(n: number | undefined): string {
-  if (!n) return "—";
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-}
-
 function formatHammer(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   return n.toLocaleString(undefined, {
@@ -253,7 +269,17 @@ function formatHammer(n: number | null | undefined): string {
 }
 
 function soldDocketCsv(row: TeamActivity): string {
-  const headers = ["SKU", "Title", "Category", "Hammer", "Sale", "Posted", "Catalogger", "Lot ID"];
+  const headers = [
+    "SKU",
+    "Title",
+    "Category",
+    "Outcome",
+    "Hammer",
+    "Sale",
+    "Posted",
+    "Catalogger",
+    "Lot ID"
+  ];
   const lines = [headers.map(csvCell).join(",")];
   for (const item of row.sold_items || []) {
     lines.push(
@@ -261,7 +287,8 @@ function soldDocketCsv(row: TeamActivity): string {
         item.sku || "",
         item.auction_title || "",
         item.category || "",
-        item.sold_price,
+        item.outcome || "",
+        item.outcome === "sold" ? item.sold_price : "",
         item.sale_name || "",
         item.posted_at || "",
         item.user_email || "",
@@ -275,11 +302,33 @@ function soldDocketCsv(row: TeamActivity): string {
 }
 
 function soldCategoryCsv(row: TeamActivity): string {
-  const headers = ["Category", "Sold", "Hammer", "Average", "Low", "High"];
+  const headers = [
+    "Category",
+    "Posted",
+    "Sold",
+    "Unsold",
+    "Live",
+    "Sell-through",
+    "Hammer",
+    "Average",
+    "Low",
+    "High"
+  ];
   const lines = [headers.map(csvCell).join(",")];
   for (const cat of row.sold_by_category || []) {
     lines.push(
-      [cat.category, cat.sold_count, cat.revenue, cat.avg_price, cat.min_price, cat.max_price]
+      [
+        cat.category,
+        cat.posted_count ?? "",
+        cat.sold_count,
+        cat.unsold_count ?? "",
+        cat.live_count ?? "",
+        cat.sell_through ?? "",
+        cat.revenue,
+        cat.avg_price,
+        cat.min_price,
+        cat.max_price
+      ]
         .map(csvCell)
         .join(",")
     );
@@ -297,22 +346,17 @@ function teamActivityCsv(row: TeamActivity): string {
   const headers = [
     "Person",
     "Role",
-    "First photo",
-    "Last photo",
+    "First upload",
+    "Last upload",
     "Last lot",
     "Photos",
     "Lots",
-    "Posted",
-    "Sold",
-    "Unsold",
-    "Live",
-    "Hammer",
     "Jobs",
     "Active hours",
     "Photos/hr",
     "Lots/hr",
     "Lots photographed",
-    "Median min/lot"
+    "Median shutter min/lot"
   ];
   const lines = [headers.map(csvCell).join(",")];
   for (const m of row.members) {
@@ -325,11 +369,6 @@ function teamActivityCsv(row: TeamActivity): string {
         m.last_lot_at || "",
         m.photos_uploaded,
         m.lots_created,
-        m.lots_posted ?? 0,
-        m.lots_sold ?? 0,
-        m.lots_unsold ?? 0,
-        m.lots_live ?? 0,
-        m.sold_revenue ?? 0,
         m.jobs_started,
         m.active_hours,
         m.photos_per_hour,
@@ -351,11 +390,6 @@ function teamActivityCsv(row: TeamActivity): string {
       "",
       t.photos_uploaded,
       t.lots_created,
-      t.lots_posted ?? 0,
-      t.lots_sold ?? 0,
-      t.lots_unsold ?? 0,
-      t.lots_live ?? 0,
-      t.sold_revenue ?? 0,
       t.jobs_started,
       t.active_hours,
       t.photos_per_hour,
@@ -391,13 +425,12 @@ function teamActivityLotsCsv(row: TeamActivity): string {
           lot.sku || "",
           lot.auction_title || "",
           lot.photo_count,
-          lot.timing_source === "camera"
-            ? lot.capture_minutes ?? ""
-            : lot.capture_minutes != null
-              ? lot.capture_minutes
-              : "",
+          lot.timing_source === "camera" ? lot.capture_minutes ?? "" : "",
           lot.timing_source || "",
-          (lot.photo_times || []).map((t) => t.at).join("; "),
+          (lot.photo_times || [])
+            .filter((t) => (t.source || "camera") === "camera")
+            .map((t) => t.at)
+            .join("; "),
           lot.first_photo_at || "",
           lot.last_photo_at || "",
           lot.lot_id
@@ -433,6 +466,8 @@ export function TeamActivitySection({
   const [activity, setActivity] = useState<TeamActivity | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState("");
+  const [panel, setPanel] = useState<"catalog" | "sales">("catalog");
+  const [saleOutcome, setSaleOutcome] = useState<"all" | "sold" | "unsold" | "live">("all");
 
   const refreshTeamActivity = useCallback(async () => {
     if (!token) return;
@@ -465,34 +500,42 @@ export function TeamActivitySection({
   return (
     <section className="ct-card ct-card--padded">
       <h2 className="ct-section-title" style={{ marginTop: 0 }}>
-        Team activity
+        {panel === "sales" ? "Sale results" : "Cataloging"}
       </h2>
       <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
-        Photos, lots, catalog jobs, CT Bids posted/sold, and time-per-lot for pictures each login
-        actually uploaded.
+        {panel === "sales"
+          ? "Every posted lot in this date range: sold, unsold, or still live — hammer and CT Bids category."
+          : "Photos, lots, and shutter time between pictures. Upload clock is not used here."}
       </p>
+      <div className="ct-seg" role="group" aria-label="Team analytics view" style={{ marginBottom: "0.75rem" }}>
+        <button type="button" disabled={panel === "catalog"} onClick={() => setPanel("catalog")}>
+          Cataloging
+        </button>
+        <button type="button" disabled={panel === "sales"} onClick={() => setPanel("sales")}>
+          Sale results
+        </button>
+      </div>
       <details className="ct-help-details" style={{ marginBottom: "0.75rem" }}>
         <summary>How this is counted</summary>
         <div className="ct-help-details__body">
-          Credit goes to the login that uploaded the photo or started the catalog job. Deleted photos
-          drop off. Shared logins look like one person. <strong>Posted / Sold / Unsold / Live</strong>{" "}
-          are lots that login created and that went to CT Bids in this window (post time, or catalog
-          time if the post stamp is missing). Hammer is the sum of reported sold prices.{" "}
-          <strong>First photo</strong>, <strong>Last photo</strong>, and <strong>Last lot</strong> are
-          when that login&apos;s first/last photo or last lot in this window landed in the catalog
-          (upload time, not the camera shutter). On Today that is that day; on 7d/30d/90d it is last
-          in the selected range. Photos/hr and Lots/hr use <strong>active hours</strong>: each UTC
-          day with a photo or lot is the time from that person&apos;s first event to their last that
-          day, at least one hour. Totals divide team counts by the sum of those person-hours. This is
-          cataloging pace, not hours on the clock. <strong>Min/lot</strong> is first-to-last photo on
-          that lot (the densest cluster; a gap over 15 minutes is a later add-on, not one shoot). One
-          photo cannot measure duration. Each card shows first-to-last clock time and every photo
-          stamp. <strong>Shutter</strong> is camera EXIF or the phone shutter. If those are missing,
-          the times are when the files hit the server (<strong>upload</strong>) — a whole lot in a
-          few seconds is Sync, not the shoot. The <strong>sold docket</strong> lists every lot posted
-          in this window that CT Seller now reports as sold — hammer price and CT Bids category —
-          so you can see what actually moved. Refresh after a sale closes so statuses and prices
-          catch up.
+          {panel === "sales" ? (
+            <>
+              Sale results are lots posted to CT Bids in this date range, with the current CT Seller
+              status. <strong>Sold</strong> includes hammer. <strong>Unsold</strong> did not sell.{" "}
+              <strong>Live</strong> is still bidding. Categories show sell-through (sold ÷ posted)
+              and hammer stats for sold lots. Today is often empty until a sale closes — use Last 7
+              or 30 days, then Refresh after statuses sync.
+            </>
+          ) : (
+            <>
+              Credit goes to the login that uploaded the photo or started the catalog job. Lot cards
+              use <strong>camera shutter</strong> only (EXIF or phone shutter), including time
+              between photos. If the phone did not send shutter time, the card says no shutter time
+              — we do not show upload bursts here. <strong>Min/lot</strong> is first-to-last shutter
+              on that lot. First/last photo columns in the table are still when files landed on the
+              server.
+            </>
+          )}
         </div>
       </details>
       <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -525,44 +568,45 @@ export function TeamActivitySection({
           {activityLoading ? "Refreshing…" : "Refresh"}
         </button>
         {activity ? (
-          <>
-            <button
-              type="button"
-              className="ct-btn ct-btn--ghost"
-              onClick={() => downloadCsv(teamActivityCsv(activity), `team-activity-${activityPreset}.csv`)}
-            >
-              Download CSV
-            </button>
-            <button
-              type="button"
-              className="ct-btn ct-btn--ghost"
-              onClick={() =>
-                downloadCsv(teamActivityLotsCsv(activity), `team-activity-lots-${activityPreset}.csv`)
-              }
-            >
-              Download lots CSV
-            </button>
-            {(activity.sold_items || []).length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--ghost"
-                  onClick={() => downloadCsv(soldDocketCsv(activity), `sold-docket-${activityPreset}.csv`)}
-                >
-                  Download sold CSV
-                </button>
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--ghost"
-                  onClick={() =>
-                    downloadCsv(soldCategoryCsv(activity), `sold-categories-${activityPreset}.csv`)
-                  }
-                >
-                  Download categories CSV
-                </button>
-              </>
-            ) : null}
-          </>
+          panel === "sales" ? (
+            <>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() => downloadCsv(soldDocketCsv(activity), `sale-results-${activityPreset}.csv`)}
+              >
+                Download lots CSV
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() =>
+                  downloadCsv(soldCategoryCsv(activity), `sale-categories-${activityPreset}.csv`)
+                }
+              >
+                Download categories CSV
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() => downloadCsv(teamActivityCsv(activity), `team-activity-${activityPreset}.csv`)}
+              >
+                Download CSV
+              </button>
+              <button
+                type="button"
+                className="ct-btn ct-btn--ghost"
+                onClick={() =>
+                  downloadCsv(teamActivityLotsCsv(activity), `team-activity-lots-${activityPreset}.csv`)
+                }
+              >
+                Download lots CSV
+              </button>
+            </>
+          )
         ) : null}
       </div>
       {activityPreset === "custom" ? (
@@ -600,275 +644,180 @@ export function TeamActivitySection({
         <>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
             {formatActivityWhen(activity.since)} – {formatActivityWhen(activity.until)}
-            {activity.totals.lots_posted
-              ? ` · ${activity.totals.lots_posted} posted · ${activity.totals.lots_sold ?? 0} sold`
-              : ""}
-            {activity.totals.sold_revenue
-              ? ` · ${formatActivityMoney(activity.totals.sold_revenue)} hammer`
-              : ""}
-            {activity.totals.median_minutes_per_lot != null
-              ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)}/lot`
-              : ""}
+            {panel === "sales"
+              ? `${activity.totals.lots_posted ? ` · ${activity.totals.lots_posted} posted` : " · 0 posted"} · ${activity.totals.lots_sold ?? 0} sold · ${activity.totals.lots_unsold ?? 0} unsold · ${activity.totals.lots_live ?? 0} live${activity.totals.sold_revenue ? ` · ${formatHammer(activity.totals.sold_revenue)} hammer` : ""}`
+              : `${activity.totals.photos_uploaded} photos · ${activity.totals.lots_photographed ?? 0} lots shot${activity.totals.median_minutes_per_lot != null ? ` · median ${formatActivityMinutes(activity.totals.median_minutes_per_lot)} shutter/lot` : ""}`}
           </p>
-          <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
-            <table className="ct-table">
-              <thead>
-                <tr>
-                  <th>Person</th>
-                  <th>First photo</th>
-                  <th>Last photo</th>
-                  <th>Last lot</th>
-                  <th className="ct-table__num">Photos</th>
-                  <th className="ct-table__num">Lots</th>
-                  <th className="ct-table__num">Posted</th>
-                  <th className="ct-table__num">Sold</th>
-                  <th className="ct-table__num">Unsold</th>
-                  <th className="ct-table__num">Live</th>
-                  <th className="ct-table__num">Hammer</th>
-                  <th className="ct-table__num">Jobs</th>
-                  <th className="ct-table__num">Active hrs</th>
-                  <th className="ct-table__num">Photos/hr</th>
-                  <th className="ct-table__num">Lots/hr</th>
-                  <th className="ct-table__num">Shot</th>
-                  <th className="ct-table__num">Min/lot</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activity.members.map((m) => (
-                  <tr key={m.user_id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{m.email}</div>
-                      <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
-                        {accountRoleLabel(m.role)}
-                        {m.user_id === viewerUserId ? " · you" : ""}
-                      </div>
-                    </td>
-                    <td>{formatActivityStamp(m.first_photo_at)}</td>
-                    <td>{formatActivityStamp(m.last_photo_at)}</td>
-                    <td>{formatActivityStamp(m.last_lot_at)}</td>
-                    <td className="ct-table__num">{m.photos_uploaded}</td>
-                    <td className="ct-table__num">{m.lots_created}</td>
-                    <td className="ct-table__num">{m.lots_posted ?? 0}</td>
-                    <td className="ct-table__num">{m.lots_sold ?? 0}</td>
-                    <td className="ct-table__num">{m.lots_unsold ?? 0}</td>
-                    <td className="ct-table__num">{m.lots_live ?? 0}</td>
-                    <td className="ct-table__num">{formatActivityMoney(m.sold_revenue)}</td>
-                    <td className="ct-table__num">{m.jobs_started}</td>
-                    <td className="ct-table__num">{formatActivityHours(m.active_hours)}</td>
-                    <td className="ct-table__num">{formatActivityRate(m.photos_per_hour)}</td>
-                    <td className="ct-table__num">{formatActivityRate(m.lots_per_hour)}</td>
-                    <td className="ct-table__num">{m.lots_photographed ?? 0}</td>
-                    <td className="ct-table__num">{formatActivityMinutes(m.median_minutes_per_lot)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <th>
-                    Total · {activity.totals.member_count}{" "}
-                    {activity.totals.member_count === 1 ? "login" : "logins"}
-                  </th>
-                  <th>—</th>
-                  <th>—</th>
-                  <th>—</th>
-                  <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
-                  <th className="ct-table__num">{activity.totals.lots_created}</th>
-                  <th className="ct-table__num">{activity.totals.lots_posted ?? 0}</th>
-                  <th className="ct-table__num">{activity.totals.lots_sold ?? 0}</th>
-                  <th className="ct-table__num">{activity.totals.lots_unsold ?? 0}</th>
-                  <th className="ct-table__num">{activity.totals.lots_live ?? 0}</th>
-                  <th className="ct-table__num">{formatActivityMoney(activity.totals.sold_revenue)}</th>
-                  <th className="ct-table__num">{activity.totals.jobs_started}</th>
-                  <th className="ct-table__num">{formatActivityHours(activity.totals.active_hours)}</th>
-                  <th className="ct-table__num">{formatActivityRate(activity.totals.photos_per_hour)}</th>
-                  <th className="ct-table__num">{formatActivityRate(activity.totals.lots_per_hour)}</th>
-                  <th className="ct-table__num">{activity.totals.lots_photographed ?? 0}</th>
-                  <th className="ct-table__num">
-                    {formatActivityMinutes(activity.totals.median_minutes_per_lot)}
-                  </th>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          {(activity.sold_by_category || []).length > 0 || (activity.sold_items || []).length > 0 ? (
-            <div style={{ marginTop: "1.25rem" }}>
-              <h3 className="ct-section-title" style={{ fontSize: "1.05rem", marginBottom: "0.35rem" }}>
-                Sold docket
-              </h3>
-              <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.86rem" }}>
-                {(activity.sold_items || []).length} sold
-                {activity.totals.sold_revenue
-                  ? ` · ${formatHammer(activity.totals.sold_revenue)} hammer`
-                  : ""}
-                . Categories ranked by hammer. Item list is highest hammer first.
-              </p>
-              {(activity.sold_by_category || []).length > 0 ? (
-                <div className="ct-table-wrap" style={{ marginBottom: "0.85rem" }}>
-                  <table className="ct-table">
-                    <thead>
-                      <tr>
-                        <th>Category</th>
-                        <th className="ct-table__num">Sold</th>
-                        <th className="ct-table__num">Hammer</th>
-                        <th className="ct-table__num">Avg</th>
-                        <th className="ct-table__num">Low</th>
-                        <th className="ct-table__num">High</th>
+          {panel === "catalog" ? (
+            <>
+              <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
+                <table className="ct-table">
+                  <thead>
+                    <tr>
+                      <th>Person</th>
+                      <th>First upload</th>
+                      <th>Last upload</th>
+                      <th>Last lot</th>
+                      <th className="ct-table__num">Photos</th>
+                      <th className="ct-table__num">Lots</th>
+                      <th className="ct-table__num">Jobs</th>
+                      <th className="ct-table__num">Active hrs</th>
+                      <th className="ct-table__num">Photos/hr</th>
+                      <th className="ct-table__num">Lots/hr</th>
+                      <th className="ct-table__num">Shot</th>
+                      <th className="ct-table__num">Min/lot</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activity.members.map((m) => (
+                      <tr key={m.user_id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{m.email}</div>
+                          <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
+                            {accountRoleLabel(m.role)}
+                            {m.user_id === viewerUserId ? " · you" : ""}
+                          </div>
+                        </td>
+                        <td>{formatActivityStamp(m.first_photo_at)}</td>
+                        <td>{formatActivityStamp(m.last_photo_at)}</td>
+                        <td>{formatActivityStamp(m.last_lot_at)}</td>
+                        <td className="ct-table__num">{m.photos_uploaded}</td>
+                        <td className="ct-table__num">{m.lots_created}</td>
+                        <td className="ct-table__num">{m.jobs_started}</td>
+                        <td className="ct-table__num">{formatActivityHours(m.active_hours)}</td>
+                        <td className="ct-table__num">{formatActivityRate(m.photos_per_hour)}</td>
+                        <td className="ct-table__num">{formatActivityRate(m.lots_per_hour)}</td>
+                        <td className="ct-table__num">{m.lots_photographed ?? 0}</td>
+                        <td className="ct-table__num">
+                          {formatActivityMinutes(m.median_minutes_per_lot)}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {(activity.sold_by_category || []).map((cat) => (
-                        <tr key={cat.category}>
-                          <td style={{ fontWeight: 600 }}>{cat.category}</td>
-                          <td className="ct-table__num">{cat.sold_count}</td>
-                          <td className="ct-table__num">{formatHammer(cat.revenue)}</td>
-                          <td className="ct-table__num">{formatHammer(cat.avg_price)}</td>
-                          <td className="ct-table__num">{formatHammer(cat.min_price)}</td>
-                          <td className="ct-table__num">{formatHammer(cat.max_price)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-              {(activity.sold_items || []).length > 0 ? (
-                <div className="ct-table-wrap">
-                  <table className="ct-table">
-                    <thead>
-                      <tr>
-                        <th>SKU</th>
-                        <th>Item</th>
-                        <th>Category</th>
-                        <th className="ct-table__num">Hammer</th>
-                        <th>Sale</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(activity.sold_items || []).map((item) => (
-                        <tr key={item.lot_id}>
-                          <td style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
-                            {item.sku?.trim() || "—"}
-                          </td>
-                          <td>{item.auction_title || "—"}</td>
-                          <td>
-                            {item.category}
-                            {item.subcategory ? (
-                              <div className="ct-muted" style={{ fontSize: "0.78rem" }}>
-                                {item.subcategory}
-                              </div>
-                            ) : null}
-                          </td>
-                          <td className="ct-table__num">{formatHammer(item.sold_price)}</td>
-                          <td>
-                            {item.sale_name || "—"}
-                            {item.posted_at ? (
-                              <div className="ct-muted" style={{ fontSize: "0.78rem" }}>
-                                {formatActivityStamp(item.posted_at)}
-                              </div>
-                            ) : null}
-                          </td>
-                          <td>
-                            <Link href={`/lots/${item.lot_id}`} className="ct-btn ct-btn--ghost">
-                              Open
-                            </Link>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-            </div>
-          ) : activity.totals.lots_posted ? (
-            <p className="ct-muted" style={{ marginTop: "1rem", marginBottom: 0 }}>
-              No sold lots in this window yet. After the sale closes and CT Seller statuses
-              sync, they land here with hammer and category.
-            </p>
-          ) : null}
-          {activity.members.some((m) => (m.lots || []).length > 0) ? (
-            <div style={{ marginTop: "1rem" }}>
-              {activity.members
-                .filter((m) => (m.lots_photographed || 0) > 0)
-                .map((m) => (
-                  <details key={m.user_id} open style={{ marginBottom: "0.85rem" }}>
-                    <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-                      {m.email} · {m.lots_photographed}{" "}
-                      {(m.lots_photographed || 0) === 1 ? "lot" : "lots"} photographed
-                      {m.median_minutes_per_lot != null
-                        ? ` · median ${formatActivityMinutes(m.median_minutes_per_lot)}`
-                        : ""}
-                    </summary>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        gap: "0.65rem",
-                        marginTop: "0.65rem"
-                      }}
-                    >
-                      {(m.lots || []).map((lot) => (
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <th>
+                        Total · {activity.totals.member_count}{" "}
+                        {activity.totals.member_count === 1 ? "login" : "logins"}
+                      </th>
+                      <th>—</th>
+                      <th>—</th>
+                      <th>—</th>
+                      <th className="ct-table__num">{activity.totals.photos_uploaded}</th>
+                      <th className="ct-table__num">{activity.totals.lots_created}</th>
+                      <th className="ct-table__num">{activity.totals.jobs_started}</th>
+                      <th className="ct-table__num">
+                        {formatActivityHours(activity.totals.active_hours)}
+                      </th>
+                      <th className="ct-table__num">
+                        {formatActivityRate(activity.totals.photos_per_hour)}
+                      </th>
+                      <th className="ct-table__num">
+                        {formatActivityRate(activity.totals.lots_per_hour)}
+                      </th>
+                      <th className="ct-table__num">{activity.totals.lots_photographed ?? 0}</th>
+                      <th className="ct-table__num">
+                        {formatActivityMinutes(activity.totals.median_minutes_per_lot)}
+                      </th>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              {activity.members.some((m) => (m.lots || []).length > 0) ? (
+                <div style={{ marginTop: "1rem" }}>
+                  {activity.members
+                    .filter((m) => (m.lots_photographed || 0) > 0)
+                    .map((m) => (
+                      <details key={m.user_id} open style={{ marginBottom: "0.85rem" }}>
+                        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                          {m.email} · {m.lots_photographed}{" "}
+                          {(m.lots_photographed || 0) === 1 ? "lot" : "lots"} photographed
+                          {m.median_minutes_per_lot != null
+                            ? ` · median ${formatActivityMinutes(m.median_minutes_per_lot)} shutter`
+                            : ""}
+                        </summary>
                         <div
-                          key={lot.lot_id}
                           style={{
-                            width: 148,
                             display: "flex",
-                            flexDirection: "column",
-                            gap: 4
+                            flexWrap: "wrap",
+                            gap: "0.65rem",
+                            marginTop: "0.65rem"
                           }}
                         >
-                          <Link
-                            href={`/lots/${lot.lot_id}`}
-                            style={{ textDecoration: "none", color: "inherit" }}
-                          >
-                            <LotThumbnail
-                              lotId={lot.lot_id}
-                              token={token}
-                              hasThumbnail={Boolean(lot.has_thumbnail)}
-                              size={128}
-                              maxPx={220}
-                            />
-                            <div style={{ fontWeight: 700, fontSize: "0.82rem", marginTop: 4 }}>
-                              {lot.sku?.trim() || "No SKU"}
-                            </div>
-                            <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
-                              {lot.photo_count} {lot.photo_count === 1 ? "photo" : "photos"} ·{" "}
-                              {formatLotShootTime(lot)}
-                            </div>
-                            {formatPhotoShutterList(lot) ? (
-                              <div
-                                className="ct-muted"
-                                style={{ fontSize: "0.68rem", lineHeight: 1.35, marginTop: 2 }}
+                          {(m.lots || []).map((lot) => (
+                            <div
+                              key={lot.lot_id}
+                              style={{
+                                width: 148,
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4
+                              }}
+                            >
+                              <Link
+                                href={`/lots/${lot.lot_id}`}
+                                style={{ textDecoration: "none", color: "inherit" }}
                               >
-                                {formatPhotoShutterList(lot)}
-                              </div>
-                            ) : null}
-                          </Link>
-                          <Link
-                            href={`/lots/${lot.lot_id}`}
-                            className="ct-btn ct-btn--ghost"
-                            style={{
-                              display: "inline-flex",
-                              justifyContent: "center",
-                              width: "100%",
-                              padding: "0.28rem 0.4rem",
-                              fontSize: "0.78rem"
-                            }}
-                          >
-                            Open lot
-                          </Link>
+                                <LotThumbnail
+                                  lotId={lot.lot_id}
+                                  token={token}
+                                  hasThumbnail={Boolean(lot.has_thumbnail)}
+                                  size={128}
+                                  maxPx={220}
+                                />
+                                <div style={{ fontWeight: 700, fontSize: "0.82rem", marginTop: 4 }}>
+                                  {lot.sku?.trim() || "No SKU"}
+                                </div>
+                                <div className="ct-muted" style={{ fontSize: "0.75rem" }}>
+                                  {formatLotShootTime(lot)}
+                                </div>
+                                {formatPhotoShutterList(lot) ? (
+                                  <div
+                                    className="ct-muted"
+                                    style={{ fontSize: "0.68rem", lineHeight: 1.35, marginTop: 2 }}
+                                  >
+                                    {formatPhotoShutterList(lot)}
+                                  </div>
+                                ) : null}
+                              </Link>
+                              <Link
+                                href={`/lots/${lot.lot_id}`}
+                                className="ct-btn ct-btn--ghost"
+                                style={{
+                                  display: "inline-flex",
+                                  justifyContent: "center",
+                                  width: "100%",
+                                  padding: "0.28rem 0.4rem",
+                                  fontSize: "0.78rem"
+                                }}
+                              >
+                                Open lot
+                              </Link>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                    {(m.lots_photographed || 0) > (m.lots || []).length ? (
-                      <p className="ct-muted" style={{ fontSize: "0.8rem", margin: "0.5rem 0 0" }}>
-                        Showing {(m.lots || []).length} of {m.lots_photographed}. Narrow the dates to
-                        see the rest.
-                      </p>
-                    ) : null}
-                  </details>
-                ))}
-            </div>
-          ) : null}
+                        {(m.lots_photographed || 0) > (m.lots || []).length ? (
+                          <p className="ct-muted" style={{ fontSize: "0.8rem", margin: "0.5rem 0 0" }}>
+                            Showing {(m.lots || []).length} of {m.lots_photographed}. Narrow the dates
+                            to see the rest.
+                          </p>
+                        ) : null}
+                      </details>
+                    ))}
+                </div>
+              ) : (
+                <p className="ct-muted" style={{ marginTop: "1rem", marginBottom: 0 }}>
+                  No photographed lots in this window.
+                </p>
+              )}
+            </>
+          ) : (
+            <SaleResultsPanel
+              activity={activity}
+              saleOutcome={saleOutcome}
+              setSaleOutcome={setSaleOutcome}
+            />
+          )}
         </>
       ) : activityLoading ? (
         <p className="ct-muted" style={{ marginBottom: 0 }}>
@@ -880,5 +829,140 @@ export function TeamActivitySection({
         </p>
       ) : null}
     </section>
+  );
+}
+
+function SaleResultsPanel({
+  activity,
+  saleOutcome,
+  setSaleOutcome
+}: {
+  activity: TeamActivity;
+  saleOutcome: "all" | "sold" | "unsold" | "live";
+  setSaleOutcome: (next: "all" | "sold" | "unsold" | "live") => void;
+}) {
+  const items = activity.sold_items || [];
+  const categories = activity.sold_by_category || [];
+  const filtered =
+    saleOutcome === "all" ? items : items.filter((row) => (row.outcome || "").toLowerCase() === saleOutcome);
+
+  if (!items.length) {
+    return (
+      <div className="ct-banner" style={{ marginBottom: 0 }}>
+        <p style={{ margin: 0 }}>
+          No posted lots in this date range yet. Today is often empty until a sale closes and CT
+          Seller statuses sync. Switch to <strong>Last 7 days</strong> or <strong>Last 30 days</strong>
+          , then Refresh.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="ct-seg" role="group" aria-label="Sale outcome filter" style={{ marginBottom: "0.75rem" }}>
+        {(
+          [
+            ["all", "All"],
+            ["sold", "Sold"],
+            ["unsold", "Unsold"],
+            ["live", "Live"]
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} type="button" disabled={saleOutcome === id} onClick={() => setSaleOutcome(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {categories.length ? (
+        <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>
+          <table className="ct-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th className="ct-table__num">Posted</th>
+                <th className="ct-table__num">Sold</th>
+                <th className="ct-table__num">Unsold</th>
+                <th className="ct-table__num">Live</th>
+                <th className="ct-table__num">Sell-through</th>
+                <th className="ct-table__num">Hammer</th>
+                <th className="ct-table__num">Average</th>
+                <th className="ct-table__num">Low</th>
+                <th className="ct-table__num">High</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map((cat) => (
+                <tr key={cat.category}>
+                  <td>{cat.category}</td>
+                  <td className="ct-table__num">{cat.posted_count ?? 0}</td>
+                  <td className="ct-table__num">{cat.sold_count}</td>
+                  <td className="ct-table__num">{cat.unsold_count ?? 0}</td>
+                  <td className="ct-table__num">{cat.live_count ?? 0}</td>
+                  <td className="ct-table__num">{formatPercent(cat.sell_through)}</td>
+                  <td className="ct-table__num">{cat.revenue ? formatHammer(cat.revenue) : "—"}</td>
+                  <td className="ct-table__num">{cat.avg_price ? formatHammer(cat.avg_price) : "—"}</td>
+                  <td className="ct-table__num">{cat.min_price ? formatHammer(cat.min_price) : "—"}</td>
+                  <td className="ct-table__num">{cat.max_price ? formatHammer(cat.max_price) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <div className="ct-table-wrap" style={{ marginBottom: 0 }}>
+        <table className="ct-table">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Title</th>
+              <th>Category</th>
+              <th>Outcome</th>
+              <th className="ct-table__num">Hammer</th>
+              <th>Sale</th>
+              <th>Posted</th>
+              <th>Catalogger</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length ? (
+              filtered.map((item) => (
+                <tr key={item.lot_id}>
+                  <td style={{ fontWeight: 600 }}>{item.sku?.trim() || "—"}</td>
+                  <td>{item.auction_title || "—"}</td>
+                  <td>
+                    {item.category}
+                    {item.subcategory ? (
+                      <div className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                        {item.subcategory}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td>{formatSaleOutcome(item.outcome)}</td>
+                  <td className="ct-table__num">
+                    {item.outcome === "sold" ? formatHammer(item.sold_price) : "—"}
+                  </td>
+                  <td>{item.sale_name || "—"}</td>
+                  <td>{formatActivityStamp(item.posted_at)}</td>
+                  <td>{item.user_email || "—"}</td>
+                  <td>
+                    <Link href={`/lots/${item.lot_id}`} className="ct-btn ct-btn--ghost">
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={9} className="ct-muted">
+                  No {saleOutcome} lots in this window.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
