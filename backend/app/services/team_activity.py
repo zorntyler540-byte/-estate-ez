@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -26,6 +27,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models import Lot, Photo, ProcessingJob, Sale, User
+from app.services.photo_captured_at import captured_at_from_filename
 
 MAX_ACTIVITY_DAYS = 366
 MIN_ACTIVE_HOURS_PER_DAY = 1.0
@@ -439,6 +441,12 @@ def build_sold_docket(
 
 
 @dataclass(frozen=True)
+class TeamActivityPhotoTime:
+    at: datetime
+    source: str
+
+
+@dataclass(frozen=True)
 class TeamActivityLot:
     lot_id: str
     sale_id: str
@@ -450,6 +458,7 @@ class TeamActivityLot:
     last_photo_at: datetime
     has_thumbnail: bool
     timing_source: str = "upload"
+    photo_times: tuple[TeamActivityPhotoTime, ...] = ()
 
 
 def _photographed_lots_by_user(
@@ -465,7 +474,13 @@ def _photographed_lots_by_user(
     Returns user_id -> (lots slice for the UI, all capture-minute samples, total lot count).
     """
     rows = (
-        db.query(Photo.user_id, Photo.lot_id, Photo.created_at, Photo.captured_at)
+        db.query(
+            Photo.user_id,
+            Photo.lot_id,
+            Photo.created_at,
+            Photo.captured_at,
+            Photo.original_name,
+        )
         .filter(
             Photo.account_id == account_id,
             Photo.lot_id.isnot(None),
@@ -474,11 +489,13 @@ def _photographed_lots_by_user(
         )
         .all()
     )
-    times_by_user_lot: dict[tuple[str, str], list[tuple[datetime, datetime | None]]] = {}
-    for uid, lot_id, created, captured in rows:
+    times_by_user_lot: dict[tuple[str, str], list[tuple[datetime, datetime | None, str]]] = {}
+    for uid, lot_id, created, captured, original_name in rows:
         if not uid or not lot_id or created is None:
             continue
-        times_by_user_lot.setdefault((str(uid), str(lot_id)), []).append((created, captured))
+        times_by_user_lot.setdefault((str(uid), str(lot_id)), []).append(
+            (created, captured, str(original_name or ""))
+        )
     if not times_by_user_lot:
         return {}
 
@@ -496,23 +513,39 @@ def _photographed_lots_by_user(
         lot = lot_by_id.get(lot_id)
         if lot is None:
             continue
-        camera = [aware_utc(c) for _created, c in stamps if c is not None]
-        uploaded = [aware_utc(c) for c, _cap in stamps]
-        if len(camera) >= 2:
+        resolved: list[tuple[datetime, str]] = []
+        uploaded = [aware_utc(created) for created, _cap, _name in stamps]
+        for created, captured, original_name in stamps:
+            if captured is not None:
+                resolved.append((aware_utc(captured), "camera"))
+                continue
+            inferred = captured_at_from_filename(Path(original_name or "x.jpg"))
+            if inferred is not None:
+                resolved.append((inferred, "camera"))
+            else:
+                resolved.append((aware_utc(created), "upload"))
+        camera = [ts for ts, src in resolved if src == "camera"]
+        distinct_camera = {ts.isoformat() for ts in camera}
+        if len(distinct_camera) >= 2:
             ordered = sorted(camera)
-            mins = capture_minutes_for_timestamps(ordered)
-            source = "camera"
+            stamp_source = "camera"
+            photo_times = tuple(
+                TeamActivityPhotoTime(at=ts, source="camera") for ts, src in resolved if src == "camera"
+            )
         else:
             ordered = sorted(uploaded)
-            mins = capture_minutes_for_timestamps(ordered)
-            source = "upload"
-            if (
-                mins is not None
-                and len(ordered) >= 2
-                and (ordered[-1] - ordered[0]) <= UPLOAD_BURST_MAX
-            ):
-                mins = None
-                source = "upload_burst"
+            stamp_source = "upload"
+            photo_times = tuple(TeamActivityPhotoTime(at=ts, source="upload") for ts in ordered)
+        photo_times = tuple(sorted(photo_times, key=lambda row: row.at))
+        mins = capture_minutes_for_timestamps(ordered)
+        source = stamp_source
+        if (
+            source == "upload"
+            and mins is not None
+            and len(ordered) >= 2
+            and (ordered[-1] - ordered[0]) <= UPLOAD_BURST_MAX
+        ):
+            source = "upload_burst"
         if mins is not None and source != "upload_burst":
             minutes_by_user.setdefault(uid, []).append(mins)
         grouped.setdefault(uid, []).append(
@@ -527,6 +560,7 @@ def _photographed_lots_by_user(
                 last_photo_at=ordered[-1],
                 has_thumbnail=True,
                 timing_source=source,
+                photo_times=photo_times,
             )
         )
 

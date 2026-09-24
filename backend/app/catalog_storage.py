@@ -40,13 +40,22 @@ def persist_catalog_photo(account_id: str, source: Path, *, photo_id: str | None
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{pid}{suffix}"
     shutil.copy2(source, dest)
+    from app.services.photo_captured_at import sidecar_path
+
+    src_side = sidecar_path(source)
+    dest_side = sidecar_path(dest)
+    if src_side.is_file():
+        shutil.copy2(src_side, dest_side)
     key = catalog_storage_key(dest)
     if object_storage.r2_configured():
         try:
             object_storage.put_file(key, str(dest))
+            if dest_side.is_file():
+                object_storage.put_file(catalog_storage_key(dest_side), str(dest_side))
         except Exception:
             # Fail the persist if cloud upload fails — otherwise DB would claim a durable file.
             dest.unlink(missing_ok=True)
+            dest_side.unlink(missing_ok=True)
             raise
     return pid, key
 

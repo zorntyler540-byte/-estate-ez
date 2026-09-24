@@ -117,6 +117,7 @@ from app.schemas import (
     TeamActivityLotOut,
     TeamActivityMemberOut,
     TeamActivityOut,
+    TeamActivityPhotoTimeOut,
     TeamActivityTotalsOut,
     SoldDocketItemOut,
     SoldCategoryRollupOut,
@@ -896,6 +897,10 @@ def team_activity(
                         last_photo_at=lot.last_photo_at,
                         has_thumbnail=lot.has_thumbnail,
                         timing_source=lot.timing_source,
+                        photo_times=[
+                            TeamActivityPhotoTimeOut(at=pt.at, source=pt.source)
+                            for pt in lot.photo_times
+                        ],
                     )
                     for lot in m.lots
                 ],
