@@ -639,6 +639,50 @@ a.ct-btn:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.ct-table-sort {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+}
+
+.ct-table__num .ct-table-sort {
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.ct-table-sort:hover,
+.ct-table-sort:focus-visible {
+  color: var(--ct-text);
+}
+
+.ct-table-sort__mark {
+  font-size: 0.62rem;
+  min-width: 0.7em;
+  opacity: 0.85;
+}
+
+.ct-table-sort--link {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 650;
+  text-align: left;
+}
+
+.ct-table-row--picked td {
+  background: rgba(251, 191, 36, 0.08);
+}
+
 .ct-table tfoot th,
 .ct-table tfoot td {
   border-bottom: none;

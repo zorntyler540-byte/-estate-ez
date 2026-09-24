@@ -1,10 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LotThumbnail } from "./LotThumbnail";
 import { apiFetch } from "../lib/api";
 import { accountRoleLabel } from "../lib/roles";
+import {
+  nextCategorySort,
+  nextDocketSort,
+  sortCategoryRows,
+  sortDocketRows,
+  type CategorySortKey,
+  type DocketSortKey,
+  type SortDir
+} from "../lib/saleResultsSort";
 
 export type TeamActivityPhotoTime = {
   at: string;
@@ -577,7 +586,8 @@ export function TeamActivitySection({
               Sale results are lots posted to CT Bids in this date range, with the current CT Seller
               status. <strong>Sold</strong> includes hammer. <strong>Unsold</strong> did not sell.{" "}
               <strong>Live</strong> is still bidding. Categories show sell-through (sold ÷ posted)
-              and hammer stats for sold lots. Pull <strong>CT Seller history</strong> to include
+              and hammer stats for sold lots. Click a column header (Hammer, Average, Sell-through)
+              to sort. Click a category name to list only those lots. Pull <strong>CT Seller history</strong> to include
               closed auctions from seller.ctbids.com (sold, unsold, category, hammer), not only lots
               already in this catalog. <strong>All time</strong> runs from 2000 through now. The first
               history pull can take a minute; pull again if older auctions are still missing. Today is
@@ -907,6 +917,37 @@ export function TeamActivitySection({
   );
 }
 
+function SortTh({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  numeric,
+  onSort
+}: {
+  label: string;
+  sortKey: string;
+  activeKey: string;
+  dir: SortDir;
+  numeric?: boolean;
+  onSort: (key: string) => void;
+}) {
+  const active = sortKey === activeKey;
+  return (
+    <th
+      className={numeric ? "ct-table__num" : undefined}
+      aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button type="button" className="ct-table-sort" onClick={() => onSort(sortKey)}>
+        {label}
+        <span className="ct-table-sort__mark" aria-hidden="true">
+          {active ? (dir === "asc" ? "▲" : "▼") : ""}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 function SaleResultsPanel({
   activity,
   saleOutcome,
@@ -920,10 +961,28 @@ function SaleResultsPanel({
   historyBusy: boolean;
   onPullHistory: () => void;
 }) {
+  const [catKey, setCatKey] = useState<CategorySortKey>("hammer");
+  const [catDir, setCatDir] = useState<SortDir>("desc");
+  const [docketKey, setDocketKey] = useState<DocketSortKey>("hammer");
+  const [docketDir, setDocketDir] = useState<SortDir>("desc");
+  const [pickedCategory, setPickedCategory] = useState<string | null>(null);
+
   const items = activity.sold_items || [];
   const categories = activity.sold_by_category || [];
-  const filtered =
-    saleOutcome === "all" ? items : items.filter((row) => (row.outcome || "").toLowerCase() === saleOutcome);
+  const sortedCategories = useMemo(
+    () => sortCategoryRows(categories, catKey, catDir),
+    [categories, catKey, catDir]
+  );
+  const filtered = useMemo(() => {
+    let rows = items;
+    if (saleOutcome !== "all") {
+      rows = rows.filter((row) => (row.outcome || "").toLowerCase() === saleOutcome);
+    }
+    if (pickedCategory) {
+      rows = rows.filter((row) => row.category === pickedCategory);
+    }
+    return sortDocketRows(rows, docketKey, docketDir);
+  }, [items, saleOutcome, pickedCategory, docketKey, docketDir]);
 
   if (!items.length) {
     return (
@@ -961,27 +1020,70 @@ function SaleResultsPanel({
           </button>
         ))}
       </div>
+      {pickedCategory ? (
+        <p className="ct-muted" style={{ margin: "0 0 0.65rem" }}>
+          Showing lots in <strong>{pickedCategory}</strong>.{" "}
+          <button type="button" className="ct-btn ct-btn--ghost" onClick={() => setPickedCategory(null)}>
+            Show all categories
+          </button>
+        </p>
+      ) : (
+        <p className="ct-muted" style={{ margin: "0 0 0.65rem" }}>
+          Click a column header to sort. Click a category name to list only those lots.
+        </p>
+      )}
       {categories.length ? (
         <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>
           <table className="ct-table">
             <thead>
               <tr>
-                <th>Category</th>
-                <th className="ct-table__num">Posted</th>
-                <th className="ct-table__num">Sold</th>
-                <th className="ct-table__num">Unsold</th>
-                <th className="ct-table__num">Live</th>
-                <th className="ct-table__num">Sell-through</th>
-                <th className="ct-table__num">Hammer</th>
-                <th className="ct-table__num">Average</th>
-                <th className="ct-table__num">Low</th>
-                <th className="ct-table__num">High</th>
+                {(
+                  [
+                    ["category", "Category", false],
+                    ["posted", "Posted", true],
+                    ["sold", "Sold", true],
+                    ["unsold", "Unsold", true],
+                    ["live", "Live", true],
+                    ["sell_through", "Sell-through", true],
+                    ["hammer", "Hammer", true],
+                    ["avg", "Average", true],
+                    ["low", "Low", true],
+                    ["high", "High", true]
+                  ] as const
+                ).map(([key, label, numeric]) => (
+                  <SortTh
+                    key={key}
+                    label={label}
+                    sortKey={key}
+                    activeKey={catKey}
+                    dir={catDir}
+                    numeric={numeric}
+                    onSort={(next) => {
+                      const n = nextCategorySort(catKey, catDir, next as CategorySortKey);
+                      setCatKey(n.key);
+                      setCatDir(n.dir);
+                    }}
+                  />
+                ))}
               </tr>
             </thead>
             <tbody>
-              {categories.map((cat) => (
-                <tr key={cat.category}>
-                  <td>{cat.category}</td>
+              {sortedCategories.map((cat) => (
+                <tr
+                  key={cat.category}
+                  className={pickedCategory === cat.category ? "ct-table-row--picked" : undefined}
+                >
+                  <td>
+                    <button
+                      type="button"
+                      className="ct-table-sort ct-table-sort--link"
+                      onClick={() =>
+                        setPickedCategory((prev) => (prev === cat.category ? null : cat.category))
+                      }
+                    >
+                      {cat.category}
+                    </button>
+                  </td>
                   <td className="ct-table__num">{cat.posted_count ?? 0}</td>
                   <td className="ct-table__num">{cat.sold_count}</td>
                   <td className="ct-table__num">{cat.unsold_count ?? 0}</td>
@@ -1001,15 +1103,33 @@ function SaleResultsPanel({
         <table className="ct-table">
           <thead>
             <tr>
-              <th>SKU</th>
-              <th>Title</th>
-              <th>Category</th>
-              <th>Outcome</th>
-              <th className="ct-table__num">Hammer</th>
-              <th>Sale</th>
-              <th>Source</th>
-              <th>Posted</th>
-              <th>Catalogger</th>
+              {(
+                [
+                  ["sku", "SKU", false],
+                  ["title", "Title", false],
+                  ["category", "Category", false],
+                  ["outcome", "Outcome", false],
+                  ["hammer", "Hammer", true],
+                  ["sale", "Sale", false],
+                  ["source", "Source", false],
+                  ["posted", "Posted", false],
+                  ["catalogger", "Catalogger", false]
+                ] as const
+              ).map(([key, label, numeric]) => (
+                <SortTh
+                  key={key}
+                  label={label}
+                  sortKey={key}
+                  activeKey={docketKey}
+                  dir={docketDir}
+                  numeric={numeric}
+                  onSort={(next) => {
+                    const n = nextDocketSort(docketKey, docketDir, next as DocketSortKey);
+                    setDocketKey(n.key);
+                    setDocketDir(n.dir);
+                  }}
+                />
+              ))}
               <th></th>
             </tr>
           </thead>
@@ -1049,7 +1169,8 @@ function SaleResultsPanel({
             ) : (
               <tr>
                 <td colSpan={10} className="ct-muted">
-                  No {saleOutcome} lots in this window.
+                  No {saleOutcome === "all" ? "" : `${saleOutcome} `}lots
+                  {pickedCategory ? ` in ${pickedCategory}` : " in this window"}.
                 </td>
               </tr>
             )}
