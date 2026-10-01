@@ -39,6 +39,8 @@ from pipeline.pipeline import (
     select_analysis_photos,
 )
 from pipeline.schemas import FullyAuditedManifest, InventoryLotDraft, PhotoTriageResult
+from app.services.image_preprocess import load_pipeline_working_jpeg
+from app.services.memory_trim import trim_process_memory
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,9 @@ def _sync_pipeline_env_from_settings() -> None:
     os.environ["BRAND_PRO_MAX_LABEL_FRAMES"] = str(settings.brand_pro_max_label_frames)
     os.environ["BRAND_SKIP_PRO_IF_AGREEMENT"] = "1" if settings.brand_skip_pro_if_agreement else "0"
     os.environ["ENABLE_GROUNDED_VALUATION"] = "1" if settings.enable_grounded_valuation else "0"
-    os.environ["TRIAGE_IMAGE_MAX_EDGE"] = str(settings.triage_image_max_edge)
+    working_edge = min(int(settings.triage_image_max_edge), int(settings.pipeline_working_max_edge))
+    os.environ["TRIAGE_IMAGE_MAX_EDGE"] = str(working_edge)
+    os.environ["PIPELINE_TRIAGE_PARALLEL"] = str(settings.pipeline_triage_parallel)
 
 
 def _coerce_photo_entries(photos: list[Path] | list[PhotoEntry]) -> tuple[list[PhotoEntry], dict[str, Path]]:
@@ -97,6 +101,19 @@ def _coerce_photo_entries(photos: list[Path] | list[PhotoEntry]) -> tuple[list[P
 
     normalized = [(path_by_key[k], k) for k in path_by_key]
     return normalized, path_by_key
+
+
+def _working_image_edge() -> int:
+    return min(int(settings.triage_image_max_edge), int(settings.pipeline_working_max_edge))
+
+
+def _load_working_images(entries: list[PhotoEntry]) -> dict[str, bytes]:
+    edge = _working_image_edge()
+    quality = int(settings.pipeline_working_jpeg_quality)
+    images: dict[str, bytes] = {}
+    for path, key in entries:
+        images[key] = load_pipeline_working_jpeg(path, max_edge=edge, quality=quality)
+    return images
 
 
 def is_weak_pipeline_lot(lot: LotOutput) -> bool:
@@ -286,15 +303,12 @@ def triage_ordered_photo_batch(
     emit: EmitFn | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[tuple[Path, str, dict[str, Any]]]:
-    """Parallel Stage-1 triage; return rows in the same order as ``photos``."""
+    """Stage-1 triage in small RAM chunks; return rows in the same order as ``photos``."""
     _sync_pipeline_env_from_settings()
     entries, _path_by_key = _coerce_photo_entries(photos)
-    images: dict[str, bytes] = {}
-    for path, key in entries:
-        images[key] = path.read_bytes()
-
     total_photos = len(entries)
     filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
+    chunk_n = max(1, min(8, int(settings.pipeline_triage_parallel)))
 
     if emit:
         emit({"type": "batch_phase", "phase": "pipeline_triage", "total_photos": total_photos})
@@ -317,14 +331,25 @@ def triage_ordered_photo_batch(
             }
         )
 
-    if should_cancel and should_cancel():
-        raise PipelineCancelled()
-    triage_list = _run_parallel_triage(
-        images,
-        on_triage_complete=_emit_triage_row,
-        should_cancel=should_cancel,
-    )
-    by_name = {str(r.get("filename") or ""): r for r in triage_list}
+    by_name: dict[str, dict[str, Any]] = {}
+    for offset in range(0, len(entries), chunk_n):
+        if should_cancel and should_cancel():
+            raise PipelineCancelled()
+        chunk = entries[offset : offset + chunk_n]
+        images = _load_working_images(chunk)
+        try:
+            triage_list = _run_parallel_triage(
+                images,
+                on_triage_complete=_emit_triage_row,
+                should_cancel=should_cancel,
+            )
+        finally:
+            images.clear()
+            trim_process_memory()
+        for row in triage_list:
+            name = str(row.get("filename") or "")
+            if name:
+                by_name[name] = row
     ordered: list[tuple[Path, str, dict[str, Any]]] = []
     for path, key in entries:
         row = by_name.get(key) or _default_unusable_triage_row(key)
@@ -614,9 +639,7 @@ def run_single_lot_pipeline(
     _sync_pipeline_env_from_settings()
 
     entries, path_by_key = _coerce_photo_entries(photos)
-    images: dict[str, bytes] = {}
-    for path, key in entries:
-        images[key] = path.read_bytes()
+    images = _load_working_images(entries)
 
     total_photos = len(entries)
     filename_to_index = {key: i for i, (_, key) in enumerate(entries)}
@@ -847,4 +870,6 @@ def run_single_lot_pipeline(
     )
     pipeline_result["token_estimates"] = {"input": est_in, "output": est_out}
     pipeline_result["listing_filenames_used"] = listing_names
+    images.clear()
+    trim_process_memory()
     return lot, pipeline_result
