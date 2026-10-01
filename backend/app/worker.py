@@ -10,12 +10,17 @@ On Railway: add a second service from ``infra/docker/Dockerfile.worker``, copy t
     RUN_CATALOG_JOBS_IN_PROCESS=false
 
 Leave ``RUN_CATALOG_JOBS_IN_PROCESS`` unset/true on the worker (default).
+
+By default each catalog job runs in a **child process** (``WORKER_ISOLATE_JOBS=true``) so
+decoded JPEG RAM is released when the child exits. Cap the worker replica at 4 GB.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 import time
 
 from app import job_tasks
@@ -28,6 +33,16 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [worker] %(message)s",
 )
 _LOG = logging.getLogger("app.worker")
+
+
+def parse_worker_argv(argv: list[str]) -> tuple[str, str] | None:
+    """Return ``(job_id, account_id)`` when invoked as ``--run-job <id> <account>``."""
+    if len(argv) >= 4 and argv[1] == "--run-job":
+        job_id = (argv[2] or "").strip()
+        account_id = (argv[3] or "").strip()
+        if job_id and account_id:
+            return job_id, account_id
+    return None
 
 
 def _poll_seconds() -> float:
@@ -93,6 +108,29 @@ def _reconcile_stale_receiving_globally() -> int:
     return n
 
 
+def run_isolated_job(job_id: str, account_id: str) -> int:
+    """Child entry: claim and run one job, then exit so the parent RSS stays small."""
+    os.environ["WORKER_ISOLATED_CHILD"] = "1"
+    try:
+        started = job_tasks.start_job_in_background(job_id, account_id)
+    except RuntimeError as exc:
+        _LOG.warning("Could not start isolated job_id=%s: %s", job_id, exc)
+        return 2
+    if not started:
+        return 3
+    _LOG.info("Isolated catalog job running job_id=%s account_id=%s", job_id, account_id)
+    while job_tasks.is_job_running(job_id):
+        time.sleep(0.5)
+    return 0
+
+
+def _spawn_isolated_job(job_id: str, account_id: str) -> int:
+    cmd = [sys.executable, "-m", "app.worker", "--run-job", job_id, account_id]
+    _LOG.info("Spawning isolated catalog job job_id=%s", job_id)
+    completed = subprocess.run(cmd, check=False)
+    return int(completed.returncode or 0)
+
+
 def run_worker_loop(poll_seconds: float | None = None) -> None:
     """Poll Postgres for queued catalog jobs and run them in this process."""
     interval = _poll_seconds() if poll_seconds is None else poll_seconds
@@ -103,11 +141,13 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
         )
         raise SystemExit(2)
 
+    isolate = bool(settings.worker_isolate_jobs)
     _LOG.info(
-        "Catalog worker starting poll=%.1fs max_concurrent=%s gemini_parallelism=%s",
+        "Catalog worker starting poll=%.1fs max_concurrent=%s gemini_parallelism=%s isolate_jobs=%s",
         interval,
         settings.catalog_job_max_concurrent,
         settings.gemini_parallelism,
+        isolate,
     )
 
     # Previous container life may have left rows in ``processing`` with no live thread —
@@ -137,6 +177,12 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
             continue
         idle_sweeps = 0
         job_id, account_id = picked
+        if isolate:
+            code = _spawn_isolated_job(job_id, account_id)
+            if code != 0:
+                _LOG.warning("Isolated job job_id=%s exited %s", job_id, code)
+                time.sleep(interval)
+            continue
         try:
             started = job_tasks.start_job_in_background(job_id, account_id)
         except RuntimeError as exc:
@@ -152,5 +198,13 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
             time.sleep(0.5)
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    isolated = parse_worker_argv(argv if argv is not None else sys.argv)
+    if isolated is not None:
+        job_id, account_id = isolated
+        raise SystemExit(run_isolated_job(job_id, account_id))
     run_worker_loop()
+
+
+if __name__ == "__main__":
+    main()

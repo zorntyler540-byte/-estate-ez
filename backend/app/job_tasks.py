@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import traceback
@@ -555,6 +556,11 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
                     _LOG.exception("failed to persist job failure state job_id=%s", job_id)
     finally:
         _unregister(job_id)
+        from app.services.memory_trim import trim_process_memory
+
+        trim_process_memory()
+        if os.environ.get("WORKER_ISOLATED_CHILD") == "1":
+            return
         try_start_next_queued_job(account_id)
 
 

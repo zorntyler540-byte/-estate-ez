@@ -1268,7 +1268,11 @@ def _run_parallel_triage(
 ) -> list[dict[str, Any]]:
     """Stage 1 — parallel per-photo triage (order-independent)."""
     triage: list[dict[str, Any]] = []
-    max_workers = min(8, max(1, len(user_images_dict)))
+    try:
+        parallel_cap = max(1, min(8, int(os.environ.get("PIPELINE_TRIAGE_PARALLEL", "2"))))
+    except ValueError:
+        parallel_cap = 2
+    max_workers = min(parallel_cap, max(1, len(user_images_dict)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(triage_single_photo, filename, img_bytes): filename

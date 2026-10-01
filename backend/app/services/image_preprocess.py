@@ -48,6 +48,12 @@ def bytes_to_gemini_jpeg(
         return out.getvalue()
 
 
+def load_pipeline_working_jpeg(path: Path, *, max_edge: int, quality: int) -> bytes:
+    """Downscaled JPEG for triage / gallery / Pro — never keep the 4096px catalog original in RAM."""
+    data, _mime = prepare_gemini_image_file(path, max_edge=max_edge, quality=quality)
+    return data
+
+
 def prepare_gemini_image_file(path: Path, *, max_edge: int, quality: int) -> tuple[bytes, str]:
     """
     Read disk file and return (jpeg_bytes, image/jpeg).

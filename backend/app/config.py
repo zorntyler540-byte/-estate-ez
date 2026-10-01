@@ -82,14 +82,23 @@ class Settings(BaseSettings):
     # Default is conservative: many parallel Gemini calls decode large JPEGs in RAM and trigger OOM on small hosts (e.g. Railway). Override with GEMINI_PARALLELISM=12–15 on a beefy machine.
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
     # Cap simultaneous Gemini HTTP calls across upload jobs, regenerate, and triage threads.
-    gemini_global_concurrency: int = Field(default=4, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
+    gemini_global_concurrency: int = Field(default=3, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
     # Stacked Add-one-lot uploads queue automatically when this many jobs are already running.
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
     # When false, this process only enqueues catalog jobs; a separate ``python -m app.worker`` claims them.
     # Set false on the Railway API service and true (default) on the worker service.
     run_catalog_jobs_in_process: bool = Field(default=True, alias="RUN_CATALOG_JOBS_IN_PROCESS")
-    gemini_image_max_edge: int = Field(default=3072, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
-    gemini_jpeg_quality: int = Field(default=95, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
+    gemini_image_max_edge: int = Field(default=2048, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
+    gemini_jpeg_quality: int = Field(default=85, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
+    # In-memory pipeline copies (triage/gallery/Pro). Keep well below catalog 4096px originals.
+    pipeline_working_max_edge: int = Field(default=1600, ge=256, le=4096, alias="PIPELINE_WORKING_MAX_EDGE")
+    pipeline_working_jpeg_quality: int = Field(
+        default=80, ge=40, le=95, alias="PIPELINE_WORKING_JPEG_QUALITY"
+    )
+    # How many full photos are decoded for triage at once (each decode is tens of MB).
+    pipeline_triage_parallel: int = Field(default=2, ge=1, le=8, alias="PIPELINE_TRIAGE_PARALLEL")
+    # Dedicated worker: run each catalog job in a child process so RSS drops when it exits.
+    worker_isolate_jobs: bool = Field(default=True, alias="WORKER_ISOLATE_JOBS")
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
     gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
     gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")
