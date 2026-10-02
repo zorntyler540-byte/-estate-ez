@@ -31,7 +31,7 @@ def thumbnail_jpeg_bytes_first_available(paths: list[Path], max_px: int) -> byte
     raise FileNotFoundError("No displayable catalog image on disk")
 
 
-def thumbnail_jpeg_bytes(src: Path, max_px: int) -> bytes:
+def thumbnail_jpeg_bytes(src: Path, max_px: int, *, fast: bool = False) -> bytes:
     """Resize image to fit within max_px square; output JPEG bytes."""
     from PIL import Image, ImageOps
 
@@ -47,8 +47,8 @@ def thumbnail_jpeg_bytes(src: Path, max_px: int) -> bytes:
         else:
             im_rgb = im
         # Bilinear is much faster than LANCZOS for large→small dashboard thumbs; quality is fine at listing sizes.
-        resample = Image.Resampling.BILINEAR if max_px <= 512 else Image.Resampling.LANCZOS
+        resample = Image.Resampling.BILINEAR if (fast or max_px <= 512) else Image.Resampling.LANCZOS
         im_rgb.thumbnail((max_px, max_px), resample)
         buf = BytesIO()
-        im_rgb.save(buf, format="JPEG", quality=86, optimize=True)
+        im_rgb.save(buf, format="JPEG", quality=86, optimize=not fast)
         return buf.getvalue()

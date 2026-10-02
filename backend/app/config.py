@@ -99,6 +99,8 @@ class Settings(BaseSettings):
     pipeline_triage_parallel: int = Field(default=2, ge=1, le=8, alias="PIPELINE_TRIAGE_PARALLEL")
     # Dedicated worker: run each catalog job in a child process so RSS drops when it exits.
     worker_isolate_jobs: bool = Field(default=True, alias="WORKER_ISOLATE_JOBS")
+    # Parallel CT Seller photo upload (download/resize/POST). Keep modest — unofficial API + 2 GB API RAM.
+    ctseller_post_photo_workers: int = Field(default=4, ge=1, le=8, alias="CTSELLER_POST_PHOTO_WORKERS")
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
     gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
     gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")

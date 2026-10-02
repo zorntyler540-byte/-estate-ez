@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from datetime import datetime
 
@@ -838,23 +839,50 @@ def parse_sale_image_secondary_urls(raw: Any) -> list[str]:
     return []
 
 
+def jpeg_bytes_for_ctseller_post(path: Path) -> bytes:
+    """1600px JPEG for item/image/add. Cache beside the catalog file so a sale is not re-encoded."""
+    src = Path(path)
+    cache = src.with_name(f"{src.stem}.ctseller.{IMAGE_MAX_EDGE}.jpg")
+    try:
+        if cache.is_file() and src.is_file() and cache.stat().st_mtime >= src.stat().st_mtime:
+            return cache.read_bytes()
+    except OSError:
+        pass
+    from app.services.thumbnail_image import thumbnail_jpeg_bytes
+
+    try:
+        body = thumbnail_jpeg_bytes(src, IMAGE_MAX_EDGE, fast=True)
+    except Exception:
+        return src.read_bytes()
+    try:
+        cache.write_bytes(body)
+    except OSError:
+        pass
+    return body
+
+
 def _image_to_base64(raw: bytes, *, mime: str = "image/jpeg") -> str:
     """Return raw base64 (no data: prefix), matching CT Seller processAddImage."""
     try:
-        img = Image.open(io.BytesIO(raw))
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        elif img.mode == "L":
-            img = img.convert("RGB")
-        w, h = img.size
-        edge = max(w, h)
-        if edge > IMAGE_MAX_EDGE:
-            scale = IMAGE_MAX_EDGE / float(edge)
-            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=IMAGE_JPEG_QUALITY, optimize=True)
-        return base64.b64encode(buf.getvalue()).decode("ascii")
+        with Image.open(io.BytesIO(raw)) as img:
+            fmt = (img.format or "").upper()
+            w, h = img.size
+            edge = max(w, h)
+            # Already a listing-sized JPEG from jpeg_bytes_for_ctseller_post — do not decode pixels again.
+            if fmt == "JPEG" and edge <= IMAGE_MAX_EDGE:
+                return base64.b64encode(raw).decode("ascii")
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            elif img.mode == "L":
+                img = img.convert("RGB")
+            w, h = img.size
+            edge = max(w, h)
+            if edge > IMAGE_MAX_EDGE:
+                img.thumbnail((IMAGE_MAX_EDGE, IMAGE_MAX_EDGE), Image.Resampling.BILINEAR)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=IMAGE_JPEG_QUALITY, optimize=False)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:  # noqa: BLE001 — fall back to original bytes
         return base64.b64encode(raw).decode("ascii")
 

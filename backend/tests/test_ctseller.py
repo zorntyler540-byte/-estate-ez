@@ -517,3 +517,37 @@ def test_client_falls_back_to_password_when_refresh_fails(tmp_path) -> None:
     assert client.access_token == "access-login"
     db.refresh(account)
     assert unseal_secret(account.ctseller_access_token_enc) == "access-login"
+
+
+def test_jpeg_bytes_for_ctseller_post_caches_small_file(tmp_path) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.ctseller import IMAGE_MAX_EDGE, jpeg_bytes_for_ctseller_post
+
+    src = tmp_path / "hero.jpg"
+    Image.new("RGB", (2400, 1800), (20, 40, 80)).save(src, format="JPEG", quality=90)
+    out = jpeg_bytes_for_ctseller_post(src)
+    cache = src.with_name(f"hero.ctseller.{IMAGE_MAX_EDGE}.jpg")
+    assert cache.is_file()
+    with Image.open(BytesIO(out)) as im:
+        assert max(im.size) <= IMAGE_MAX_EDGE
+    again = jpeg_bytes_for_ctseller_post(src)
+    assert again == cache.read_bytes()
+
+
+def test_image_to_base64_skips_second_decode_for_small_jpeg() -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.ctseller import _image_to_base64
+
+    buf = BytesIO()
+    Image.new("RGB", (400, 300), (9, 9, 9)).save(buf, format="JPEG", quality=80)
+    raw = buf.getvalue()
+    b64 = _image_to_base64(raw)
+    import base64
+
+    assert base64.b64decode(b64) == raw
