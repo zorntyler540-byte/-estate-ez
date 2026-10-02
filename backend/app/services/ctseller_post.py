@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -11,11 +13,18 @@ from typing import Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.catalog_storage import resolve_catalog_storage_path
 from app.models import Lot, Photo, Sale
 from app.schemas import LotPostToCTSellerOut
 from app.services.audience_hunt import lot_is_held_from_ctseller
-from app.services.ctseller import CTSellerClient, CTSellerError, build_item_payload, resolve_lot_reserve_price
+from app.services.ctseller import (
+    CTSellerClient,
+    CTSellerError,
+    build_item_payload,
+    jpeg_bytes_for_ctseller_post,
+    resolve_lot_reserve_price,
+)
 from app.services.listing_channels import is_facebook_listing_channel
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.search_tags import parse_search_tags_json, search_tags_for_lot_fields
@@ -171,30 +180,42 @@ def post_one_lot_to_ctseller(
 
     uploaded = 0
     total_photos = len(listing_photos)
-    for idx, ph in enumerate(listing_photos):
-        phase(f"photo {idx + 1}/{total_photos}")
+    workers = max(1, min(int(settings.ctseller_post_photo_workers), total_photos or 1))
+    post_lock = threading.Lock()
+
+    def _upload_one(idx: int, ph: Photo) -> bool:
+        with post_lock:
+            phase(f"photo {idx + 1}/{total_photos}")
         try:
             path = resolve_catalog_storage_path(ph.storage_path)
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("CT Seller photo resolve failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
-            continue
+            return False
         if path is None or not path.is_file():
             _LOG.warning("CT Seller photo missing lot=%s photo=%s", lot.id, getattr(ph, "id", idx))
-            continue
+            return False
         try:
-            raw = path.read_bytes()
+            raw = jpeg_bytes_for_ctseller_post(path)
             name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
-            client.add_item_image(
-                item_id=item_id,
-                image_bytes=raw,
-                name=name[:80],
-                display_order=idx + 1,
-                is_display_image=(idx == 0),
-            )
-            uploaded += 1
+            with post_lock:
+                client.add_item_image(
+                    item_id=item_id,
+                    image_bytes=raw,
+                    name=name[:80],
+                    display_order=idx + 1,
+                    is_display_image=(idx == 0),
+                )
+            return True
         except (OSError, CTSellerError) as exc:
             _LOG.warning("CT Seller photo upload failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
-            continue
+            return False
+
+    if total_photos == 1 or workers == 1:
+        uploaded = sum(1 for idx, ph in enumerate(listing_photos) if _upload_one(idx, ph))
+    elif total_photos > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ct-photo") as pool:
+            futs = [pool.submit(_upload_one, idx, ph) for idx, ph in enumerate(listing_photos)]
+            uploaded = sum(1 for fut in as_completed(futs) if fut.result())
 
     return LotPostToCTSellerOut(
         lot_id=lot.id,
