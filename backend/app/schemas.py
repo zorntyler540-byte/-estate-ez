@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.services.plain_background import PLAIN_BG_MAX_PHOTOS
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -785,8 +787,8 @@ class PlainBackgroundIn(BaseModel):
     color: Literal["studio", "white", "gray"] = "studio"
     photo_ids: list[str] | None = Field(
         default=None,
-        max_length=6,
-        description="When omitted, only the first listing photo (not SKU tape) is changed.",
+        max_length=PLAIN_BG_MAX_PHOTOS,
+        description="When omitted, only the first listing photo (not SKU tape) is changed. SKU tape ids are skipped.",
     )
 
 
@@ -795,6 +797,7 @@ class PlainBackgroundOut(BaseModel):
     failed: int = 0
     photos: list[LotPhotoOut]
     errors: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class RestorePlainBackgroundIn(BaseModel):

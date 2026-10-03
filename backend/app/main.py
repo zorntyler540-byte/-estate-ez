@@ -4172,9 +4172,11 @@ def _lot_photos_ordered(db: Session, lot_id: str, account_id: str) -> list[Photo
 def _plain_bg_targets(
     existing: list[Photo],
     photo_ids: list[str] | None,
-) -> list[Photo]:
+) -> tuple[list[Photo], list[str]]:
+    """Listing photos to recolor, plus notes (SKU tape is skipped, not a hard stop)."""
     from app.services.photo_roles import is_sku_tape_photo_role, photos_for_ctbids_listing
 
+    notes: list[str] = []
     by_id = {p.id: p for p in existing}
     if photo_ids:
         missing = [pid for pid in photo_ids if pid not in by_id]
@@ -4183,16 +4185,20 @@ def _plain_bg_targets(
             raise HTTPException(status_code=400, detail=f"Photo id(s) not on this lot: {preview}")
         chosen = [by_id[pid] for pid in photo_ids]
         tape = [p for p in chosen if is_sku_tape_photo_role(p.photo_role)]
+        listing = [p for p in chosen if not is_sku_tape_photo_role(p.photo_role)]
         if tape:
+            count = len(tape)
+            notes.append(f"Left {count} SKU tape photo{'s' if count != 1 else ''} as shot.")
+        if not listing:
             raise HTTPException(
                 status_code=400,
                 detail="SKU tape photos stay as shot. Uncheck those and run the listing photos.",
             )
-        return chosen
-    listing = photos_for_ctbids_listing(existing)
-    if not listing:
+        return listing, notes
+    listing_photos = photos_for_ctbids_listing(existing)
+    if not listing_photos:
         raise HTTPException(status_code=400, detail="This lot has no listing photo to place on a color.")
-    return [listing[0]]
+    return [listing_photos[0]], notes
 
 
 def _write_plain_bg_jpeg(account_id: str, row: Photo, body: bytes) -> None:
@@ -4219,6 +4225,7 @@ def plain_background_lot_photos(
     import subprocess
 
     from app.services.plain_background import (
+        PLAIN_BG_CHUNK,
         discard_plain_bg_original,
         ensure_plain_bg_original,
         lot_is_janet_furniture,
@@ -4238,65 +4245,79 @@ def plain_background_lot_photos(
     if not existing:
         raise HTTPException(status_code=400, detail="This lot has no catalog photos.")
     want = list(dict.fromkeys(body.photo_ids or []))
-    targets = _plain_bg_targets(existing, want or None)
-
-    created: list[tuple[Photo, bool]] = []
-    payloads: dict[str, bytes] = {}
-    errors: list[str] = []
-    for row in targets:
-        src = resolve_catalog_storage_path(row.storage_path)
-        if not src.is_file():
-            if len(errors) < 8:
-                errors.append(f"{row.original_name}: file missing")
-            continue
-        fresh = ensure_plain_bg_original(row.storage_path, src)
-        if fresh:
-            row.plain_bg_saved = True
-        payloads[row.id] = src.read_bytes()
-        created.append((row, fresh))
-    if not payloads:
-        raise HTTPException(status_code=400, detail=errors[0] if errors else "No photos on disk.")
-
-    try:
-        rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
-    except (RuntimeError, subprocess.TimeoutExpired) as exc:
-        for row, fresh in created:
-            if fresh:
-                discard_plain_bg_original(row.storage_path)
-                row.plain_bg_saved = False
-        raise HTTPException(status_code=503, detail=str(exc)[:500] or "Background cutout failed") from exc
+    targets, notes = _plain_bg_targets(existing, want or None)
 
     updated = 0
     failed = 0
-    by_id = {p.id: p for p in existing}
-    for row, fresh in created:
-        jpeg = rendered.get(row.id)
-        if not jpeg:
-            failed += 1
+    errors: list[str] = []
+    cutout_down = False
+    for start in range(0, len(targets), PLAIN_BG_CHUNK):
+        chunk = targets[start : start + PLAIN_BG_CHUNK]
+        created: list[tuple[Photo, bool]] = []
+        payloads: dict[str, bytes] = {}
+        for row in chunk:
+            src = resolve_catalog_storage_path(row.storage_path)
+            if not src.is_file():
+                failed += 1
+                if len(errors) < 8:
+                    errors.append(f"{row.original_name}: file missing")
+                continue
+            fresh = ensure_plain_bg_original(row.storage_path, src)
             if fresh:
-                discard_plain_bg_original(row.storage_path)
-                row.plain_bg_saved = False
-            if len(errors) < 8:
-                errors.append(f"{row.original_name}: {cut_errors.get(row.id) or 'cutout failed'}")
+                row.plain_bg_saved = True
+            payloads[row.id] = src.read_bytes()
+            created.append((row, fresh))
+        if not payloads:
             continue
         try:
-            _write_plain_bg_jpeg(current.account_id, row, jpeg)
-            updated += 1
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            if fresh:
-                discard_plain_bg_original(row.storage_path)
-                row.plain_bg_saved = False
+            rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            for row, fresh in created:
+                if fresh:
+                    discard_plain_bg_original(row.storage_path)
+                    row.plain_bg_saved = False
+            failed += len(created)
             if len(errors) < 8:
-                errors.append(f"{row.original_name}: {exc}")
-    db.commit()
-    for row in by_id.values():
+                errors.append(str(exc)[:300] or "Background cutout failed")
+            cutout_down = True
+            db.commit()
+            break
+        for row, fresh in created:
+            jpeg = rendered.get(row.id)
+            if not jpeg:
+                failed += 1
+                if fresh:
+                    discard_plain_bg_original(row.storage_path)
+                    row.plain_bg_saved = False
+                if len(errors) < 8:
+                    errors.append(f"{row.original_name}: {cut_errors.get(row.id) or 'cutout failed'}")
+                continue
+            try:
+                _write_plain_bg_jpeg(current.account_id, row, jpeg)
+                updated += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                if fresh:
+                    discard_plain_bg_original(row.storage_path)
+                    row.plain_bg_saved = False
+                if len(errors) < 8:
+                    errors.append(f"{row.original_name}: {exc}")
+        db.commit()
+    if updated == 0 and failed and all("file missing" in line for line in errors):
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "No photos on disk.")
+    if cutout_down and updated == 0:
+        raise HTTPException(
+            status_code=503,
+            detail=errors[-1] if errors else "Background cutout failed",
+        )
+    for row in existing:
         db.refresh(row)
     return PlainBackgroundOut(
         updated=updated,
         failed=failed,
         photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
         errors=errors,
+        notes=notes,
     )
 
 

@@ -105,12 +105,18 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
     src_a = tmp_path / "a.jpg"
     src_b = tmp_path / "b.jpg"
     src_c = tmp_path / "c.jpg"
+    src_d = tmp_path / "d.jpg"
+    src_e = tmp_path / "e.jpg"
     Image.new("RGB", (40, 24), (200, 20, 20)).save(src_a, format="JPEG")
     Image.new("RGB", (40, 24), (20, 20, 200)).save(src_b, format="JPEG")
     Image.new("RGB", (40, 24), (20, 180, 20)).save(src_c, format="JPEG")
+    Image.new("RGB", (40, 24), (10, 200, 10)).save(src_d, format="JPEG")
+    Image.new("RGB", (40, 24), (220, 180, 20)).save(src_e, format="JPEG")
     _, key_a = persist_catalog_photo(account.id, src_a, photo_id="photo-a")
     _, key_b = persist_catalog_photo(account.id, src_b, photo_id="photo-b")
     _, key_c = persist_catalog_photo(account.id, src_c, photo_id="photo-c")
+    _, key_d = persist_catalog_photo(account.id, src_d, photo_id="photo-d")
+    _, key_e = persist_catalog_photo(account.id, src_e, photo_id="photo-e")
     db.add_all(
         [
             account,
@@ -136,6 +142,24 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
                 storage_path=key_b,
                 sort_order=1,
                 photo_role="tape",
+            ),
+            Photo(
+                id="photo-d",
+                account_id=account.id,
+                user_id=user.id,
+                lot_id=lot.id,
+                original_name="d.jpg",
+                storage_path=key_d,
+                sort_order=2,
+            ),
+            Photo(
+                id="photo-e",
+                account_id=account.id,
+                user_id=user.id,
+                lot_id=lot.id,
+                original_name="e.jpg",
+                storage_path=key_e,
+                sort_order=3,
             ),
             Photo(
                 id="photo-c",
@@ -170,6 +194,13 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
         )
         assert tape.status_code == 400, tape.text
 
+        over_cap = client.post(
+            "/lots/lot-bg/photos/plain-background",
+            json={"color": "studio", "photo_ids": [f"missing-{i}" for i in range(8)]},
+        )
+        assert over_cap.status_code == 400, over_cap.text
+        assert "not on this lot" in over_cap.text
+
         applied = client.post("/lots/lot-bg/photos/plain-background", json={"color": "gray"})
         assert applied.status_code == 200, applied.text
         body = applied.json()
@@ -181,6 +212,8 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
             assert pixel[0] > 200 and abs(pixel[0] - pixel[1]) < 20
         with Image.open(resolve_catalog_storage_path(key_b)) as im:
             assert im.getpixel((2, 2))[2] > 150
+        with Image.open(resolve_catalog_storage_path(key_d)) as im:
+            assert im.getpixel((2, 2))[1] > 150
         side = plain_bg_sidecar_path(key_a)
         assert side is not None and side.is_file()
         with Image.open(side) as im:
@@ -201,6 +234,25 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
         with Image.open(resolve_catalog_storage_path(key_a)) as im:
             pixel = im.getpixel((2, 2))
             assert pixel[0] > 150 and pixel[1] < 80
+
+        selected = client.post(
+            "/lots/lot-bg/photos/plain-background",
+            json={
+                "color": "gray",
+                "photo_ids": ["photo-a", "photo-b", "photo-d", "photo-e"],
+            },
+        )
+        assert selected.status_code == 200, selected.text
+        selected_body = selected.json()
+        assert selected_body["updated"] == 3
+        assert selected_body["failed"] == 0
+        assert any("tape" in note.lower() for note in selected_body["notes"])
+        for key in (key_a, key_d, key_e):
+            with Image.open(resolve_catalog_storage_path(key)) as im:
+                pixel = im.getpixel((2, 2))
+                assert abs(pixel[0] - pixel[1]) < 20 and pixel[0] > 200
+        with Image.open(resolve_catalog_storage_path(key_b)) as im:
+            assert im.getpixel((2, 2))[2] > 150
     finally:
         app.dependency_overrides.clear()
         db.close()
