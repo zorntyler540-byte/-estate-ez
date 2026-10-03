@@ -713,6 +713,8 @@ class LotPhotoOut(BaseModel):
     shows_whole_lot: bool = False
     shows_measuring_scale: bool = False
     label_legibility: str | None = None
+    """True when a plain-background pass saved the original and it can be restored."""
+    plain_background: bool = False
 
 
 class LotPhotoHealthRow(BaseModel):
@@ -775,6 +777,28 @@ class RotateLotPhotosOut(BaseModel):
     failed: int = 0
     photos: list[LotPhotoOut]
     errors: list[str] = Field(default_factory=list)
+
+
+class PlainBackgroundIn(BaseModel):
+    """Cut the piece out and place it on a flat color. Janet JL furniture lots only."""
+
+    color: Literal["studio", "white", "gray"] = "studio"
+    photo_ids: list[str] | None = Field(
+        default=None,
+        max_length=6,
+        description="When omitted, only the first listing photo (not SKU tape) is changed.",
+    )
+
+
+class PlainBackgroundOut(BaseModel):
+    updated: int
+    failed: int = 0
+    photos: list[LotPhotoOut]
+    errors: list[str] = Field(default_factory=list)
+
+
+class RestorePlainBackgroundIn(BaseModel):
+    photo_ids: list[str] | None = Field(default=None, max_length=40)
 
 
 class TransferPhotosIn(BaseModel):
