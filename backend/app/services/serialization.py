@@ -100,6 +100,7 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
         label_legibility=(str(photo.label_legibility).strip() or None)
         if getattr(photo, "label_legibility", None)
         else None,
+        plain_background=bool(getattr(photo, "plain_bg_saved", False)),
     )
 
 

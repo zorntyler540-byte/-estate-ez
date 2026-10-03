@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, Paintbrush, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -35,6 +35,7 @@ type LotPhoto = {
   created_at: string;
   sort_order?: number;
   file_on_disk?: boolean;
+  plain_background?: boolean;
   photo_role?: string | null;
   distinct_item_id?: string | null;
   is_primary_front?: boolean;
@@ -51,6 +52,21 @@ const LISTING_ROLE_LABEL: Record<string, string> = {
   unusable: "Skip"
 };
 
+const JANET_FURNITURE_TITLE =
+  /\b(sofas?|couches?|loveseats?|settees?|chairs?|recliners?|ottomans?|sectionals?|dressers?|night ?stands?|armoires?|wardrobes?|bookcases?|bookshelves?|hutches?|credenzas?|sideboards?|buffets?|cabinets?|vanit(?:y|ies)|headboards?|footboards?|desks?|tables?|benches?|stools?|futons?|chifforobes?|chiffoniers?|chests?(?: of drawers)?|bed ?frames?)\b/i;
+
+/** JL prefix plus a furniture category or title. Matches the API gate. */
+function isJanetFurnitureLot(row: {
+  sku: string | null;
+  ct_category?: string | null;
+  auction_title?: string;
+}): boolean {
+  const lead = (row.sku || "").trim().match(/^([A-Za-z]+)/);
+  if (!lead || lead[1].toUpperCase() !== "JL") return false;
+  if ((row.ct_category || "").toLowerCase().includes("furniture")) return true;
+  return JANET_FURNITURE_TITLE.test(row.auction_title || "");
+}
+
 function listingRoleBadge(photo: LotPhoto): string | null {
   if (photo.shows_measuring_scale) return "Measure";
   if (photo.photo_role && LISTING_ROLE_LABEL[photo.photo_role]) {
@@ -64,6 +80,7 @@ type Lot = {
   sale_id: string;
   sku: string | null;
   auction_title: string;
+  ct_category?: string | null;
   professional_description: string;
   specification_lines: string[];
   brands: string[];
@@ -226,6 +243,8 @@ export default function LotDetailPage() {
   const [quickRotatingId, setQuickRotatingId] = useState<string | null>(null);
   const [batchRotating, setBatchRotating] = useState(false);
   const [zipDownloading, setZipDownloading] = useState(false);
+  const [plainBgBusy, setPlainBgBusy] = useState(false);
+  const [plainBgColor, setPlainBgColor] = useState<"studio" | "white" | "gray">("studio");
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
   const [catalogSales, setCatalogSales] = useState<MoveSaleOption[]>([]);
@@ -665,6 +684,79 @@ export default function LotDetailPage() {
     } finally {
       setQuickRotatingId(null);
       setBatchRotating(false);
+    }
+  }
+
+  async function applyPlainBackground() {
+    if (!lot || !token) return;
+    const ids = Array.from(selectedPhotoIds);
+    setPlainBgBusy(true);
+    setError("");
+    try {
+      const res = (await apiFetch(
+        `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            color: plainBgColor,
+            photo_ids: ids.length ? ids : undefined
+          })
+        }
+      )) as { updated: number; failed: number; photos?: LotPhoto[]; errors?: string[] };
+      if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
+      const bustAt = Date.now();
+      setThumbCacheBust((prev) => {
+        const next = { ...prev };
+        for (const photo of res.photos || []) next[photo.id] = bustAt;
+        return next;
+      });
+      if (res.failed) {
+        setError((res.errors || []).join(" · ") || "Some photos could not be placed on a color.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not place a color behind the photo");
+    } finally {
+      setPlainBgBusy(false);
+    }
+  }
+
+  async function restorePlainBackground() {
+    if (!lot || !token) return;
+    const saved = catalogPhotos.filter((p) => p.plain_background);
+    const ids =
+      selectedPhotoIds.size > 0
+        ? Array.from(selectedPhotoIds).filter((id) => saved.some((p) => p.id === id))
+        : saved.map((p) => p.id);
+    if (!ids.length) {
+      setError("None of these photos have a saved original.");
+      return;
+    }
+    setPlainBgBusy(true);
+    setError("");
+    try {
+      const res = (await apiFetch(
+        `/lots/${encodeURIComponent(lot.id)}/photos/plain-background/restore`,
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({ photo_ids: ids })
+        }
+      )) as { failed: number; photos?: LotPhoto[]; errors?: string[] };
+      if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
+      const bustAt = Date.now();
+      setThumbCacheBust((prev) => {
+        const next = { ...prev };
+        for (const photo of res.photos || []) next[photo.id] = bustAt;
+        return next;
+      });
+      if (res.failed) {
+        setError((res.errors || []).join(" · ") || "Could not restore the original photo.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not restore the original photo");
+    } finally {
+      setPlainBgBusy(false);
     }
   }
 
@@ -2099,6 +2191,72 @@ export default function LotDetailPage() {
                       </>
                     )}
                   </button>
+                </div>
+              </div>
+            ) : null}
+            {isJanetFurnitureLot(lot) && catalogPhotos.length > 0 ? (
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Paintbrush size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Plain background</span>
+                  <span className="ct-upload-option__desc">
+                    {selectedPhotoIds.size > 0
+                      ? `Cuts the piece out of ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"} and places it on a flat color. The room shot is kept so you can restore it.`
+                      : "Cuts the piece out of the first listing photo and places it on a flat color. Check photos to do more than one. The room shot is kept so you can restore it."}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+                  {(
+                    [
+                      ["studio", "#f3f0ea", "Warm"],
+                      ["white", "#ffffff", "White"],
+                      ["gray", "#e2e2e5", "Gray"]
+                    ] as const
+                  ).map(([id, swatch, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`ct-btn ct-upload-option__btn${plainBgColor === id ? " ct-btn--primary" : ""}`}
+                      disabled={plainBgBusy}
+                      onClick={() => setPlainBgColor(id)}
+                      title={label}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          display: "inline-block",
+                          width: 12,
+                          height: 12,
+                          borderRadius: 2,
+                          background: swatch,
+                          border: "1px solid rgba(0,0,0,0.25)",
+                          marginRight: 6,
+                          verticalAlign: "-1px"
+                        }}
+                      />
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    disabled={plainBgBusy || batchRotating || addPhotosBusy}
+                    onClick={() => void applyPlainBackground()}
+                  >
+                    {plainBgBusy ? "Working…" : "Apply color"}
+                  </button>
+                  {catalogPhotos.some((p) => p.plain_background) ? (
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__btn"
+                      disabled={plainBgBusy}
+                      onClick={() => void restorePlainBackground()}
+                    >
+                      Restore original
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}

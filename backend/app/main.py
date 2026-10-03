@@ -74,6 +74,9 @@ from app.schemas import (
     DeleteLotPhotosIn,
     RotateLotPhotosIn,
     RotateLotPhotosOut,
+    PlainBackgroundIn,
+    PlainBackgroundOut,
+    RestorePlainBackgroundIn,
     HealthResponse,
     JobOut,
     LoginRequest,
@@ -605,6 +608,8 @@ def _ensure_photo_listing_columns() -> None:
         stmts.append("ALTER TABLE photos ADD COLUMN shows_measuring_scale BOOLEAN")
     if "label_legibility" not in cols:
         stmts.append("ALTER TABLE photos ADD COLUMN label_legibility VARCHAR(16)")
+    if "plain_bg_saved" not in cols:
+        stmts.append("ALTER TABLE photos ADD COLUMN plain_bg_saved BOOLEAN DEFAULT 0 NOT NULL")
     if "captured_at" not in cols:
         stmts.append(f"ALTER TABLE photos ADD COLUMN captured_at {nullable_datetime_ddl()}")
     if not stmts:
@@ -4149,6 +4154,222 @@ def rotate_lot_photos(
         db.refresh(row)
     return RotateLotPhotosOut(
         rotated=rotated,
+        failed=failed,
+        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        errors=errors,
+    )
+
+
+def _lot_photos_ordered(db: Session, lot_id: str, account_id: str) -> list[Photo]:
+    return (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
+        .all()
+    )
+
+
+def _plain_bg_targets(
+    existing: list[Photo],
+    photo_ids: list[str] | None,
+) -> list[Photo]:
+    from app.services.photo_roles import is_sku_tape_photo_role, photos_for_ctbids_listing
+
+    by_id = {p.id: p for p in existing}
+    if photo_ids:
+        missing = [pid for pid in photo_ids if pid not in by_id]
+        if missing:
+            preview = ", ".join(missing[:5])
+            raise HTTPException(status_code=400, detail=f"Photo id(s) not on this lot: {preview}")
+        chosen = [by_id[pid] for pid in photo_ids]
+        tape = [p for p in chosen if is_sku_tape_photo_role(p.photo_role)]
+        if tape:
+            raise HTTPException(
+                status_code=400,
+                detail="SKU tape photos stay as shot. Uncheck those and run the listing photos.",
+            )
+        return chosen
+    listing = photos_for_ctbids_listing(existing)
+    if not listing:
+        raise HTTPException(status_code=400, detail="This lot has no listing photo to place on a color.")
+    return [listing[0]]
+
+
+def _write_plain_bg_jpeg(account_id: str, row: Photo, body: bytes) -> None:
+    tmp_path = Path(tempfile.mkstemp(suffix=".jpg")[1])
+    try:
+        tmp_path.write_bytes(body)
+        purge_catalog_photo_thumbs(row.storage_path)
+        _, storage_path = persist_catalog_photo(account_id, tmp_path, photo_id=row.id)
+        row.storage_path = storage_path
+        stem = Path(row.original_name or "photo").stem or "photo"
+        row.original_name = f"{stem}.jpg"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/lots/{lot_id}/photos/plain-background", response_model=PlainBackgroundOut)
+def plain_background_lot_photos(
+    lot_id: str,
+    body: PlainBackgroundIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PlainBackgroundOut:
+    """Cut Janet furniture out of the room and place it on a flat color. Originals can be restored."""
+    import subprocess
+
+    from app.services.plain_background import (
+        discard_plain_bg_original,
+        ensure_plain_bg_original,
+        lot_is_janet_furniture,
+        render_plain_backgrounds,
+    )
+
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    if not lot_is_janet_furniture(lot.sku, lot.ct_category, lot.auction_title):
+        raise HTTPException(
+            status_code=403,
+            detail="Plain backgrounds are only for Janet furniture lots (SKU starting with JL).",
+        )
+    _assert_sale_editable_for_lot_moves(db, lot.sale_id, current)
+    existing = _lot_photos_ordered(db, lot_id, current.account_id)
+    if not existing:
+        raise HTTPException(status_code=400, detail="This lot has no catalog photos.")
+    want = list(dict.fromkeys(body.photo_ids or []))
+    targets = _plain_bg_targets(existing, want or None)
+
+    created: list[tuple[Photo, bool]] = []
+    payloads: dict[str, bytes] = {}
+    errors: list[str] = []
+    for row in targets:
+        src = resolve_catalog_storage_path(row.storage_path)
+        if not src.is_file():
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: file missing")
+            continue
+        fresh = ensure_plain_bg_original(row.storage_path, src)
+        if fresh:
+            row.plain_bg_saved = True
+        payloads[row.id] = src.read_bytes()
+        created.append((row, fresh))
+    if not payloads:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "No photos on disk.")
+
+    try:
+        rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        for row, fresh in created:
+            if fresh:
+                discard_plain_bg_original(row.storage_path)
+                row.plain_bg_saved = False
+        raise HTTPException(status_code=503, detail=str(exc)[:500] or "Background cutout failed") from exc
+
+    updated = 0
+    failed = 0
+    by_id = {p.id: p for p in existing}
+    for row, fresh in created:
+        jpeg = rendered.get(row.id)
+        if not jpeg:
+            failed += 1
+            if fresh:
+                discard_plain_bg_original(row.storage_path)
+                row.plain_bg_saved = False
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: {cut_errors.get(row.id) or 'cutout failed'}")
+            continue
+        try:
+            _write_plain_bg_jpeg(current.account_id, row, jpeg)
+            updated += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            if fresh:
+                discard_plain_bg_original(row.storage_path)
+                row.plain_bg_saved = False
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: {exc}")
+    db.commit()
+    for row in by_id.values():
+        db.refresh(row)
+    return PlainBackgroundOut(
+        updated=updated,
+        failed=failed,
+        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        errors=errors,
+    )
+
+
+@app.post("/lots/{lot_id}/photos/plain-background/restore", response_model=PlainBackgroundOut)
+def restore_plain_background_lot_photos(
+    lot_id: str,
+    body: RestorePlainBackgroundIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PlainBackgroundOut:
+    """Put back the photo saved before the plain-background pass."""
+    from app import object_storage
+    from app.services.plain_background import (
+        discard_plain_bg_original,
+        lot_is_janet_furniture,
+        plain_bg_sidecar_key,
+        plain_bg_sidecar_path,
+    )
+
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    if not lot_is_janet_furniture(lot.sku, lot.ct_category, lot.auction_title):
+        raise HTTPException(
+            status_code=403,
+            detail="Plain backgrounds are only for Janet furniture lots (SKU starting with JL).",
+        )
+    _assert_sale_editable_for_lot_moves(db, lot.sale_id, current)
+    existing = _lot_photos_ordered(db, lot_id, current.account_id)
+    payload = body or RestorePlainBackgroundIn()
+    want = list(dict.fromkeys(payload.photo_ids or []))
+    if want:
+        by_id = {p.id: p for p in existing}
+        missing = [pid for pid in want if pid not in by_id]
+        if missing:
+            raise HTTPException(status_code=400, detail="Photo id(s) not on this lot")
+        targets = [by_id[pid] for pid in want]
+    else:
+        targets = [p for p in existing if bool(getattr(p, "plain_bg_saved", False))]
+    updated = 0
+    failed = 0
+    errors: list[str] = []
+    for row in targets:
+        if not bool(getattr(row, "plain_bg_saved", False)):
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: no original saved")
+            continue
+        side = plain_bg_sidecar_path(row.storage_path)
+        key = plain_bg_sidecar_key(row.storage_path)
+        if side is not None and not side.is_file() and key and object_storage.r2_configured():
+            side.parent.mkdir(parents=True, exist_ok=True)
+            object_storage.download_file(key, str(side))
+        if side is None or not side.is_file():
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: original file missing")
+            continue
+        try:
+            raw = side.read_bytes()
+            _write_plain_bg_jpeg(current.account_id, row, raw)
+            discard_plain_bg_original(row.storage_path)
+            row.plain_bg_saved = False
+            updated += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            if len(errors) < 8:
+                errors.append(f"{row.original_name}: {exc}")
+    db.commit()
+    for row in existing:
+        db.refresh(row)
+    return PlainBackgroundOut(
+        updated=updated,
         failed=failed,
         photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
         errors=errors,
