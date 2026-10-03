@@ -2297,8 +2297,8 @@ export default function LotDetailPage() {
                     {plainBgNote
                       ? plainBgNote
                       : selectedPhotoIds.size > 0
-                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. A photo stays as shot when the cutout would remove the piece. SKU tape and measurement photos stay as shot.`
-                        : "Places a flat color behind the first full view. A photo stays as shot when the cutout would remove the piece. SKU tape and measurement photos stay as shot."}
+                        ? `Uses AI to place a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. SKU tape and measurement photos stay as shot. The room shot is kept so you can restore it.`
+                        : "Uses AI to place a flat color behind the first full view. Check photos to do the rest. SKU tape and measurement photos stay as shot. The room shot is kept so you can restore it."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>

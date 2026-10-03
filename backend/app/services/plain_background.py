@@ -1,7 +1,7 @@
 """Studio-color background for Janet (JL) furniture listing photos.
 
-The cutout model runs in a child process so its memory leaves when the photo is done.
-The original file is kept beside the catalog photo until someone restores it.
+Gemini edits the room into a flat color. The original file is kept beside the
+catalog photo until someone restores it.
 """
 
 from __future__ import annotations
@@ -9,9 +9,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
-import sys
-import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -33,8 +30,18 @@ PLAIN_BG_MAX_EDGE = 1600
 PLAIN_BG_MAX_PHOTOS = 40
 # One cutout per request stays under the ~60s proxy limit. Select-all sends the next photo after.
 PLAIN_BG_CHUNK = 1
-# Light cutout model. Override with PLAIN_BG_REMBG_MODEL=u2net for a heavier pass.
-PLAIN_BG_MODEL = os.environ.get("PLAIN_BG_REMBG_MODEL", "u2netp").strip() or "u2netp"
+# Image edit model. One photo per request. Override with PLAIN_BG_IMAGE_MODEL.
+PLAIN_BG_IMAGE_MODEL = os.environ.get("PLAIN_BG_IMAGE_MODEL", "gemini-2.5-flash-image").strip() or "gemini-2.5-flash-image"
+_ASPECTS: tuple[tuple[str, float], ...] = (
+    ("1:1", 1.0),
+    ("4:3", 4 / 3),
+    ("3:4", 3 / 4),
+    ("3:2", 3 / 2),
+    ("2:3", 2 / 3),
+    ("16:9", 16 / 9),
+    ("9:16", 9 / 16),
+    ("21:9", 21 / 9),
+)
 
 _FURNITURE_TITLE = re.compile(
     r"\b("
@@ -216,54 +223,110 @@ def prepare_jpeg_bytes(raw: bytes) -> bytes:
     return jpeg_bytes_rgb(rgb, quality=90)
 
 
+def nearest_aspect(width: int, height: int) -> str:
+    ratio = width / max(height, 1)
+    return min(_ASPECTS, key=lambda item: abs(item[1] - ratio))[0]
+
+
+def image_bytes_from_response(response: object) -> bytes | None:
+    """First image part from a Gemini generate_content response."""
+    for cand in getattr(response, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            inline = getattr(part, "inline_data", None)
+            data = getattr(inline, "data", None) if inline is not None else None
+            if data:
+                return bytes(data)
+    return None
+
+
+def image_is_blank(im: Image.Image) -> bool:
+    lo, hi = im.convert("L").getextrema()
+    return (hi - lo) < 18
+
+
+def fit_cover(im: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Scale and center-crop so the edited photo matches the original frame."""
+    tw, th = size
+    rgb = im.convert("RGB")
+    scale = max(tw / rgb.width, th / rgb.height)
+    nw, nh = max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale))
+    resized = rgb.resize((nw, nh), Image.Resampling.LANCZOS)
+    left = max(0, (nw - tw) // 2)
+    top = max(0, (nh - th) // 2)
+    return resized.crop((left, top, left + tw, top + th))
+
+
+def _background_prompt(color: tuple[int, int, int]) -> str:
+    r, g, b = color
+    return (
+        "Edit this estate-sale furniture photo. "
+        f"Paint the entire background one flat color, exactly RGB {r},{g},{b}. "
+        "That includes the walls, the floor, and any colored margin around the piece. The floor must not stay visible. "
+        "Keep the furniture piece itself as photographed: same legs, drawers, hardware, wear, crop, and angle. "
+        "Do not add objects, text, people, or shadows. Do not zoom, rotate, or reframe."
+    )
+
+
+def edit_plain_background(jpeg: bytes, color: tuple[int, int, int]) -> bytes:
+    """Ask Gemini to place the piece on a flat color. Returns a JPEG the same size as ``jpeg``."""
+    from google import genai
+    from google.genai import types
+
+    from app.config import settings
+    from app.core.gemini_slots import gemini_slot
+
+    key = (settings.google_api_key or os.environ.get("GOOGLE_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("AI background needs a Gemini API key on the server.")
+    with Image.open(BytesIO(jpeg)) as src:
+        frame = src.convert("RGB")
+        width, height = frame.size
+    client = genai.Client(api_key=key)
+    config = types.GenerateContentConfig(
+        response_modalities=["IMAGE"],
+        image_config=types.ImageConfig(aspect_ratio=nearest_aspect(width, height)),
+        http_options=types.HttpOptions(timeout=50_000),
+    )
+    with gemini_slot():
+        response = client.models.generate_content(
+            model=PLAIN_BG_IMAGE_MODEL,
+            contents=[
+                types.Part.from_bytes(data=jpeg, mime_type="image/jpeg"),
+                _background_prompt(color),
+            ],
+            config=config,
+        )
+    raw = image_bytes_from_response(response)
+    if not raw:
+        raise RuntimeError("AI did not return a photo.")
+    with Image.open(BytesIO(raw)) as edited:
+        if image_is_blank(edited):
+            raise RuntimeError("AI returned an empty background.")
+        fitted = fit_cover(edited, (width, height))
+    return jpeg_bytes_rgb(fitted)
+
+
 def render_plain_backgrounds(
     sources: dict[str, bytes],
     color_name: str,
     *,
     timeout_s: int = 55,
 ) -> tuple[dict[str, bytes], dict[str, str]]:
-    """Cut out each JPEG in a child process. Returns (ok jpeg bytes, id → error)."""
+    """Edit each JPEG with Gemini. Returns (ok jpeg bytes, id → error)."""
+    del timeout_s  # The Gemini client timeout covers a single photo.
     if color_name not in PLAIN_BG_COLORS:
         raise ValueError(f"Unknown background color {color_name}")
     if not sources:
         return {}, {}
-    with tempfile.TemporaryDirectory(prefix="plainbg-") as tmp:
-        root = Path(tmp)
-        in_dir = root / "in"
-        out_dir = root / "out"
-        in_dir.mkdir()
-        out_dir.mkdir()
-        names: dict[str, str] = {}
-        for index, (photo_id, raw) in enumerate(sources.items()):
-            safe = re.sub(r"[^a-zA-Z0-9_-]+", "", photo_id)[:80] or "photo"
-            name = f"{index:03d}-{safe}"
-            names[photo_id] = name
-            (in_dir / f"{name}.jpg").write_bytes(prepare_jpeg_bytes(raw))
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "app.services.plain_background_cut",
-                color_name,
-                str(in_dir),
-                str(out_dir),
-            ],
-            capture_output=True,
-            timeout=timeout_s,
-            check=False,
-        )
-        if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace").strip()
-            raise RuntimeError(err[:500] or "Background cutout failed")
-        ok: dict[str, bytes] = {}
-        errors: dict[str, str] = {}
-        for photo_id, name in names.items():
-            out_jpg = out_dir / f"{name}.jpg"
-            err_path = out_dir / f"{name}.err"
-            if out_jpg.is_file():
-                ok[photo_id] = out_jpg.read_bytes()
-            elif err_path.is_file():
-                errors[photo_id] = err_path.read_text(encoding="utf-8")[:400]
-            else:
-                errors[photo_id] = "Background cutout did not return a photo"
-        return ok, errors
+    color = PLAIN_BG_COLORS[color_name]
+    ok: dict[str, bytes] = {}
+    errors: dict[str, str] = {}
+    for photo_id, raw in sources.items():
+        try:
+            ok[photo_id] = edit_plain_background(prepare_jpeg_bytes(raw), color)
+        except Exception as exc:  # noqa: BLE001
+            errors[photo_id] = str(exc)[:400]
+    if sources and not ok and all("API key" in message for message in errors.values()):
+        raise RuntimeError(next(iter(errors.values())))
+    return ok, errors

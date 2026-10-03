@@ -4233,7 +4233,7 @@ def plain_background_lot_photos(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PlainBackgroundOut:
-    """Cut Janet furniture out of the room and place it on a flat color. Originals can be restored."""
+    """Ask Gemini to place Janet furniture on a flat color. Originals can be restored."""
     import subprocess
 
     from app.services.plain_background import (

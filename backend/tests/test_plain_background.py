@@ -8,11 +8,87 @@ from PIL import Image
 
 from app.services.plain_background import (
     composite_cutout,
+    fit_cover,
+    image_bytes_from_response,
+    image_is_blank,
     jpeg_bytes_rgb,
     lot_is_janet_furniture,
+    nearest_aspect,
     plain_bg_sidecar_path,
+    render_plain_backgrounds,
     sku_prefix,
 )
+
+
+class _Inline:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+
+class _Part:
+    def __init__(self, data: bytes | None) -> None:
+        self.inline_data = _Inline(data) if data is not None else None
+
+
+class _Content:
+    def __init__(self, parts: list[_Part]) -> None:
+        self.parts = parts
+
+
+class _Cand:
+    def __init__(self, parts: list[_Part]) -> None:
+        self.content = _Content(parts)
+
+
+class _Response:
+    def __init__(self, parts: list[_Part]) -> None:
+        self.candidates = [_Cand(parts)]
+
+
+def test_image_response_and_fit() -> None:
+    assert nearest_aspect(400, 300) == "4:3"
+    assert nearest_aspect(300, 400) == "3:4"
+    blank = Image.new("RGB", (20, 20), (243, 240, 234))
+    assert image_is_blank(blank)
+    piece = Image.new("RGB", (40, 30), (243, 240, 234))
+    for x in range(8, 32):
+        for y in range(6, 24):
+            piece.putpixel((x, y), (90, 40, 20))
+    assert not image_is_blank(piece)
+    fitted = fit_cover(piece, (20, 10))
+    assert fitted.size == (20, 10)
+    raw = jpeg_bytes_rgb(piece)
+    assert image_bytes_from_response(_Response([_Part(raw)])) == raw
+    assert image_bytes_from_response(_Response([_Part(None)])) is None
+
+
+def test_render_uses_the_ai_edit(monkeypatch) -> None:
+    def fake_edit(jpeg: bytes, color: tuple[int, int, int]) -> bytes:
+        assert color == (255, 255, 255)
+        with Image.open(BytesIO(jpeg)) as im:
+            assert im.size[0] > 0
+        return jpeg_bytes_rgb(Image.new("RGB", (12, 8), color))
+
+    monkeypatch.setattr("app.services.plain_background.edit_plain_background", fake_edit)
+    src = jpeg_bytes_rgb(Image.new("RGB", (30, 20), (20, 80, 140)))
+    ok, errors = render_plain_backgrounds({"p1": src}, "white")
+    assert errors == {}
+    assert "p1" in ok
+    with Image.open(BytesIO(ok["p1"])) as im:
+        pixel = im.getpixel((1, 1))
+        assert pixel[0] > 240 and pixel[2] > 240
+
+
+def test_render_reports_a_failed_edit(monkeypatch) -> None:
+    def fake_edit(jpeg: bytes, color: tuple[int, int, int]) -> bytes:
+        del jpeg, color
+        raise RuntimeError("AI did not return a photo.")
+
+    monkeypatch.setattr("app.services.plain_background.edit_plain_background", fake_edit)
+    src = jpeg_bytes_rgb(Image.new("RGB", (30, 20), (20, 80, 140)))
+    ok, errors = render_plain_backgrounds({"p1": src}, "studio")
+    assert ok == {}
+    assert "photo" in errors["p1"]
 
 
 def test_sku_prefix_and_janet_furniture_gate() -> None:
