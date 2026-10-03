@@ -29,7 +29,10 @@ PLAIN_BG_COLORS: dict[str, tuple[int, int, int]] = {
     "gray": (226, 226, 229),
 }
 PLAIN_BG_MAX_EDGE = 1600
-PLAIN_BG_MAX_PHOTOS = 6
+# A lot can hold this many photos. Apply runs them a couple at a time (see PLAIN_BG_CHUNK).
+PLAIN_BG_MAX_PHOTOS = 40
+# One cutout per request stays under the ~60s proxy limit. Select-all sends the next photo after.
+PLAIN_BG_CHUNK = 1
 # Light cutout model. Override with PLAIN_BG_REMBG_MODEL=u2net for a heavier pass.
 PLAIN_BG_MODEL = os.environ.get("PLAIN_BG_REMBG_MODEL", "u2netp").strip() or "u2netp"
 
@@ -192,6 +195,8 @@ def prepare_jpeg_bytes(raw: bytes) -> bytes:
 def render_plain_backgrounds(
     sources: dict[str, bytes],
     color_name: str,
+    *,
+    timeout_s: int = 55,
 ) -> tuple[dict[str, bytes], dict[str, str]]:
     """Cut out each JPEG in a child process. Returns (ok jpeg bytes, id → error)."""
     if color_name not in PLAIN_BG_COLORS:
@@ -204,9 +209,12 @@ def render_plain_backgrounds(
         out_dir = root / "out"
         in_dir.mkdir()
         out_dir.mkdir()
-        for photo_id, raw in sources.items():
-            safe = re.sub(r"[^a-zA-Z0-9_-]+", "", photo_id) or "photo"
-            (in_dir / f"{safe}.jpg").write_bytes(prepare_jpeg_bytes(raw))
+        names: dict[str, str] = {}
+        for index, (photo_id, raw) in enumerate(sources.items()):
+            safe = re.sub(r"[^a-zA-Z0-9_-]+", "", photo_id)[:80] or "photo"
+            name = f"{index:03d}-{safe}"
+            names[photo_id] = name
+            (in_dir / f"{name}.jpg").write_bytes(prepare_jpeg_bytes(raw))
         proc = subprocess.run(
             [
                 sys.executable,
@@ -217,7 +225,7 @@ def render_plain_backgrounds(
                 str(out_dir),
             ],
             capture_output=True,
-            timeout=180,
+            timeout=timeout_s,
             check=False,
         )
         if proc.returncode != 0:
@@ -225,10 +233,9 @@ def render_plain_backgrounds(
             raise RuntimeError(err[:500] or "Background cutout failed")
         ok: dict[str, bytes] = {}
         errors: dict[str, str] = {}
-        for photo_id in sources:
-            safe = re.sub(r"[^a-zA-Z0-9_-]+", "", photo_id) or "photo"
-            out_jpg = out_dir / f"{safe}.jpg"
-            err_path = out_dir / f"{safe}.err"
+        for photo_id, name in names.items():
+            out_jpg = out_dir / f"{name}.jpg"
+            err_path = out_dir / f"{name}.err"
             if out_jpg.is_file():
                 ok[photo_id] = out_jpg.read_bytes()
             elif err_path.is_file():

@@ -52,6 +52,9 @@ const LISTING_ROLE_LABEL: Record<string, string> = {
   unusable: "Skip"
 };
 
+/** One photo per request stays under the proxy time limit. The next photo starts after. */
+const PLAIN_BG_BATCH = 1;
+
 const JANET_FURNITURE_TITLE =
   /\b(sofas?|couches?|loveseats?|settees?|chairs?|recliners?|ottomans?|sectionals?|dressers?|night ?stands?|armoires?|wardrobes?|bookcases?|bookshelves?|hutches?|credenzas?|sideboards?|buffets?|cabinets?|vanit(?:y|ies)|headboards?|footboards?|desks?|tables?|benches?|stools?|futons?|chifforobes?|chiffoniers?|chests?(?: of drawers)?|bed ?frames?)\b/i;
 
@@ -244,6 +247,7 @@ export default function LotDetailPage() {
   const [batchRotating, setBatchRotating] = useState(false);
   const [zipDownloading, setZipDownloading] = useState(false);
   const [plainBgBusy, setPlainBgBusy] = useState(false);
+  const [plainBgNote, setPlainBgNote] = useState("");
   const [plainBgColor, setPlainBgColor] = useState<"studio" | "white" | "gray">("studio");
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
@@ -689,33 +693,107 @@ export default function LotDetailPage() {
 
   async function applyPlainBackground() {
     if (!lot || !token) return;
-    const ids = Array.from(selectedPhotoIds);
+    const chosen =
+      selectedPhotoIds.size > 0 ? catalogPhotos.filter((p) => selectedPhotoIds.has(p.id)) : [];
+    const tapeCount = chosen.filter((p) => (p.photo_role || "").toLowerCase() === "tape").length;
+    const ids = chosen
+      .filter((p) => (p.photo_role || "").toLowerCase() !== "tape")
+      .map((p) => p.id);
+    if (chosen.length > 0 && ids.length === 0) {
+      setPlainBgNote("SKU tape photos stay as shot. Check the listing photos.");
+      setError("SKU tape photos stay as shot. Check the listing photos.");
+      return;
+    }
+    const batches: string[][] = [];
+    if (ids.length === 0) batches.push([]);
+    else {
+      for (let i = 0; i < ids.length; i += PLAIN_BG_BATCH) batches.push(ids.slice(i, i + PLAIN_BG_BATCH));
+    }
     setPlainBgBusy(true);
     setError("");
+    setPlainBgNote(ids.length > 1 ? `Working… 0 of ${ids.length}` : "Working…");
+    let updated = 0;
+    let failed = 0;
+    let finished = 0;
+    const problems: string[] = [];
     try {
-      const res = (await apiFetch(
-        `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
-        token,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            color: plainBgColor,
-            photo_ids: ids.length ? ids : undefined
-          })
+      for (const batch of batches) {
+        if (ids.length > 1) setPlainBgNote(`Working… ${finished + 1} of ${ids.length}`);
+        let attempt = 0;
+        let settled = false;
+        while (attempt < 2 && !settled) {
+          attempt += 1;
+          try {
+            const res = (await apiFetch(
+              `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
+              token,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  color: plainBgColor,
+                  photo_ids: batch.length ? batch : undefined
+                })
+              }
+            )) as {
+              updated: number;
+              failed: number;
+              photos?: LotPhoto[];
+              errors?: string[];
+              notes?: string[];
+            };
+            const slow = (res.errors || []).some((line) => /too long/i.test(line));
+            if (slow && attempt < 2 && !(res.updated > 0)) {
+              setPlainBgNote(`Retrying ${finished + 1} of ${ids.length || 1}…`);
+              continue;
+            }
+            updated += res.updated || 0;
+            failed += res.failed || 0;
+            for (const line of [...(res.notes || []), ...(res.errors || [])]) {
+              if (line && !problems.includes(line)) problems.push(line);
+            }
+            if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
+            const bustAt = Date.now();
+            setThumbCacheBust((prev) => {
+              const next = { ...prev };
+              for (const photo of res.photos || []) next[photo.id] = bustAt;
+              return next;
+            });
+            settled = true;
+          } catch (e) {
+            if (attempt < 2) {
+              setPlainBgNote(`Retrying ${finished + 1} of ${ids.length || 1}…`);
+              continue;
+            }
+            const message = e instanceof Error ? e.message : "Could not place a color behind the photo";
+            if (!problems.includes(message)) problems.push(message);
+            failed += batch.length || 1;
+            settled = true;
+          }
         }
-      )) as { updated: number; failed: number; photos?: LotPhoto[]; errors?: string[] };
-      if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
-      const bustAt = Date.now();
-      setThumbCacheBust((prev) => {
-        const next = { ...prev };
-        for (const photo of res.photos || []) next[photo.id] = bustAt;
-        return next;
-      });
-      if (res.failed) {
-        setError((res.errors || []).join(" · ") || "Some photos could not be placed on a color.");
+        finished += batch.length || 1;
+      }
+      const parts: string[] = [];
+      if (updated) parts.push(`Updated ${updated} photo${updated === 1 ? "" : "s"}.`);
+      if (tapeCount) {
+        parts.push(`Left ${tapeCount} SKU tape photo${tapeCount === 1 ? "" : "s"} as shot.`);
+      }
+      if (failed) {
+        parts.push(
+          problems.filter((line) => !/SKU tape/i.test(line)).slice(0, 3).join(" · ") ||
+            `${failed} photo${failed === 1 ? "" : "s"} could not be placed on a color.`
+        );
+      }
+      setPlainBgNote(parts.join(" ") || "No photos changed.");
+      if (failed) {
+        setError(problems.join(" · ") || "Some photos could not be placed on a color.");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not place a color behind the photo");
+      const message = e instanceof Error ? e.message : "Could not place a color behind the photo";
+      const prefix = updated
+        ? `Updated ${updated} photo${updated === 1 ? "" : "s"}, then stopped. `
+        : "";
+      setPlainBgNote(`${prefix}${message}`);
+      setError(message);
     } finally {
       setPlainBgBusy(false);
     }
@@ -734,6 +812,7 @@ export default function LotDetailPage() {
     }
     setPlainBgBusy(true);
     setError("");
+    setPlainBgNote("Restoring…");
     try {
       const res = (await apiFetch(
         `/lots/${encodeURIComponent(lot.id)}/photos/plain-background/restore`,
@@ -751,10 +830,16 @@ export default function LotDetailPage() {
         return next;
       });
       if (res.failed) {
+        setPlainBgNote((res.errors || []).join(" · ") || "Could not restore the original photo.");
         setError((res.errors || []).join(" · ") || "Could not restore the original photo.");
+      } else {
+        const n = ids.length;
+        setPlainBgNote(`Restored ${n} photo${n === 1 ? "" : "s"}.`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not restore the original photo");
+      const message = e instanceof Error ? e.message : "Could not restore the original photo";
+      setPlainBgNote(message);
+      setError(message);
     } finally {
       setPlainBgBusy(false);
     }
@@ -2202,9 +2287,11 @@ export default function LotDetailPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Plain background</span>
                   <span className="ct-upload-option__desc">
-                    {selectedPhotoIds.size > 0
-                      ? `Cuts the piece out of ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"} and places it on a flat color. The room shot is kept so you can restore it.`
-                      : "Cuts the piece out of the first listing photo and places it on a flat color. Check photos to do more than one. The room shot is kept so you can restore it."}
+                    {plainBgNote
+                      ? plainBgNote
+                      : selectedPhotoIds.size > 0
+                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. SKU tape stays as shot. The room shot is kept so you can restore it.`
+                        : "Places a flat color behind the first listing photo. Check photos to do the rest. SKU tape stays as shot. The room shot is kept so you can restore it."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
