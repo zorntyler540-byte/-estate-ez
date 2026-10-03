@@ -4271,7 +4271,17 @@ def plain_background_lot_photos(
             continue
         try:
             rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
-        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired:
+            for row, fresh in created:
+                if fresh:
+                    discard_plain_bg_original(row.storage_path)
+                    row.plain_bg_saved = False
+            failed += len(created)
+            if len(errors) < 8:
+                errors.append("Cutout took too long. Try these photos again.")
+            db.commit()
+            continue
+        except RuntimeError as exc:
             for row, fresh in created:
                 if fresh:
                     discard_plain_bg_original(row.storage_path)

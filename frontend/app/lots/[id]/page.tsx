@@ -52,8 +52,8 @@ const LISTING_ROLE_LABEL: Record<string, string> = {
   unusable: "Skip"
 };
 
-/** Pairs stay under the proxy time limit. The next pair starts after the last one finishes. */
-const PLAIN_BG_BATCH = 2;
+/** One photo per request stays under the proxy time limit. The next photo starts after. */
+const PLAIN_BG_BATCH = 1;
 
 const JANET_FURNITURE_TITLE =
   /\b(sofas?|couches?|loveseats?|settees?|chairs?|recliners?|ottomans?|sectionals?|dressers?|night ?stands?|armoires?|wardrobes?|bookcases?|bookshelves?|hutches?|credenzas?|sideboards?|buffets?|cabinets?|vanit(?:y|ies)|headboards?|footboards?|desks?|tables?|benches?|stools?|futons?|chifforobes?|chiffoniers?|chests?(?: of drawers)?|bed ?frames?)\b/i;
@@ -718,37 +718,58 @@ export default function LotDetailPage() {
     const problems: string[] = [];
     try {
       for (const batch of batches) {
-        const through = Math.min(finished + (batch.length || 1), ids.length || 1);
-        if (ids.length > 1) setPlainBgNote(`Working… ${finished + 1}–${through} of ${ids.length}`);
-        const res = (await apiFetch(
-          `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
-          token,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              color: plainBgColor,
-              photo_ids: batch.length ? batch : undefined
-            })
+        if (ids.length > 1) setPlainBgNote(`Working… ${finished + 1} of ${ids.length}`);
+        let attempt = 0;
+        let settled = false;
+        while (attempt < 2 && !settled) {
+          attempt += 1;
+          try {
+            const res = (await apiFetch(
+              `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
+              token,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  color: plainBgColor,
+                  photo_ids: batch.length ? batch : undefined
+                })
+              }
+            )) as {
+              updated: number;
+              failed: number;
+              photos?: LotPhoto[];
+              errors?: string[];
+              notes?: string[];
+            };
+            const slow = (res.errors || []).some((line) => /too long/i.test(line));
+            if (slow && attempt < 2 && !(res.updated > 0)) {
+              setPlainBgNote(`Retrying ${finished + 1} of ${ids.length || 1}…`);
+              continue;
+            }
+            updated += res.updated || 0;
+            failed += res.failed || 0;
+            for (const line of [...(res.notes || []), ...(res.errors || [])]) {
+              if (line && !problems.includes(line)) problems.push(line);
+            }
+            if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
+            const bustAt = Date.now();
+            setThumbCacheBust((prev) => {
+              const next = { ...prev };
+              for (const photo of res.photos || []) next[photo.id] = bustAt;
+              return next;
+            });
+            settled = true;
+          } catch (e) {
+            if (attempt < 2) {
+              setPlainBgNote(`Retrying ${finished + 1} of ${ids.length || 1}…`);
+              continue;
+            }
+            const message = e instanceof Error ? e.message : "Could not place a color behind the photo";
+            if (!problems.includes(message)) problems.push(message);
+            failed += batch.length || 1;
+            settled = true;
           }
-        )) as {
-          updated: number;
-          failed: number;
-          photos?: LotPhoto[];
-          errors?: string[];
-          notes?: string[];
-        };
-        updated += res.updated || 0;
-        failed += res.failed || 0;
-        for (const line of [...(res.notes || []), ...(res.errors || [])]) {
-          if (line && !problems.includes(line)) problems.push(line);
         }
-        if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
-        const bustAt = Date.now();
-        setThumbCacheBust((prev) => {
-          const next = { ...prev };
-          for (const photo of res.photos || []) next[photo.id] = bustAt;
-          return next;
-        });
         finished += batch.length || 1;
       }
       const parts: string[] = [];
@@ -2269,7 +2290,7 @@ export default function LotDetailPage() {
                     {plainBgNote
                       ? plainBgNote
                       : selectedPhotoIds.size > 0
-                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, two at a time. SKU tape stays as shot. The room shot is kept so you can restore it.`
+                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. SKU tape stays as shot. The room shot is kept so you can restore it.`
                         : "Places a flat color behind the first listing photo. Check photos to do the rest. SKU tape stays as shot. The room shot is kept so you can restore it."}
                   </span>
                 </div>

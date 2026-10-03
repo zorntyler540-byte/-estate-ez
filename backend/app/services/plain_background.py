@@ -31,8 +31,8 @@ PLAIN_BG_COLORS: dict[str, tuple[int, int, int]] = {
 PLAIN_BG_MAX_EDGE = 1600
 # A lot can hold this many photos. Apply runs them a couple at a time (see PLAIN_BG_CHUNK).
 PLAIN_BG_MAX_PHOTOS = 40
-# Two cutouts per request stays under the ~60s proxy limit. Select-all sends the next pair after.
-PLAIN_BG_CHUNK = 2
+# One cutout per request stays under the ~60s proxy limit. Select-all sends the next photo after.
+PLAIN_BG_CHUNK = 1
 # Light cutout model. Override with PLAIN_BG_REMBG_MODEL=u2net for a heavier pass.
 PLAIN_BG_MODEL = os.environ.get("PLAIN_BG_REMBG_MODEL", "u2netp").strip() or "u2netp"
 
@@ -196,7 +196,7 @@ def render_plain_backgrounds(
     sources: dict[str, bytes],
     color_name: str,
     *,
-    timeout_s: int = 50,
+    timeout_s: int = 55,
 ) -> tuple[dict[str, bytes], dict[str, str]]:
     """Cut out each JPEG in a child process. Returns (ok jpeg bytes, id → error)."""
     if color_name not in PLAIN_BG_COLORS:
