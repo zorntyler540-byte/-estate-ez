@@ -42,7 +42,19 @@ type LotPhoto = {
   shows_whole_lot?: boolean;
   shows_measuring_scale?: boolean;
   label_legibility?: string | null;
+  added_later?: boolean;
 };
+
+function formatPhotoAddedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(d);
+}
 
 const LISTING_ROLE_LABEL: Record<string, string> = {
   hero: "Group",
@@ -2390,6 +2402,13 @@ export default function LotDetailPage() {
               {photosError}
             </div>
           ) : null}
+          {catalogPhotos.some((p) => p.added_later) ? (
+            <p className="ct-photo-adds__note" style={{ marginTop: "0.65rem" }}>
+              {catalogPhotos.filter((p) => p.added_later).length} photo
+              {catalogPhotos.filter((p) => p.added_later).length === 1 ? "" : "s"} were added after this
+              lot was first cataloged. Those frames are marked Added.
+            </p>
+          ) : null}
           <div
             className="ct-lot-detail-photo-grid-wrap"
             style={catalogPhotos.length > 0 ? { marginTop: "0.65rem" } : undefined}
@@ -2461,6 +2480,14 @@ export default function LotDetailPage() {
                       ) : null;
                     })()}
                   </span>
+                  {p.added_later ? (
+                    <span
+                      className="ct-photo-added-flag"
+                      style={{ position: "absolute", top: 34, left: 6, zIndex: 1 }}
+                    >
+                      Added
+                    </span>
+                  ) : null}
                   <span
                     draggable={!organizeBusy && !reorderBusy}
                     onDragStart={(e) => {
@@ -2619,6 +2646,11 @@ export default function LotDetailPage() {
                 >
                   {p.file_on_disk === false ? (
                     <span style={{ color: "var(--ct-error)" }}>Missing on server · </span>
+                  ) : null}
+                  {p.added_later ? (
+                    <span className="ct-photo-added-flag">
+                      Added{formatPhotoAddedAt(p.created_at) ? ` ${formatPhotoAddedAt(p.created_at)}` : ""}
+                    </span>
                   ) : null}
                   {p.original_name}
                 </figcaption>

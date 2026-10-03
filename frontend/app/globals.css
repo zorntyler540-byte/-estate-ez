@@ -2953,6 +2953,92 @@ select.ct-input option {
   color: var(--ct-error);
 }
 
+.ct-lots-table__photo-added {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--ct-warning-text);
+}
+
+.ct-photo-adds {
+  margin: 0.85rem 0 0.35rem;
+  padding: 0.85rem 1rem 0.95rem;
+  border: 1px solid var(--ct-warning-border);
+  background: var(--ct-warning-bg);
+  border-radius: 12px;
+}
+
+.ct-photo-adds__title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.ct-photo-adds__note {
+  margin: 0 0 0.7rem;
+  color: var(--ct-text-muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.ct-photo-adds__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ct-photo-adds__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.ct-photo-adds__sku {
+  font-weight: 700;
+  color: var(--ct-primary);
+  text-decoration: none;
+}
+
+.ct-photo-adds__sku:hover {
+  text-decoration: underline;
+}
+
+.ct-photo-adds__title-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.ct-photo-adds__count {
+  font-weight: 700;
+  color: var(--ct-warning-text);
+}
+
+.ct-photo-adds__when,
+.ct-photo-adds__who {
+  color: var(--ct-text-muted);
+  font-size: 0.86rem;
+}
+
+.ct-photo-added-flag {
+  display: inline-block;
+  margin-right: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ct-warning-text);
+  background: var(--ct-warning-bg);
+  border: 1px solid var(--ct-warning-border);
+}
+
 .ct-lot-sku-badge {
   display: inline-block;
   max-width: 100%;
