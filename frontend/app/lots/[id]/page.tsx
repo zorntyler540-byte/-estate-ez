@@ -696,12 +696,16 @@ export default function LotDetailPage() {
     const chosen =
       selectedPhotoIds.size > 0 ? catalogPhotos.filter((p) => selectedPhotoIds.has(p.id)) : [];
     const tapeCount = chosen.filter((p) => (p.photo_role || "").toLowerCase() === "tape").length;
+    const measureCount = chosen.filter(
+      (p) => (p.photo_role || "").toLowerCase() !== "tape" && p.shows_measuring_scale
+    ).length;
     const ids = chosen
-      .filter((p) => (p.photo_role || "").toLowerCase() !== "tape")
+      .filter((p) => (p.photo_role || "").toLowerCase() !== "tape" && !p.shows_measuring_scale)
       .map((p) => p.id);
     if (chosen.length > 0 && ids.length === 0) {
-      setPlainBgNote("SKU tape photos stay as shot. Check the listing photos.");
-      setError("SKU tape photos stay as shot. Check the listing photos.");
+      const message = "SKU tape and measurement photos stay as shot. Check a full view of the piece.";
+      setPlainBgNote(message);
+      setError(message);
       return;
     }
     const batches: string[][] = [];
@@ -776,6 +780,9 @@ export default function LotDetailPage() {
       if (updated) parts.push(`Updated ${updated} photo${updated === 1 ? "" : "s"}.`);
       if (tapeCount) {
         parts.push(`Left ${tapeCount} SKU tape photo${tapeCount === 1 ? "" : "s"} as shot.`);
+      }
+      if (measureCount) {
+        parts.push(`Left ${measureCount} measurement photo${measureCount === 1 ? "" : "s"} as shot.`);
       }
       if (failed) {
         parts.push(
@@ -2290,8 +2297,8 @@ export default function LotDetailPage() {
                     {plainBgNote
                       ? plainBgNote
                       : selectedPhotoIds.size > 0
-                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. SKU tape stays as shot. The room shot is kept so you can restore it.`
-                        : "Places a flat color behind the first listing photo. Check photos to do the rest. SKU tape stays as shot. The room shot is kept so you can restore it."}
+                        ? `Places a flat color behind ${selectedPhotoIds.size} checked photo${selectedPhotoIds.size === 1 ? "" : "s"}, one at a time. A photo stays as shot when the cutout would remove the piece. SKU tape and measurement photos stay as shot.`
+                        : "Places a flat color behind the first full view. A photo stays as shot when the cutout would remove the piece. SKU tape and measurement photos stay as shot."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>

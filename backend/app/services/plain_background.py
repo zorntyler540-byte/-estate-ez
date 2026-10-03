@@ -166,8 +166,16 @@ def downscale_rgb(im: Image.Image, max_edge: int = PLAIN_BG_MAX_EDGE) -> Image.I
     return rgb
 
 
+# A furniture photo should keep most of the piece. Close-ups of wood and tape-measure
+# frames often come back as a sliver on the color — those stay as shot.
+_MIN_COVERAGE = 0.42
+_MIN_BBOX_FRACTION = 0.50
+_MIN_SOLIDITY = 0.72
+_KEPT_TOO_LITTLE = "Left as shot. The cutout would have removed too much of the piece."
+
+
 def composite_cutout(cut: Image.Image, color: tuple[int, int, int]) -> Image.Image:
-    """Place an RGBA cutout on a flat color. Rejects a mask that kept or dropped everything."""
+    """Place an RGBA cutout on a flat color. Refuses a mask that would eat the piece."""
     rgba = cut.convert("RGBA")
     alpha = rgba.getchannel("A")
     hist = alpha.histogram()
@@ -177,6 +185,22 @@ def composite_cutout(cut: Image.Image, color: tuple[int, int, int]) -> Image.Ima
         raise RuntimeError("Could not find the piece in this photo")
     if mean > 248:
         raise RuntimeError("Could not separate the piece from the background")
+    kept = sum(hist[128:])
+    coverage = kept / count
+    if coverage < _MIN_COVERAGE:
+        raise RuntimeError(_KEPT_TOO_LITTLE)
+    mask = alpha.point(lambda p: 255 if p >= 128 else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        raise RuntimeError(_KEPT_TOO_LITTLE)
+    width, height = alpha.size
+    box_w = bbox[2] - bbox[0]
+    box_h = bbox[3] - bbox[1]
+    if box_w < _MIN_BBOX_FRACTION * width or box_h < _MIN_BBOX_FRACTION * height:
+        raise RuntimeError(_KEPT_TOO_LITTLE)
+    solidity = kept / float(box_w * box_h)
+    if solidity < _MIN_SOLIDITY:
+        raise RuntimeError(_KEPT_TOO_LITTLE)
     soft = alpha.filter(ImageFilter.GaussianBlur(radius=0.8))
     canvas = Image.new("RGB", rgba.size, color)
     canvas.paste(rgba.convert("RGB"), mask=soft)

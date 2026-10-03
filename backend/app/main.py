@@ -4185,17 +4185,29 @@ def _plain_bg_targets(
             raise HTTPException(status_code=400, detail=f"Photo id(s) not on this lot: {preview}")
         chosen = [by_id[pid] for pid in photo_ids]
         tape = [p for p in chosen if is_sku_tape_photo_role(p.photo_role)]
-        listing = [p for p in chosen if not is_sku_tape_photo_role(p.photo_role)]
+        measure = [
+            p
+            for p in chosen
+            if p not in tape and bool(getattr(p, "shows_measuring_scale", False))
+        ]
+        listing = [p for p in chosen if p not in tape and p not in measure]
         if tape:
             count = len(tape)
             notes.append(f"Left {count} SKU tape photo{'s' if count != 1 else ''} as shot.")
+        if measure:
+            count = len(measure)
+            notes.append(f"Left {count} measurement photo{'s' if count != 1 else ''} as shot.")
         if not listing:
             raise HTTPException(
                 status_code=400,
-                detail="SKU tape photos stay as shot. Uncheck those and run the listing photos.",
+                detail="SKU tape and measurement photos stay as shot. Check a full view of the piece.",
             )
         return listing, notes
-    listing_photos = photos_for_ctbids_listing(existing)
+    listing_photos = [
+        p
+        for p in photos_for_ctbids_listing(existing)
+        if not bool(getattr(p, "shows_measuring_scale", False))
+    ]
     if not listing_photos:
         raise HTTPException(status_code=400, detail="This lot has no listing photo to place on a color.")
     return [listing_photos[0]], notes
