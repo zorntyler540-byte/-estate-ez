@@ -27,15 +27,41 @@ def test_sku_prefix_and_janet_furniture_gate() -> None:
 
 
 def test_composite_paints_color_around_the_piece() -> None:
-    cut = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
-    for x in range(8, 16):
-        for y in range(8, 16):
+    cut = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    for x in range(15, 85):
+        for y in range(15, 85):
             cut.putpixel((x, y), (180, 30, 30, 255))
     out = composite_cutout(cut, (243, 240, 234))
     corner = out.getpixel((1, 1))
     assert corner[0] > 220 and corner[1] > 210
-    center = out.getpixel((12, 12))
+    center = out.getpixel((50, 50))
     assert center[0] > 140 and center[1] < 90
+
+
+def test_composite_rejects_a_mask_that_erases_the_piece() -> None:
+    # A leftover chunk, like a leg or a corner, is enough to pass the old
+    # "found something" check and still not enough to keep.
+    scrap = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
+    for x in range(8, 40):
+        for y in range(8, 48):
+            scrap.putpixel((x, y), (90, 50, 30, 255))
+    try:
+        composite_cutout(scrap, (243, 240, 234))
+    except RuntimeError as exc:
+        assert "too much" in str(exc)
+    else:
+        raise AssertionError("expected a scrap mask to fail")
+
+    hollow = Image.new("RGBA", (80, 80), (90, 50, 30, 255))
+    for x in range(12, 68):
+        for y in range(12, 68):
+            hollow.putpixel((x, y), (0, 0, 0, 0))
+    try:
+        composite_cutout(hollow, (243, 240, 234))
+    except RuntimeError as exc:
+        assert "too much" in str(exc)
+    else:
+        raise AssertionError("expected a hollow mask to fail")
 
 
 def test_composite_rejects_a_mask_that_kept_the_whole_frame() -> None:
