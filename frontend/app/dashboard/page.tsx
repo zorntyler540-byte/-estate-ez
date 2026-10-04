@@ -5883,6 +5883,7 @@ export default function DashboardPage() {
       if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
       setDataReloadNonce((n) => n + 1);
     } catch (e) {
+      setCtSellerBulkMsg("");
       setCtSellerBulkErr(e instanceof Error ? e.message : "Photo update failed");
     } finally {
       setCtSellerBulkBusy(false);

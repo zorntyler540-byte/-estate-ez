@@ -2524,8 +2524,8 @@ export default function LotDetailPage() {
           {catalogPhotos.some((p) => p.added_later) ? (
             <p className="ct-photo-adds__note" style={{ marginTop: "0.65rem" }}>
               {catalogPhotos.filter((p) => p.added_later).length} photo
-              {catalogPhotos.filter((p) => p.added_later).length === 1 ? "" : "s"} were added after this
-              lot was first cataloged. Those frames are marked Added.
+              {catalogPhotos.filter((p) => p.added_later).length === 1 ? " was" : "s were"} added after
+              this lot was first cataloged. Those frames are marked Added.
               {lot.ctseller_item_id
                 ? " Update photos on CT Seller to put them on the listing already posted."
                 : ""}
