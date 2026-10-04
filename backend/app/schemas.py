@@ -706,6 +706,8 @@ class LotPhotoOut(BaseModel):
     original_name: str
     created_at: datetime
     sort_order: int = 0
+    """True when this frame was uploaded at least 2 hours after the lot's first photo."""
+    added_later: bool = False
     """False when ``Photo.storage_path`` is missing or not a readable file on the API host."""
     file_on_disk: bool = True
     """Pipeline triage role when known (e.g. ``tape`` for estate SKU-tape frames)."""
@@ -732,6 +734,25 @@ class SalePhotoHealthOut(BaseModel):
     """Lots in a sale with at least one linked catalog photo file missing on disk."""
 
     lots: list[LotPhotoHealthRow]
+
+
+class PhotoAddLotOut(BaseModel):
+    """A lot that received more photos after it was already cataloged."""
+
+    lot_id: str
+    sale_id: str
+    sku: str | None = None
+    auction_title: str = ""
+    added_count: int
+    latest_added_at: datetime
+    added_by: list[str] = []
+
+
+class PhotoAddsOut(BaseModel):
+    """Lots in one sale that gained photos at least 2 hours after their first photo."""
+
+    window_days: int
+    lots: list[PhotoAddLotOut]
 
 
 class CatalogedMobileDraftLotOut(BaseModel):

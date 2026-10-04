@@ -141,6 +141,7 @@ from app.schemas import (
     SaleAudienceHuntStatusOut,
     LotPhotoOut,
     LotVideoOut,
+    PhotoAddsOut,
     DeleteLotVideosIn,
     ReorderLotPhotosIn,
     CatalogedMobileDraftLotOut,
@@ -174,6 +175,7 @@ from app.services.lot_moves import move_lots_to_sale
 from app.services.serialization import (
     lot_ids_with_linked_photos,
     lot_photo_out,
+    lot_photos_out,
     lot_to_schema,
     lot_video_out,
     photo_count_is_sale_outlier,
@@ -190,6 +192,7 @@ from app.services.suggestion_email import (
     send_suggestion_email,
     smtp_configured,
 )
+from app.services.photo_adds import recent_photo_adds
 from app.services.photo_order import (
     renormalize_photo_sort_orders,
     reorder_photos_for_listing,
@@ -1746,6 +1749,17 @@ def sale_photo_health(
     return SalePhotoHealthOut(lots=photo_health_from_loaded(lot_meta, photo_rows))
 
 
+@app.get("/sales/{sale_id}/photo-adds", response_model=PhotoAddsOut)
+def sale_photo_adds(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PhotoAddsOut:
+    """Lots that received more photos after they were already cataloged, in the last 14 days."""
+    _sale_for_user(sale_id, current, db)
+    return recent_photo_adds(db, current.account_id, sale_id)
+
+
 @app.get("/sales/{sale_id}/cataloged-mobile-drafts", response_model=CatalogedMobileDraftsOut)
 def sale_cataloged_mobile_drafts(
     sale_id: str,
@@ -2385,7 +2399,7 @@ def sort_lot_photos_for_listing(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
+    return lot_photos_out(photos, lot_id=lot_id)
 
 
 @app.delete("/sales/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -3226,9 +3240,8 @@ def list_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    if for_listing:
-        photos = photos_for_ctbids_listing(photos)
-    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
+    shown = photos_for_ctbids_listing(photos) if for_listing else photos
+    return lot_photos_out(shown, lot_id=lot_id, anchor_photos=photos)
 
 
 @app.post("/lots/{lot_id}/photos/upload", response_model=list[LotPhotoOut])
@@ -3311,7 +3324,7 @@ async def upload_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
+    return lot_photos_out(photos, lot_id=lot_id)
 
 
 @app.get("/lots/{lot_id}/videos", response_model=list[LotVideoOut])
@@ -3600,7 +3613,7 @@ def reorder_lot_photos(
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
-    return [lot_photo_out(p, lot_id=lot_id) for p in photos]
+    return lot_photos_out(photos, lot_id=lot_id)
 
 
 @app.post("/lots/{target_lot_id}/photos/transfer", response_model=TransferPhotosOut)
@@ -4155,7 +4168,7 @@ def rotate_lot_photos(
     return RotateLotPhotosOut(
         rotated=rotated,
         failed=failed,
-        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        photos=lot_photos_out(existing, lot_id=lot_id),
         errors=errors,
     )
 
@@ -4337,7 +4350,7 @@ def plain_background_lot_photos(
     return PlainBackgroundOut(
         updated=updated,
         failed=failed,
-        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        photos=lot_photos_out(existing, lot_id=lot_id),
         errors=errors,
         notes=notes,
     )
@@ -4414,7 +4427,7 @@ def restore_plain_background_lot_photos(
     return PlainBackgroundOut(
         updated=updated,
         failed=failed,
-        photos=[lot_photo_out(p, lot_id=lot_id) for p in existing],
+        photos=lot_photos_out(existing, lot_id=lot_id),
         errors=errors,
     )
 

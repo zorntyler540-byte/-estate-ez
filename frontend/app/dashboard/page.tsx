@@ -24,6 +24,7 @@ import {
   X
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
+import { PhotoAddsPanel, photoAddsFromResponse, type PhotoAddLot } from "../../components/PhotoAddsPanel";
 import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
@@ -2053,6 +2054,7 @@ export default function DashboardPage() {
   const [lots, setLots] = useState<Lot[]>([]);
   /** ``lot_id`` → count of catalog photos whose files are missing on the API host (from ``GET /sales/{id}/photo-health``). */
   const [photoHealthMissing, setPhotoHealthMissing] = useState<Record<string, number>>({});
+  const [photoAdds, setPhotoAdds] = useState<PhotoAddLot[]>([]);
   /** Filter ``GET /lots`` to rows with SKU sanity flags (duplicate digit-SKU in sale, or mixed lot numbers in text). */
   const [inventorySkuFlagFilter, setInventorySkuFlagFilter] = useState<
     "" | "duplicate" | "text_mismatch" | "any"
@@ -2200,6 +2202,11 @@ export default function DashboardPage() {
     () => Object.keys(photoHealthMissing).length,
     [photoHealthMissing]
   );
+  const photoAddsByLot = useMemo(() => {
+    const byLot = new Map<string, PhotoAddLot>();
+    for (const row of photoAdds) byLot.set(row.lot_id, row);
+    return byLot;
+  }, [photoAdds]);
 
   const { activeJobs, completedJobs, queuedJobCount } = useMemo(() => {
     const active: Job[] = [];
@@ -2842,6 +2849,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!token || !selectedSaleId) {
+      setPhotoAdds([]);
       return;
     }
     const t = token;
@@ -2923,6 +2931,16 @@ export default function DashboardPage() {
       .catch(() => {
         if (loadId !== inventoryLoadId.current) return;
         setPhotoHealthMissing({});
+      });
+    setPhotoAdds([]);
+    void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/photo-adds`, t)
+      .then((d) => {
+        if (loadId !== inventoryLoadId.current) return;
+        setPhotoAdds(photoAddsFromResponse(d));
+      })
+      .catch(() => {
+        if (loadId !== inventoryLoadId.current) return;
+        setPhotoAdds([]);
       });
   }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
 
@@ -7551,6 +7569,7 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </header>
+      <PhotoAddsPanel lots={photoAdds} />
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
         {visibleLots.length < 1 && lotPostedSaleFilter === "unsold" ? (
           <p className="ct-muted ct-dash-lots__empty">
@@ -7622,6 +7641,11 @@ export default function DashboardPage() {
                 <div className="ct-lot-mobile-card__meta">
                   <span className="ct-lot-mobile-card__meta-item">
                     <strong>{lot.photo_count}</strong> photo{lot.photo_count === 1 ? "" : "s"}
+                    {photoAddsByLot.get(lot.id) ? (
+                      <span className="ct-lots-table__photo-added">
+                        +{photoAddsByLot.get(lot.id)?.added_count} added
+                      </span>
+                    ) : null}
                   </span>
                   {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
                     <span className="ct-lot-mobile-card__meta-item ct-lot-mobile-card__meta-item--error">
@@ -7837,6 +7861,18 @@ export default function DashboardPage() {
               </td>
               <td className="ct-lots-table__photo-count">
                 {lot.photo_count}
+                {photoAddsByLot.get(lot.id) ? (
+                  <span
+                    className="ct-lots-table__photo-added"
+                    title={`More photos were uploaded to this lot${
+                      photoAddsByLot.get(lot.id)?.added_by.length
+                        ? ` by ${photoAddsByLot.get(lot.id)?.added_by.join(", ")}`
+                        : ""
+                    }`}
+                  >
+                    +{photoAddsByLot.get(lot.id)?.added_count} added
+                  </span>
+                ) : null}
                 {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
                   <span
                     className="ct-lots-table__photo-missing"

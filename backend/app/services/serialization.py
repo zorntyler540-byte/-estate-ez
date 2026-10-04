@@ -104,6 +104,24 @@ def lot_photo_out(photo: Photo, *, lot_id: str | None = None) -> LotPhotoOut:
     )
 
 
+def lot_photos_out(
+    photos: list[Photo],
+    *,
+    lot_id: str,
+    anchor_photos: list[Photo] | None = None,
+) -> list[LotPhotoOut]:
+    """Serialize a lot's photos and mark frames uploaded after the original set."""
+    from app.services.photo_adds import added_later_photo_ids
+
+    later = added_later_photo_ids(anchor_photos if anchor_photos is not None else photos)
+    outs: list[LotPhotoOut] = []
+    for photo in photos:
+        out = lot_photo_out(photo, lot_id=lot_id)
+        out.added_later = photo.id in later
+        outs.append(out)
+    return outs
+
+
 def sale_lots_with_missing_photo_files(
     db: Session, account_id: str, sale_id: str
 ) -> list[LotPhotoHealthRow]:
