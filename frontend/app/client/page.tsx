@@ -30,7 +30,7 @@ export default function ClientUploadPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
   const [me, setMe] = useState<Me | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
   const [sku, setSku] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
@@ -42,7 +42,7 @@ export default function ClientUploadPage() {
     const t = localStorage.getItem("token") || "";
     setToken(t);
     if (!t) {
-      setLoading(false);
+      setReady(true);
       return;
     }
     void apiFetch("/auth/me", t)
@@ -60,7 +60,7 @@ export default function ClientUploadPage() {
         setToken("");
         router.replace("/");
       })
-      .finally(() => setLoading(false));
+      .finally(() => setReady(true));
   }, [router]);
 
   useEffect(() => {
@@ -124,6 +124,18 @@ export default function ClientUploadPage() {
     }
   }
 
+  if (!ready) {
+    return (
+      <main className="ct-shell">
+        <div className="ct-panel">
+          <p className="ct-muted" style={{ margin: 0 }}>
+            Loading…
+          </p>
+        </div>
+      </main>
+    );
+  }
+
   if (!token) {
     return (
       <main className="ct-shell">
@@ -155,7 +167,6 @@ export default function ClientUploadPage() {
             Log out
           </button>
         </div>
-        {loading ? <p className="ct-muted">Loading…</p> : null}
         {me ? (
           <>
             <p className="ct-lead" style={{ marginTop: "0.85rem" }}>
