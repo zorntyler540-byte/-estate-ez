@@ -6,11 +6,14 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
+import { captureGate } from "@/lib/clientCapture";
 import { countPendingDrafts } from "@/lib/queue/db";
 
 export default function CaptureScreen() {
-  const { selectedSaleId, selectedSaleName, signedInEmail, signOut } = useAuth();
+  const { selectedSaleId, selectedSaleName, signedInEmail, signedInRole, signOut } = useAuth();
   const { getSaleName } = useSales();
+  const saleLabel = selectedSaleId ? getSaleName(selectedSaleId, selectedSaleName) : "";
+  const gate = captureGate({ role: signedInRole, saleId: selectedSaleId, saleName: saleLabel });
   const [pending, setPending] = useState(0);
   const [signingOut, setSigningOut] = useState(false);
 
@@ -21,8 +24,12 @@ export default function CaptureScreen() {
   );
 
   function startCapture() {
-    if (!selectedSaleId) {
+    if (gate.action === "pick-sale") {
       router.push("/(tabs)/sale");
+      return;
+    }
+    if (gate.action === "wait-for-owner") {
+      Alert.alert("No sale assigned", gate.message);
       return;
     }
     router.push("/capture-session");
@@ -71,14 +78,22 @@ export default function CaptureScreen() {
         </Text>
       </View>
 
-      {!selectedSaleId ? (
-        <Text style={styles.warn}>Choose a sale on the Sale tab before capturing.</Text>
-      ) : (
+      {gate.action === "capture" ? (
         <Text style={styles.saleBanner}>
-          Uploading to: <Text style={styles.saleName}>{getSaleName(selectedSaleId, selectedSaleName)}</Text>
-          {"\n"}
-          <Text style={styles.meta}>Wrong sale? Change it on the Sale tab before capturing.</Text>
+          {gate.staffHint ? (
+            <>
+              Uploading to: <Text style={styles.saleName}>{saleLabel}</Text>
+              {"\n"}
+              <Text style={styles.meta}>{gate.staffHint}</Text>
+            </>
+          ) : (
+            <>
+              Photos from this phone go into <Text style={styles.saleName}>{saleLabel}</Text>.
+            </>
+          )}
         </Text>
+      ) : (
+        <Text style={styles.warn}>{gate.message}</Text>
       )}
 
       <Pressable style={styles.primary} onPress={startCapture}>

@@ -28,7 +28,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="capture"
         options={{
-          title: "Capture",
+          title: isClient ? "Photos" : "Capture",
           tabBarIcon: ({ color }) => <Ionicons name="camera" size={26} color={color} />
         }}
       />

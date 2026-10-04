@@ -46,15 +46,19 @@ export default function LoginScreen() {
       </View>
       <Text style={styles.kicker}>Estate-EZ</Text>
       <Text style={styles.title}>Sign in</Text>
-      <Text style={styles.sub}>Manage lots, photos, and AI-assisted cataloging.</Text>
+      <Text style={styles.sub}>
+        Sign in with the email and password from your account. Photos you take on this phone upload to your sale.
+      </Text>
       <Text style={styles.api} numberOfLines={2}>
         API: {API_BASE}
       </Text>
 
       <TextInput
         autoCapitalize="none"
-        autoComplete="email"
+        autoComplete="username"
+        autoCorrect={false}
         keyboardType="email-address"
+        textContentType="username"
         placeholder="Email"
         placeholderTextColor={theme.textSubtle}
         style={styles.input}
@@ -62,8 +66,15 @@ export default function LoginScreen() {
         onChangeText={setEmail}
       />
       <TextInput
+        autoCapitalize="none"
+        autoComplete="password"
+        returnKeyType="go"
         secureTextEntry
+        textContentType="password"
         placeholder="Password"
+        onSubmitEditing={() => {
+          if (email.trim() && password && !busy) void onSubmit();
+        }}
         placeholderTextColor={theme.textSubtle}
         style={styles.input}
         value={password}

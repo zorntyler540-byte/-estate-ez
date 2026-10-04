@@ -124,8 +124,6 @@ export default function CaptureSessionScreen() {
     appendTitle?: string;
     appendExistingCount?: string;
   }>();
-  const listingChannel = params.channel === "facebook" ? "facebook" : "ctseller";
-  const isFacebook = listingChannel === "facebook";
   const resumeDraftId = paramString(params.draftId);
   const appendLotId = paramString(params.appendLotId);
   const appendSku = paramString(params.appendSku);
@@ -135,7 +133,10 @@ export default function CaptureSessionScreen() {
     Number.parseInt(paramString(params.appendExistingCount) || "0", 10) || 0
   );
   const isAppendMode = Boolean(appendLotId);
-  const { token, selectedSaleId, selectedSaleName } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, signedInRole } = useAuth();
+  const clientLogin = (signedInRole || "").toLowerCase() === "client";
+  const listingChannel = !clientLogin && params.channel === "facebook" ? "facebook" : "ctseller";
+  const isFacebook = listingChannel === "facebook";
   const { syncNow, setSyncPaused } = useSyncActions();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -316,7 +317,11 @@ export default function CaptureSessionScreen() {
   async function ensureDraft(): Promise<string | null> {
     if (draftIdRef.current) return draftIdRef.current;
     if (!selectedSaleId) {
-      setError("Select a sale first.");
+      setError(
+        clientLogin
+          ? "This login does not have a sale yet. Ask the account owner to assign one."
+          : "Select a sale first."
+      );
       return null;
     }
     // Prefer an existing unfinished draft so a remount / race doesn't orphan photos.
