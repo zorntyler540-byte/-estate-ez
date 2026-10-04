@@ -269,6 +269,7 @@ export default function LotDetailPage() {
   const [ctSellerConditions, setCtSellerConditions] = useState<CTSellerCondition[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
   const [ctSellerPostBusy, setCtSellerPostBusy] = useState(false);
+  const [ctSellerPostMode, setCtSellerPostMode] = useState<"" | "post" | "photos">("");
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
@@ -1089,6 +1090,7 @@ export default function LotDetailPage() {
       return;
     }
     setCtSellerPostBusy(true);
+    setCtSellerPostMode("post");
     setCtSellerErr("");
     setCtSellerMsg("");
     try {
@@ -1187,6 +1189,91 @@ export default function LotDetailPage() {
       setCtSellerErr(e instanceof Error ? e.message : "Post to CT Seller failed");
     } finally {
       setCtSellerPostBusy(false);
+      setCtSellerPostMode("");
+    }
+  }
+
+  async function updatePhotosOnCtSeller() {
+    if (!lot?.ctseller_item_id) return;
+    if (
+      !window.confirm(
+        "Replace the photos on the existing CT Seller item with this gallery? SKU tape stays off CT Bids. Photos already on that item are removed first."
+      )
+    ) {
+      return;
+    }
+    setCtSellerPostBusy(true);
+    setCtSellerPostMode("photos");
+    setCtSellerErr("");
+    setCtSellerMsg("");
+    try {
+      const res = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/ctseller-photos`, token, {
+        method: "POST"
+      })) as {
+        ctseller_item_id?: number | null;
+        photos_uploaded: number;
+        queued?: boolean;
+      };
+      if (res.queued && lot.sale_id) {
+        setCtSellerMsg("Updating photos on the CT Seller item already posted…");
+        let active = true;
+        let lastErr = "";
+        while (active) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const st = (await apiFetch(
+            `/sales/${encodeURIComponent(lot.sale_id)}/post-to-ctseller`,
+            token
+          )) as {
+            active: boolean;
+            current_phase?: string | null;
+            results: Array<{
+              lot_id: string;
+              ok: boolean;
+              skipped?: boolean;
+              error?: string | null;
+              ctseller_item_id?: number | null;
+              photos_uploaded?: number | null;
+            }>;
+          };
+          const row = (st.results || []).find((r) => r.lot_id === lot.id);
+          if (st.current_phase) {
+            setCtSellerMsg(`Updating photos… ${st.current_phase}`);
+          }
+          if (row?.ok) {
+            const itemId = row.ctseller_item_id || lot.ctseller_item_id;
+            const count = row.photos_uploaded ?? 0;
+            setLot((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    ctseller_item_id: itemId,
+                    ctseller_posted_at: new Date().toISOString()
+                  }
+                : prev
+            );
+            setCtSellerMsg(
+              `Updated ${count} photo${count === 1 ? "" : "s"} on CT Seller item #${itemId}`
+            );
+            active = false;
+            break;
+          }
+          if (row && !row.ok && !st.active) {
+            lastErr = row.error || "Photo update failed";
+            active = false;
+            break;
+          }
+          active = Boolean(st.active);
+          if (!active && !row?.ok) {
+            lastErr = row?.error || "Photo update failed";
+          }
+        }
+        if (lastErr) setCtSellerErr(lastErr);
+      }
+    } catch (e) {
+      setCtSellerErr(e instanceof Error ? e.message : "Photo update failed");
+    } finally {
+      setCtSellerPostBusy(false);
+      setCtSellerPostMode("");
     }
   }
 
@@ -1858,9 +1945,23 @@ export default function LotDetailPage() {
                   "Regenerate with AI"
                 )}
               </button>
+              {lot.ctseller_item_id ? (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  onClick={() => void updatePhotosOnCtSeller()}
+                  disabled={ctSellerPostBusy || showAiRegenProgress}
+                  aria-busy={ctSellerPostBusy && ctSellerPostMode === "photos"}
+                  title={`Replace photos on CT Seller item #${lot.ctseller_item_id}`}
+                >
+                  {ctSellerPostBusy && ctSellerPostMode === "photos"
+                    ? "Updating photos…"
+                    : "Update photos on CT Seller"}
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="ct-btn"
+                className={lot.ctseller_item_id ? "ct-btn ct-btn--ghost" : "ct-btn"}
                 onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
                 disabled={
                   ctSellerPostBusy ||
@@ -1871,21 +1972,21 @@ export default function LotDetailPage() {
                   !(lot.sku || "").trim() ||
                   !(lot.auction_title || "").trim()
                 }
-                aria-busy={ctSellerPostBusy}
+                aria-busy={ctSellerPostBusy && ctSellerPostMode === "post"}
                 title={
                   audienceHeld
                     ? "Held for collector groups — turn off Hold for groups to post"
                     : listingDirty
                       ? "Save listing first"
                       : lot.ctseller_item_id
-                        ? "Already posted — click to post again"
+                        ? "Creates another CT Seller item"
                         : "Create this lot on seller.ctbids.com"
                 }
               >
-                {ctSellerPostBusy
+                {ctSellerPostBusy && ctSellerPostMode === "post"
                   ? "Posting…"
                   : lot.ctseller_item_id
-                    ? "Re-post to CT Seller"
+                    ? "Post as new item"
                     : "Post to CT Seller"}
               </button>
             </div>
@@ -2056,7 +2157,8 @@ export default function LotDetailPage() {
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
             Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
             <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
-            photos stay in this gallery and are <strong>not</strong> uploaded to CT Bids.
+            photos stay in this gallery and stay off CT Bids. Update photos sends this gallery to the
+            CT Seller item already posted. Post as new item creates another listing.
           </p>
           {audienceHeld ? (
             <div className="ct-banner ct-banner--warning">
@@ -2107,9 +2209,20 @@ export default function LotDetailPage() {
                 </p>
               ) : null}
             </div>
+            {lot.ctseller_item_id ? (
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                onClick={() => void updatePhotosOnCtSeller()}
+                disabled={ctSellerPostBusy}
+                title={`Replace photos on CT Seller item #${lot.ctseller_item_id}`}
+              >
+                {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Updating photos…" : "Update photos"}
+              </button>
+            ) : null}
             <button
               type="button"
-              className="ct-btn ct-btn--primary"
+              className={lot.ctseller_item_id ? "ct-btn ct-btn--ghost" : "ct-btn ct-btn--primary"}
               onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
               disabled={
                 ctSellerPostBusy ||
@@ -2120,12 +2233,18 @@ export default function LotDetailPage() {
                 !(lot.auction_title || "").trim() ||
                 !ctSellerPickId
               }
-              title={audienceHeld ? "Held for collector groups — turn off Hold for groups to post" : undefined}
+              title={
+                audienceHeld
+                  ? "Held for collector groups — turn off Hold for groups to post"
+                  : lot.ctseller_item_id
+                    ? "Creates another CT Seller item"
+                    : undefined
+              }
             >
-              {ctSellerPostBusy
+              {ctSellerPostBusy && ctSellerPostMode === "post"
                 ? "Posting…"
                 : lot.ctseller_item_id
-                  ? "Re-post lot"
+                  ? "Post as new item"
                   : "Post lot"}
             </button>
           </div>
@@ -2405,8 +2524,11 @@ export default function LotDetailPage() {
           {catalogPhotos.some((p) => p.added_later) ? (
             <p className="ct-photo-adds__note" style={{ marginTop: "0.65rem" }}>
               {catalogPhotos.filter((p) => p.added_later).length} photo
-              {catalogPhotos.filter((p) => p.added_later).length === 1 ? "" : "s"} were added after this
-              lot was first cataloged. Those frames are marked Added.
+              {catalogPhotos.filter((p) => p.added_later).length === 1 ? " was" : "s were"} added after
+              this lot was first cataloged. Those frames are marked Added.
+              {lot.ctseller_item_id
+                ? " Update photos on CT Seller to put them on the listing already posted."
+                : ""}
             </p>
           ) : null}
           <div

@@ -106,6 +106,7 @@ from app.schemas import (
     SaleCoverPhotosSelectIn,
     SaleCoverRemoteOut,
     SaleOut,
+    SaleCtSellerPhotosIn,
     SalePostToCTSellerIn,
     SalePostToCTSellerLotResult,
     SalePostToCTSellerOut,
@@ -2787,6 +2788,50 @@ def _queue_lots_for_ctseller_post(
     return queued, results
 
 
+def _queue_lots_for_ctseller_photo_update(
+    lots: list[Lot],
+) -> tuple[list[str], list[SalePostToCTSellerLotResult]]:
+    """Queue lots that already have a CT Seller item. Held lots can still refresh photos."""
+    queued: list[str] = []
+    results: list[SalePostToCTSellerLotResult] = []
+    for lot in lots:
+        sku = (lot.sku or "").strip() or None
+        if is_facebook_listing_channel(getattr(lot, "listing_channel", None)):
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Marked for Facebook Marketplace",
+                    ctseller_item_id=lot.ctseller_item_id,
+                )
+            )
+            continue
+        if not lot.ctseller_item_id:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot.id,
+                    sku=sku,
+                    ok=False,
+                    skipped=True,
+                    error="Not on CT Seller yet",
+                )
+            )
+            continue
+        queued.append(lot.id)
+        results.append(
+            SalePostToCTSellerLotResult(
+                lot_id=lot.id,
+                sku=sku,
+                ok=True,
+                error="queued",
+                ctseller_item_id=lot.ctseller_item_id,
+            )
+        )
+    return queued, results
+
+
 @app.post("/lots/{lot_id}/post-to-ctseller", response_model=LotPostToCTSellerOut)
 def post_lot_to_ctseller(
     lot_id: str,
@@ -2923,6 +2968,144 @@ def post_sale_lots_to_ctseller(
                 skus=sku_map,
                 remote_sale_id=int(remote_sale_id),
                 force=body.force,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return SalePostToCTSellerOut(
+        ctseller_sale_id=int(remote_sale_id),
+        posted=0,
+        failed=0,
+        skipped=skipped,
+        queued=len(queued_ids),
+        results=results,
+    )
+
+
+@app.post("/lots/{lot_id}/ctseller-photos", response_model=LotPostToCTSellerOut)
+def update_lot_photos_on_ctseller(
+    lot_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotPostToCTSellerOut:
+    """Replace photos on the CT Seller item this lot already uses. Does not create a new item."""
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    if not lot.ctseller_item_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is not on CT Seller yet. Post the lot first, then update photos.",
+        )
+    if is_facebook_listing_channel(getattr(lot, "listing_channel", None)):
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is marked for Facebook Marketplace — its photos stay off CT Seller",
+        )
+
+    sale = _sale_for_user(lot.sale_id, current, db)
+    remote_sale_id = lot.ctseller_sale_id or sale.ctseller_sale_id or 0
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if ctseller_post_tasks.sale_post_is_active(sale.id):
+        raise HTTPException(
+            status_code=409,
+            detail="A CT Seller post is already running for this sale. Wait for it to finish.",
+        )
+    try:
+        _ctseller_client_for_account(account, db, probe=False)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    sku = (lot.sku or "").strip() or None
+    ctseller_post_tasks.start_sale_post_in_background(
+        account_id=current.account_id,
+        sale_id=sale.id,
+        lot_ids=[lot.id],
+        skus={lot.id: sku},
+        remote_sale_id=int(remote_sale_id),
+        force=False,
+        photos_only=True,
+    )
+    return LotPostToCTSellerOut(
+        lot_id=lot.id,
+        ctseller_item_id=lot.ctseller_item_id,
+        ctseller_sale_id=int(remote_sale_id),
+        photos_uploaded=0,
+        ctseller_posted_at=lot.ctseller_posted_at,
+        queued=True,
+    )
+
+
+@app.post("/sales/{sale_id}/ctseller-photos", response_model=SalePostToCTSellerOut)
+def update_sale_lot_photos_on_ctseller(
+    sale_id: str,
+    payload: SaleCtSellerPhotosIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SalePostToCTSellerOut:
+    """Replace photos on specific lots already posted to CT Seller."""
+    sale = _sale_for_user(sale_id, current, db)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if ctseller_post_tasks.sale_post_is_active(sale.id):
+        raise HTTPException(
+            status_code=409,
+            detail="A CT Seller post is already running for this sale. Wait for it to finish.",
+        )
+
+    wanted: list[str] = []
+    for raw in payload.lot_ids:
+        lot_id = (raw or "").strip()
+        if lot_id and lot_id not in wanted:
+            wanted.append(lot_id)
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Pick at least one lot")
+
+    rows = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id, Lot.id.in_(wanted))
+        .all()
+    )
+    by_id = {row.id: row for row in rows}
+    ordered = [by_id[lot_id] for lot_id in wanted if lot_id in by_id]
+    queued_ids, results = _queue_lots_for_ctseller_photo_update(ordered)
+    for lot_id in wanted:
+        if lot_id not in by_id:
+            results.append(
+                SalePostToCTSellerLotResult(
+                    lot_id=lot_id,
+                    ok=False,
+                    skipped=True,
+                    error="Lot not found",
+                )
+            )
+
+    remote_sale_id = sale.ctseller_sale_id or 0
+    for lot_id in queued_ids:
+        posted_sale = by_id[lot_id].ctseller_sale_id
+        if posted_sale:
+            remote_sale_id = int(posted_sale)
+            break
+
+    try:
+        _ctseller_client_for_account(account, db, probe=False)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skipped = sum(1 for row in results if row.skipped)
+    if queued_ids:
+        sku_map = {lot_id: ((by_id[lot_id].sku or "").strip() or None) for lot_id in queued_ids}
+        try:
+            ctseller_post_tasks.start_sale_post_in_background(
+                account_id=current.account_id,
+                sale_id=sale.id,
+                lot_ids=queued_ids,
+                skus=sku_map,
+                remote_sale_id=int(remote_sale_id),
+                force=False,
+                photos_only=True,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

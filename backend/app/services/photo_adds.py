@@ -129,6 +129,7 @@ def recent_photo_adds(
                 added_count=len(rows),
                 latest_added_at=latest,
                 added_by=added_by,
+                on_ctseller=bool(getattr(lot, "ctseller_item_id", None)),
             )
         )
     out.sort(key=lambda row: (row.latest_added_at, row.lot_id), reverse=True)

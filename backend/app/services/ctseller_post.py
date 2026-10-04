@@ -34,6 +34,23 @@ _LOG = logging.getLogger(__name__)
 PhaseFn = Callable[[str], None]
 
 
+def ctseller_image_ids_to_replace(rows: list[dict]) -> list[int]:
+    """Image ids to remove before a photo refresh. Videos on the item stay."""
+    ids: list[int] = []
+    for row in rows:
+        kind = str(row.get("type") or "image").strip().lower()
+        if kind not in ("", "image"):
+            continue
+        raw_id = row.get("id")
+        if raw_id is None:
+            continue
+        try:
+            ids.append(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 def search_tags_for_lot_row(lot: Lot) -> list[str]:
     try:
         specs = json.loads(lot.specification_lines_json or "[]")
@@ -61,6 +78,140 @@ def search_tags_for_lot_row(lot: Lot) -> list[str]:
         specification_lines=specs,
         labels_and_tags=labels,
         category=lot.ct_category,
+    )
+
+
+def _upload_listing_photos(
+    *,
+    client: CTSellerClient,
+    lot: Lot,
+    item_id: int,
+    listing_photos: list[Photo],
+    phase: PhaseFn,
+) -> int:
+    """Upload the current gallery onto an existing CT Seller item. Returns how many landed."""
+    uploaded = 0
+    total_photos = len(listing_photos)
+    workers = max(1, min(int(settings.ctseller_post_photo_workers), total_photos or 1))
+    post_lock = threading.Lock()
+
+    def _upload_one(idx: int, ph: Photo) -> bool:
+        with post_lock:
+            phase(f"photo {idx + 1}/{total_photos}")
+        try:
+            path = resolve_catalog_storage_path(ph.storage_path)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("CT Seller photo resolve failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
+            return False
+        if path is None or not path.is_file():
+            _LOG.warning("CT Seller photo missing lot=%s photo=%s", lot.id, getattr(ph, "id", idx))
+            return False
+        try:
+            raw = jpeg_bytes_for_ctseller_post(path)
+            name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
+            with post_lock:
+                client.add_item_image(
+                    item_id=item_id,
+                    image_bytes=raw,
+                    name=name[:80],
+                    display_order=idx + 1,
+                    is_display_image=(idx == 0),
+                )
+            return True
+        except (OSError, CTSellerError) as exc:
+            _LOG.warning("CT Seller photo upload failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
+            return False
+
+    if total_photos == 1 or workers == 1:
+        return sum(1 for idx, ph in enumerate(listing_photos) if _upload_one(idx, ph))
+    if total_photos > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ct-photo") as pool:
+            futs = [pool.submit(_upload_one, idx, ph) for idx, ph in enumerate(listing_photos)]
+            uploaded = sum(1 for fut in as_completed(futs) if fut.result())
+    return uploaded
+
+
+def _listing_photos_for_lot(db: Session, lot: Lot) -> list[Photo]:
+    photos = (
+        db.query(Photo)
+        .filter(Photo.lot_id == lot.id, Photo.account_id == lot.account_id)
+        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
+        .all()
+    )
+    listing_photos = photos_for_ctbids_listing(photos)
+    if photos and not listing_photos:
+        raise HTTPException(
+            status_code=400,
+            detail="Only SKU tape photos on this lot — add a product photo before posting to CT Seller",
+        )
+    return listing_photos
+
+
+def replace_lot_photos_on_ctseller(
+    *,
+    db: Session,
+    lot: Lot,
+    client: CTSellerClient,
+    on_phase: PhaseFn | None = None,
+) -> LotPostToCTSellerOut:
+    """Replace photos on the CT Seller item already posted. Does not create a new item."""
+
+    def phase(msg: str) -> None:
+        if on_phase:
+            on_phase(msg)
+
+    item_id = getattr(lot, "ctseller_item_id", None)
+    if not item_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is not on CT Seller yet. Post the lot first, then update photos.",
+        )
+    if is_facebook_listing_channel(getattr(lot, "listing_channel", None)):
+        raise HTTPException(
+            status_code=400,
+            detail="This lot is marked for Facebook Marketplace — its photos stay off CT Seller",
+        )
+
+    listing_photos = _listing_photos_for_lot(db, lot)
+    if not listing_photos:
+        raise HTTPException(status_code=400, detail="This lot has no photos to send to CT Seller.")
+
+    phase("reading CT Seller photos")
+    existing = client.list_item_images(int(item_id))
+    image_ids = ctseller_image_ids_to_replace(existing)
+    if image_ids:
+        phase("removing old photos")
+        client.delete_item_images(int(item_id), image_ids)
+
+    uploaded = _upload_listing_photos(
+        client=client,
+        lot=lot,
+        item_id=int(item_id),
+        listing_photos=listing_photos,
+        phase=phase,
+    )
+    total = len(listing_photos)
+    if uploaded < total:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Sent {uploaded} of {total} photos to CT Seller item {item_id}. "
+                "The previous photos were already removed. Click Update photos again."
+            ),
+        )
+
+    now = datetime.now(timezone.utc)
+    lot.ctseller_posted_at = now
+    db.add(lot)
+    db.commit()
+    db.refresh(lot)
+    remote_sale_id = getattr(lot, "ctseller_sale_id", None) or 0
+    return LotPostToCTSellerOut(
+        lot_id=lot.id,
+        ctseller_item_id=int(item_id),
+        ctseller_sale_id=int(remote_sale_id),
+        photos_uploaded=uploaded,
+        ctseller_posted_at=now,
     )
 
 
@@ -109,18 +260,7 @@ def post_one_lot_to_ctseller(
             detail="This lot is held for collector groups — turn off Hold for groups, or pass force=true",
         )
 
-    photos = (
-        db.query(Photo)
-        .filter(Photo.lot_id == lot.id, Photo.account_id == lot.account_id)
-        .order_by(Photo.sort_order.asc(), Photo.created_at.asc())
-        .all()
-    )
-    listing_photos = photos_for_ctbids_listing(photos)
-    if photos and not listing_photos:
-        raise HTTPException(
-            status_code=400,
-            detail="Only SKU tape photos on this lot — add a product photo before posting to CT Seller",
-        )
+    listing_photos = _listing_photos_for_lot(db, lot)
 
     areas = allowed_areas
     if areas is None:
@@ -178,44 +318,13 @@ def post_one_lot_to_ctseller(
     db.commit()
     db.refresh(lot)
 
-    uploaded = 0
-    total_photos = len(listing_photos)
-    workers = max(1, min(int(settings.ctseller_post_photo_workers), total_photos or 1))
-    post_lock = threading.Lock()
-
-    def _upload_one(idx: int, ph: Photo) -> bool:
-        with post_lock:
-            phase(f"photo {idx + 1}/{total_photos}")
-        try:
-            path = resolve_catalog_storage_path(ph.storage_path)
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("CT Seller photo resolve failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
-            return False
-        if path is None or not path.is_file():
-            _LOG.warning("CT Seller photo missing lot=%s photo=%s", lot.id, getattr(ph, "id", idx))
-            return False
-        try:
-            raw = jpeg_bytes_for_ctseller_post(path)
-            name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
-            with post_lock:
-                client.add_item_image(
-                    item_id=item_id,
-                    image_bytes=raw,
-                    name=name[:80],
-                    display_order=idx + 1,
-                    is_display_image=(idx == 0),
-                )
-            return True
-        except (OSError, CTSellerError) as exc:
-            _LOG.warning("CT Seller photo upload failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
-            return False
-
-    if total_photos == 1 or workers == 1:
-        uploaded = sum(1 for idx, ph in enumerate(listing_photos) if _upload_one(idx, ph))
-    elif total_photos > 1:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ct-photo") as pool:
-            futs = [pool.submit(_upload_one, idx, ph) for idx, ph in enumerate(listing_photos)]
-            uploaded = sum(1 for fut in as_completed(futs) if fut.result())
+    uploaded = _upload_listing_photos(
+        client=client,
+        lot=lot,
+        item_id=int(item_id),
+        listing_photos=listing_photos,
+        phase=phase,
+    )
 
     return LotPostToCTSellerOut(
         lot_id=lot.id,

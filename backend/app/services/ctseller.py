@@ -460,6 +460,30 @@ class CTSellerClient:
         }
         self._post_raw("/item/image/add", payload)
 
+    def list_item_images(self, item_id: int) -> list[dict[str, Any]]:
+        """Photos and clips already on a CT Seller item, in display order."""
+        payload = {
+            "filter": [{"field": "itemid", "value": int(item_id), "op": "=", "join": "AND"}],
+            "sort": [{"field": "displayorder", "direction": "asc"}],
+        }
+        body = self._post_raw("/item/image/list", payload)
+        data = body.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            inner = data.get("data")
+            if isinstance(inner, list):
+                return [row for row in inner if isinstance(row, dict)]
+        return []
+
+    def delete_item_images(self, item_id: int, image_ids: list[int]) -> None:
+        """Remove existing item photos. Matches the seller site DELETE /item/image/delete."""
+        ids = [int(x) for x in image_ids]
+        if not ids:
+            return
+        payload = {"data": {"imageids": ids, "itemid": int(item_id)}}
+        self._delete_raw("/item/image/delete", payload)
+
     def item_detail(self, item_id: int) -> dict[str, Any]:
         payload = {
             "field": [
@@ -637,6 +661,16 @@ class CTSellerClient:
             _friendly_cover_upload_error(last_exc or CTSellerError("CT Seller cover upload failed")),
             status_code=getattr(last_exc, "status_code", None),
         ) from last_exc
+
+    def _delete_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.access_token:
+            raise CTSellerError("Not signed in to CT Seller", status_code=401)
+        resp = self.session.delete(
+            f"{SELLER_API}{path}",
+            data=json.dumps(payload),
+            timeout=self.timeout,
+        )
+        return self._parse_seller_response(resp)
 
     def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.access_token:

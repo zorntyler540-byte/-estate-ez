@@ -69,6 +69,9 @@ def test_photo_adds_lists_only_late_uploads_in_the_window(tmp_path: Path) -> Non
         ]
     )
     db.commit()
+    posted = db.query(Lot).filter(Lot.id == "lot-late").one()
+    posted.ctseller_item_id = 8801
+    db.commit()
 
     def override_db():
         inner = Session()
@@ -91,6 +94,7 @@ def test_photo_adds_lists_only_late_uploads_in_the_window(tmp_path: Path) -> Non
         assert row["auction_title"] == "Oak dresser"
         assert row["added_count"] == 2
         assert row["added_by"] == ["aunt@example.com"]
+        assert row["on_ctseller"] is True
 
         photos = client.get("/lots/lot-late/photos")
         assert photos.status_code == 200, photos.text

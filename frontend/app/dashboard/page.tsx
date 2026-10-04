@@ -5774,6 +5774,122 @@ export default function DashboardPage() {
     }
   }
 
+  async function updateCtSellerPhotos(ids: string[]) {
+    if (!token || !selectedSaleId || ids.length < 1 || ctSellerBulkBusy) return;
+    const n = ids.length;
+    if (
+      !window.confirm(
+        `Replace photos on ${n} CT Seller listing${n === 1 ? "" : "s"} with the current gallery?\n\nPhotos already on those items are removed first. SKU tape stays off CT Bids. This keeps the same CT Seller item.`
+      )
+    ) {
+      return;
+    }
+    setCtSellerBulkBusy(true);
+    setCtSellerBulkErr("");
+    setCtSellerBulkMsg("Updating photos…");
+    const failSamples: string[] = [];
+    const noteRows = (
+      rows: Array<{
+        lot_id: string;
+        ok: boolean;
+        skipped?: boolean;
+        error?: string | null;
+        sku?: string | null;
+        photos_uploaded?: number | null;
+      }>
+    ) => {
+      for (const row of rows) {
+        if (row.ok) {
+          setLots((prev) =>
+            prev.map((l) => (l.id === row.lot_id ? { ...l, ctseller_posted_at: new Date().toISOString() } : l))
+          );
+        } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
+          const sample = `${row.sku || row.lot_id}: ${row.error}`;
+          if (!failSamples.includes(sample)) failSamples.push(sample);
+        }
+      }
+    };
+    try {
+      const kick = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/ctseller-photos`, token, {
+        method: "POST",
+        body: JSON.stringify({ lot_ids: ids })
+      })) as {
+        queued?: number;
+        skipped: number;
+        results: Array<{
+          lot_id: string;
+          ok: boolean;
+          skipped?: boolean;
+          error?: string | null;
+          sku?: string | null;
+          photos_uploaded?: number | null;
+        }>;
+      };
+      noteRows(kick.results || []);
+      if ((kick.queued || 0) < 1) {
+        setCtSellerBulkMsg(`Nothing queued` + (kick.skipped ? ` — ${kick.skipped} skipped` : "") + ".");
+        if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+        return;
+      }
+      setCtSellerBulkMsg(`Updating photos on ${kick.queued} lot(s)…`);
+      let active = true;
+      let posted = 0;
+      let failed = 0;
+      let skipped = kick.skipped || 0;
+      while (active) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = (await apiFetch(
+          `/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`,
+          token
+        )) as {
+          active: boolean;
+          total: number;
+          done: number;
+          posted: number;
+          failed: number;
+          skipped: number;
+          current_sku?: string | null;
+          current_phase?: string | null;
+          results: Array<{
+            lot_id: string;
+            ok: boolean;
+            skipped?: boolean;
+            error?: string | null;
+            sku?: string | null;
+            photos_uploaded?: number | null;
+          }>;
+        };
+        posted = st.posted || 0;
+        failed = st.failed || 0;
+        skipped = st.skipped || 0;
+        noteRows(st.results || []);
+        const skuBit = st.current_sku ? ` ${st.current_sku}` : "";
+        const phaseBit = st.current_phase ? ` — ${st.current_phase}` : "";
+        setCtSellerBulkMsg(
+          `Updating photos… ${posted} done` +
+            (failed ? `, ${failed} failed` : "") +
+            ` (lot ${Math.min(st.total, st.done + (st.active ? 1 : 0))} of ${st.total}${skuBit}${phaseBit})`
+        );
+        active = Boolean(st.active);
+        if (!active) {
+          setCtSellerBulkMsg(
+            `Photo update finished: ${posted} updated` +
+              (failed ? `, ${failed} failed` : "") +
+              (skipped ? `, ${skipped} skipped` : "") +
+              "."
+          );
+        }
+      }
+      if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+      setDataReloadNonce((n) => n + 1);
+    } catch (e) {
+      setCtSellerBulkMsg("");
+      setCtSellerBulkErr(e instanceof Error ? e.message : "Photo update failed");
+    } finally {
+      setCtSellerBulkBusy(false);
+    }
+  }
+
   async function bulkHuntSaleAudience() {
     if (!token || !selectedSaleId) return;
     const selectedIds = lots.filter((l) => ctSellerPostSelected.has(l.id)).map((l) => l.id);
@@ -7569,7 +7685,11 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </header>
-      <PhotoAddsPanel lots={photoAdds} />
+      <PhotoAddsPanel
+        lots={photoAdds}
+        updateBusy={ctSellerBulkBusy}
+        onUpdatePhotos={(ids) => void updateCtSellerPhotos(ids)}
+      />
       <div className="ct-dashboard-lots-mobile" aria-label="Lots (mobile layout)">
         {visibleLots.length < 1 && lotPostedSaleFilter === "unsold" ? (
           <p className="ct-muted ct-dash-lots__empty">

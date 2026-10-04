@@ -10,6 +10,7 @@ export type PhotoAddLot = {
   added_count: number;
   latest_added_at: string;
   added_by: string[];
+  on_ctseller: boolean;
 };
 
 export function photoAddsFromResponse(data: unknown): PhotoAddLot[] {
@@ -28,7 +29,8 @@ export function photoAddsFromResponse(data: unknown): PhotoAddLot[] {
       auction_title: typeof r.auction_title === "string" ? r.auction_title : "",
       added_count: r.added_count,
       latest_added_at: typeof r.latest_added_at === "string" ? r.latest_added_at : "",
-      added_by: Array.isArray(r.added_by) ? r.added_by.filter((email): email is string => typeof email === "string") : []
+      added_by: Array.isArray(r.added_by) ? r.added_by.filter((email): email is string => typeof email === "string") : [],
+      on_ctseller: r.on_ctseller === true
     });
   }
   return out;
@@ -45,9 +47,18 @@ function formatAddedWhen(iso: string): string {
   }).format(d);
 }
 
-export function PhotoAddsPanel({ lots }: { lots: PhotoAddLot[] }) {
+export function PhotoAddsPanel({
+  lots,
+  updateBusy = false,
+  onUpdatePhotos
+}: {
+  lots: PhotoAddLot[];
+  updateBusy?: boolean;
+  onUpdatePhotos?: (ids: string[]) => void;
+}) {
   if (lots.length < 1) return null;
   const photoTotal = lots.reduce((n, row) => n + row.added_count, 0);
+  const postedIds = lots.filter((row) => row.on_ctseller).map((row) => row.lot_id);
   return (
     <section className="ct-photo-adds" aria-label="Photos added to existing lots">
       <h2 className="ct-photo-adds__title">Photos added to existing lots</h2>
@@ -55,7 +66,22 @@ export function PhotoAddsPanel({ lots }: { lots: PhotoAddLot[] }) {
         {photoTotal} photo{photoTotal === 1 ? "" : "s"} landed on {lots.length} lot
         {lots.length === 1 ? "" : "s"} that already had photos. These uploads came in at least 2 hours
         after the first photos, in the last 14 days.
+        {onUpdatePhotos
+          ? " Update CT Seller photos replaces the pictures on the listing already posted. SKU tape stays off CT Bids."
+          : ""}
       </p>
+      {onUpdatePhotos && postedIds.length > 0 ? (
+        <div className="ct-photo-adds__actions">
+          <button
+            type="button"
+            className="ct-btn ct-btn--primary"
+            disabled={updateBusy}
+            onClick={() => onUpdatePhotos(postedIds)}
+          >
+            {updateBusy ? "Updating photos…" : `Update CT Seller photos (${postedIds.length})`}
+          </button>
+        </div>
+      ) : null}
       <ul className="ct-photo-adds__list">
         {lots.map((row) => {
           const when = formatAddedWhen(row.latest_added_at);
@@ -71,6 +97,20 @@ export function PhotoAddsPanel({ lots }: { lots: PhotoAddLot[] }) {
               </span>
               {when ? <span className="ct-photo-adds__when">{when}</span> : null}
               {who ? <span className="ct-photo-adds__who">{who}</span> : null}
+              {onUpdatePhotos ? (
+                row.on_ctseller ? (
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--ghost ct-photo-adds__action"
+                    disabled={updateBusy}
+                    onClick={() => onUpdatePhotos([row.lot_id])}
+                  >
+                    Update CT Seller
+                  </button>
+                ) : (
+                  <span className="ct-photo-adds__who">Not on CT Seller yet</span>
+                )
+              ) : null}
             </li>
           );
         })}
