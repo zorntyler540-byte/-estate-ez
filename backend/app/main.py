@@ -120,6 +120,7 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    TeamMemberSaleUpdate,
     TeamActivityLotOut,
     TeamActivityMemberOut,
     TeamActivityOut,
@@ -216,9 +217,12 @@ from app.services.sale_covers import (
 )
 from app.services.ctseller_sale_sync import apply_ctseller_catalog_sale_sync
 from app.services.roles import (
-    ALLOWED_ROLES,
+    ASSIGNABLE_ROLES,
+    CLIENT_UPLOAD_DETAIL,
+    ROLE_CLIENT,
     can_delete_lot,
     can_run_audience_hunt,
+    is_client_role,
     is_owner,
     normalize_role,
 )
@@ -362,6 +366,23 @@ def _ctseller_after_expired_session(account_id: str) -> CTSellerClient:
         return _ctseller_client_for_account(account, db2, force=True)
 
 
+def _client_assigned_sale_id(current: User) -> str:
+    return (getattr(current, "assigned_sale_id", None) or "").strip()
+
+
+def _enforce_client_sale(current: User, sale_id: str | None) -> None:
+    """Clients may touch only the sale the owner assigned to this login."""
+    if not is_client_role(current.role):
+        return
+    assigned = _client_assigned_sale_id(current)
+    if not assigned or (sale_id or "") != assigned:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+
+
+def _assert_client_job(current: User, job: ProcessingJob) -> None:
+    _enforce_client_sale(current, job.sale_id)
+
+
 def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
     row = (
         db.query(Sale)
@@ -370,6 +391,7 @@ def _sale_for_user(sale_id: str, current: User, db: Session) -> Sale:
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sale not found")
+    _enforce_client_sale(current, row.id)
     return row
 
 
@@ -541,6 +563,7 @@ def startup() -> None:
     _ensure_sale_cover_photo_ids_column()
     _ensure_reserve_price_columns()
     _ensure_lot_ctseller_sale_id_column()
+    _ensure_user_assigned_sale_column()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -668,6 +691,20 @@ def _ensure_reserve_price_columns() -> None:
                 conn.execute(text("ALTER TABLE lots ADD COLUMN reserve_price FLOAT"))
 
 
+def _ensure_user_assigned_sale_column() -> None:
+    """Existing SQLite/Postgres databases do not gain new User columns from create_all."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("users")}
+    if "assigned_sale_id" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN assigned_sale_id VARCHAR(36)"))
+
+
 def _ensure_lot_ctseller_sale_id_column() -> None:
     """Local SQLite ``create_all`` does not ALTER existing lots / zip export tables."""
     from sqlalchemy import inspect, text
@@ -765,8 +802,23 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
 
 
 @app.get("/auth/me", response_model=UserSummary)
-def me(current: User = Depends(get_current_user)) -> UserSummary:
-    return UserSummary(id=current.id, account_id=current.account_id, email=current.email, role=current.role)
+def me(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> UserSummary:
+    sale_id = _client_assigned_sale_id(current) or None
+    sale_name: str | None = None
+    if sale_id:
+        sale = db.query(Sale).filter(Sale.id == sale_id, Sale.account_id == current.account_id).first()
+        if sale is None:
+            sale_id = None
+        else:
+            sale_name = sale.name
+    return UserSummary(
+        id=current.id,
+        account_id=current.account_id,
+        email=current.email,
+        role=current.role,
+        assigned_sale_id=sale_id,
+        assigned_sale_name=sale_name,
+    )
 
 
 @app.patch("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
@@ -790,6 +842,18 @@ def change_own_password(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _team_member_out(row: User, sale_names: dict[str, str]) -> TeamMemberOut:
+    sale_id = (getattr(row, "assigned_sale_id", None) or "").strip() or None
+    return TeamMemberOut(
+        id=row.id,
+        email=row.email,
+        role=row.role,
+        created_at=row.created_at,
+        assigned_sale_id=sale_id,
+        assigned_sale_name=sale_names.get(sale_id) if sale_id else None,
+    )
+
+
 @app.get("/team/members", response_model=list[TeamMemberOut])
 def list_team_members(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[TeamMemberOut]:
     _require_owner(current)
@@ -799,7 +863,11 @@ def list_team_members(current: User = Depends(get_current_user), db: Session = D
         .order_by(User.created_at.asc())
         .all()
     )
-    return [TeamMemberOut(id=r.id, email=r.email, role=r.role, created_at=r.created_at) for r in rows]
+    sale_names = {
+        s.id: s.name
+        for s in db.query(Sale).filter(Sale.account_id == current.account_id).all()
+    }
+    return [_team_member_out(r, sale_names) for r in rows]
 
 
 @app.post("/team/members", response_model=TeamMemberOut, status_code=status.HTTP_201_CREATED)
@@ -818,18 +886,31 @@ def create_team_member(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     role = normalize_role(payload.role)
-    if role not in ALLOWED_ROLES:
-        raise HTTPException(status_code=400, detail="Role must be owner or catalogger")
+    if role not in ASSIGNABLE_ROLES:
+        raise HTTPException(status_code=400, detail="Role must be owner, catalogger, or client")
+    assigned_sale_id: str | None = None
+    if role == ROLE_CLIENT:
+        sale_id = (payload.sale_id or "").strip()
+        if not sale_id:
+            raise HTTPException(status_code=400, detail="Choose a sale for this client login")
+        sale = db.query(Sale).filter(Sale.id == sale_id, Sale.account_id == current.account_id).first()
+        if sale is None:
+            raise HTTPException(status_code=404, detail="Sale not found")
+        assigned_sale_id = sale.id
     row = User(
         account_id=current.account_id,
         email=email,
         password_hash=pw_hash,
         role=role,
+        assigned_sale_id=assigned_sale_id,
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return TeamMemberOut(id=row.id, email=row.email, role=row.role, created_at=row.created_at)
+    sale_name = None
+    if assigned_sale_id:
+        sale_name = db.query(Sale.name).filter(Sale.id == assigned_sale_id).scalar()
+    return _team_member_out(row, {assigned_sale_id: sale_name} if assigned_sale_id and sale_name else {})
 
 
 @app.post("/team/members/{member_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -851,6 +932,30 @@ def reset_team_member_password(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.patch("/team/members/{member_id}/sale", response_model=TeamMemberOut)
+def update_team_member_sale(
+    member_id: str,
+    payload: TeamMemberSaleUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeamMemberOut:
+    """Point a client login at a different sale. Cataloggers and owners are not sale-locked."""
+    _require_owner(current)
+    row = db.query(User).filter(User.id == member_id, User.account_id == current.account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Team member not found")
+    if not is_client_role(row.role):
+        raise HTTPException(status_code=400, detail="Only client logins have an assigned sale")
+    sale_id = payload.sale_id.strip()
+    sale = db.query(Sale).filter(Sale.id == sale_id, Sale.account_id == current.account_id).first()
+    if sale is None:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    row.assigned_sale_id = sale.id
+    db.commit()
+    db.refresh(row)
+    return _team_member_out(row, {sale.id: sale.name})
 
 
 @app.get("/team/activity", response_model=TeamActivityOut)
@@ -1626,12 +1731,13 @@ def list_saved_suggestions(
 
 @app.get("/sales", response_model=list[SaleOut])
 def list_sales(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[SaleOut]:
-    rows = (
-        db.query(Sale)
-        .filter(Sale.account_id == current.account_id)
-        .order_by(Sale.created_at.asc())
-        .all()
-    )
+    q = db.query(Sale).filter(Sale.account_id == current.account_id)
+    if is_client_role(current.role):
+        assigned = _client_assigned_sale_id(current)
+        if not assigned:
+            return []
+        q = q.filter(Sale.id == assigned)
+    rows = q.order_by(Sale.created_at.asc()).all()
     return [_sale_out(r) for r in rows]
 
 
@@ -1844,6 +1950,8 @@ def sale_lot_cover_urls(
 def create_sale(
     payload: SaleCreate, current: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> SaleOut:
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
     remote_id: int | None = None
     if payload.ctseller_sale_id is not None:
         remote_id = int(payload.ctseller_sale_id)
@@ -2418,6 +2526,7 @@ def delete_sale(
             status_code=409,
             detail=f"Sale still has {lot_n} lot(s) and {job_n} job(s). Remove or reassign them first.",
         )
+    db.query(User).filter(User.assigned_sale_id == row.id).update({User.assigned_sale_id: None})
     db.delete(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -2476,6 +2585,7 @@ def remove_sale(
     )
     name = have
     sid = row.id
+    db.query(User).filter(User.assigned_sale_id == sid).update({User.assigned_sale_id: None})
     _purge_catalog_data(db, account_id=current.account_id, sale_id=sid)
     leftover = db.query(Sale).filter(Sale.id == sid, Sale.account_id == current.account_id).first()
     if leftover:
@@ -3179,6 +3289,13 @@ def list_lots(
         raise HTTPException(status_code=400, detail="sort must be created_desc, created_asc, or sku_asc")
 
     q = db.query(Lot).filter(Lot.account_id == current.account_id)
+    if is_client_role(current.role):
+        assigned = _client_assigned_sale_id(current)
+        if sale_id is not None and sale_id != assigned:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        if not assigned:
+            return []
+        sale_id = assigned
     if sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(Lot.sale_id == sale_id)
@@ -3298,6 +3415,8 @@ def lot_thumbnail(
     # connection during Pillow work (concurrent dashboard thumbs exhausted QueuePool in production logs).
     with SessionLocal() as db:
         user = user_from_access_token(token, db)
+        if is_client_role(user.role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
@@ -3444,6 +3563,8 @@ async def upload_lot_photos(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
     _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -3676,6 +3797,8 @@ def stream_lot_video(
 ) -> Response:
     with SessionLocal() as db:
         user = user_from_access_token(token, db)
+        if is_client_role(user.role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
@@ -4161,6 +4284,8 @@ def lot_photo_thumbnail(
     max_px = min(2048, max(64, int(max_px)))
     with SessionLocal() as db:
         user = user_from_access_token(token, db)
+        if is_client_role(user.role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
@@ -4690,6 +4815,8 @@ def update_lot(
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Lot not found")
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
 
     if patch.auction_title is not None:
         row.auction_title = patch.auction_title
@@ -5180,6 +5307,7 @@ async def append_files_to_queued_job(
         )
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+        _assert_client_job(current, job)
         if job.status not in (JobStatus.receiving, JobStatus.queued):
             raise HTTPException(
                 status_code=409,
@@ -5215,6 +5343,8 @@ def create_job(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
     _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
@@ -5249,7 +5379,14 @@ def list_jobs(
     job_tasks.kick_queue_if_idle_async(current.account_id)
 
     q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
-    if sale_id is not None:
+    if is_client_role(current.role):
+        assigned = _client_assigned_sale_id(current)
+        if not assigned:
+            return []
+        if sale_id is not None and sale_id != assigned:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        q = q.filter(ProcessingJob.sale_id == assigned)
+    elif sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(ProcessingJob.sale_id == sale_id)
     rows = q.order_by(ProcessingJob.created_at.desc()).all()
@@ -5279,6 +5416,7 @@ def run_job(
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _assert_client_job(current, job)
     if job.status == JobStatus.failed:
         job.error_message = None
         job.cancel_requested = False
@@ -5420,6 +5558,7 @@ def cancel_job(job_id: str, current: User = Depends(get_current_user), db: Sessi
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _assert_client_job(current, job)
     if job.status != JobStatus.processing:
         raise HTTPException(status_code=400, detail="Only a running job can be cancelled")
     # DB flag: works for standalone worker.py and survives API reload; in-process thread also gets
@@ -5452,6 +5591,7 @@ def delete_job(
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _assert_client_job(current, job)
     if job.status == JobStatus.processing:
         raise HTTPException(status_code=409, detail="Cannot delete a job that is still processing")
     folder = Path(job.input_folder).resolve()
@@ -5513,6 +5653,7 @@ async def job_events_sse(
         )
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _assert_client_job(current, job)
 
     account_id = current.account_id
 

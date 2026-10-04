@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, apiFetch, isApiBaseMisconfiguredForHost } from "../lib/api";
+import { isClientRole, rememberAccountRole } from "../lib/roles";
 
 export default function HomePage() {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -49,7 +50,9 @@ export default function HomePage() {
         );
         return;
       }
-      router.push("/dashboard");
+      const me = (await apiFetch("/auth/me", token)) as { role?: string };
+      rememberAccountRole(me?.role);
+      router.push(isClientRole(me?.role) ? "/client" : "/dashboard");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Login failed");
     } finally {

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.models import Account, User
+from app.services.roles import enforce_client_http
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 http_bearer_optional = HTTPBearer(auto_error=False)
@@ -79,11 +80,18 @@ def user_from_access_token(token: str, db: Session) -> User:
     return user
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    return user_from_access_token(token, db)
+def get_current_user(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    user = user_from_access_token(token, db)
+    enforce_client_http(user, request.method, request.url.path)
+    return user
 
 
 def get_current_user_sse(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer_optional),
     access_token: str | None = Query(
         None,
@@ -98,7 +106,9 @@ def get_current_user_sse(
     if not token:
         raise CREDENTIALS_EXCEPTION
     with SessionLocal() as db:
-        return user_from_access_token(token, db)
+        user = user_from_access_token(token, db)
+        enforce_client_http(user, request.method, request.url.path)
+        return user
 
 
 def is_master_admin_email(email: str) -> bool:

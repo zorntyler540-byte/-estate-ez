@@ -40,12 +40,20 @@ class UserSummary(BaseModel):
     account_id: str
     email: EmailStr
     role: str
+    assigned_sale_id: str | None = None
+    assigned_sale_name: str | None = None
 
 
 class TeamMemberCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
-    role: str = Field(default="catalogger", pattern="^(owner|catalogger)$")
+    role: str = Field(default="catalogger", pattern="^(owner|catalogger|client)$")
+    # Required when role is client. Ignored for owner and catalogger.
+    sale_id: str | None = None
+
+
+class TeamMemberSaleUpdate(BaseModel):
+    sale_id: str = Field(min_length=1)
 
 
 class TeamMemberOut(BaseModel):
@@ -53,6 +61,8 @@ class TeamMemberOut(BaseModel):
     email: EmailStr
     role: str
     created_at: datetime
+    assigned_sale_id: str | None = None
+    assigned_sale_name: str | None = None
 
 
 class TeamActivityPhotoTimeOut(BaseModel):

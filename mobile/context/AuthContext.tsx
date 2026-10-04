@@ -87,6 +87,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const selectedSaleIdRef = useRef<string | null>(null);
   const selectedSaleNameRef = useRef<string | null>(null);
   const refreshInFlight = useRef<Promise<string | null> | null>(null);
+  const clientSaleLockRef = useRef<{ id: string; name: string | null } | null>(null);
+  const setSelectedSaleRef = useRef<
+    ((saleId: string | null, saleName?: string | null) => Promise<void>) | null
+  >(null);
   selectedSaleIdRef.current = selectedSaleId;
   selectedSaleNameRef.current = selectedSaleName;
 
@@ -182,6 +186,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setSignedInRole(me.role || null);
         if (me.email) setSignedInEmail(me.email);
+        if ((me.role || "").toLowerCase() === "client" && me.assigned_sale_id) {
+          const name = me.assigned_sale_name || null;
+          clientSaleLockRef.current = { id: me.assigned_sale_id, name };
+          void setSelectedSaleRef.current?.(me.assigned_sale_id, name);
+        } else {
+          clientSaleLockRef.current = null;
+        }
       })
       .catch(() => {
         if (!cancelled) setSignedInRole(null);
@@ -214,11 +225,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setSignedInEmail(null);
     setSignedInRole(null);
+    clientSaleLockRef.current = null;
     setSelectedSaleIdState(null);
     setSelectedSaleNameState(null);
   }, []);
 
   const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
+    const lock = clientSaleLockRef.current;
+    if (lock) {
+      saleId = lock.id;
+      saleName = lock.name;
+    }
     const name = saleId ? normalizeSaleName(saleName) : null;
     // Same sale + same name must not broadcast a new auth value — that re-rendered every screen
     // and looked like a 1s refresh loop on lot details / Lots.
@@ -241,6 +258,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedSaleIdState(saleId);
     setSelectedSaleNameState(name);
   }, []);
+  setSelectedSaleRef.current = setSelectedSale;
 
   const value = useMemo(
     () => ({

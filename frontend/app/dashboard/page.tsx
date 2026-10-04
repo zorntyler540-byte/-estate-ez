@@ -34,7 +34,7 @@ import {
   audienceHuntPhaseLabel
 } from "../../components/AudienceHuntProgress";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
-import { isOwnerRole } from "../../lib/roles";
+import { isClientRole, isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
 import {
   clearStagingDraft,
   loadStagingDraft,
@@ -2768,7 +2768,13 @@ export default function DashboardPage() {
     let cancelled = false;
     void apiFetch("/auth/me", token)
       .then((data) => {
-        if (!cancelled) setAccountRole(String((data as { role?: string }).role || ""));
+        const role = String((data as { role?: string }).role || "");
+        rememberAccountRole(role);
+        if (!cancelled && isClientRole(role)) {
+          router.replace("/client");
+          return;
+        }
+        if (!cancelled) setAccountRole(role);
       })
       .catch(() => {
         if (!cancelled) setAccountRole("");
@@ -2781,6 +2787,11 @@ export default function DashboardPage() {
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
     setToken(t);
+    if (t && isClientRole(storedAccountRole())) {
+      setLoading(false);
+      router.replace("/client");
+      return;
+    }
     if (!t) {
       inventoryFirstLoad.current = true;
       setLoading(false);
