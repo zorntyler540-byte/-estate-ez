@@ -2987,7 +2987,7 @@ def update_lot_photos_on_ctseller(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LotPostToCTSellerOut:
-    """Replace photos on the CT Seller item this lot already uses. Does not create a new item."""
+    """Add gallery photos that are not already on this lot's CT Seller item. Does not create a new item."""
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
@@ -3044,7 +3044,7 @@ def update_sale_lot_photos_on_ctseller(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SalePostToCTSellerOut:
-    """Replace photos on specific lots already posted to CT Seller."""
+    """Add gallery photos that are not already on these posted CT Seller items."""
     sale = _sale_for_user(sale_id, current, db)
     account = db.query(Account).filter(Account.id == current.account_id).first()
     if not account:

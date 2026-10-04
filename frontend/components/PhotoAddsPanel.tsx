@@ -67,7 +67,7 @@ export function PhotoAddsPanel({
         {lots.length === 1 ? "" : "s"} that already had photos. These uploads came in at least 2 hours
         after the first photos, in the last 14 days.
         {onUpdatePhotos
-          ? " Update CT Seller photos replaces the pictures on the listing already posted. SKU tape stays off CT Bids."
+          ? " Add photos to CT Seller puts new pictures on the listing already posted. Photos already there stay. SKU tape stays off CT Bids."
           : ""}
       </p>
       {onUpdatePhotos && postedIds.length > 0 ? (
@@ -78,7 +78,7 @@ export function PhotoAddsPanel({
             disabled={updateBusy}
             onClick={() => onUpdatePhotos(postedIds)}
           >
-            {updateBusy ? "Updating photos…" : `Update CT Seller photos (${postedIds.length})`}
+            {updateBusy ? "Adding photos…" : `Add photos to CT Seller (${postedIds.length})`}
           </button>
         </div>
       ) : null}
@@ -105,7 +105,7 @@ export function PhotoAddsPanel({
                     disabled={updateBusy}
                     onClick={() => onUpdatePhotos([row.lot_id])}
                   >
-                    Update CT Seller
+                    Add to CT Seller
                   </button>
                 ) : (
                   <span className="ct-photo-adds__who">Not on CT Seller yet</span>

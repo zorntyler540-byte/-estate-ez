@@ -5779,14 +5779,14 @@ export default function DashboardPage() {
     const n = ids.length;
     if (
       !window.confirm(
-        `Replace photos on ${n} CT Seller listing${n === 1 ? "" : "s"} with the current gallery?\n\nPhotos already on those items are removed first. SKU tape stays off CT Bids. This keeps the same CT Seller item.`
+        `Add photos that are not already on ${n} CT Seller listing${n === 1 ? "" : "s"}?\n\nPhotos already on those items stay. New photos go on the end. SKU tape stays off CT Bids.`
       )
     ) {
       return;
     }
     setCtSellerBulkBusy(true);
     setCtSellerBulkErr("");
-    setCtSellerBulkMsg("Updating photos…");
+    setCtSellerBulkMsg("Adding photos…");
     const failSamples: string[] = [];
     const noteRows = (
       rows: Array<{
@@ -5799,7 +5799,7 @@ export default function DashboardPage() {
       }>
     ) => {
       for (const row of rows) {
-        if (row.ok) {
+        if (row.ok && (row.photos_uploaded || 0) > 0) {
           setLots((prev) =>
             prev.map((l) => (l.id === row.lot_id ? { ...l, ctseller_posted_at: new Date().toISOString() } : l))
           );
@@ -5831,7 +5831,7 @@ export default function DashboardPage() {
         if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
         return;
       }
-      setCtSellerBulkMsg(`Updating photos on ${kick.queued} lot(s)…`);
+      setCtSellerBulkMsg(`Adding photos on ${kick.queued} lot(s)…`);
       let active = true;
       let posted = 0;
       let failed = 0;
@@ -5866,14 +5866,14 @@ export default function DashboardPage() {
         const skuBit = st.current_sku ? ` ${st.current_sku}` : "";
         const phaseBit = st.current_phase ? ` — ${st.current_phase}` : "";
         setCtSellerBulkMsg(
-          `Updating photos… ${posted} done` +
+          `Adding photos… ${posted} done` +
             (failed ? `, ${failed} failed` : "") +
             ` (lot ${Math.min(st.total, st.done + (st.active ? 1 : 0))} of ${st.total}${skuBit}${phaseBit})`
         );
         active = Boolean(st.active);
         if (!active) {
           setCtSellerBulkMsg(
-            `Photo update finished: ${posted} updated` +
+            `Added photos on ${posted} lot${posted === 1 ? "" : "s"}` +
               (failed ? `, ${failed} failed` : "") +
               (skipped ? `, ${skipped} skipped` : "") +
               "."

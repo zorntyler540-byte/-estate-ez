@@ -1197,7 +1197,7 @@ export default function LotDetailPage() {
     if (!lot?.ctseller_item_id) return;
     if (
       !window.confirm(
-        "Replace the photos on the existing CT Seller item with this gallery? SKU tape stays off CT Bids. Photos already on that item are removed first."
+        "Add photos from this gallery that are not already on the CT Seller item? Photos already on that item stay. SKU tape stays off CT Bids."
       )
     ) {
       return;
@@ -1215,7 +1215,7 @@ export default function LotDetailPage() {
         queued?: boolean;
       };
       if (res.queued && lot.sale_id) {
-        setCtSellerMsg("Updating photos on the CT Seller item already posted…");
+        setCtSellerMsg("Adding photos to the CT Seller item already posted…");
         let active = true;
         let lastErr = "";
         while (active) {
@@ -1237,22 +1237,26 @@ export default function LotDetailPage() {
           };
           const row = (st.results || []).find((r) => r.lot_id === lot.id);
           if (st.current_phase) {
-            setCtSellerMsg(`Updating photos… ${st.current_phase}`);
+            setCtSellerMsg(`Adding photos… ${st.current_phase}`);
           }
           if (row?.ok) {
             const itemId = row.ctseller_item_id || lot.ctseller_item_id;
             const count = row.photos_uploaded ?? 0;
-            setLot((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    ctseller_item_id: itemId,
-                    ctseller_posted_at: new Date().toISOString()
-                  }
-                : prev
-            );
+            if (count > 0) {
+              setLot((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      ctseller_item_id: itemId,
+                      ctseller_posted_at: new Date().toISOString()
+                    }
+                  : prev
+              );
+            }
             setCtSellerMsg(
-              `Updated ${count} photo${count === 1 ? "" : "s"} on CT Seller item #${itemId}`
+              count > 0
+                ? `Added ${count} photo${count === 1 ? "" : "s"} on CT Seller item #${itemId}`
+                : `Those photos are already on CT Seller item #${itemId}`
             );
             active = false;
             break;
@@ -1952,11 +1956,11 @@ export default function LotDetailPage() {
                   onClick={() => void updatePhotosOnCtSeller()}
                   disabled={ctSellerPostBusy || showAiRegenProgress}
                   aria-busy={ctSellerPostBusy && ctSellerPostMode === "photos"}
-                  title={`Replace photos on CT Seller item #${lot.ctseller_item_id}`}
+                  title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
                 >
                   {ctSellerPostBusy && ctSellerPostMode === "photos"
-                    ? "Updating photos…"
-                    : "Update photos on CT Seller"}
+                    ? "Adding photos…"
+                    : "Add photos to CT Seller"}
                 </button>
               ) : null}
               <button
@@ -2157,8 +2161,9 @@ export default function LotDetailPage() {
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
             Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
             <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
-            photos stay in this gallery and stay off CT Bids. Update photos sends this gallery to the
-            CT Seller item already posted. Post as new item creates another listing.
+            photos stay in this gallery and stay off CT Bids. Add photos puts gallery pictures that are
+            not already on the CT Seller item onto that listing. Photos already there stay. Post as new
+            item creates another listing.
           </p>
           {audienceHeld ? (
             <div className="ct-banner ct-banner--warning">
@@ -2215,9 +2220,9 @@ export default function LotDetailPage() {
                 className="ct-btn ct-btn--primary"
                 onClick={() => void updatePhotosOnCtSeller()}
                 disabled={ctSellerPostBusy}
-                title={`Replace photos on CT Seller item #${lot.ctseller_item_id}`}
+                title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
               >
-                {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Updating photos…" : "Update photos"}
+                {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos"}
               </button>
             ) : null}
             <button
@@ -2527,7 +2532,7 @@ export default function LotDetailPage() {
               {catalogPhotos.filter((p) => p.added_later).length === 1 ? " was" : "s were"} added after
               this lot was first cataloged. Those frames are marked Added.
               {lot.ctseller_item_id
-                ? " Update photos on CT Seller to put them on the listing already posted."
+                ? " Add photos to CT Seller to put them on the listing already posted."
                 : ""}
             </p>
           ) : null}

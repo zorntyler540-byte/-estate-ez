@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from app.db import SessionLocal
 from app.models import Account, Lot
 from app.services.ctseller import CTSellerError
-from app.services.ctseller_post import post_one_lot_to_ctseller, replace_lot_photos_on_ctseller
+from app.services.ctseller_post import add_lot_photos_on_ctseller, post_one_lot_to_ctseller
 
 _LOG = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ def start_sale_post_in_background(
             "queued": len(ordered),
             "current_id": None,
             "current_sku": None,
-            "current_phase": "updating photos" if photos_only else "starting",
+            "current_phase": "adding photos" if photos_only else "starting",
             "results": [],
             "force": force,
             "photos_only": photos_only,
@@ -265,7 +265,7 @@ def _run_sale_post(
 
         for lot_id in lot_ids:
             sku = skus.get(lot_id)
-            _set_phase(sale_id, lot_id, sku, "updating photos" if photos_only else "creating item")
+            _set_phase(sale_id, lot_id, sku, "adding photos" if photos_only else "creating item")
             lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
             if lot is None:
                 _append_result(
@@ -283,7 +283,7 @@ def _run_sale_post(
                 continue
             try:
                 if photos_only:
-                    out = replace_lot_photos_on_ctseller(
+                    out = add_lot_photos_on_ctseller(
                         db=db,
                         lot=lot,
                         client=client,

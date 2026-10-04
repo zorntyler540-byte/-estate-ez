@@ -251,28 +251,27 @@ def _photo_db(photos: list, lot_status: str = "Sold"):
     return db, lot
 
 
-def test_replace_photos_keeps_the_same_item(tmp_path, monkeypatch) -> None:
+def test_add_photos_keeps_the_ones_already_there(tmp_path, monkeypatch) -> None:
     from fastapi import HTTPException
 
-    from app.services.ctseller_post import replace_lot_photos_on_ctseller
+    from app.services.ctseller_post import add_lot_photos_on_ctseller
 
     jpeg = tmp_path / "a.jpg"
     jpeg.write_bytes(b"jpeg")
     client = _FakeClient()
-    client.deleted: list[int] = []
+    existing = [
+        {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
+        {"id": 11, "type": "video", "name": "clip", "displayorder": 2},
+        {"id": 12, "type": "image", "name": "drawer.jpg", "displayorder": 3},
+    ]
 
     def list_item_images(item_id: int):
         client.order.append("list")
         assert item_id == 8801
-        return [
-            {"id": 10, "type": "image"},
-            {"id": 11, "type": "video"},
-            {"id": 12, "type": ""},
-        ]
+        return existing
 
-    def delete_item_images(item_id: int, image_ids: list[int]) -> None:
-        client.order.append("delete")
-        client.deleted = list(image_ids)
+    def delete_item_images(*_args, **_kwargs) -> None:
+        raise AssertionError("delete")
 
     def add_item_image(**kwargs) -> None:
         client.order.append("image")
@@ -291,28 +290,38 @@ def test_replace_photos_keeps_the_same_item(tmp_path, monkeypatch) -> None:
     photos = [
         SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="dresser.jpg", photo_role="item"),
         SimpleNamespace(id="ph2", storage_path="b.jpg", original_name="drawer.jpg", photo_role="detail"),
+        SimpleNamespace(id="ph3", storage_path="c.jpg", original_name="added.jpg", photo_role="item"),
     ]
     db, lot = _photo_db(photos)
-    out = replace_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
     assert out.ctseller_item_id == 8801
-    assert out.photos_uploaded == 2
+    assert out.photos_uploaded == 1
     assert out.ctseller_sale_id == 77
     assert "create" not in client.order
+    assert "delete" not in client.order
     assert client.order[0] == "list"
-    assert client.order.index("delete") < client.order.index("image")
-    assert client.deleted == [10, 12]
-    assert sorted(row["display_order"] for row in client.added) == [1, 2]
-    covers = [row for row in client.added if row["is_display_image"]]
-    assert len(covers) == 1 and covers[0]["display_order"] == 1
+    assert client.added[0]["name"] == "added"
+    assert client.added[0]["display_order"] == 4
+    assert client.added[0]["is_display_image"] is False
     assert lot.ctseller_item_status == "Sold"
     assert lot.ctseller_sold_price == 40
     assert lot.ctseller_item_id == 8801
     db.commit.assert_called()
 
+    existing.append({"id": 13, "type": "image", "name": "added", "displayorder": 4})
+    client.order.clear()
+    client.added.clear()
+    db.commit.reset_mock()
+    again = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert again.photos_uploaded == 0
+    assert client.added == []
+    assert "delete" not in client.order
+    db.commit.assert_not_called()
+
     client.order.clear()
     lot.ctseller_item_id = None
     try:
-        replace_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+        add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
         raise AssertionError("expected 400")
     except HTTPException as exc:
         assert exc.status_code == 400
@@ -321,17 +330,17 @@ def test_replace_photos_keeps_the_same_item(tmp_path, monkeypatch) -> None:
     lot.ctseller_item_id = 8801
     lot.listing_channel = "facebook"
     try:
-        replace_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+        add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
         raise AssertionError("expected facebook 400")
     except HTTPException as exc:
         assert exc.status_code == 400
     assert "delete" not in client.order
 
 
-def test_replace_does_not_wipe_a_tape_only_lot(monkeypatch) -> None:
+def test_add_does_not_touch_a_tape_only_lot(monkeypatch) -> None:
     from fastapi import HTTPException
 
-    from app.services.ctseller_post import replace_lot_photos_on_ctseller
+    from app.services.ctseller_post import add_lot_photos_on_ctseller
 
     client = _FakeClient()
     client.list_item_images = lambda item_id: (_ for _ in ()).throw(AssertionError("list"))
@@ -339,18 +348,18 @@ def test_replace_does_not_wipe_a_tape_only_lot(monkeypatch) -> None:
     photos = [SimpleNamespace(id="tape", storage_path="tape.jpg", original_name="sku-tape.jpg", photo_role="tape")]
     db, lot = _photo_db(photos)
     try:
-        replace_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+        add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
         raise AssertionError("expected tape 400")
     except HTTPException as exc:
         assert exc.status_code == 400
         assert "tape" in str(exc.detail).lower()
 
 
-def test_replace_reports_a_short_upload(tmp_path, monkeypatch) -> None:
+def test_add_reports_a_short_upload(tmp_path, monkeypatch) -> None:
     from fastapi import HTTPException
 
     from app.services.ctseller import CTSellerError
-    from app.services.ctseller_post import replace_lot_photos_on_ctseller
+    from app.services.ctseller_post import add_lot_photos_on_ctseller
 
     jpeg = tmp_path / "a.jpg"
     jpeg.write_bytes(b"jpeg")
@@ -359,10 +368,10 @@ def test_replace_reports_a_short_upload(tmp_path, monkeypatch) -> None:
 
     def list_item_images(_item_id: int):
         client.order.append("list")
-        return [{"id": 10, "type": "image"}]
+        return [{"id": 10, "type": "image", "name": "dresser", "displayorder": 1}]
 
-    def delete_item_images(_item_id: int, _image_ids: list[int]) -> None:
-        client.order.append("delete")
+    def delete_item_images(*_args, **_kwargs) -> None:
+        raise AssertionError("delete")
 
     def add_item_image(**_kwargs) -> None:
         raise CTSellerError("upload failed")
@@ -373,15 +382,15 @@ def test_replace_reports_a_short_upload(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", lambda _p: jpeg)
     monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
     monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
-    photos = [SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="a.jpg", photo_role="item")]
+    photos = [SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="added.jpg", photo_role="item")]
     db, lot = _photo_db(photos)
     try:
-        replace_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+        add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
         raise AssertionError("expected 502")
     except HTTPException as exc:
         assert exc.status_code == 502
-        assert "Click Update photos again" in str(exc.detail)
-    assert client.order == ["list", "delete"]
+        assert "still there" in str(exc.detail)
+    assert client.order == ["list"]
     assert "create" not in client.order
     assert lot.ctseller_item_status == "Sold"
     db.commit.assert_not_called()
@@ -419,7 +428,7 @@ def test_photo_refresh_skips_auction_lookup(monkeypatch) -> None:
     monkeypatch.setattr("app.ctseller_post_tasks.SessionLocal", lambda: _DB())
     monkeypatch.setattr("app.main._ctseller_client_for_account", lambda *a, **k: client)
     monkeypatch.setattr(
-        "app.ctseller_post_tasks.replace_lot_photos_on_ctseller",
+        "app.ctseller_post_tasks.add_lot_photos_on_ctseller",
         lambda **kwargs: SimpleNamespace(ctseller_item_id=55, photos_uploaded=2),
     )
     _run_sale_post(

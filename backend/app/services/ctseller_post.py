@@ -81,6 +81,41 @@ def search_tags_for_lot_row(lot: Lot) -> list[str]:
     )
 
 
+def ctseller_upload_name(original_name: object, fallback: str) -> str:
+    stem = Path(str(original_name or "")).stem.strip()
+    return (stem or fallback)[:80]
+
+
+def listing_photos_missing_on_ctseller(listing_photos: list[Photo], rows: list[dict]) -> list[Photo]:
+    """Gallery frames whose file name is not already an image on the CT Seller item."""
+    present: set[str] = set()
+    for row in rows:
+        kind = str(row.get("type") or "image").strip().lower()
+        if kind not in ("", "image"):
+            continue
+        key = ctseller_upload_name(row.get("name"), "").lower()
+        if key:
+            present.add(key)
+    missing: list[Photo] = []
+    for idx, photo in enumerate(listing_photos):
+        key = ctseller_upload_name(getattr(photo, "original_name", None), f"image{idx + 1}").lower()
+        if key in present:
+            continue
+        missing.append(photo)
+    return missing
+
+
+def next_ctseller_display_order(rows: list[dict]) -> int:
+    top = 0
+    for row in rows:
+        raw = row.get("displayorder", row.get("display_order"))
+        try:
+            top = max(top, int(raw))
+        except (TypeError, ValueError):
+            continue
+    return top + 1
+
+
 def _upload_listing_photos(
     *,
     client: CTSellerClient,
@@ -88,8 +123,10 @@ def _upload_listing_photos(
     item_id: int,
     listing_photos: list[Photo],
     phase: PhaseFn,
+    order_start: int = 1,
+    make_cover: bool = True,
 ) -> int:
-    """Upload the current gallery onto an existing CT Seller item. Returns how many landed."""
+    """Upload listing photos onto a CT Seller item. Returns how many landed."""
     uploaded = 0
     total_photos = len(listing_photos)
     workers = max(1, min(int(settings.ctseller_post_photo_workers), total_photos or 1))
@@ -108,14 +145,14 @@ def _upload_listing_photos(
             return False
         try:
             raw = jpeg_bytes_for_ctseller_post(path)
-            name = Path(ph.original_name or path.name).stem or f"image{idx + 1}"
+            name = ctseller_upload_name(ph.original_name or path.name, f"image{idx + 1}")
             with post_lock:
                 client.add_item_image(
                     item_id=item_id,
                     image_bytes=raw,
-                    name=name[:80],
-                    display_order=idx + 1,
-                    is_display_image=(idx == 0),
+                    name=name,
+                    display_order=order_start + idx,
+                    is_display_image=make_cover and idx == 0,
                 )
             return True
         except (OSError, CTSellerError) as exc:
@@ -147,14 +184,14 @@ def _listing_photos_for_lot(db: Session, lot: Lot) -> list[Photo]:
     return listing_photos
 
 
-def replace_lot_photos_on_ctseller(
+def add_lot_photos_on_ctseller(
     *,
     db: Session,
     lot: Lot,
     client: CTSellerClient,
     on_phase: PhaseFn | None = None,
 ) -> LotPostToCTSellerOut:
-    """Replace photos on the CT Seller item already posted. Does not create a new item."""
+    """Add gallery photos that are not already on the CT Seller item. Does not remove photos or create an item."""
 
     def phase(msg: str) -> None:
         if on_phase:
@@ -178,25 +215,33 @@ def replace_lot_photos_on_ctseller(
 
     phase("reading CT Seller photos")
     existing = client.list_item_images(int(item_id))
-    image_ids = ctseller_image_ids_to_replace(existing)
-    if image_ids:
-        phase("removing old photos")
-        client.delete_item_images(int(item_id), image_ids)
+    to_add = listing_photos_missing_on_ctseller(listing_photos, existing)
+    remote_sale_id = int(getattr(lot, "ctseller_sale_id", None) or 0)
+    if not to_add:
+        return LotPostToCTSellerOut(
+            lot_id=lot.id,
+            ctseller_item_id=int(item_id),
+            ctseller_sale_id=remote_sale_id,
+            photos_uploaded=0,
+            ctseller_posted_at=getattr(lot, "ctseller_posted_at", None),
+        )
 
     uploaded = _upload_listing_photos(
         client=client,
         lot=lot,
         item_id=int(item_id),
-        listing_photos=listing_photos,
+        listing_photos=to_add,
         phase=phase,
+        order_start=next_ctseller_display_order(existing),
+        make_cover=not ctseller_image_ids_to_replace(existing),
     )
-    total = len(listing_photos)
+    total = len(to_add)
     if uploaded < total:
         raise HTTPException(
             status_code=502,
             detail=(
-                f"Sent {uploaded} of {total} photos to CT Seller item {item_id}. "
-                "The previous photos were already removed. Click Update photos again."
+                f"Sent {uploaded} of {total} new photos to CT Seller item {item_id}. "
+                "Photos already on that item are still there. Click Add photos again."
             ),
         )
 
@@ -205,11 +250,10 @@ def replace_lot_photos_on_ctseller(
     db.add(lot)
     db.commit()
     db.refresh(lot)
-    remote_sale_id = getattr(lot, "ctseller_sale_id", None) or 0
     return LotPostToCTSellerOut(
         lot_id=lot.id,
         ctseller_item_id=int(item_id),
-        ctseller_sale_id=int(remote_sale_id),
+        ctseller_sale_id=remote_sale_id,
         photos_uploaded=uploaded,
         ctseller_posted_at=now,
     )
