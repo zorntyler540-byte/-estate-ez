@@ -3025,6 +3025,17 @@ select.ct-input option {
   font-size: 0.86rem;
 }
 
+.ct-photo-adds__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.ct-photo-adds__action {
+  margin-left: auto;
+}
+
 .ct-photo-added-flag {
   display: inline-block;
   margin-right: 0.35rem;

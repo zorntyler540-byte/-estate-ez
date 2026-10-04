@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from app.db import SessionLocal
 from app.models import Account, Lot
 from app.services.ctseller import CTSellerError
-from app.services.ctseller_post import post_one_lot_to_ctseller
+from app.services.ctseller_post import post_one_lot_to_ctseller, replace_lot_photos_on_ctseller
 
 _LOG = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ def start_sale_post_in_background(
     skus: dict[str, str | None],
     remote_sale_id: int,
     force: bool,
+    photos_only: bool = False,
 ) -> None:
     ordered = [x for x in lot_ids if (x or "").strip()]
     if not ordered:
@@ -118,9 +119,10 @@ def start_sale_post_in_background(
             "queued": len(ordered),
             "current_id": None,
             "current_sku": None,
-            "current_phase": "starting",
+            "current_phase": "updating photos" if photos_only else "starting",
             "results": [],
             "force": force,
+            "photos_only": photos_only,
             "finished_at": None,
         }
 
@@ -133,6 +135,7 @@ def start_sale_post_in_background(
                 skus=skus,
                 remote_sale_id=int(remote_sale_id),
                 force=force,
+                photos_only=photos_only,
             )
         except Exception:
             _LOG.error("CT Seller sale post crashed sale_id=%s\n%s", sale_id, traceback.format_exc())
@@ -180,6 +183,15 @@ def _append_result(sale_id: str, row: dict[str, Any], *, posted: bool = False, f
             run["failed"] = int(run.get("failed") or 0) + 1
 
 
+def _first_posted_item_id(db, account_id: str, lot_ids: list[str]) -> int | None:
+    for lot_id in lot_ids:
+        lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+        item_id = getattr(lot, "ctseller_item_id", None) if lot is not None else None
+        if item_id:
+            return int(item_id)
+    return None
+
+
 def _run_sale_post(
     *,
     account_id: str,
@@ -188,6 +200,7 @@ def _run_sale_post(
     skus: dict[str, str | None],
     remote_sale_id: int,
     force: bool,
+    photos_only: bool = False,
 ) -> None:
     from app.main import _ctseller_client_for_account
 
@@ -197,17 +210,29 @@ def _run_sale_post(
             raise RuntimeError("Account not found")
         try:
             client = _ctseller_client_for_account(account, db, probe=False)
-            try:
-                detail = client.sale_detail(int(remote_sale_id))
-            except CTSellerError as exc:
-                if exc.status_code not in (401, 403):
-                    raise
-                client = _ctseller_client_for_account(account, db, force=True)
-                detail = client.sale_detail(int(remote_sale_id))
-            try:
-                allowed_areas = client.list_areas()
-            except CTSellerError:
+            if photos_only:
+                # Photo refresh already has an item id. A stale auction id must not block it.
+                probe_item = _first_posted_item_id(db, account_id, lot_ids)
+                if probe_item:
+                    try:
+                        client.list_item_images(probe_item)
+                    except CTSellerError as exc:
+                        if exc.status_code in (401, 403):
+                            client = _ctseller_client_for_account(account, db, force=True)
+                detail = {}
                 allowed_areas = None
+            else:
+                try:
+                    detail = client.sale_detail(int(remote_sale_id))
+                except CTSellerError as exc:
+                    if exc.status_code not in (401, 403):
+                        raise
+                    client = _ctseller_client_for_account(account, db, force=True)
+                    detail = client.sale_detail(int(remote_sale_id))
+                try:
+                    allowed_areas = client.list_areas()
+                except CTSellerError:
+                    allowed_areas = None
         except (CTSellerError, HTTPException) as exc:
             msg = str(exc)
             for lot_id in lot_ids:
@@ -240,7 +265,7 @@ def _run_sale_post(
 
         for lot_id in lot_ids:
             sku = skus.get(lot_id)
-            _set_phase(sale_id, lot_id, sku, "creating item")
+            _set_phase(sale_id, lot_id, sku, "updating photos" if photos_only else "creating item")
             lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
             if lot is None:
                 _append_result(
@@ -257,19 +282,27 @@ def _run_sale_post(
                 )
                 continue
             try:
-                out = post_one_lot_to_ctseller(
-                    db=db,
-                    lot=lot,
-                    client=client,
-                    remote_sale_id=int(remote_sale_id),
-                    location_id=location_id,
-                    item_receipt_method=irm,
-                    force=force,
-                    allowed_areas=allowed_areas,
-                    tax=tax,
-                    buyers_premium=buyers_premium,
-                    on_phase=lambda msg, sid=sale_id, lid=lot_id, sk=sku: _set_phase(sid, lid, sk, msg),
-                )
+                if photos_only:
+                    out = replace_lot_photos_on_ctseller(
+                        db=db,
+                        lot=lot,
+                        client=client,
+                        on_phase=lambda msg, sid=sale_id, lid=lot_id, sk=sku: _set_phase(sid, lid, sk, msg),
+                    )
+                else:
+                    out = post_one_lot_to_ctseller(
+                        db=db,
+                        lot=lot,
+                        client=client,
+                        remote_sale_id=int(remote_sale_id),
+                        location_id=location_id,
+                        item_receipt_method=irm,
+                        force=force,
+                        allowed_areas=allowed_areas,
+                        tax=tax,
+                        buyers_premium=buyers_premium,
+                        on_phase=lambda msg, sid=sale_id, lid=lot_id, sk=sku: _set_phase(sid, lid, sk, msg),
+                    )
                 _append_result(
                     sale_id,
                     {

@@ -500,6 +500,12 @@ class SalePostToCTSellerOut(BaseModel):
     results: list[SalePostToCTSellerLotResult]
 
 
+class SaleCtSellerPhotosIn(BaseModel):
+    """Replace photos on lots already posted to CT Seller. lot_ids is required."""
+
+    lot_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class SalePostToCTSellerStatusOut(BaseModel):
     """Live progress for a background CT Seller post (photos upload after the HTTP response)."""
 
@@ -746,6 +752,7 @@ class PhotoAddLotOut(BaseModel):
     added_count: int
     latest_added_at: datetime
     added_by: list[str] = []
+    on_ctseller: bool = False
 
 
 class PhotoAddsOut(BaseModel):
