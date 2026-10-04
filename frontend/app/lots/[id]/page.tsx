@@ -2483,7 +2483,13 @@ export default function LotDetailPage() {
                   {p.added_later ? (
                     <span
                       className="ct-photo-added-flag"
-                      style={{ position: "absolute", top: 34, left: 6, zIndex: 1 }}
+                      style={{
+                        position: "absolute",
+                        top: 34,
+                        left: 6,
+                        zIndex: 1,
+                        textTransform: "uppercase"
+                      }}
                     >
                       Added
                     </span>

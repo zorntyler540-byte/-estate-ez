@@ -3033,7 +3033,6 @@ select.ct-input option {
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.03em;
-  text-transform: uppercase;
   color: var(--ct-warning-text);
   background: var(--ct-warning-bg);
   border: 1px solid var(--ct-warning-border);
