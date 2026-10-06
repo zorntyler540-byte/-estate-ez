@@ -362,18 +362,22 @@ export default function CaptureSessionScreen() {
   }, []);
 
   async function mirrorToPhotoLibrary(uri: string) {
-    const result = await saveCaptureToPhotoLibrary(uri);
-    if (result === "unavailable") {
-      setPhotosBackup("off");
-      setLibraryNote("");
-      return;
+    try {
+      const result = await saveCaptureToPhotoLibrary(uri);
+      if (result === "unavailable") {
+        setPhotosBackup("off");
+        setLibraryNote("");
+        return;
+      }
+      if (result === "saved") {
+        setPhotosBackup("on");
+        setLibraryNote("");
+        return;
+      }
+      setLibraryNote(librarySaveNote(result) ?? "");
+    } catch {
+      setLibraryNote(librarySaveNote("failed") ?? "");
     }
-    if (result === "saved") {
-      setPhotosBackup("on");
-      setLibraryNote("");
-      return;
-    }
-    setLibraryNote(librarySaveNote(result) ?? "");
   }
 
   async function handleCameraReady() {
