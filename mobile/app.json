@@ -19,7 +19,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Capture estate lot photos and short videos for catalog upload.",
         "NSMicrophoneUsageDescription": "Record audio with lot videos.",
-        "NSPhotoLibraryUsageDescription": "Optional access to save or pick reference photos.",
+        "NSPhotoLibraryUsageDescription": "Estate-EZ saves a backup copy of lot photos and videos into the Photos app.",
+        "NSPhotoLibraryAddUsageDescription": "Estate-EZ saves a backup copy of each lot photo and video into the Photos app.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.caringtransitions.capture"
@@ -53,6 +54,15 @@
           "cameraPermission": "Capture estate lot photos and short videos for catalog upload.",
           "microphonePermission": "Record audio with lot videos.",
           "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Estate-EZ saves a backup copy of lot photos and videos into the Photos app.",
+          "savePhotosPermission": "Estate-EZ saves a backup copy of each lot photo and video into the Photos app.",
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": []
         }
       ],
       [
