@@ -465,6 +465,8 @@ class LotPostToCTSellerOut(BaseModel):
     ctseller_item_id: int | None = None
     ctseller_sale_id: int
     photos_uploaded: int = 0
+    videos_uploaded: int = 0
+    video_note: str | None = None
     ctseller_posted_at: datetime | None = None
     queued: bool = False
 
@@ -489,6 +491,8 @@ class SalePostToCTSellerLotResult(BaseModel):
     error: str | None = None
     ctseller_item_id: int | None = None
     photos_uploaded: int | None = None
+    videos_uploaded: int | None = None
+    video_note: str | None = None
 
 
 class SalePostToCTSellerOut(BaseModel):

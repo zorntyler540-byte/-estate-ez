@@ -313,6 +313,8 @@ def _run_sale_post(
                         "error": None,
                         "ctseller_item_id": out.ctseller_item_id,
                         "photos_uploaded": out.photos_uploaded,
+                        "videos_uploaded": out.videos_uploaded,
+                        "video_note": out.video_note,
                     },
                     posted=True,
                 )

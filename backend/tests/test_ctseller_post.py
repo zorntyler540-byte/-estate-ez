@@ -429,7 +429,9 @@ def test_photo_refresh_skips_auction_lookup(monkeypatch) -> None:
     monkeypatch.setattr("app.main._ctseller_client_for_account", lambda *a, **k: client)
     monkeypatch.setattr(
         "app.ctseller_post_tasks.add_lot_photos_on_ctseller",
-        lambda **kwargs: SimpleNamespace(ctseller_item_id=55, photos_uploaded=2),
+        lambda **kwargs: SimpleNamespace(
+            ctseller_item_id=55, photos_uploaded=2, videos_uploaded=0, video_note=None
+        ),
     )
     _run_sale_post(
         account_id="acct",
@@ -443,3 +445,310 @@ def test_photo_refresh_skips_auction_lookup(monkeypatch) -> None:
     client.sale_detail.assert_not_called()
     client.list_areas.assert_not_called()
     client.list_item_images.assert_called()
+
+
+def test_listing_videos_missing_skips_name_or_stem() -> None:
+    from app.services.ctseller_post import listing_videos_missing_on_ctseller
+
+    videos = [
+        SimpleNamespace(original_name="clip.mp4"),
+        SimpleNamespace(original_name="Walk.MP4"),
+        SimpleNamespace(original_name="new.mov"),
+    ]
+    rows = [
+        {"type": "image", "name": "new.jpg"},
+        {"type": "video", "name": "clip.mp4"},
+        {"type": "VIDEO", "name": "walk"},
+    ]
+    missing = listing_videos_missing_on_ctseller(videos, rows)
+    assert [row.original_name for row in missing] == ["new.mov"]
+
+
+def _post_db(*, photos: list, videos: list, sale):
+    photo_q = MagicMock()
+    photo_q.filter.return_value = photo_q
+    photo_q.order_by.return_value = photo_q
+    photo_q.all.return_value = photos
+    video_q = MagicMock()
+    video_q.filter.return_value = video_q
+    video_q.order_by.return_value = video_q
+    video_q.all.return_value = videos
+    sale_q = MagicMock()
+    sale_q.filter.return_value = sale_q
+    sale_q.first.return_value = sale
+    db = MagicMock()
+
+    def query(model):
+        name = getattr(model, "__name__", str(model))
+        if name == "LotVideo":
+            return video_q
+        if "Photo" in name:
+            return photo_q
+        return sale_q
+
+    db.query.side_effect = query
+    return db
+
+
+def test_post_sends_video_after_photos(tmp_path, monkeypatch) -> None:
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"jpeg")
+    clip = tmp_path / "walk.mp4"
+    clip.write_bytes(b"mp4-bytes")
+    client = _FakeClient()
+    client.videos = []
+
+    def add_item_video(**kwargs) -> None:
+        client.order.append("video")
+        client.videos.append(kwargs)
+
+    client.add_item_video = add_item_video
+
+    def fake_resolve(path: str | None):
+        client.order.append("download")
+        return clip if path and str(path).endswith(".mp4") else jpeg
+
+    monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", fake_resolve)
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+    monkeypatch.setattr("app.services.ctseller_post.build_item_payload", lambda **kwargs: {"sku": "TG1"})
+    monkeypatch.setattr("app.services.ctseller_post.resolve_lot_reserve_price", lambda lot, sale: None)
+    monkeypatch.setattr("app.services.ctseller_post.search_tags_for_lot_row", lambda lot: [])
+    monkeypatch.setattr("app.services.ctseller_post.lot_is_held_from_ctseller", lambda lot: False)
+    monkeypatch.setattr("app.services.ctseller_post.is_facebook_listing_channel", lambda _ch: False)
+
+    photo = SimpleNamespace(
+        id="ph1",
+        storage_path="a.jpg",
+        original_name="a.jpg",
+        sort_order=0,
+        created_at=None,
+        photo_role="item",
+    )
+    video = SimpleNamespace(
+        id="vid1",
+        storage_path="walk.mp4",
+        original_name="walk.mp4",
+        sort_order=0,
+        created_at=None,
+    )
+    lot = SimpleNamespace(
+        id="lot1",
+        account_id="acct",
+        sale_id="sale1",
+        sku="TG1AD",
+        auction_title="Silver pitcher",
+        professional_description="desc",
+        listing_channel="ctseller",
+        ctseller_item_id=None,
+        specification_lines_json="[]",
+        condition_text="GOOD",
+        ct_category="Household Goods Other",
+        starting_price=1,
+        search_tags_json=None,
+    )
+    sale = SimpleNamespace(id="sale1", account_id="acct")
+    db = _post_db(photos=[photo], videos=[video], sale=sale)
+    out = post_one_lot_to_ctseller(
+        db=db,
+        lot=lot,
+        client=client,
+        remote_sale_id=99,
+        location_id=1,
+        item_receipt_method=None,
+        allowed_areas=[],
+    )
+    assert out.ctseller_item_id == 4411
+    assert out.photos_uploaded == 1
+    assert out.videos_uploaded == 1
+    assert out.video_note is None
+    assert client.order[0] == "create"
+    assert client.order.index("image") < client.order.index("video")
+    assert client.videos[0]["item_id"] == 4411
+    assert client.videos[0]["name"] == "walk.mp4"
+    assert client.videos[0]["display_order"] == 2
+    assert client.videos[0]["video_bytes"] == b"mp4-bytes"
+
+
+def test_post_keeps_the_item_when_a_video_fails(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller import CTSellerError
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"jpeg")
+    clip = tmp_path / "walk.mp4"
+    clip.write_bytes(b"mp4")
+    client = _FakeClient()
+
+    def add_item_video(**kwargs) -> None:
+        raise CTSellerError("seller said no")
+
+    client.add_item_video = add_item_video
+    monkeypatch.setattr(
+        "app.services.ctseller_post.resolve_catalog_storage_path",
+        lambda path: clip if path and str(path).endswith(".mp4") else jpeg,
+    )
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+    monkeypatch.setattr("app.services.ctseller_post.build_item_payload", lambda **kwargs: {"sku": "TG1"})
+    monkeypatch.setattr("app.services.ctseller_post.resolve_lot_reserve_price", lambda lot, sale: None)
+    monkeypatch.setattr("app.services.ctseller_post.search_tags_for_lot_row", lambda lot: [])
+    monkeypatch.setattr("app.services.ctseller_post.lot_is_held_from_ctseller", lambda lot: False)
+    monkeypatch.setattr("app.services.ctseller_post.is_facebook_listing_channel", lambda _ch: False)
+    photo = SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="a.jpg", photo_role="item")
+    video = SimpleNamespace(id="vid1", storage_path="walk.mp4", original_name="walk.mp4")
+    lot = SimpleNamespace(
+        id="lot1",
+        account_id="acct",
+        sale_id="sale1",
+        sku="TG1AD",
+        auction_title="Silver pitcher",
+        professional_description="desc",
+        listing_channel="ctseller",
+        ctseller_item_id=None,
+        specification_lines_json="[]",
+        condition_text="GOOD",
+        ct_category="Household Goods Other",
+        starting_price=1,
+        search_tags_json=None,
+    )
+    db = _post_db(photos=[photo], videos=[video], sale=SimpleNamespace(id="sale1"))
+    out = post_one_lot_to_ctseller(
+        db=db,
+        lot=lot,
+        client=client,
+        remote_sale_id=99,
+        location_id=1,
+        item_receipt_method=None,
+        allowed_areas=[],
+    )
+    assert out.ctseller_item_id == 4411
+    assert out.photos_uploaded == 1
+    assert out.videos_uploaded == 0
+    assert "seller said no" in (out.video_note or "")
+
+
+def test_add_photos_uploads_a_missing_video_and_skips_one_already_there(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller_post import add_lot_photos_on_ctseller
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"jpeg")
+    clip = tmp_path / "walk.mp4"
+    clip.write_bytes(b"clip-bytes")
+    old = tmp_path / "old.mp4"
+    old.write_bytes(b"old")
+    client = _FakeClient()
+    client.videos = []
+    existing = [
+        {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
+        {"id": 11, "type": "video", "name": "old.mp4", "displayorder": 2},
+    ]
+
+    def list_item_images(item_id: int):
+        assert item_id == 8801
+        return existing
+
+    def delete_item_images(*_args, **_kwargs) -> None:
+        raise AssertionError("delete")
+
+    def add_item_video(**kwargs) -> None:
+        client.videos.append(kwargs)
+
+    client.list_item_images = list_item_images
+    client.delete_item_images = delete_item_images
+    client.add_item_video = add_item_video
+    monkeypatch.setattr(
+        "app.services.ctseller_post.resolve_catalog_storage_path",
+        lambda path: clip if path and "walk" in str(path) else (old if path and "old" in str(path) else jpeg),
+    )
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+
+    photos = [SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="dresser.jpg", photo_role="item")]
+    videos = [
+        SimpleNamespace(id="v1", storage_path="old.mp4", original_name="old.mp4"),
+        SimpleNamespace(id="v2", storage_path="walk.mp4", original_name="walk.mp4"),
+    ]
+    db, lot = _photo_db(photos)
+
+    def query(model):
+        name = getattr(model, "__name__", "")
+        if name == "LotVideo":
+            q = MagicMock()
+            q.filter.return_value = q
+            q.order_by.return_value = q
+            q.all.return_value = videos
+            return q
+        if "Photo" in name:
+            return db.query(model)
+        return MagicMock()
+
+    # _photo_db already set query. Replace it so LotVideo returns the clips.
+    photo_query = db.query.side_effect
+
+    def query_with_videos(model):
+        if getattr(model, "__name__", "") == "LotVideo":
+            return query(model)
+        return photo_query(model)
+
+    db.query.side_effect = query_with_videos
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert out.photos_uploaded == 0
+    assert out.videos_uploaded == 1
+    assert out.video_note is None
+    assert len(client.videos) == 1
+    assert client.videos[0]["name"] == "walk.mp4"
+    assert client.videos[0]["video_bytes"] == b"clip-bytes"
+    assert client.videos[0]["display_order"] == 3
+    assert client.videos[0]["item_id"] == 8801
+    db.commit.assert_called()
+
+    existing.append({"id": 12, "type": "video", "name": "walk.mp4", "displayorder": 3})
+    client.videos.clear()
+    db.commit.reset_mock()
+    again = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert again.photos_uploaded == 0
+    assert again.videos_uploaded == 0
+    assert client.videos == []
+    db.commit.assert_not_called()
+
+
+def test_add_notes_a_missing_video_file_without_deleting(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller_post import add_lot_photos_on_ctseller
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"jpeg")
+    client = _FakeClient()
+    client.videos = []
+
+    def list_item_images(_item_id: int):
+        return [{"id": 10, "type": "image", "name": "dresser", "displayorder": 1}]
+
+    def delete_item_images(*_args, **_kwargs) -> None:
+        raise AssertionError("delete")
+
+    client.list_item_images = list_item_images
+    client.delete_item_images = delete_item_images
+    client.add_item_video = lambda **kwargs: client.videos.append(kwargs)
+    monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", lambda path: jpeg if path == "a.jpg" else None)
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+    photos = [SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="dresser.jpg", photo_role="item")]
+    videos = [SimpleNamespace(id="v1", storage_path="gone.mp4", original_name="gone.mp4")]
+    db, lot = _photo_db(photos)
+    photo_query = db.query.side_effect
+
+    def query_with_videos(model):
+        if getattr(model, "__name__", "") == "LotVideo":
+            q = MagicMock()
+            q.filter.return_value = q
+            q.order_by.return_value = q
+            q.all.return_value = videos
+            return q
+        return photo_query(model)
+
+    db.query.side_effect = query_with_videos
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert out.videos_uploaded == 0
+    assert "missing" in (out.video_note or "")
+    assert client.videos == []
+    db.commit.assert_not_called()

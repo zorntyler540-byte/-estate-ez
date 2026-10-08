@@ -5628,8 +5628,8 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         useSelection
-          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. SKU-tape photos are not uploaded.`
-          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. Already-posted lots are skipped.\nSKU-tape photos are not uploaded.\n\nTip: check rows to post only some of them.`
+          ? `Post ${targetCount} selected lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. SKU-tape photos are not uploaded. Videos on the lot go to the item media tab.`
+          : `Post ${targetCount} unposted lot${targetCount === 1 ? "" : "s"} to CT Seller?\n\nPosting runs in the background so photo-heavy lots are not cut off. Already-posted lots are skipped.\nSKU-tape photos are not uploaded. Videos on the lot go to the item media tab.\n\nTip: check rows to post only some of them.`
       )
     ) {
       return;
@@ -5647,6 +5647,7 @@ export default function DashboardPage() {
         error?: string | null;
         ctseller_item_id?: number | null;
         sku?: string | null;
+        video_note?: string | null;
       }>
     ) => {
       for (const row of rows) {
@@ -5663,6 +5664,10 @@ export default function DashboardPage() {
                 : l
             )
           );
+        }
+        if (row.ok && row.video_note && failSamples.length < 3) {
+          const sample = `${row.sku || row.lot_id}: ${row.video_note}`;
+          if (!failSamples.includes(sample)) failSamples.push(sample);
         } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
           const sample = `${row.sku || row.lot_id}: ${row.error}`;
           if (!failSamples.includes(sample)) failSamples.push(sample);
@@ -5692,6 +5697,7 @@ export default function DashboardPage() {
           error?: string | null;
           ctseller_item_id?: number | null;
           sku?: string | null;
+          video_note?: string | null;
         }>;
       };
       applyRows(kick.results || []);
@@ -5731,6 +5737,7 @@ export default function DashboardPage() {
             error?: string | null;
             ctseller_item_id?: number | null;
             sku?: string | null;
+            video_note?: string | null;
           }>;
         };
         posted = st.posted || 0;
@@ -5779,7 +5786,7 @@ export default function DashboardPage() {
     const n = ids.length;
     if (
       !window.confirm(
-        `Add photos that are not already on ${n} CT Seller listing${n === 1 ? "" : "s"}?\n\nPhotos already on those items stay. New photos go on the end. SKU tape stays off CT Bids.`
+        `Add photos that are not already on ${n} CT Seller listing${n === 1 ? "" : "s"}?\n\nPhotos already on those items stay. New photos go on the end. Videos on the lot are sent to the media tab. SKU tape stays off CT Bids.`
       )
     ) {
       return;
@@ -5796,13 +5803,20 @@ export default function DashboardPage() {
         error?: string | null;
         sku?: string | null;
         photos_uploaded?: number | null;
+        videos_uploaded?: number | null;
+        video_note?: string | null;
       }>
     ) => {
       for (const row of rows) {
-        if (row.ok && (row.photos_uploaded || 0) > 0) {
+        const sentMedia = (row.photos_uploaded || 0) > 0 || (row.videos_uploaded || 0) > 0;
+        if (row.ok && sentMedia) {
           setLots((prev) =>
             prev.map((l) => (l.id === row.lot_id ? { ...l, ctseller_posted_at: new Date().toISOString() } : l))
           );
+        }
+        if (row.ok && row.video_note && failSamples.length < 3) {
+          const sample = `${row.sku || row.lot_id}: ${row.video_note}`;
+          if (!failSamples.includes(sample)) failSamples.push(sample);
         } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
           const sample = `${row.sku || row.lot_id}: ${row.error}`;
           if (!failSamples.includes(sample)) failSamples.push(sample);
@@ -5823,6 +5837,8 @@ export default function DashboardPage() {
           error?: string | null;
           sku?: string | null;
           photos_uploaded?: number | null;
+          videos_uploaded?: number | null;
+          video_note?: string | null;
         }>;
       };
       noteRows(kick.results || []);
@@ -5857,6 +5873,8 @@ export default function DashboardPage() {
             error?: string | null;
             sku?: string | null;
             photos_uploaded?: number | null;
+            videos_uploaded?: number | null;
+            video_note?: string | null;
           }>;
         };
         posted = st.posted || 0;

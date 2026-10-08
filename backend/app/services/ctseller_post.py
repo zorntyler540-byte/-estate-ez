@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.catalog_storage import resolve_catalog_storage_path
-from app.models import Lot, Photo, Sale
+from app.models import Lot, LotVideo, Photo, Sale
 from app.schemas import LotPostToCTSellerOut
 from app.services.audience_hunt import lot_is_held_from_ctseller
 from app.services.ctseller import (
@@ -103,6 +103,78 @@ def listing_photos_missing_on_ctseller(listing_photos: list[Photo], rows: list[d
             continue
         missing.append(photo)
     return missing
+
+
+def listing_videos_missing_on_ctseller(videos: list[LotVideo], rows: list[dict]) -> list[LotVideo]:
+    """Clips whose file name is not already a video on the CT Seller item."""
+    present: set[str] = set()
+    for row in rows:
+        if str(row.get("type") or "").strip().lower() != "video":
+            continue
+        name = str(row.get("name") or "").strip().lower()
+        if not name:
+            continue
+        present.add(name)
+        present.add(Path(name).stem.lower())
+    missing: list[LotVideo] = []
+    for video in videos:
+        name = str(getattr(video, "original_name", "") or "").strip()
+        key = name.lower()
+        stem = Path(name).stem.lower() if name else ""
+        if key and (key in present or (stem and stem in present)):
+            continue
+        missing.append(video)
+    return missing
+
+
+def _listing_videos_for_lot(db: Session, lot: Lot) -> list[LotVideo]:
+    rows = (
+        db.query(LotVideo)
+        .filter(LotVideo.lot_id == lot.id, LotVideo.account_id == lot.account_id)
+        .order_by(LotVideo.sort_order.asc(), LotVideo.created_at.asc(), LotVideo.id.asc())
+        .all()
+    )
+    return rows if isinstance(rows, list) else []
+
+
+def _upload_listing_videos(
+    *,
+    client: CTSellerClient,
+    lot: Lot,
+    item_id: int,
+    videos: list[LotVideo],
+    phase: PhaseFn,
+    order_start: int,
+) -> tuple[int, str | None]:
+    """Upload clips after photos. A failure here does not remove the item or its photos."""
+    uploaded = 0
+    notes: list[str] = []
+    total = len(videos)
+    for idx, video in enumerate(videos):
+        phase(f"video {idx + 1}/{total}")
+        name = Path(str(getattr(video, "original_name", "") or "video.mp4")).name or "video.mp4"
+        try:
+            path = resolve_catalog_storage_path(getattr(video, "storage_path", None))
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("CT Seller video resolve failed lot=%s video=%s: %s", lot.id, getattr(video, "id", idx), exc)
+            notes.append(f"{name} is missing on the server")
+            continue
+        if path is None or not path.is_file():
+            notes.append(f"{name} is missing on the server")
+            continue
+        try:
+            client.add_item_video(
+                item_id=item_id,
+                video_bytes=path.read_bytes(),
+                name=name,
+                display_order=order_start + idx,
+            )
+            uploaded += 1
+        except (OSError, CTSellerError) as exc:
+            _LOG.warning("CT Seller video upload failed lot=%s video=%s: %s", lot.id, getattr(video, "id", idx), exc)
+            notes.append(str(exc)[:240])
+    note = " ".join(notes)[:500] if notes else None
+    return uploaded, note
 
 
 def next_ctseller_display_order(rows: list[dict]) -> int:
@@ -210,52 +282,75 @@ def add_lot_photos_on_ctseller(
         )
 
     listing_photos = _listing_photos_for_lot(db, lot)
-    if not listing_photos:
+    local_videos = _listing_videos_for_lot(db, lot)
+    if not listing_photos and not local_videos:
         raise HTTPException(status_code=400, detail="This lot has no photos to send to CT Seller.")
 
     phase("reading CT Seller photos")
     existing = client.list_item_images(int(item_id))
-    to_add = listing_photos_missing_on_ctseller(listing_photos, existing)
+    to_add = listing_photos_missing_on_ctseller(listing_photos, existing) if listing_photos else []
+    videos = listing_videos_missing_on_ctseller(local_videos, existing)
     remote_sale_id = int(getattr(lot, "ctseller_sale_id", None) or 0)
-    if not to_add:
+    if not to_add and not videos:
         return LotPostToCTSellerOut(
             lot_id=lot.id,
             ctseller_item_id=int(item_id),
             ctseller_sale_id=remote_sale_id,
             photos_uploaded=0,
+            videos_uploaded=0,
             ctseller_posted_at=getattr(lot, "ctseller_posted_at", None),
         )
 
-    uploaded = _upload_listing_photos(
-        client=client,
-        lot=lot,
-        item_id=int(item_id),
-        listing_photos=to_add,
-        phase=phase,
-        order_start=next_ctseller_display_order(existing),
-        make_cover=not ctseller_image_ids_to_replace(existing),
-    )
-    total = len(to_add)
-    if uploaded < total:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Sent {uploaded} of {total} new photos to CT Seller item {item_id}. "
-                "Photos already on that item are still there. Click Add photos again."
-            ),
+    order_start = next_ctseller_display_order(existing)
+    uploaded = 0
+    if to_add:
+        uploaded = _upload_listing_photos(
+            client=client,
+            lot=lot,
+            item_id=int(item_id),
+            listing_photos=to_add,
+            phase=phase,
+            order_start=order_start,
+            make_cover=not ctseller_image_ids_to_replace(existing),
+        )
+        total = len(to_add)
+        if uploaded < total:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Sent {uploaded} of {total} new photos to CT Seller item {item_id}. "
+                    "Photos already on that item are still there. Click Add photos again."
+                ),
+            )
+
+    videos_uploaded, video_note = (0, None)
+    if videos:
+        videos_uploaded, video_note = _upload_listing_videos(
+            client=client,
+            lot=lot,
+            item_id=int(item_id),
+            videos=videos,
+            phase=phase,
+            order_start=order_start + len(to_add),
         )
 
-    now = datetime.now(timezone.utc)
-    lot.ctseller_posted_at = now
-    db.add(lot)
-    db.commit()
-    db.refresh(lot)
+    if uploaded or videos_uploaded:
+        now = datetime.now(timezone.utc)
+        lot.ctseller_posted_at = now
+        db.add(lot)
+        db.commit()
+        db.refresh(lot)
+        posted_at = now
+    else:
+        posted_at = getattr(lot, "ctseller_posted_at", None)
     return LotPostToCTSellerOut(
         lot_id=lot.id,
         ctseller_item_id=int(item_id),
         ctseller_sale_id=remote_sale_id,
         photos_uploaded=uploaded,
-        ctseller_posted_at=now,
+        videos_uploaded=videos_uploaded,
+        video_note=video_note,
+        ctseller_posted_at=posted_at,
     )
 
 
@@ -369,11 +464,21 @@ def post_one_lot_to_ctseller(
         listing_photos=listing_photos,
         phase=phase,
     )
+    videos_uploaded, video_note = _upload_listing_videos(
+        client=client,
+        lot=lot,
+        item_id=int(item_id),
+        videos=_listing_videos_for_lot(db, lot),
+        phase=phase,
+        order_start=1 + len(listing_photos),
+    )
 
     return LotPostToCTSellerOut(
         lot_id=lot.id,
         ctseller_item_id=int(item_id),
         ctseller_sale_id=int(remote_sale_id),
         photos_uploaded=uploaded,
+        videos_uploaded=videos_uploaded,
+        video_note=video_note,
         ctseller_posted_at=now,
     )

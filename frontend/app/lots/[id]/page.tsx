@@ -18,6 +18,25 @@ import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
 
+function ctSellerMediaCounts(photos?: number | null, videos?: number | null): string {
+  const parts: string[] = [];
+  const photoCount = photos || 0;
+  const videoCount = videos || 0;
+  if (photoCount) parts.push(`${photoCount} photo${photoCount === 1 ? "" : "s"}`);
+  if (videoCount) parts.push(`${videoCount} video${videoCount === 1 ? "" : "s"}`);
+  return parts.join(", ");
+}
+
+function ctSellerMediaNote(
+  photos?: number | null,
+  videos?: number | null,
+  note?: string | null
+): string {
+  const counts = ctSellerMediaCounts(photos, videos);
+  const extra = (note || "").trim();
+  return (counts ? ` (${counts})` : "") + (extra ? ` ${extra}` : "");
+}
+
 type LotVideo = {
   id: string;
   lot_id: string;
@@ -1104,6 +1123,8 @@ export default function LotDetailPage() {
       })) as {
         ctseller_item_id?: number | null;
         photos_uploaded: number;
+        videos_uploaded?: number;
+        video_note?: string | null;
         ctseller_sale_id: number;
         queued?: boolean;
       };
@@ -1128,6 +1149,8 @@ export default function LotDetailPage() {
               error?: string | null;
               ctseller_item_id?: number | null;
               photos_uploaded?: number | null;
+              videos_uploaded?: number | null;
+              video_note?: string | null;
             }>;
           };
           const row = (st.results || []).find((r) => r.lot_id === lot.id);
@@ -1149,9 +1172,7 @@ export default function LotDetailPage() {
             );
             setCtSellerMsg(
               `Posted to CT Seller as item #${row.ctseller_item_id}` +
-                (row.photos_uploaded
-                  ? ` (${row.photos_uploaded} photo${row.photos_uploaded === 1 ? "" : "s"})`
-                  : "")
+                ctSellerMediaNote(row.photos_uploaded, row.videos_uploaded, row.video_note)
             );
             active = false;
             break;
@@ -1182,7 +1203,7 @@ export default function LotDetailPage() {
         );
         setCtSellerMsg(
           `Posted to CT Seller as item #${res.ctseller_item_id}` +
-            (res.photos_uploaded ? ` (${res.photos_uploaded} photo${res.photos_uploaded === 1 ? "" : "s"})` : "")
+            ctSellerMediaNote(res.photos_uploaded, res.videos_uploaded, res.video_note)
         );
       }
     } catch (e) {
@@ -1197,7 +1218,7 @@ export default function LotDetailPage() {
     if (!lot?.ctseller_item_id) return;
     if (
       !window.confirm(
-        "Add photos from this gallery that are not already on the CT Seller item? Photos already on that item stay. SKU tape stays off CT Bids."
+        "Add photos from this gallery that are not already on the CT Seller item? Photos already on that item stay. Videos on this lot are sent to the media tab. SKU tape stays off CT Bids."
       )
     ) {
       return;
@@ -1212,6 +1233,8 @@ export default function LotDetailPage() {
       })) as {
         ctseller_item_id?: number | null;
         photos_uploaded: number;
+        videos_uploaded?: number;
+        video_note?: string | null;
         queued?: boolean;
       };
       if (res.queued && lot.sale_id) {
@@ -1233,6 +1256,8 @@ export default function LotDetailPage() {
               error?: string | null;
               ctseller_item_id?: number | null;
               photos_uploaded?: number | null;
+              videos_uploaded?: number | null;
+              video_note?: string | null;
             }>;
           };
           const row = (st.results || []).find((r) => r.lot_id === lot.id);
@@ -1242,7 +1267,8 @@ export default function LotDetailPage() {
           if (row?.ok) {
             const itemId = row.ctseller_item_id || lot.ctseller_item_id;
             const count = row.photos_uploaded ?? 0;
-            if (count > 0) {
+            const videos = row.videos_uploaded ?? 0;
+            if (count > 0 || videos > 0) {
               setLot((prev) =>
                 prev
                   ? {
@@ -1253,10 +1279,12 @@ export default function LotDetailPage() {
                   : prev
               );
             }
+            const added = ctSellerMediaCounts(count, videos);
+            const videoNote = (row.video_note || "").trim();
             setCtSellerMsg(
-              count > 0
-                ? `Added ${count} photo${count === 1 ? "" : "s"} on CT Seller item #${itemId}`
-                : `Those photos are already on CT Seller item #${itemId}`
+              added
+                ? `Added ${added} on CT Seller item #${itemId}${videoNote ? ` ${videoNote}` : ""}`
+                : `Those photos and videos are already on CT Seller item #${itemId}`
             );
             active = false;
             break;
@@ -2804,8 +2832,8 @@ export default function LotDetailPage() {
             ) : null}
           </h2>
           <p className="ct-upload-intro">
-            Short walk-around clips from the phone app. They stay on Estate-EZ and are not posted
-            to CT Bids or sent through AI catalog.
+            Short walk-around clips from the phone app. Post to CT Seller sends them to the item
+            media tab after the photos. They are not sent through AI catalog.
           </p>
           <input
             ref={addVideosInputRef}
