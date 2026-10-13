@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { apiFetch } from "../../lib/api";
-import { accountRoleLabel } from "../../lib/roles";
+import { accountRoleLabel, isClientRole } from "../../lib/roles";
 
 type Me = {
   id: string;
@@ -26,6 +26,14 @@ type TeamMember = {
   email: string;
   role: string;
   created_at: string;
+  assigned_sale_id?: string | null;
+  assigned_sale_name?: string | null;
+};
+
+type SaleOption = {
+  id: string;
+  name: string;
+  closed_at?: string | null;
 };
 
 function isAuthFailureMessage(message: string): boolean {
@@ -59,6 +67,13 @@ export default function AccountPage() {
   const [newMemberBusy, setNewMemberBusy] = useState(false);
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [resetBusyId, setResetBusyId] = useState("");
+  const [accountSales, setAccountSales] = useState<SaleOption[]>([]);
+  const [clientEmail, setClientEmail] = useState("");
+  const [clientPassword, setClientPassword] = useState("");
+  const [clientSaleId, setClientSaleId] = useState("");
+  const [clientBusy, setClientBusy] = useState(false);
+  const [clientSaleChoice, setClientSaleChoice] = useState<Record<string, string>>({});
+  const [clientSaleBusyId, setClientSaleBusyId] = useState("");
   const [selfCurrentPassword, setSelfCurrentPassword] = useState("");
   const [selfNewPassword, setSelfNewPassword] = useState("");
   const [selfPasswordBusy, setSelfPasswordBusy] = useState(false);
@@ -80,7 +95,14 @@ export default function AccountPage() {
       return;
     }
     void apiFetch("/auth/me", t)
-      .then((data) => setMe(data as Me))
+      .then((data) => {
+        const row = data as Me;
+        if (isClientRole(row.role)) {
+          router.replace("/client");
+          return;
+        }
+        setMe(row);
+      })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : "Could not load account";
         if (isAuthFailureMessage(msg)) {
@@ -199,6 +221,9 @@ export default function AccountPage() {
     try {
       const rows = (await apiFetch("/team/members", token)) as TeamMember[];
       setTeamMembers(rows);
+      const sales = (await apiFetch("/sales", token)) as SaleOption[];
+      setAccountSales(sales);
+      setClientSaleId((prev) => prev || sales.find((s) => !s.closed_at)?.id || sales[0]?.id || "");
     } catch (e) {
       setTeamError(e instanceof Error ? e.message : "Could not load team members");
     } finally {
@@ -228,6 +253,50 @@ export default function AccountPage() {
       setTeamError(e instanceof Error ? e.message : "Could not add team member");
     } finally {
       setNewMemberBusy(false);
+    }
+  }
+
+  async function addClientLogin() {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    if (!clientEmail.trim() || clientPassword.trim().length < 8 || !clientSaleId) return;
+    setClientBusy(true);
+    setTeamError("");
+    try {
+      await apiFetch("/team/members", token, {
+        method: "POST",
+        body: JSON.stringify({
+          email: clientEmail.trim(),
+          password: clientPassword,
+          role: "client",
+          sale_id: clientSaleId
+        })
+      });
+      setClientEmail("");
+      setClientPassword("");
+      await refreshTeamMembers();
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not add client login");
+    } finally {
+      setClientBusy(false);
+    }
+  }
+
+  async function saveClientSale(memberId: string) {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    const saleId = (clientSaleChoice[memberId] || "").trim();
+    if (!saleId) return;
+    setClientSaleBusyId(memberId);
+    setTeamError("");
+    try {
+      await apiFetch(`/team/members/${memberId}/sale`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ sale_id: saleId })
+      });
+      await refreshTeamMembers();
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not change the assigned sale");
+    } finally {
+      setClientSaleBusyId("");
     }
   }
 
@@ -584,13 +653,13 @@ export default function AccountPage() {
               {teamLoading ? "Refreshing…" : "Refresh"}
             </button>
           </div>
-          {teamMembers.length === 0 ? (
+          {teamMembers.filter((m) => !isClientRole(m.role)).length === 0 ? (
             <p className="ct-muted" style={{ marginBottom: 0 }}>
               No team members yet.
             </p>
           ) : (
             <div className="ct-stack">
-              {teamMembers.map((m) => (
+              {teamMembers.filter((m) => !isClientRole(m.role)).map((m) => (
                 <div key={m.id} className="ct-card ct-card--padded">
                   <p style={{ margin: 0, fontWeight: 600 }}>{m.email}</p>
                   <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.86rem" }}>
@@ -617,6 +686,126 @@ export default function AccountPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+      {me?.role?.toLowerCase() === "owner" ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Client logins
+          </h2>
+          <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+            A client can sign in on this website or the phone app and upload photos into one sale you choose.
+            They cannot open other sales, edit listings, or post to CT Seller.
+          </p>
+          {accountSales.length === 0 ? (
+            <p className="ct-muted">Create a sale on the dashboard before adding a client login.</p>
+          ) : (
+            <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", marginBottom: "0.75rem" }}>
+              <input
+                className="ct-input"
+                style={{ maxWidth: 300, width: "100%" }}
+                placeholder="client@email.com"
+                value={clientEmail}
+                onChange={(e) => setClientEmail(e.target.value)}
+                autoComplete="off"
+              />
+              <input
+                className="ct-input"
+                style={{ maxWidth: 260, width: "100%" }}
+                type="password"
+                placeholder="Temporary password (min 8)"
+                value={clientPassword}
+                onChange={(e) => setClientPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+              <select
+                className="ct-input"
+                style={{ maxWidth: 280 }}
+                value={clientSaleId}
+                onChange={(e) => setClientSaleId(e.target.value)}
+                aria-label="Sale this client uploads into"
+              >
+                {accountSales.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.closed_at ? " (closed)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={
+                  clientBusy || !clientEmail.trim() || clientPassword.trim().length < 8 || !clientSaleId
+                }
+                onClick={() => void addClientLogin()}
+              >
+                {clientBusy ? "Adding…" : "Add client login"}
+              </button>
+            </div>
+          )}
+          {teamMembers.filter((m) => isClientRole(m.role)).length === 0 ? (
+            <p className="ct-muted" style={{ marginBottom: 0 }}>
+              No client logins yet.
+            </p>
+          ) : (
+            <div className="ct-stack">
+              {teamMembers.filter((m) => isClientRole(m.role)).map((m) => {
+                const selectedSale = clientSaleChoice[m.id] || m.assigned_sale_id || "";
+                return (
+                  <div key={m.id} className="ct-card ct-card--padded">
+                    <p style={{ margin: 0, fontWeight: 600 }}>{m.email}</p>
+                    <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.86rem" }}>
+                      Uploads to {m.assigned_sale_name || "no sale"} · Added {new Date(m.created_at).toLocaleString()}
+                    </p>
+                    <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.55rem", flexWrap: "wrap" }}>
+                      <select
+                        className="ct-input"
+                        style={{ maxWidth: 280 }}
+                        value={selectedSale}
+                        onChange={(e) => setClientSaleChoice((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                        aria-label={`Sale for ${m.email}`}
+                      >
+                        {accountSales.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                            {s.closed_at ? " (closed)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        disabled={
+                          clientSaleBusyId === m.id || !selectedSale || selectedSale === (m.assigned_sale_id || "")
+                        }
+                        onClick={() => void saveClientSale(m.id)}
+                      >
+                        {clientSaleBusyId === m.id ? "Saving…" : "Change sale"}
+                      </button>
+                      <input
+                        className="ct-input"
+                        style={{ maxWidth: 260, width: "100%" }}
+                        type="password"
+                        placeholder="Reset password (min 8)"
+                        value={resetPasswords[m.id] || ""}
+                        onChange={(e) => setResetPasswords((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        disabled={resetBusyId === m.id || (resetPasswords[m.id] || "").trim().length < 8}
+                        onClick={() => void resetMemberPassword(m.id)}
+                      >
+                        {resetBusyId === m.id ? "Resetting…" : "Reset password"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

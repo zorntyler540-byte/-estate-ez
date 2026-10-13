@@ -25,7 +25,7 @@ type SalesContextValue = {
 const SalesContext = createContext<SalesContextValue | null>(null);
 
 export function SalesProvider({ children }: { children: ReactNode }) {
-  const { token, selectedSaleId, selectedSaleName, setSelectedSale } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, setSelectedSale, signedInRole } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
   const selectedSaleIdRef = useRef(selectedSaleId);
@@ -58,6 +58,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       }
 
       void (async () => {
+        if ((signedInRole || "").toLowerCase() === "client" || !signedInRole) return;
         try {
           const sync = await syncSalesFromCtSeller(token);
           const created = Number(sync.created || 0);
@@ -84,7 +85,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [token, setSelectedSale]);
+  }, [token, setSelectedSale, signedInRole]);
 
   // Load once per token — do not use useFocusEffect here. That hook re-ran on every
   // screen focus (including the add-photos camera) and, when the stored sale name differed

@@ -66,7 +66,8 @@ function formatQueueSyncMessage(result: SyncResult, online: boolean | null): str
 }
 
 export default function QueueScreen() {
-  const { token, selectedSaleId } = useAuth();
+  const { token, selectedSaleId, signedInRole } = useAuth();
+  const clientLogin = (signedInRole || "").toLowerCase() === "client";
   const { getSaleName } = useSales();
   const { syncing, lastMessage } = useSyncStatus();
   const { syncNow } = useSyncActions();
@@ -405,7 +406,9 @@ export default function QueueScreen() {
           <Text style={styles.empty}>
             {showArchive
               ? "Archive is empty. Cataloged lots land here until you Clear Archive. Website listings stay."
-              : "No lots waiting on this phone. Capture photos on the Capture tab."}
+              : clientLogin
+                ? "No lots waiting on this phone. Take photos on the Photos tab."
+                : "No lots waiting on this phone. Capture photos on the Capture tab."}
           </Text>
         }
         renderItem={({ item }) => {
@@ -440,7 +443,7 @@ export default function QueueScreen() {
               <Text style={styles.cardStatus}>{status.label}</Text>
               <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
                 Sale: {getSaleName(item.sale_id, item.sale_name)}
-                {otherSale ? " — not the sale currently selected" : ""}
+                {otherSale && !clientLogin ? " — not the sale currently selected" : ""}
               </Text>
               <Text style={styles.cardHint}>{status.hint}</Text>
               {item.manual_sku ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}

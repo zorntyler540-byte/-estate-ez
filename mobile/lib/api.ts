@@ -88,6 +88,8 @@ export type AuthMe = {
   account_id: string;
   email: string;
   role: string;
+  assigned_sale_id?: string | null;
+  assigned_sale_name?: string | null;
 };
 
 export async function getAuthMe(token: string): Promise<AuthMe> {

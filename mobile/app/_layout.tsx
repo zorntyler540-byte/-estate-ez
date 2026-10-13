@@ -54,7 +54,7 @@ export default function RootLayout() {
 }
 
 function RootNav() {
-  const { token, ready } = useAuth();
+  const { token, ready, sessionReady } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -66,10 +66,10 @@ function RootNav() {
       router.replace("/login");
       return;
     }
-    if (token && onAuthScreen) {
+    if (token && sessionReady && onAuthScreen) {
       router.replace("/(tabs)/capture");
     }
-  }, [token, ready, segments, router]);
+  }, [token, ready, sessionReady, segments, router]);
 
   return (
     <ThemeProvider value={EstateTheme}>

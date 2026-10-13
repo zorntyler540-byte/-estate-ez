@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Activity, ClipboardList, LayoutDashboard, Menu, Monitor, Settings, Store, X } from "lucide-react";
+import { apiFetch } from "../lib/api";
+import { isClientRole, rememberAccountRole } from "../lib/roles";
 
 type AppShellProps = {
   children: ReactNode;
@@ -121,6 +123,7 @@ function ShellNavLinks({ pathname, onNavigate, linkClass = "ct-app-sidebar__link
 
 export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShellProps) {
   const pathname = usePathname() || "";
+  const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
 
@@ -137,6 +140,25 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
   useEffect(() => {
     closeNav();
   }, [pathname, closeNav]);
+
+  useEffect(() => {
+    if (pathname.startsWith("/client")) return;
+    const token = localStorage.getItem("token") || "";
+    if (!token) return;
+    let cancelled = false;
+    void apiFetch("/auth/me", token)
+      .then((data) => {
+        const role = String((data as { role?: string }).role || "");
+        rememberAccountRole(role);
+        if (!cancelled && isClientRole(role)) router.replace("/client");
+      })
+      .catch(() => {
+        /* leave the page; the screen handles auth errors */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, router]);
 
   useEffect(() => {
     if (!navOpen) return;

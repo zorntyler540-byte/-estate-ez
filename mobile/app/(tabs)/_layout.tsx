@@ -6,7 +6,9 @@ import { useAuth } from "@/context/AuthContext";
 
 export default function TabLayout() {
   const { signedInRole } = useAuth();
-  const isOwner = (signedInRole || "").toLowerCase() === "owner";
+  const role = (signedInRole || "").toLowerCase();
+  const isOwner = role === "owner";
+  const isClient = role === "client";
 
   return (
     <Tabs
@@ -26,7 +28,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="capture"
         options={{
-          title: "Capture",
+          title: isClient ? "Photos" : "Capture",
           tabBarIcon: ({ color }) => <Ionicons name="camera" size={26} color={color} />
         }}
       />
@@ -34,6 +36,7 @@ export default function TabLayout() {
         name="lots"
         options={{
           title: "Lots",
+          href: isClient ? null : "/(tabs)/lots",
           tabBarIcon: ({ color }) => <Ionicons name="list" size={26} color={color} />
         }}
       />
@@ -49,6 +52,7 @@ export default function TabLayout() {
         name="facebook"
         options={{
           title: "Facebook",
+          href: isClient ? null : "/(tabs)/facebook",
           tabBarIcon: ({ color }) => <Ionicons name="storefront-outline" size={26} color={color} />
         }}
       />
@@ -56,6 +60,7 @@ export default function TabLayout() {
         name="sale"
         options={{
           title: "Sale",
+          href: isClient ? null : "/(tabs)/sale",
           tabBarIcon: ({ color }) => <Ionicons name="pricetag" size={26} color={color} />
         }}
       />

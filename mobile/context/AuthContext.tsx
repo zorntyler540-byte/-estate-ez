@@ -34,6 +34,8 @@ type AuthContextValue = {
   signedInEmail: string | null;
   /** Account role from ``GET /auth/me`` — owners see the Team tab. */
   signedInRole: string | null;
+  /** False until ``/auth/me`` has been applied for the current token (client sale lock included). */
+  sessionReady: boolean;
   selectedSaleId: string | null;
   /** Sale name matching ``selectedSaleId`` — shown on capture/queue so uploads go where the user expects. */
   selectedSaleName: string | null;
@@ -80,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
   const [signedInRole, setSignedInRole] = useState<string | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const [selectedSaleId, setSelectedSaleIdState] = useState<string | null>(null);
   const [selectedSaleName, setSelectedSaleNameState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -87,6 +90,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const selectedSaleIdRef = useRef<string | null>(null);
   const selectedSaleNameRef = useRef<string | null>(null);
   const refreshInFlight = useRef<Promise<string | null> | null>(null);
+  const clientSaleLockRef = useRef<{ id: string; name: string | null } | null>(null);
+  const setSelectedSaleRef = useRef<
+    ((saleId: string | null, saleName?: string | null) => Promise<void>) | null
+  >(null);
   selectedSaleIdRef.current = selectedSaleId;
   selectedSaleNameRef.current = selectedSaleName;
 
@@ -171,25 +178,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [persistToken, silentRefresh]);
 
+  const loadAccount = useCallback(async (accessToken: string) => {
+    const me = await getAuthMe(accessToken);
+    setSignedInRole(me.role || null);
+    if (me.email) setSignedInEmail(me.email);
+    if ((me.role || "").toLowerCase() === "client") {
+      if (me.assigned_sale_id) {
+        const name = me.assigned_sale_name || null;
+        clientSaleLockRef.current = { id: me.assigned_sale_id, name };
+        await setSelectedSaleRef.current?.(me.assigned_sale_id, name);
+      } else {
+        // Drop a sale left on this phone so a client cannot shoot into the wrong one.
+        clientSaleLockRef.current = null;
+        await setSelectedSaleRef.current?.(null, null);
+      }
+    } else {
+      clientSaleLockRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
+    if (!ready) return;
     if (!token) {
       setSignedInRole(null);
+      setSessionReady(true);
       return;
     }
     let cancelled = false;
-    void getAuthMe(token)
-      .then((me) => {
-        if (cancelled) return;
-        setSignedInRole(me.role || null);
-        if (me.email) setSignedInEmail(me.email);
-      })
+    setSessionReady(false);
+    void loadAccount(token)
       .catch(() => {
         if (!cancelled) setSignedInRole(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionReady(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, ready, loadAccount]);
 
   useEffect(() => {
     registerSessionRefresher(async () => silentRefresh());
@@ -198,9 +225,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (email: string, password: string) => {
-      await loginWithPassword(email, password);
+      const access = await loginWithPassword(email, password);
+      try {
+        await loadAccount(access);
+        setSessionReady(true);
+      } catch (error) {
+        await persistToken(null);
+        await secureDelete(CREDENTIALS_KEY);
+        setSignedInEmail(null);
+        setSignedInRole(null);
+        clientSaleLockRef.current = null;
+        setSessionReady(true);
+        throw error;
+      }
     },
-    [loginWithPassword]
+    [loadAccount, loginWithPassword, persistToken]
   );
 
   const signOut = useCallback(async () => {
@@ -214,11 +253,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setSignedInEmail(null);
     setSignedInRole(null);
+    clientSaleLockRef.current = null;
     setSelectedSaleIdState(null);
     setSelectedSaleNameState(null);
   }, []);
 
   const setSelectedSale = useCallback(async (saleId: string | null, saleName?: string | null) => {
+    const lock = clientSaleLockRef.current;
+    if (lock) {
+      saleId = lock.id;
+      saleName = lock.name;
+    }
     const name = saleId ? normalizeSaleName(saleName) : null;
     // Same sale + same name must not broadcast a new auth value — that re-rendered every screen
     // and looked like a 1s refresh loop on lot details / Lots.
@@ -241,6 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedSaleIdState(saleId);
     setSelectedSaleNameState(name);
   }, []);
+  setSelectedSaleRef.current = setSelectedSale;
 
   const value = useMemo(
     () => ({
@@ -248,13 +294,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ready,
       signedInEmail,
       signedInRole,
+      sessionReady,
       selectedSaleId,
       selectedSaleName,
       signIn,
       signOut,
       setSelectedSale
     }),
-    [token, ready, signedInEmail, signedInRole, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
+    [token, ready, signedInEmail, signedInRole, sessionReady, selectedSaleId, selectedSaleName, signIn, signOut, setSelectedSale]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
