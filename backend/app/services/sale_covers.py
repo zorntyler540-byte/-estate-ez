@@ -83,6 +83,15 @@ def pick_lot_cover_photo(lot_photos: list[Photo]) -> Photo | None:
     return pick_lot_hero_photo(eligible)
 
 
+def lot_cover_choice_photos(lot_photos: list[Photo]) -> list[Photo]:
+    """Every cover-eligible frame on one lot, hero first. SKU tape stays out."""
+    eligible = listing_cover_photos(lot_photos)
+    hero = pick_lot_cover_photo(lot_photos)
+    if hero is None:
+        return eligible
+    return [hero, *[photo for photo in eligible if photo.id != hero.id]]
+
+
 def photos_by_lot_id(photos: Iterable[Photo]) -> dict[str, list[Photo]]:
     grouped: dict[str, list[Photo]] = {}
     for photo in photos:

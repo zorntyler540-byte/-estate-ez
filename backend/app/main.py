@@ -203,6 +203,7 @@ from app.services.photo_roles import normalize_catalog_photo_role, photos_for_ct
 from app.services.sale_covers import (
     SALE_COVER_SLOT_COUNT,
     cover_candidate_photos,
+    lot_cover_choice_photos,
     load_cover_photos_by_ids,
     load_sale_lots_and_photos,
     parse_cover_photo_ids,
@@ -2035,17 +2036,29 @@ def get_sale_cover_photos(
 @app.get("/sales/{sale_id}/cover-candidates", response_model=SaleCoverCandidatesOut)
 def get_sale_cover_candidates(
     sale_id: str,
+    lot_id: str | None = None,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleCoverCandidatesOut:
-    """Photos from the open website catalog. Saved covers still follow the CT Seller auction."""
+    """Photos from the open website catalog. Saved covers still follow the CT Seller auction.
+
+    ``lot_id`` returns every cover-eligible frame on that lot so a slot can use
+    a photo other than the hero. The unfiltered list stays one photo per lot
+    plus a capped set of extras.
+    """
     sale = _sale_for_user(sale_id, current, db)
     lots, photos = load_sale_lots_and_photos(db, sale)
     lots_by_id = {lot.id: lot for lot in lots}
     sales_by_id = {sale.id: sale}
     by_lot = photos_by_lot_id(photos)
+    if lot_id:
+        if lot_id not in lots_by_id:
+            raise HTTPException(status_code=404, detail="That lot is not in this catalog")
+        chosen = lot_cover_choice_photos(by_lot.get(lot_id, []))
+    else:
+        chosen = cover_candidate_photos(lots, photos)
     cards: list[SaleCoverCandidateOut] = []
-    for photo in cover_candidate_photos(lots, photos):
+    for photo in chosen:
         meta = photo_card_meta(
             photo,
             lots_by_id,
