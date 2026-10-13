@@ -67,7 +67,7 @@ export function PhotoAddsPanel({
         {lots.length === 1 ? "" : "s"} that already had photos. These uploads came in at least 2 hours
         after the first photos, in the last 14 days.
         {onUpdatePhotos
-          ? " Add photos to CT Seller puts new pictures on the listing already posted. Photos already there stay. SKU tape stays off CT Bids."
+          ? " Add photos to CT Seller puts new pictures on the listing already posted. Photos already there stay. Videos on the lot go to the media tab. SKU tape stays off CT Bids."
           : ""}
       </p>
       {onUpdatePhotos && postedIds.length > 0 ? (

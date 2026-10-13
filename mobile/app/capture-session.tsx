@@ -594,7 +594,7 @@ export default function CaptureSessionScreen() {
       ].filter(Boolean);
       Alert.alert(
         "Add to lot?",
-        `${parts.join(" · ")} will be uploaded to ${label}. Photos attach to the listing; videos stay on Estate-EZ (not posted to CT Bids).`,
+        `${parts.join(" · ")} will be uploaded to ${label}. Photos attach to the listing. Videos go to the website, then to CT Seller when the lot is posted.`,
         [
           { text: "Keep editing", style: "cancel" },
           { text: "Upload", style: "default", onPress: () => void finishAppend() }

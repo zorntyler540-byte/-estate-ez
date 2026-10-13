@@ -551,3 +551,75 @@ def test_image_to_base64_skips_second_decode_for_small_jpeg() -> None:
     import base64
 
     assert base64.b64decode(b64) == raw
+
+
+def test_video_locator_matches_seller_btoa() -> None:
+    from app.services.ctseller import ctseller_video_locator
+
+    raw = "BIGwalk.mp4$pk-9$1048580$2"
+    assert ctseller_video_locator(
+        filename="walk.mp4", partkey="pk-9", size=1048580, part_count=2
+    ) == base64.b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def test_add_item_video_chunks_then_registers_on_the_media_tab() -> None:
+    client = CTSellerClient(access_token="tok")
+    posted: list[tuple[str, dict]] = []
+
+    def fake_post(path: str, payload: dict) -> dict:
+        posted.append((path, payload))
+        if path == "/file/upload":
+            return {"status": "success", "data": {"partkey": "pk-9"}}
+        return {"status": "success"}
+
+    payload = b"a" * (1024 * 1024) + b"tail"
+    with patch.object(client, "_post_raw", fake_post):
+        client.add_item_video(item_id=9, video_bytes=payload, name="folder/walk.mp4", display_order=4)
+
+    assert [row[0] for row in posted] == [
+        "/file/upload",
+        "/file/upload/fragment",
+        "/file/upload/fragment",
+        "/item/image/add",
+    ]
+    start = posted[0][1]["data"]
+    assert start == {"filename": "walk.mp4", "size": len(payload), "partCount": 2}
+    assert posted[1][1]["data"]["partid"] == 1
+    assert posted[1][1]["data"]["partkey"] == "pk-9"
+    assert len(base64.b64decode(posted[1][1]["data"]["content"])) == 1024 * 1024
+    assert posted[2][1]["data"]["partid"] == 2
+    assert base64.b64decode(posted[2][1]["data"]["content"]) == b"tail"
+    media = posted[3][1]["data"]
+    assert media["itemid"] == 9
+    assert media["name"] == "walk.mp4"
+    assert media["type"] == "video"
+    assert media["isdisplayimage"] == 0
+    assert media["displayorder"] == 4
+    assert media["image"] == base64.b64encode(b"BIGwalk.mp4$pk-9$1048580$2").decode("ascii")
+
+
+def test_add_item_video_rejects_empty_and_oversize_before_upload(monkeypatch) -> None:
+    from app.services import ctseller as ctseller_mod
+
+    client = CTSellerClient(access_token="tok")
+
+    def fake_post(path: str, payload: dict) -> dict:
+        raise AssertionError(path)
+
+    monkeypatch.setattr(ctseller_mod, "CTSELLER_MAX_VIDEO_BYTES", 2 * 1024 * 1024)
+    with patch.object(client, "_post_raw", fake_post):
+        try:
+            client.add_item_video(item_id=1, video_bytes=b"", name="empty.mp4", display_order=1)
+            raise AssertionError("empty")
+        except CTSellerError as exc:
+            assert "empty" in str(exc)
+        try:
+            client.add_item_video(
+                item_id=1,
+                video_bytes=b"x" * (2 * 1024 * 1024 + 1),
+                name="big.mp4",
+                display_order=1,
+            )
+            raise AssertionError("oversize")
+        except CTSellerError as exc:
+            assert "2 MB" in str(exc)

@@ -325,8 +325,8 @@ export default function LotDetailScreen() {
               <Text style={styles.addPhotosBtnText}>Add photos or video</Text>
             </Pressable>
             <Text style={styles.addPhotosHint}>
-              Opens the camera. Still photos attach to the listing (max 40). Videos stay on Estate-EZ
-              and are not posted to CT Bids (max 8, 45 seconds).
+              Opens the camera. Still photos attach to the listing (max 40). Videos stay with the
+              lot and go to CT Seller when the lot is posted (max 8, 45 seconds).
             </Text>
           </>
         ) : null}

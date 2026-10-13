@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,26 @@ IMAGE_JPEG_QUALITY = 85
 COVER_MAX_EDGE = 1200
 COVER_RETRY_EDGE = 880
 COVER_JPEG_QUALITY = 78
+# Seller media tab: 1 MB fragments, 50 MB per clip. The cover image stays a photo.
+CTSELLER_VIDEO_PART_BYTES = 1024 * 1024
+CTSELLER_MAX_VIDEO_BYTES = 50 * 1024 * 1024
+
+
+def ctseller_video_locator(*, filename: str, partkey: str, size: int, part_count: int) -> str:
+    """Same token the seller site stores in ``image`` for a video (``btoa`` of the BIG… string)."""
+    raw = f"BIG{filename}${partkey}${int(size)}${int(part_count)}"
+    return base64.b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _ctseller_partkey(body: dict[str, Any]) -> str:
+    key = body.get("partkey")
+    data = body.get("data")
+    if not key and isinstance(data, dict):
+        key = data.get("partkey")
+    text = str(key or "").strip()
+    if not text:
+        raise CTSellerError("CT Seller did not return a video upload key")
+    return text
 
 
 class CTSellerError(Exception):
@@ -459,6 +480,68 @@ class CTSellerClient:
             }
         }
         self._post_raw("/item/image/add", payload)
+
+    def add_item_video(
+        self,
+        *,
+        item_id: int,
+        video_bytes: bytes,
+        name: str,
+        display_order: int,
+    ) -> None:
+        """Attach a clip the way the seller media tab does.
+
+        The site starts a multipart upload, sends 1 MB base64 fragments, then
+        posts ``/item/image/add`` with ``type`` ``video`` and ``isdisplayimage`` 0
+        so the cover stays a photo.
+        """
+        filename = Path(name or "video.mp4").name.strip() or "video.mp4"
+        size = len(video_bytes)
+        if size <= 0:
+            raise CTSellerError(f"{filename} is an empty video")
+        if size > CTSELLER_MAX_VIDEO_BYTES:
+            mb = CTSELLER_MAX_VIDEO_BYTES // (1024 * 1024)
+            raise CTSellerError(
+                f"{filename} is {size / (1024 * 1024):.1f} MB. CT Seller accepts videos up to {mb} MB."
+            )
+        part_size = CTSELLER_VIDEO_PART_BYTES
+        part_count = max(1, math.ceil(size / part_size))
+        started = self._post_raw(
+            "/file/upload",
+            {"data": {"filename": filename, "size": size, "partCount": part_count}},
+        )
+        partkey = _ctseller_partkey(started)
+        for index in range(part_count):
+            chunk = video_bytes[index * part_size : (index + 1) * part_size]
+            self._post_raw(
+                "/file/upload/fragment",
+                {
+                    "data": {
+                        "partkey": partkey,
+                        "partid": index + 1,
+                        "content": base64.b64encode(chunk).decode("ascii"),
+                    }
+                },
+            )
+        locator = ctseller_video_locator(
+            filename=filename,
+            partkey=partkey,
+            size=size,
+            part_count=part_count,
+        )
+        self._post_raw(
+            "/item/image/add",
+            {
+                "data": {
+                    "itemid": int(item_id),
+                    "name": filename,
+                    "image": locator,
+                    "type": "video",
+                    "isdisplayimage": 0,
+                    "displayorder": int(display_order),
+                }
+            },
+        )
 
     def list_item_images(self, item_id: int) -> list[dict[str, Any]]:
         """Photos and clips already on a CT Seller item, in display order."""

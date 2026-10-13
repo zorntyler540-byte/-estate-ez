@@ -158,7 +158,7 @@ class Photo(Base):
 
 
 class LotVideo(Base):
-    """Phone/web clip attached to a catalog lot. Not sent through Gemini or CT Bids."""
+    """Phone/web clip attached to a catalog lot. Not sent through Gemini. Post to CT Seller sends it to the item media tab."""
 
     __tablename__ = "lot_videos"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
