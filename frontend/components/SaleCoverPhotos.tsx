@@ -139,6 +139,9 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
   const [pickerSlot, setPickerSlot] = useState<number | null>(null);
   const [pickerSkuQuery, setPickerSkuQuery] = useState("");
   const [candidatesLoaded, setCandidatesLoaded] = useState(false);
+  const [lotFrames, setLotFrames] = useState<Record<string, CoverCandidate[]>>({});
+  const [lotFramesBusy, setLotFramesBusy] = useState<string | null>(null);
+  const [openLotMenu, setOpenLotMenu] = useState<string | null>(null);
   const skuSearchRef = useRef<HTMLInputElement | null>(null);
   const saleIdRef = useRef(saleId);
   saleIdRef.current = saleId;
@@ -210,6 +213,9 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
     setCandidates([]);
     setPickerSlot(null);
     setPickerSkuQuery("");
+    setLotFrames({});
+    setLotFramesBusy(null);
+    setOpenLotMenu(null);
     setSlots((prev) =>
       prev.map((slot) => ({
         ...slot,
@@ -234,6 +240,7 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
   const closePicker = () => {
     setPickerSlot(null);
     setPickerSkuQuery("");
+    setOpenLotMenu(null);
   };
 
   const openPicker = (slot: number) => {
@@ -262,6 +269,42 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
     () => coverCandidates.filter((candidate) => candidateMatchesQuery(candidate, pickerSkuQuery)),
     [coverCandidates, pickerSkuQuery]
   );
+  const lotCards = useMemo(() => {
+    const order: string[] = [];
+    const byLot = new Map<string, CoverCandidate>();
+    for (const row of visibleCandidates) {
+      if (!byLot.has(row.lot_id)) order.push(row.lot_id);
+      const prev = byLot.get(row.lot_id);
+      if (!prev || (row.is_hero && !prev.is_hero)) byLot.set(row.lot_id, row);
+    }
+    return order.map((id) => byLot.get(id)!);
+  }, [visibleCandidates]);
+
+  const toggleLotPhotos = async (lotId: string) => {
+    if (!lotId) return;
+    if (openLotMenu === lotId) {
+      setOpenLotMenu(null);
+      return;
+    }
+    setOpenLotMenu(lotId);
+    if (lotFrames[lotId] || !token || !saleId) return;
+    setLotFramesBusy(lotId);
+    try {
+      const raw = (await apiFetch(
+        `/sales/${encodeURIComponent(saleId)}/cover-candidates?lot_id=${encodeURIComponent(lotId)}`,
+        token
+      )) as CoverCandidatesOut;
+      const rows = (Array.isArray(raw.candidates) ? raw.candidates : []).filter(
+        (candidate) => candidate.photo_role !== "tape" && candidate.photo_role !== "unusable"
+      );
+      setLotFrames((prev) => ({ ...prev, [lotId]: rows }));
+    } catch (e) {
+      setOpenLotMenu(null);
+      setErr(e instanceof Error ? parseApiErrorMessage(e.message) : "Could not load this lot's photos");
+    } finally {
+      setLotFramesBusy((current) => (current === lotId ? null : current));
+    }
+  };
 
   const pickCandidate = (candidate: CoverCandidate) => {
     if (pickerSlot == null) return;
@@ -467,8 +510,10 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
               </button>
             </div>
             <p className="ct-sale-covers__hint">
-              Photos from {openCatalogName || "the catalog you are on"}. Switch Change sale to pick
-              from another catalog — the 4 slots stay. SKU-tape frames are not shown.
+              Photos from {openCatalogName || "the catalog you are on"}. One card per lot.
+              More photos opens the rest of that SKU so you can use a different frame. Switch
+              Change sale to pick from another catalog — the 4 slots stay. SKU-tape frames are
+              not shown.
             </p>
             <label className="ct-sale-covers-modal__search">
               <span className="ct-sale-covers-modal__search-label">Search SKU</span>
@@ -488,33 +533,82 @@ export function SaleCoverPhotos({ saleId, saleName, token, ctsellerSaleId, disab
               <p className="ct-sale-covers__hint">Loading catalog photos…</p>
             ) : null}
             <div className="ct-sale-covers-grid">
-              {visibleCandidates.map((candidate) => {
+              {lotCards.map((candidate) => {
                 const usedHere = slots.some((s) => s.photo_id === candidate.photo_id && s.slot === pickerSlot);
                 const usedOther = slots.some((s) => s.photo_id === candidate.photo_id && s.slot !== pickerSlot);
+                const menuOpen = openLotMenu === candidate.lot_id;
+                const frames = lotFrames[candidate.lot_id] || [];
+                const otherFrames = frames.filter((frame) => frame.photo_id !== candidate.photo_id);
                 return (
-                  <button
-                    key={candidate.photo_id}
-                    type="button"
+                  <div
+                    key={candidate.lot_id}
                     className={`ct-sale-covers-grid__card${usedHere ? " is-current" : ""}${
                       usedOther ? " is-used" : ""
                     }`}
-                    onClick={() => pickCandidate(candidate)}
                   >
-                    <CoverThumb
-                      token={token}
-                      lotId={candidate.lot_id}
-                      photoId={candidate.photo_id}
-                      thumbUrl={candidate.thumb_url}
-                      label={candidate.sku || "lot"}
-                    />
-                    <span className="ct-sale-covers-grid__meta">
-                      <strong>{candidate.sku || "No SKU"}</strong>
-                      {candidate.is_hero ? " · hero" : ""}
-                      {usedOther ? " · used" : ""}
-                      <br />
-                      {(candidate.auction_title || "").slice(0, 72) || "Untitled lot"}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      className="ct-sale-covers-grid__pick"
+                      onClick={() => pickCandidate(candidate)}
+                    >
+                      <CoverThumb
+                        token={token}
+                        lotId={candidate.lot_id}
+                        photoId={candidate.photo_id}
+                        thumbUrl={candidate.thumb_url}
+                        label={candidate.sku || "lot"}
+                      />
+                      <span className="ct-sale-covers-grid__meta">
+                        <strong>{candidate.sku || "No SKU"}</strong>
+                        {candidate.is_hero ? " · hero" : ""}
+                        {usedOther ? " · used" : ""}
+                        <br />
+                        {(candidate.auction_title || "").slice(0, 72) || "Untitled lot"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ct-sale-covers-more-btn"
+                      aria-expanded={menuOpen}
+                      onClick={() => void toggleLotPhotos(candidate.lot_id)}
+                    >
+                      {menuOpen ? "Hide photos" : "More photos"}
+                    </button>
+                    {menuOpen ? (
+                      <div className="ct-sale-covers-more" role="listbox" aria-label={`Other photos of ${candidate.sku || "this lot"}`}>
+                        {lotFramesBusy === candidate.lot_id && !frames.length ? (
+                          <p className="ct-sale-covers__hint">Loading photos…</p>
+                        ) : null}
+                        {frames.length && !otherFrames.length ? (
+                          <p className="ct-sale-covers__hint">This lot has no other listing photo.</p>
+                        ) : null}
+                        {otherFrames.map((frame) => {
+                          const frameUsed = slots.some((s) => s.photo_id === frame.photo_id && s.slot !== pickerSlot);
+                          return (
+                            <button
+                              key={frame.photo_id}
+                              type="button"
+                              role="option"
+                              className="ct-sale-covers-more__shot"
+                              onClick={() => pickCandidate(frame)}
+                            >
+                              <CoverThumb
+                                token={token}
+                                lotId={frame.lot_id}
+                                photoId={frame.photo_id}
+                                thumbUrl={frame.thumb_url}
+                                label={frame.sku || "lot"}
+                              />
+                              <span>
+                                {frame.is_hero ? "hero" : frame.photo_role || "photo"}
+                                {frameUsed ? " · used" : ""}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>

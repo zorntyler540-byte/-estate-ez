@@ -4396,12 +4396,63 @@ select.ct-input option {
   opacity: 0.72;
 }
 
+.ct-sale-covers-grid__pick {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-sale-covers-more-btn {
+  margin: 0 0.35rem 0.4rem;
+  padding: 0.28rem 0.4rem;
+  border: 1px solid var(--ct-border);
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.ct-sale-covers-more {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding: 0 0.35rem 0.45rem;
+}
+
+.ct-sale-covers-more__shot {
+  flex: 0 0 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0;
+  border: 1px solid var(--ct-border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.68rem;
+  text-align: left;
+  cursor: pointer;
+}
+
 .ct-sale-covers-grid__card img,
 .ct-sale-covers-grid__card .ct-sale-covers__ph {
   height: 110px;
   width: 100%;
   object-fit: cover;
   background: var(--ct-thumb-placeholder);
+}
+
+.ct-sale-covers-more__shot .ct-sale-covers__ph {
+  height: 64px;
 }
 
 .ct-sale-covers-grid__meta {

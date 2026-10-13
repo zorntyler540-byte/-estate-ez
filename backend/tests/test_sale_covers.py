@@ -70,6 +70,23 @@ def test_suggest_fills_from_extras_when_fewer_lots() -> None:
     assert "tape" not in {p.id for p in picked}
 
 
+def test_lot_cover_choices_are_hero_first_and_skip_tape() -> None:
+    from app.services.sale_covers import lot_cover_choice_photos
+
+    photos = [
+        _photo("tape", "l1", "tape", sort_order=0),
+        _photo("angle", "l1", "angle_only", sort_order=3),
+        _photo("front", "l1", "item_front", sort_order=2),
+        _photo("hero", "l1", "hero", sort_order=1),
+        _photo("bad", "l1", "unusable", sort_order=4),
+    ]
+    chosen = lot_cover_choice_photos(photos)  # type: ignore[arg-type]
+    assert [p.id for p in chosen][0] == "hero"
+    assert "tape" not in {p.id for p in chosen}
+    assert "bad" not in {p.id for p in chosen}
+    assert {p.id for p in chosen} == {"hero", "front", "angle"}
+
+
 def test_candidates_include_hero_and_cap_extras() -> None:
     lots = [_lot("l1", "001")]
     photos = [_photo("h1", "l1", "hero")] + [
