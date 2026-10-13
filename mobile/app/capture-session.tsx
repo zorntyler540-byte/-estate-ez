@@ -32,6 +32,7 @@ import {
 import { uploadLotPhotos, uploadLotVideos } from "@/lib/api";
 import { capturedAtMsFromUri } from "@/lib/uploadPrepare";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
+import { librarySaveNote, photoLibraryBackupAvailable, saveCaptureToPhotoLibrary } from "@/lib/saveToPhotos";
 import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
 import {
   MAX_VIDEO_DURATION_SEC,
@@ -148,6 +149,8 @@ export default function CaptureSessionScreen() {
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [libraryNote, setLibraryNote] = useState("");
+  const [photosBackup, setPhotosBackup] = useState<"unknown" | "on" | "off">("unknown");
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
@@ -357,6 +360,31 @@ export default function CaptureSessionScreen() {
     }
   }
 
+  useEffect(() => {
+    void photoLibraryBackupAvailable().then((ok) => {
+      setPhotosBackup(ok ? "on" : "off");
+    });
+  }, []);
+
+  async function mirrorToPhotoLibrary(uri: string) {
+    try {
+      const result = await saveCaptureToPhotoLibrary(uri);
+      if (result === "unavailable") {
+        setPhotosBackup("off");
+        setLibraryNote("");
+        return;
+      }
+      if (result === "saved") {
+        setPhotosBackup("on");
+        setLibraryNote("");
+        return;
+      }
+      setLibraryNote(librarySaveNote(result) ?? "");
+    } catch {
+      setLibraryNote(librarySaveNote("failed") ?? "");
+    }
+  }
+
   async function handleCameraReady() {
     setCameraReady(true);
     try {
@@ -399,6 +427,7 @@ export default function CaptureSessionScreen() {
         const dest = `${dir}${Date.now()}.jpg`;
         await FileSystem.copyAsync({ from: croppedUri, to: dest });
         setThumbs((prev) => [...prev, dest]);
+        await mirrorToPhotoLibrary(dest);
         return;
       }
       const id = await ensureDraft();
@@ -412,6 +441,7 @@ export default function CaptureSessionScreen() {
       const uris = photos.map((p) => p.file_uri);
       setThumbs(uris);
       setResumedNotice("");
+      await mirrorToPhotoLibrary(dest);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Capture failed");
     } finally {
@@ -441,6 +471,7 @@ export default function CaptureSessionScreen() {
       const dest = `${dir}${Date.now()}${ext}`;
       await FileSystem.copyAsync({ from: uri, to: dest });
       setThumbs((prev) => [...prev, dest]);
+      await mirrorToPhotoLibrary(dest);
       return;
     }
     const id = await ensureDraft();
@@ -453,6 +484,7 @@ export default function CaptureSessionScreen() {
     const photos = await listDraftPhotos(id);
     setThumbs(photos.map((p) => p.file_uri));
     setResumedNotice("");
+    await mirrorToPhotoLibrary(dest);
   }
 
   async function recordVideo() {
@@ -992,6 +1024,11 @@ export default function CaptureSessionScreen() {
             />
           ) : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
+          {libraryNote ? (
+            <Text style={styles.libraryNote}>{libraryNote}</Text>
+          ) : photosBackup === "on" ? (
+            <Text style={styles.libraryHint}>A copy of each shot is also saved in the Photos app.</Text>
+          ) : null}
         </View>
 
         <ScrollView
@@ -1280,6 +1317,8 @@ const styles = StyleSheet.create({
   primaryText: { color: "#fff", fontWeight: "600" },
   disabled: { opacity: 0.45 },
   error: { color: "#fca5a5", fontSize: 13 },
+  libraryHint: { color: "#a8a29e", fontSize: 12, textAlign: "center" },
+  libraryNote: { color: "#fcd34d", fontSize: 12, textAlign: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 16 },
   text: { color: "#d6d3d1", textAlign: "center" }
 });
