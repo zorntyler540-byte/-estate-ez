@@ -2259,6 +2259,18 @@ export default function DashboardPage() {
     }
     return ids.size;
   }, [lots]);
+  const ctSellerAuctionOptions = useMemo(() => {
+    const byId = new Map<number, CTSellerRemoteSale>();
+    for (const sale of ctSellerRemoteSales) byId.set(sale.id, sale);
+    for (const lot of lots) {
+      const id = lot.ctseller_sale_id;
+      if (!id || id <= 0 || !lotIsPostedToCtSeller(lot) || byId.has(id)) continue;
+      byId.set(id, { id, title: ctBidsAuctionLabel(id, ctSellerRemoteSales) || `CT Bids #${id}` });
+    }
+    return [...byId.values()].sort((a, b) =>
+      (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
+    );
+  }, [ctSellerRemoteSales, lots]);
   const postedToPickedCount = useMemo(
     () =>
       pickedCtBidsSaleId > 0
@@ -7481,7 +7493,7 @@ export default function DashboardPage() {
               disabled={ctSellerBulkBusy || !selectedSaleId}
             >
               <option value="">Select auction…</option>
-              {ctSellerRemoteSales.map((s) => (
+              {ctSellerAuctionOptions.map((s) => (
                 <option key={s.id} value={String(s.id)}>
                   {s.title}
                   {s.status ? ` (${s.status})` : ""}
@@ -8158,7 +8170,9 @@ export default function DashboardPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Photo ZIP</span>
                   <span className="ct-upload-option__desc">
-                    Every catalog photo for this sale — one folder per lot, named SKU plus title.
+                    Every catalog photo, one folder per lot, named SKU plus title. Use{" "}
+                    <strong>this CT Bids sale</strong> when this catalog was posted to more than one
+                    auction — only lots on the CT Seller auction you picked are included.
                   </span>
                 </div>
                 <div className="ct-upload-option__actions">
@@ -8173,8 +8187,38 @@ export default function DashboardPage() {
                       saleZipExport?.status === "queued" ||
                       saleZipExport?.status === "processing"
                     }
+                    title="Every lot in this Estate-EZ catalog, posted or not"
                   >
-                    {saleZipBusy ? "Starting…" : "Prepare ZIP…"}
+                    {saleZipBusy && !saleZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : "All lots in this catalog"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    onClick={() => void startSalePhotosZipExport("all", pickedCtBidsSaleId)}
+                    disabled={
+                      !selectedSaleId ||
+                      pickedCtBidsSaleId < 1 ||
+                      postedToPickedCount < 1 ||
+                      saleZipBusy ||
+                      busyProcessing ||
+                      saleZipExport?.status === "queued" ||
+                      saleZipExport?.status === "processing"
+                    }
+                    title={
+                      pickedCtBidsSaleId < 1
+                        ? "Pick a CT Seller auction above first"
+                        : postedToPickedCount < 1
+                          ? "No lots in this catalog are posted to that CT Bids sale — Check CT Bids sales, or pick the auction they were posted to"
+                          : `Every photo of the ${postedToPickedCount} lot(s) posted to the selected CT Bids sale`
+                    }
+                  >
+                    {saleZipBusy && saleZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : pickedCtBidsSaleId > 0
+                        ? `This CT Bids sale (${postedToPickedCount})`
+                        : "This CT Bids sale"}
                   </button>
                   {saleZipExport?.ready ? (
                     <button
@@ -8182,7 +8226,9 @@ export default function DashboardPage() {
                       className="ct-btn ct-btn--primary ct-upload-option__btn"
                       onClick={() => void downloadSaleZipExport("all")}
                     >
-                      Download ZIP
+                      {saleZipExport.filter_ctseller_sale_id
+                        ? "Download CT Bids photos"
+                        : "Download ZIP"}
                     </button>
                   ) : null}
                 </div>
@@ -8265,7 +8311,9 @@ export default function DashboardPage() {
                   <li>
                     <strong>Photo ZIP</strong>: original images, <strong>one folder per lot</strong> named
                     SKU plus a short title (e.g. <code>JZ5137AD-Liz-Co-Heart-Necklace</code>, or{" "}
-                    <code>lot-045-Table-Lamp</code> for number-only SKUs).
+                    <code>lot-045-Table-Lamp</code> for number-only SKUs).{" "}
+                    <strong>This CT Bids sale</strong> keeps only lots posted to the CT Seller auction
+                    you picked, so photos from a different CT Bids sale in this catalog stay out.
                   </li>
                   <li>
                     <strong>Hero shots ZIP</strong>: one listing photo per lot (AI group/hero, never the
@@ -8285,7 +8333,11 @@ export default function DashboardPage() {
             </details>
             {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
               <p className="ct-dash-exports__status ct-muted">
-                Building photo ZIP… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+                Building photo ZIP
+                {saleZipExport.filter_ctseller_sale_id
+                  ? ` for CT Bids #${saleZipExport.filter_ctseller_sale_id}`
+                  : ""}
+                … <strong>{saleZipExport.photo_files_written}</strong> /{" "}
                 <strong>{saleZipExport.total_photos_expected}</strong> files in archive
               </p>
             ) : null}
