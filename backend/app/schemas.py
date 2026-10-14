@@ -969,6 +969,7 @@ class SaleZipExportOut(BaseModel):
     ready: bool = False
     kind: str = "all"
     filter_ctseller_sale_id: int | None = None
+    across_sales: bool = False
 
 
 class AppraisalResultOut(BaseModel):

@@ -68,6 +68,22 @@ def count_sale_hero_photos(
     )
 
 
+def count_account_hero_photos(db: Session, account_id: str, ctseller_sale_id: int) -> int:
+    """Lots on any website sale posted to this CT Seller auction that have a catalog photo."""
+    return (
+        db.query(func.count(func.distinct(Lot.id)))
+        .join(Photo, Photo.lot_id == Lot.id)
+        .filter(
+            Lot.account_id == account_id,
+            Photo.account_id == account_id,
+            Lot.ctseller_item_id.isnot(None),
+            Lot.ctseller_sale_id == int(ctseller_sale_id),
+        )
+        .scalar()
+        or 0
+    )
+
+
 def normalize_sale_zip_kind(raw: object | None) -> str:
     kind = str(raw or ZIP_KIND_ALL).strip().lower()
     return kind if kind in ZIP_KINDS else ZIP_KIND_ALL
@@ -210,14 +226,11 @@ def run_sale_photo_zip_export(db: Session, export_id: str) -> None:
 
     zip_final = export_dir_for_account(row.account_id) / f"sale-{row.sale_id}-{export_id}.zip"
     try:
-        lots_q = (
-            db.query(Lot)
-            .filter(
-                Lot.sale_id == row.sale_id,
-                Lot.account_id == row.account_id,
-            )
-            .order_by(Lot.created_at.asc())
-        )
+        across = bool(getattr(row, "across_sales", False))
+        lots_q = db.query(Lot).filter(Lot.account_id == row.account_id)
+        if not across:
+            lots_q = lots_q.filter(Lot.sale_id == row.sale_id)
+        lots_q = lots_q.order_by(Lot.created_at.asc())
         filter_sid = getattr(row, "filter_ctseller_sale_id", None)
         if filter_sid is not None:
             lots_q = lots_q.filter(

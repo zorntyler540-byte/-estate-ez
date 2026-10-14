@@ -245,6 +245,7 @@ from app.services.sale_zip_export import (
     ZIP_KIND_ALL,
     ZIP_KIND_HEROES,
     cleanup_expired_sale_zip_exports,
+    count_account_hero_photos,
     count_sale_catalog_photos,
     count_sale_hero_photos,
     normalize_sale_zip_kind,
@@ -728,6 +729,14 @@ def _ensure_lot_ctseller_sale_id_column() -> None:
         if "filter_ctseller_sale_id" not in zip_cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE sale_photo_zip_exports ADD COLUMN filter_ctseller_sale_id INTEGER"))
+        if "across_sales" not in zip_cols:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE sale_photo_zip_exports "
+                        "ADD COLUMN across_sales BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
 
 
 def _count_catalog_image_files(max_scan: int = 200_000) -> int:
@@ -5868,6 +5877,7 @@ def _sale_zip_export_out(row: SalePhotoZipExport) -> SaleZipExportOut:
         ready=ready,
         kind=normalize_sale_zip_kind(getattr(row, "kind", None)),
         filter_ctseller_sale_id=getattr(row, "filter_ctseller_sale_id", None),
+        across_sales=bool(getattr(row, "across_sales", False)),
     )
 
 
@@ -5901,6 +5911,10 @@ def start_sale_photos_zip_export(
         None,
         description="When set, only lots posted to this CT Seller auction (heroes for one CT Bids sale).",
     ),
+    across_sales: bool = Query(
+        False,
+        description="When true with ctseller_sale_id, include posted lots from every website sale.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleZipExportOut:
@@ -5913,13 +5927,26 @@ def start_sale_photos_zip_export(
     filter_sid = int(ctseller_sale_id) if ctseller_sale_id is not None else None
     if filter_sid is not None and filter_sid <= 0:
         raise HTTPException(status_code=400, detail="ctseller_sale_id must be a positive integer")
+    span_sales = bool(across_sales)
+    if span_sales:
+        if is_client_role(current.role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        if filter_sid is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Pick a CT Seller auction before downloading heroes from every website sale.",
+            )
+        if zip_kind != ZIP_KIND_HEROES:
+            raise HTTPException(status_code=400, detail="Across-sale download is hero shots only.")
     cleanup_expired_sale_zip_exports(db, current.account_id)
     in_progress_q = db.query(SalePhotoZipExport).filter(
-        SalePhotoZipExport.sale_id == sale.id,
         SalePhotoZipExport.account_id == current.account_id,
         SalePhotoZipExport.status.in_((JobStatus.queued, JobStatus.processing)),
         SalePhotoZipExport.kind == zip_kind,
+        SalePhotoZipExport.across_sales.is_(span_sales),
     )
+    if not span_sales:
+        in_progress_q = in_progress_q.filter(SalePhotoZipExport.sale_id == sale.id)
     if filter_sid is None:
         in_progress_q = in_progress_q.filter(SalePhotoZipExport.filter_ctseller_sale_id.is_(None))
     else:
@@ -5931,12 +5958,23 @@ def start_sale_photos_zip_export(
         if in_progress.status in (JobStatus.queued, JobStatus.processing):
             return _sale_zip_export_out(in_progress)
 
-    n = int(
-        count_sale_hero_photos(db, sale.id, current.account_id, filter_sid)
-        if zip_kind == ZIP_KIND_HEROES
-        else count_sale_catalog_photos(db, sale.id, current.account_id, filter_sid)
-    )
+    if span_sales and filter_sid is not None:
+        n = int(count_account_hero_photos(db, current.account_id, filter_sid))
+    else:
+        n = int(
+            count_sale_hero_photos(db, sale.id, current.account_id, filter_sid)
+            if zip_kind == ZIP_KIND_HEROES
+            else count_sale_catalog_photos(db, sale.id, current.account_id, filter_sid)
+        )
     if n <= 0:
+        if span_sales:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No posted lots with photos for that CT Bids sale on this website. "
+                    "Use “Check CT Bids sales” on each catalog so lots are matched to the auction."
+                ),
+            )
         if filter_sid is not None:
             raise HTTPException(
                 status_code=400,
@@ -5955,6 +5993,7 @@ def start_sale_photos_zip_export(
         photo_files_written=0,
         kind=zip_kind,
         filter_ctseller_sale_id=filter_sid,
+        across_sales=span_sales,
     )
     db.add(row)
     db.commit()
@@ -6013,9 +6052,13 @@ def download_sale_photos_zip_export(
     slug = re.sub(r"[^\w\-]+", "_", (sale.name if sale else "sale")[:60]).strip("_") or "sale"
     suffix = "heroes" if normalize_sale_zip_kind(getattr(row, "kind", None)) == ZIP_KIND_HEROES else "photos"
     filter_sid = getattr(row, "filter_ctseller_sale_id", None)
-    if filter_sid:
-        suffix = f"{suffix}-ctbids-{int(filter_sid)}"
-    return FileResponse(str(p), media_type="application/zip", filename=f"sale-{slug}-{suffix}.zip")
+    if getattr(row, "across_sales", False) and filter_sid:
+        filename = f"ctbids-{int(filter_sid)}-heroes.zip"
+    else:
+        if filter_sid:
+            suffix = f"{suffix}-ctbids-{int(filter_sid)}"
+        filename = f"sale-{slug}-{suffix}.zip"
+    return FileResponse(str(p), media_type="application/zip", filename=filename)
 
 
 def _require_appraiser_enabled() -> None:

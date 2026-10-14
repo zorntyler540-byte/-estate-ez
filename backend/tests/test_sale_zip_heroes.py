@@ -403,3 +403,107 @@ def test_all_photos_zip_can_filter_to_one_ctbids_sale(tmp_path: Path, monkeypatc
     assert "TG415SK" in index
     assert "MS322AD" not in index
 
+
+def test_heroes_zip_across_website_sales_for_one_ctbids_auction(tmp_path: Path, monkeypatch) -> None:
+    """One CT Seller auction can hold lots that live in different Estate-EZ catalogs."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'zip.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    monkeypatch.setattr("app.services.sale_zip_export.export_dir_for_account", lambda _aid: export_dir)
+
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    other_auction = tmp_path / "c.jpg"
+    _tiny_jpeg(a)
+    _tiny_jpeg(b)
+    _tiny_jpeg(other_auction)
+
+    db.add_all(
+        [
+            Lot(
+                id="lot-a",
+                account_id="acct-1",
+                user_id="user-1",
+                sale_id="sale-theresa",
+                sku="TG415SK",
+                auction_title="Gold necklace",
+                ctseller_item_id=11,
+                ctseller_sale_id=100,
+            ),
+            Lot(
+                id="lot-b",
+                account_id="acct-1",
+                user_id="user-1",
+                sale_id="sale-primitive",
+                sku="MS322AD",
+                auction_title="Hallmark ornaments",
+                ctseller_item_id=22,
+                ctseller_sale_id=100,
+            ),
+            Lot(
+                id="lot-c",
+                account_id="acct-1",
+                user_id="user-1",
+                sale_id="sale-primitive",
+                sku="ZZ999ZZ",
+                auction_title="Other auction",
+                ctseller_item_id=33,
+                ctseller_sale_id=200,
+            ),
+            Photo(
+                id="p-a",
+                account_id="acct-1",
+                user_id="user-1",
+                lot_id="lot-a",
+                original_name="a.jpg",
+                storage_path=str(a),
+                sort_order=0,
+                photo_role="hero",
+            ),
+            Photo(
+                id="p-b",
+                account_id="acct-1",
+                user_id="user-1",
+                lot_id="lot-b",
+                original_name="b.jpg",
+                storage_path=str(b),
+                sort_order=0,
+                photo_role="hero",
+            ),
+            Photo(
+                id="p-c",
+                account_id="acct-1",
+                user_id="user-1",
+                lot_id="lot-c",
+                original_name="c.jpg",
+                storage_path=str(other_auction),
+                sort_order=0,
+                photo_role="hero",
+            ),
+        ]
+    )
+    row = SalePhotoZipExport(
+        id="ex-across",
+        account_id="acct-1",
+        user_id="user-1",
+        sale_id="sale-theresa",
+        status=JobStatus.queued,
+        kind=ZIP_KIND_HEROES,
+        filter_ctseller_sale_id=100,
+        across_sales=True,
+        total_photos_expected=2,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+
+    run_sale_photo_zip_export(db, "ex-across")
+    db.refresh(row)
+    assert row.status == JobStatus.completed
+    assert row.photo_files_written == 2
+    names = sorted(n for n in zipfile.ZipFile(row.zip_path).namelist() if n != "_lots.csv")
+    assert names == ["MS322AD-Hallmark-ornaments.jpg", "TG415SK-Gold-necklace.jpg"]
+
