@@ -410,6 +410,15 @@ class CTSellerStatusOut(BaseModel):
     username: str | None = None
 
 
+class CTSellerSessionOut(BaseModel):
+    """Desktop Watcher session: CT Seller JWTs only — never the CT Seller password."""
+
+    access_token: str
+    refresh_token: str = ""
+    username: str | None = None
+    connected: bool = True
+
+
 class CTSellerRemoteSaleOut(BaseModel):
     id: int
     title: str

@@ -65,6 +65,7 @@ from app.schemas import (
     CTSellerPostedAuctionOut,
     CTSellerPostedAuctionsOut,
     CTSellerPostedRefreshIn,
+    CTSellerSessionOut,
     CTSellerStatusOut,
     CatalogR2MigrateIn,
     CatalogR2MigrateOut,
@@ -2654,6 +2655,39 @@ def ctseller_status(
     username = (getattr(account, "ctseller_username", None) or "").strip() or None
     has_pw = bool(unseal_secret(getattr(account, "ctseller_password_enc", None)))
     return CTSellerStatusOut(connected=bool(username and has_pw), username=username)
+
+
+@app.post("/integrations/ctseller/session", response_model=CTSellerSessionOut)
+def ctseller_desktop_session(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerSessionOut:
+    """Mint a fresh CT Seller token for Estate-Ez Auction Watcher.
+
+    Uses the CT Seller login already stored on Account. Does not return the
+    CT Seller password. Access JWTs are short-lived; Watcher should persist
+    the refresh token and call this again if refresh fails.
+    """
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    client = _ctseller_client_for_account(account, db)
+    access = (client.access_token or "").strip() or unseal_secret(
+        getattr(account, "ctseller_access_token_enc", None)
+    )
+    refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
+    if not access:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect your CT Seller account on Account → CT Seller first",
+        )
+    username = (getattr(account, "ctseller_username", None) or "").strip() or None
+    return CTSellerSessionOut(
+        access_token=access,
+        refresh_token=refresh or "",
+        username=username,
+        connected=True,
+    )
 
 
 @app.put("/integrations/ctseller/credentials", response_model=CTSellerStatusOut)
