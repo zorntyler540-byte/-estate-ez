@@ -1545,6 +1545,7 @@ type SaleZipExport = {
   ready: boolean;
   kind?: string;
   filter_ctseller_sale_id?: number | null;
+  across_sales?: boolean;
 };
 
 /** One placeholder row per queued photo (stable slot for “where the next result lands”). */
@@ -2077,6 +2078,8 @@ export default function DashboardPage() {
   const [saleZipExport, setSaleZipExport] = useState<SaleZipExport | null>(null);
   const [saleZipBusy, setSaleZipBusy] = useState(false);
   const [saleHeroZipExport, setSaleHeroZipExport] = useState<SaleZipExport | null>(null);
+  const [auctionHeroZipExport, setAuctionHeroZipExport] = useState<SaleZipExport | null>(null);
+  const [auctionHeroZipBusy, setAuctionHeroZipBusy] = useState(false);
   const [saleHeroZipBusy, setSaleHeroZipBusy] = useState(false);
   const [lotPostedSaleFilter, setLotPostedSaleFilter] = useState<
     "all" | "picked" | "other" | "unposted" | "sold" | "unsold" | "live"
@@ -2259,6 +2262,18 @@ export default function DashboardPage() {
     }
     return ids.size;
   }, [lots]);
+  const ctSellerAuctionOptions = useMemo(() => {
+    const byId = new Map<number, CTSellerRemoteSale>();
+    for (const sale of ctSellerRemoteSales) byId.set(sale.id, sale);
+    for (const lot of lots) {
+      const id = lot.ctseller_sale_id;
+      if (!id || id <= 0 || !lotIsPostedToCtSeller(lot) || byId.has(id)) continue;
+      byId.set(id, { id, title: ctBidsAuctionLabel(id, ctSellerRemoteSales) || `CT Bids #${id}` });
+    }
+    return [...byId.values()].sort((a, b) =>
+      (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
+    );
+  }, [ctSellerRemoteSales, lots]);
   const postedToPickedCount = useMemo(
     () =>
       pickedCtBidsSaleId > 0
@@ -2600,6 +2615,10 @@ export default function DashboardPage() {
     setSaleHeroZipExport(null);
   }, [selectedSaleId]);
 
+  useEffect(() => {
+    setAuctionHeroZipExport(null);
+  }, [pickedCtBidsSaleId]);
+
   /** Refresh/close during multipart upload aborts the request and clears staging — warn first. */
   useEffect(() => {
     if (typeof window === "undefined" || !uploading) return;
@@ -2759,6 +2778,33 @@ export default function DashboardPage() {
       if (intervalId !== undefined) window.clearInterval(intervalId);
     };
   }, [token, saleHeroZipExport?.id]);
+
+  useEffect(() => {
+    if (!token || !auctionHeroZipExport?.id) return;
+    if (auctionHeroZipExport.status !== "queued" && auctionHeroZipExport.status !== "processing") return;
+    const id = auctionHeroZipExport.id;
+    let cancelled = false;
+    let intervalId: number | undefined;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const row = (await apiFetch(`/exports/sale-photos-zip/${encodeURIComponent(id)}`, token)) as SaleZipExport;
+        if (!cancelled) setAuctionHeroZipExport(row);
+        if (row.ready || row.status === "failed") {
+          cancelled = true;
+          if (intervalId !== undefined) window.clearInterval(intervalId);
+        }
+      } catch {
+        /* keep last row */
+      }
+    };
+    intervalId = window.setInterval(() => void tick(), 2500);
+    void tick();
+    return () => {
+      cancelled = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [token, auctionHeroZipExport?.id]);
 
   useEffect(() => {
     if (!token) {
@@ -6097,6 +6143,55 @@ export default function DashboardPage() {
     }
   }
 
+  async function startAuctionHeroZip() {
+    if (!token || !selectedSaleId || pickedCtBidsSaleId < 1) return;
+    setError("");
+    setAuctionHeroZipBusy(true);
+    try {
+      const q = new URLSearchParams({
+        sale_id: selectedSaleId,
+        kind: "heroes",
+        ctseller_sale_id: String(pickedCtBidsSaleId),
+        across_sales: "true"
+      });
+      const row = (await apiFetch(`/exports/sale-photos-zip?${q.toString()}`, token, {
+        method: "POST"
+      })) as SaleZipExport;
+      setAuctionHeroZipExport(row);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start the CT Bids hero ZIP");
+    } finally {
+      setAuctionHeroZipBusy(false);
+    }
+  }
+
+  async function downloadAuctionHeroZip() {
+    const row = auctionHeroZipExport;
+    if (!token || !row?.id || !row.ready || !row.filter_ctseller_sale_id) return;
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/exports/sale-photos-zip/${encodeURIComponent(row.id)}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `ctbids-${row.filter_ctseller_sale_id}-heroes.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not download the CT Bids hero ZIP");
+    }
+  }
+
   async function downloadSaleZipExport(kind: "all" | "heroes" = "all") {
     const row = kind === "heroes" ? saleHeroZipExport : saleZipExport;
     if (!token || !row?.id || !row.ready) return;
@@ -7481,7 +7576,7 @@ export default function DashboardPage() {
               disabled={ctSellerBulkBusy || !selectedSaleId}
             >
               <option value="">Select auction…</option>
-              {ctSellerRemoteSales.map((s) => (
+              {ctSellerAuctionOptions.map((s) => (
                 <option key={s.id} value={String(s.id)}>
                   {s.title}
                   {s.status ? ` (${s.status})` : ""}
@@ -7490,6 +7585,39 @@ export default function DashboardPage() {
               ))}
             </select>
           </div>
+          <button
+            type="button"
+            className="ct-btn"
+            onClick={() => void startAuctionHeroZip()}
+            disabled={
+              pickedCtBidsSaleId < 1 ||
+              auctionReserveLots.length < 1 ||
+              auctionHeroZipBusy ||
+              auctionHeroZipExport?.status === "queued" ||
+              auctionHeroZipExport?.status === "processing" ||
+              !selectedSaleId
+            }
+            title={
+              pickedCtBidsSaleId < 1
+                ? "Pick a CT Seller auction first"
+                : auctionReserveLots.length < 1
+                  ? "No lots on the website are posted to that auction yet. Check CT Bids sales on each catalog."
+                  : "One hero photo for every lot posted to this CT Seller auction, from every sale on the website"
+            }
+          >
+            {auctionHeroZipBusy ||
+            auctionHeroZipExport?.status === "queued" ||
+            auctionHeroZipExport?.status === "processing"
+              ? `Building heroes ${auctionHeroZipExport?.photo_files_written ?? 0}/${
+                  auctionHeroZipExport?.total_photos_expected ?? auctionReserveLots.length
+                }…`
+              : `Heroes from every sale (${auctionReserveLots.length})`}
+          </button>
+          {auctionHeroZipExport?.ready ? (
+            <button type="button" className="ct-btn ct-btn--primary" onClick={() => void downloadAuctionHeroZip()}>
+              Download heroes
+            </button>
+          ) : null}
           <div style={{ minWidth: 180, flex: "0 1 200px" }}>
             <label className="ct-label" htmlFor="dash-posted-sale-filter">
               Show lots
@@ -7615,6 +7743,11 @@ export default function DashboardPage() {
             </div>
           ) : null}
         </div>
+        {auctionHeroZipExport?.status === "failed" ? (
+          <p className="ct-dash-exports__status" style={{ color: "var(--ct-error)" }}>
+            {auctionHeroZipExport.error_message || "Hero ZIP failed"}
+          </p>
+        ) : null}
         {selectedSaleId && token ? (
           <SaleCoverPhotos
             saleId={selectedSaleId}
@@ -8158,7 +8291,9 @@ export default function DashboardPage() {
                 <div className="ct-upload-option__text">
                   <span className="ct-upload-option__title">Photo ZIP</span>
                   <span className="ct-upload-option__desc">
-                    Every catalog photo for this sale — one folder per lot, named SKU plus title.
+                    Every catalog photo, one folder per lot, named SKU plus title. Use{" "}
+                    <strong>this CT Bids sale</strong> when this catalog was posted to more than one
+                    auction — only lots on the CT Seller auction you picked are included.
                   </span>
                 </div>
                 <div className="ct-upload-option__actions">
@@ -8173,8 +8308,38 @@ export default function DashboardPage() {
                       saleZipExport?.status === "queued" ||
                       saleZipExport?.status === "processing"
                     }
+                    title="Every lot in this Estate-EZ catalog, posted or not"
                   >
-                    {saleZipBusy ? "Starting…" : "Prepare ZIP…"}
+                    {saleZipBusy && !saleZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : "All lots in this catalog"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    onClick={() => void startSalePhotosZipExport("all", pickedCtBidsSaleId)}
+                    disabled={
+                      !selectedSaleId ||
+                      pickedCtBidsSaleId < 1 ||
+                      postedToPickedCount < 1 ||
+                      saleZipBusy ||
+                      busyProcessing ||
+                      saleZipExport?.status === "queued" ||
+                      saleZipExport?.status === "processing"
+                    }
+                    title={
+                      pickedCtBidsSaleId < 1
+                        ? "Pick a CT Seller auction above first"
+                        : postedToPickedCount < 1
+                          ? "No lots in this catalog are posted to that CT Bids sale — Check CT Bids sales, or pick the auction they were posted to"
+                          : `Every photo of the ${postedToPickedCount} lot(s) posted to the selected CT Bids sale`
+                    }
+                  >
+                    {saleZipBusy && saleZipExport?.filter_ctseller_sale_id
+                      ? "Starting…"
+                      : pickedCtBidsSaleId > 0
+                        ? `This CT Bids sale (${postedToPickedCount})`
+                        : "This CT Bids sale"}
                   </button>
                   {saleZipExport?.ready ? (
                     <button
@@ -8182,7 +8347,9 @@ export default function DashboardPage() {
                       className="ct-btn ct-btn--primary ct-upload-option__btn"
                       onClick={() => void downloadSaleZipExport("all")}
                     >
-                      Download ZIP
+                      {saleZipExport.filter_ctseller_sale_id
+                        ? "Download CT Bids photos"
+                        : "Download ZIP"}
                     </button>
                   ) : null}
                 </div>
@@ -8265,7 +8432,9 @@ export default function DashboardPage() {
                   <li>
                     <strong>Photo ZIP</strong>: original images, <strong>one folder per lot</strong> named
                     SKU plus a short title (e.g. <code>JZ5137AD-Liz-Co-Heart-Necklace</code>, or{" "}
-                    <code>lot-045-Table-Lamp</code> for number-only SKUs).
+                    <code>lot-045-Table-Lamp</code> for number-only SKUs).{" "}
+                    <strong>This CT Bids sale</strong> keeps only lots posted to the CT Seller auction
+                    you picked, so photos from a different CT Bids sale in this catalog stay out.
                   </li>
                   <li>
                     <strong>Hero shots ZIP</strong>: one listing photo per lot (AI group/hero, never the
@@ -8285,7 +8454,11 @@ export default function DashboardPage() {
             </details>
             {saleZipExport && (saleZipExport.status === "queued" || saleZipExport.status === "processing") ? (
               <p className="ct-dash-exports__status ct-muted">
-                Building photo ZIP… <strong>{saleZipExport.photo_files_written}</strong> /{" "}
+                Building photo ZIP
+                {saleZipExport.filter_ctseller_sale_id
+                  ? ` for CT Bids #${saleZipExport.filter_ctseller_sale_id}`
+                  : ""}
+                … <strong>{saleZipExport.photo_files_written}</strong> /{" "}
                 <strong>{saleZipExport.total_photos_expected}</strong> files in archive
               </p>
             ) : null}
