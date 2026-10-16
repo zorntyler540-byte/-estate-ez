@@ -807,6 +807,9 @@ a.ct-btn:hover {
   display: flex;
   flex-direction: column;
   gap: 0.38rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
 }
 
 .ct-sale-bar {

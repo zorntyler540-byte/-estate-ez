@@ -92,15 +92,13 @@ function CategoryMetricBars({
           const value = metric === "avg" ? bar.avg : bar.hammer;
           const pct = Math.max(2, (value / max) * 100);
           const active = picked === bar.category;
-          const clickable = bar.category !== "Other";
           return (
             <button
               key={bar.category}
               type="button"
               role="listitem"
               className={`ct-sale-bar${active ? " is-active" : ""}`}
-              disabled={!clickable}
-              onClick={() => clickable && onPick(bar.category)}
+              onClick={() => onPick(bar.category)}
               title={`${bar.category}: ${money(value)} ${metric === "avg" ? "avg" : "hammer"} · ${bar.sold} sold`}
             >
               <span className="ct-sale-bar__label">{bar.category}</span>
@@ -179,8 +177,8 @@ export function SaleResultsCharts({
   onPickCategory: (category: string | null) => void;
 }) {
   const slices = useMemo(() => outcomeSlices(items), [items]);
-  const bars = useMemo(() => topHammerBars(categories, 10), [categories]);
-  const avgBars = useMemo(() => topAvgBars(categories, 10), [categories]);
+  const bars = useMemo(() => topHammerBars(categories), [categories]);
+  const avgBars = useMemo(() => topAvgBars(categories), [categories]);
   const times = useMemo(() => hammerTimeBuckets(items, since, until), [items, since, until]);
   if (!items.length) return null;
   const pick = (cat: string) => onPickCategory(pickedCategory === cat ? null : cat);
