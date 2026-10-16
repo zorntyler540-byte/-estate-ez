@@ -99,8 +99,13 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   Cloud Agents publish with the injected secret **`EXPO_TOKEN`** (Expo personal access token
   for account `vtz1900`, created at https://expo.dev/settings/access-tokens). The secret
   name is already wired; if `eas whoami` says the bearer token is invalid, replace the
-  Cursor secret with a freshly created token (do not put it in git or chat). Then:
-  `cd mobile && EXPO_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app eas update --channel production --non-interactive --message "…"`.
+  Cursor secret with a freshly created token (do not put it in git or chat).
+  **A long-running Cloud Agent keeps the `EXPO_TOKEN` it booted with** — replacing the
+  secret does not refresh this VM. Start a **new** Cloud Agent after the secret is saved,
+  then publish:
+  `cd mobile && bash scripts/publish-eas-update.sh "…"`.
+  That script installs `eas-cli` to `$HOME/.local` (global `/usr/lib/node_modules` is not
+  writable here), refuses localhost API bases, and requires `eas whoami` to be `vtz1900`.
   **`eas.json` `build.env` is not applied to `eas update`.** SDK 54 reads local `mobile/.env`.
   Always set `EXPO_PUBLIC_API_BASE` to the Railway API in the same command. Release bundles
   (`__DEV__ === false`) also drop localhost in `mobile/lib/config.ts` so a leftover `.env`
