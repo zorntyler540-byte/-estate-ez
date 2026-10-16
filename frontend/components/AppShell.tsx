@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Activity, ClipboardList, LayoutDashboard, Menu, Monitor, Settings, Store, X } from "lucide-react";
+import { Activity, ClipboardList, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
 
@@ -32,6 +32,12 @@ const NAV_GROUPS = [
         label: "Facebook",
         icon: Store,
         match: (p: string) => p.startsWith("/facebook")
+      },
+      {
+        href: "/engagement",
+        label: "Push queue",
+        icon: Megaphone,
+        match: (p: string) => p.startsWith("/engagement")
       }
     ]
   },

@@ -6492,6 +6492,11 @@ export default function DashboardPage() {
               {selectedSaleClosed ? (
                 <p className="ct-muted ct-dashboard-hero__note">This sale is closed — uploads and edits are disabled.</p>
               ) : null}
+              <p className="ct-muted ct-dashboard-hero__note" style={{ marginTop: "0.35rem" }}>
+                <Link href="/engagement">Push queue</Link>
+                {" "}
+                — live views, watchers, and bids from the Watcher, plus a planned social calendar.
+              </p>
             </header>
             <section className="ct-dash-stats" aria-label="Sale summary">
               <div className="ct-stat-card">

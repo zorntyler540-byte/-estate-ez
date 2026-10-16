@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.services.plain_background import PLAIN_BG_MAX_PHOTOS
 
@@ -361,6 +361,7 @@ class LotOut(BaseModel):
     audience_hunt_error: str | None = None
     audience_hunt_phase: str | None = None
     audience: dict | None = None
+    engagement: "EngagementOut | None" = None
 
 
 class LotUpdate(BaseModel):
@@ -988,6 +989,108 @@ class AppraisalResultOut(BaseModel):
     items: list[dict] = Field(default_factory=list)
 
 
+class EngagementItemIn(BaseModel):
+    """One live lot. Extra fields are rejected so bidder PII cannot be stored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ctseller_item_id: int
+    sku: str = ""
+    title: str = ""
+    views: int = Field(default=0, ge=0)
+    watchers: int = Field(default=0, ge=0)
+    bids: int = Field(default=0, ge=0)
+    price: float = Field(default=0, ge=0)
+    reserve: float = Field(default=0, ge=0)
+    item_url: str = ""
+    item_status: str = ""
+
+
+class EngagementSnapshotIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ctseller_sale_id: int
+    sale_title: str = ""
+    auction_url: str = ""
+    sale_ends_at: datetime | None = None
+    captured_at: datetime | None = None
+    items: list[EngagementItemIn] = Field(min_length=1, max_length=2000)
+
+
+class EngagementOut(BaseModel):
+    views: int = 0
+    watchers: int = 0
+    bids: int = 0
+    price: float = 0
+    reserve: float = 0
+    item_url: str = ""
+    captured_at: datetime | None = None
+    bucket: str = ""
+    engagement_score: str = ""
+    momentum: str = ""
+    notes: str = ""
+    late_surge: str = ""
+    trajectory: str = ""
+    rescue_candidate: bool = False
+    push_rank: int | None = None
+    ctseller_sale_id: int | None = None
+    ctseller_item_id: int | None = None
+
+
+class EngagementQueueItem(EngagementOut):
+    sku: str = ""
+    title: str = ""
+    item_status: str = ""
+    lot_id: str | None = None
+    has_thumbnail: bool = False
+    photo_ids: list[str] = Field(default_factory=list)
+
+
+class EngagementSaleSummary(BaseModel):
+    ctseller_sale_id: int
+    sale_title: str = ""
+    auction_url: str = ""
+    sale_ends_at: datetime | None = None
+    captured_at: datetime | None = None
+    item_count: int = 0
+    rescue: int = 0
+    push: int = 0
+    protect: int = 0
+    let_ride: int = 0
+
+
+class EngagementSaleOut(EngagementSaleSummary):
+    items: list[EngagementQueueItem] = Field(default_factory=list)
+
+
+class SocialCalendarPost(BaseModel):
+    order: int
+    post_date: str
+    local_time: str
+    zone: str = "PT"
+    platform: str
+    hook: str = ""
+    post_type: str = ""
+    sku: str = ""
+    title: str = ""
+    item_url: str = ""
+    lot_id: str | None = None
+    photo_ids: list[str] = Field(default_factory=list)
+    paste_copy: str = ""
+    status: str = "Planned"
+    preflight: str = ""
+
+
+class EngagementIngestOut(BaseModel):
+    ctseller_sale_id: int
+    item_count: int
+    matched_lots: int
+    rescue: int
+    push: int
+    protect: int
+    let_ride: int
+
+
 class AppraisalCheckOut(BaseModel):
     id: str
     sale_id: str
@@ -998,4 +1101,7 @@ class AppraisalCheckOut(BaseModel):
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+LotOut.model_rebuild()
 
