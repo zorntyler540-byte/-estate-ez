@@ -152,6 +152,17 @@ type Lot = {
     recommend_hold?: boolean;
     researched_at?: string | null;
   } | null;
+  engagement?: {
+    bucket?: string;
+    engagement_score?: string;
+    views?: number;
+    watchers?: number;
+    bids?: number;
+    price?: number;
+    push_rank?: number | null;
+    notes?: string;
+    item_url?: string;
+  } | null;
 };
 
 type CTSellerRemoteSale = {
@@ -1923,6 +1934,18 @@ export default function LotDetailPage() {
             ) : (
               <p className="ct-lot-detail-hero__title ct-muted">No auction title yet</p>
             )}
+            {lot.engagement?.bucket ? (
+              <p className="ct-muted" style={{ margin: "0.45rem 0 0" }}>
+                <strong>{lot.engagement.bucket}</strong>
+                {lot.engagement.push_rank ? ` · Push rank ${lot.engagement.push_rank}` : ""}
+                {" · "}
+                {lot.engagement.views ?? 0} views, {lot.engagement.watchers ?? 0} watchers,{" "}
+                {lot.engagement.bids ?? 0} bids
+                {lot.engagement.notes ? ` — ${lot.engagement.notes}` : ""}
+                {" · "}
+                <Link href="/engagement">Open Push queue</Link>
+              </p>
+            ) : null}
           </div>
           <div className="ct-lot-detail-hero__side">
             <span

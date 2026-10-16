@@ -27,6 +27,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sse_starlette import EventSourceResponse
 
+from app.engagement_routes import router as engagement_router
 from app.auth import (
     create_access_token,
     get_current_user,
@@ -280,6 +281,7 @@ from app.catalog_limits import (
 )
 
 app = FastAPI(title=settings.app_name)
+app.include_router(engagement_router)
 _LOG = logging.getLogger("app.main")
 
 
@@ -567,6 +569,7 @@ def startup() -> None:
     _ensure_reserve_price_columns()
     _ensure_lot_ctseller_sale_id_column()
     _ensure_user_assigned_sale_column()
+    _ensure_lot_engagement_column()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -647,6 +650,20 @@ def _ensure_photo_listing_columns() -> None:
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+
+
+def _ensure_lot_engagement_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing lots tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "lots" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("lots")}
+    if "engagement_json" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE lots ADD COLUMN engagement_json TEXT DEFAULT '{}' NOT NULL"))
 
 
 def _ensure_lot_search_tags_column() -> None:

@@ -120,6 +120,8 @@ class Lot(Base):
     audience_hunting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     audience_hunt_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     audience_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    # Latest Watcher engagement snapshot (views, watchers, bids, bucket). No bidder PII.
+    engagement_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -310,6 +312,50 @@ class CtSellerHistoryItem(Base):
     sold_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     lot_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EngagementSnapshot(Base):
+    """Latest live counts for one CT Bids item. Replaced on each Watcher refresh.
+
+    Bidder names, emails, phones, buyer ids, and invoices are not stored.
+    """
+
+    __tablename__ = "engagement_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "ctseller_sale_id",
+            "ctseller_item_id",
+            name="uq_engagement_snapshot_item",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    ctseller_sale_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    ctseller_item_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    item_url: Mapped[str] = mapped_column(String(600), nullable=False, default="")
+    item_status: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    views: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    watchers: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    bids: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    price: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    reserve: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    bucket: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    engagement_score: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    momentum: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    late_surge: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    trajectory: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    rescue_candidate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    push_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lot_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    sale_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    auction_url: Mapped[str] = mapped_column(String(600), nullable=False, default="")
+    sale_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AudienceHuntEvent(Base):

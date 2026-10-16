@@ -17,6 +17,7 @@ from app.core.lotting import listing_quality_issue
 from app.models import Lot, LotVideo, Photo
 from app.schemas import LotOut, LotPhotoHealthRow, LotPhotoOut, LotVideoOut
 from app.services.audience_hunt import audience_payload_for_lot
+from app.services.engagement_store import engagement_out_for_lot
 
 
 def _json_str_list(raw: str | None) -> list[str]:
@@ -261,5 +262,6 @@ def lot_to_schema(
         listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
         audience_hold=bool(getattr(row, "audience_hold", False)),
         audience=audience_payload_for_lot(row),
+        engagement=engagement_out_for_lot(row),
     )
 
