@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sse_starlette import EventSourceResponse
 
 from app.engagement_routes import router as engagement_router
+from app.facebook_routes import router as facebook_router
 from app.auth import (
     create_access_token,
     get_current_user,
@@ -282,6 +283,7 @@ from app.catalog_limits import (
 
 app = FastAPI(title=settings.app_name)
 app.include_router(engagement_router)
+app.include_router(facebook_router)
 _LOG = logging.getLogger("app.main")
 
 
@@ -570,6 +572,7 @@ def startup() -> None:
     _ensure_lot_ctseller_sale_id_column()
     _ensure_user_assigned_sale_column()
     _ensure_lot_engagement_column()
+    _ensure_facebook_account_columns()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -645,6 +648,40 @@ def _ensure_photo_listing_columns() -> None:
         stmts.append("ALTER TABLE photos ADD COLUMN plain_bg_saved BOOLEAN DEFAULT 0 NOT NULL")
     if "captured_at" not in cols:
         stmts.append(f"ALTER TABLE photos ADD COLUMN captured_at {nullable_datetime_ddl()}")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
+def _ensure_facebook_account_columns() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing accounts tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "accounts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("accounts")}
+    stmts: list[str] = []
+    if "facebook_user_id" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_user_id VARCHAR(64)")
+    if "facebook_user_token_enc" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_user_token_enc TEXT")
+    if "facebook_user_token_expires_at" not in cols:
+        stmts.append(
+            f"ALTER TABLE accounts ADD COLUMN facebook_user_token_expires_at {nullable_datetime_ddl()}"
+        )
+    if "facebook_page_id" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_page_id VARCHAR(64)")
+    if "facebook_page_name" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_page_name VARCHAR(255)")
+    if "facebook_page_token_enc" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_page_token_enc TEXT")
+    if "facebook_connected_at" not in cols:
+        stmts.append(f"ALTER TABLE accounts ADD COLUMN facebook_connected_at {nullable_datetime_ddl()}")
+    if "facebook_token_error" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN facebook_token_error TEXT")
     if not stmts:
         return
     with engine.begin() as conn:

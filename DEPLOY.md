@@ -51,6 +51,10 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `TRUSTED_HOSTS` | Optional but recommended: comma-separated **Host** header values for the API (e.g. `your-api.up.railway.app`). Enables `TrustedHostMiddleware`. |
 | `ALLOW_OPEN_REGISTRATION` | Default `true`. After you create the first real account, set **`false`** and redeploy so strangers cannot register. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
+| `META_APP_ID` / `META_APP_SECRET` | Optional. Facebook Page posting. Leave unset to hide Connect/Post in the dashboard. See **§9 Facebook Page**. |
+| `META_OAUTH_REDIRECT_URI` | API callback, e.g. `https://<your-api-domain>/integrations/facebook/oauth/callback`. Must match the Meta app exactly. |
+| `PUBLIC_WEB_ORIGIN` | Dashboard origin the OAuth callback returns to (Account settings), e.g. `https://your-web.up.railway.app`. Falls back to the first `CORS_ORIGINS` value. |
+| `META_TOKEN_ENCRYPTION_KEY` | Optional. If unset, Page tokens are encrypted with a key derived from `SECRET_KEY`. |
 | Optional | Copy other keys from `backend/.env.example` (SMTP, model flags, etc.). |
 
 6. **Generate domain** for the API service → note the HTTPS URL, e.g. `https://caring-api.up.railway.app`.
@@ -224,3 +228,32 @@ The repo has a **legacy** `main.py` at the **root** (old CLI photo scanner). It 
 ### Deploy still shows `python@3.x` instead of Docker
 
 You are not using the Docker image. Switch the service to the **Dockerfile** builder and set `infra/docker/Dockerfile.api` (see §3).
+
+---
+
+## 9. Facebook Page posting (optional)
+
+Estate-EZ can post **multi-photo feed posts to a Facebook Page** the account owner connects (per franchise). v1 is aimed at the owner’s own Page. Other franchises can connect later; that will need Meta **App Review** and business verification (out of scope here).
+
+Instagram, Stories, Groups, and Marketplace are **not** implemented. There is no Groups posting API.
+
+### Create the Meta app (no App Review for the owner’s Page)
+
+1. Go to [developers.facebook.com](https://developers.facebook.com/) → **My Apps** → **Create App**.
+2. Choose type **Business**.
+3. Add the **Facebook Login** product (Facebook Login for Business is fine).
+4. **Facebook Login → Settings → Valid OAuth Redirect URIs**: add the API callback  
+   `https://<your-api-domain>/integrations/facebook/oauth/callback`  
+   (local: `http://localhost:8000/integrations/facebook/oauth/callback`).
+5. App Dashboard → **App settings → Basic**: copy **App ID** and **App Secret**.
+6. Add the Page owner (Tyler’s aunt) as an **Admin** or **Developer** on the app (App roles).  
+   She must also be an admin of the Facebook Page. Tokens for Pages owned/admin’d by app roles work **without App Review**.
+7. Permissions requested: `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`.
+8. Set the Railway **API** variables from the table in §3 (`META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `PUBLIC_WEB_ORIGIN`). Redeploy the API.
+9. In Estate-EZ: **Account → Facebook Page → Connect Facebook Page**. Pick the Page if she admins more than one.
+
+Graph API version is pinned in code (`GRAPH_API_VERSION` in `backend/app/services/meta_graph.py`). Bump that constant when Meta sunsets the version.
+
+**If Connect is missing:** `META_APP_ID` is unset — the UI hides the feature on purpose.
+
+**If posting says reconnect:** the user token expired or was revoked. Connect again from Account settings.

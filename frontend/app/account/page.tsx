@@ -86,6 +86,27 @@ export default function AccountPage() {
   const [ctSellerBusy, setCtSellerBusy] = useState(false);
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
+  const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [facebookConnected, setFacebookConnected] = useState(false);
+  const [facebookNeedsReconnect, setFacebookNeedsReconnect] = useState(false);
+  const [facebookPageName, setFacebookPageName] = useState("");
+  const [facebookPages, setFacebookPages] = useState<Array<{ id: string; name: string; can_post: boolean; selected: boolean }>>(
+    []
+  );
+  const [facebookBusy, setFacebookBusy] = useState(false);
+  const [facebookMsg, setFacebookMsg] = useState("");
+  const [facebookErr, setFacebookErr] = useState("");
+  const [facebookPosts, setFacebookPosts] = useState<
+    Array<{
+      id: string;
+      lot_id?: string | null;
+      status: string;
+      facebook_post_id?: string | null;
+      caption: string;
+      created_at: string;
+      error_message?: string | null;
+    }>
+  >([]);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -124,6 +145,37 @@ export default function AccountPage() {
       .catch(() => {
         /* optional until backend redeploys */
       });
+    const params = new URLSearchParams(window.location.search);
+    const fbFlag = params.get("facebook") || "";
+    const fbError = params.get("facebook_error") || "";
+    if (fbError) setFacebookErr(fbError);
+    else if (fbFlag === "connected") setFacebookMsg("Facebook Page connected.");
+    void apiFetch("/integrations/facebook/status", t)
+      .then((data) => {
+        const row = data as {
+          configured?: boolean;
+          connected?: boolean;
+          needs_reconnect?: boolean;
+          page_name?: string | null;
+        };
+        setFacebookConfigured(Boolean(row.configured));
+        setFacebookConnected(Boolean(row.connected));
+        setFacebookNeedsReconnect(Boolean(row.needs_reconnect));
+        setFacebookPageName((row.page_name || "").trim());
+        if (row.configured && (fbFlag === "pick" || (row.connected && !row.page_name))) {
+          void apiFetch("/integrations/facebook/pages", t)
+            .then((pages) => setFacebookPages(pages as typeof facebookPages))
+            .catch(() => undefined);
+        }
+        if (row.connected) {
+          void apiFetch("/facebook/posts?limit=12", t)
+            .then((rows) => setFacebookPosts(rows as typeof facebookPosts))
+            .catch(() => undefined);
+        }
+      })
+      .catch(() => {
+        /* feature hidden until API with META_APP_ID is deployed */
+      });
   }, [router]);
 
   async function connectCtSeller() {
@@ -147,6 +199,61 @@ export default function AccountPage() {
       setCtSellerErr(e instanceof Error ? e.message : "Could not connect");
     } finally {
       setCtSellerBusy(false);
+    }
+  }
+
+  async function startFacebookConnect() {
+    if (!token) return;
+    setFacebookBusy(true);
+    setFacebookErr("");
+    setFacebookMsg("");
+    try {
+      const res = (await apiFetch("/integrations/facebook/oauth/start", token)) as { url: string };
+      if (res.url) window.location.href = res.url;
+    } catch (e) {
+      setFacebookErr(e instanceof Error ? e.message : "Could not start Facebook sign-in");
+      setFacebookBusy(false);
+    }
+  }
+
+  async function selectFacebookPage(pageId: string) {
+    if (!token) return;
+    setFacebookBusy(true);
+    setFacebookErr("");
+    try {
+      const res = (await apiFetch("/integrations/facebook/pages/select", token, {
+        method: "POST",
+        body: JSON.stringify({ page_id: pageId })
+      })) as { connected?: boolean; page_name?: string | null; needs_reconnect?: boolean };
+      setFacebookConnected(Boolean(res.connected));
+      setFacebookNeedsReconnect(Boolean(res.needs_reconnect));
+      setFacebookPageName((res.page_name || "").trim());
+      setFacebookMsg(`Posting as ${res.page_name || "that Page"}.`);
+    } catch (e) {
+      setFacebookErr(e instanceof Error ? e.message : "Could not select that Page");
+    } finally {
+      setFacebookBusy(false);
+    }
+  }
+
+  async function disconnectFacebook() {
+    if (!token) return;
+    if (!window.confirm("Disconnect this Facebook Page from Estate-EZ? Stored tokens are deleted.")) return;
+    setFacebookBusy(true);
+    setFacebookErr("");
+    setFacebookMsg("");
+    try {
+      await apiFetch("/integrations/facebook/connection", token, { method: "DELETE" });
+      setFacebookConnected(false);
+      setFacebookNeedsReconnect(false);
+      setFacebookPageName("");
+      setFacebookPages([]);
+      setFacebookPosts([]);
+      setFacebookMsg("Facebook Page disconnected.");
+    } catch (e) {
+      setFacebookErr(e instanceof Error ? e.message : "Could not disconnect");
+    } finally {
+      setFacebookBusy(false);
     }
   }
 
@@ -540,6 +647,94 @@ export default function AccountPage() {
           </p>
         )}
       </section>
+
+      {facebookConfigured ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Facebook Page
+          </h2>
+          <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
+            Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption).
+            Instagram, Stories, Groups, and Marketplace are not available here. Owners only to connect.
+          </p>
+          {facebookMsg ? <div className="ct-banner ct-banner--success">{facebookMsg}</div> : null}
+          {facebookErr ? <div className="ct-banner ct-banner--error">{facebookErr}</div> : null}
+          {facebookNeedsReconnect ? (
+            <div className="ct-banner ct-banner--warning">Facebook access expired. Reconnect the Page.</div>
+          ) : null}
+          {facebookConnected ? (
+            <p style={{ marginTop: 0 }}>
+              Connected to <strong>{facebookPageName || "a Facebook Page"}</strong>
+            </p>
+          ) : (
+            <p className="ct-muted" style={{ marginTop: 0 }}>
+              Not connected.
+            </p>
+          )}
+          {me?.role?.toLowerCase() === "owner" ? (
+            <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={facebookBusy}
+                onClick={() => void startFacebookConnect()}
+              >
+                {facebookBusy
+                  ? "Working…"
+                  : facebookConnected || facebookNeedsReconnect
+                    ? "Reconnect Facebook"
+                    : "Connect Facebook Page"}
+              </button>
+              {facebookConnected ? (
+                <button type="button" className="ct-btn" disabled={facebookBusy} onClick={() => void disconnectFacebook()}>
+                  Disconnect
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="ct-muted">Ask an account owner to connect the Facebook Page.</p>
+          )}
+          {facebookPages.length > 1 || (facebookPages.length === 1 && !facebookConnected) ? (
+            <div style={{ marginTop: "0.85rem" }}>
+              <p className="ct-muted" style={{ marginTop: 0 }}>
+                Choose which Page Estate-EZ should post to.
+              </p>
+              {facebookPages.map((page) => (
+                <label key={page.id} className="ct-row" style={{ gap: "0.45rem", marginBottom: "0.4rem" }}>
+                  <input
+                    type="radio"
+                    name="fb-page"
+                    checked={page.selected}
+                    disabled={facebookBusy || !page.can_post}
+                    onChange={() => void selectFacebookPage(page.id)}
+                  />
+                  <span>
+                    {page.name}
+                    {page.can_post ? "" : " (no posting permission)"}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {facebookPosts.length > 0 ? (
+            <div style={{ marginTop: "1rem" }}>
+              <h3 className="ct-section-title" style={{ fontSize: "1rem" }}>
+                Recent Page posts
+              </h3>
+              <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                {facebookPosts.map((row) => (
+                  <li key={row.id}>
+                    {row.status}
+                    {row.facebook_post_id ? ` · ${row.facebook_post_id}` : ""}
+                    {row.error_message ? ` · ${row.error_message}` : ""}
+                    <div className="ct-muted">{row.caption.slice(0, 140)}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>

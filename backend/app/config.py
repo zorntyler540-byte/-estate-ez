@@ -173,6 +173,15 @@ class Settings(BaseSettings):
     r2_bucket: str = Field(default="", alias="R2_BUCKET")
     r2_endpoint: str = Field(default="", alias="R2_ENDPOINT")
 
+    # Facebook Page posting (Meta Graph API). Feature is hidden when META_APP_ID is unset.
+    # Tokens are encrypted at rest; optional META_TOKEN_ENCRYPTION_KEY, else derived from SECRET_KEY.
+    meta_app_id: str = Field(default="", alias="META_APP_ID")
+    meta_app_secret: str = Field(default="", alias="META_APP_SECRET")
+    meta_oauth_redirect_uri: str = Field(default="", alias="META_OAUTH_REDIRECT_URI")
+    meta_token_encryption_key: str = Field(default="", alias="META_TOKEN_ENCRYPTION_KEY")
+    # Where the OAuth callback sends the browser after connecting a Page (Account settings).
+    public_web_origin: str = Field(default="", alias="PUBLIC_WEB_ORIGIN")
+
     @property
     def is_production(self) -> bool:
         return (self.environment or "").strip().lower() in ("production", "prod")
@@ -180,6 +189,11 @@ class Settings(BaseSettings):
     def trusted_host_list(self) -> list[str]:
         hosts = [h.strip() for h in (self.trusted_hosts or "").split(",") if h.strip()]
         return hosts
+
+    @property
+    def meta_configured(self) -> bool:
+        """True when Facebook Login can run (app id + secret). Redirect URI may still be defaulted."""
+        return bool((self.meta_app_id or "").strip() and (self.meta_app_secret or "").strip())
 
     def master_admin_email_list(self) -> list[str]:
         out: list[str] = []

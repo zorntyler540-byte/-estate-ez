@@ -29,6 +29,7 @@ import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
+import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import {
   AudienceHuntProgress,
   audienceHuntPhaseLabel
@@ -2095,6 +2096,8 @@ export default function DashboardPage() {
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
   /** Lots checked for selective CT Seller post (empty = post all unposted). */
   const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
+  const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
   const [pendingMoveLotIds, setPendingMoveLotIds] = useState<string[] | null>(null);
   const [audienceHuntBusy, setAudienceHuntBusy] = useState(false);
   const [audienceHuntMsg, setAudienceHuntMsg] = useState("");
@@ -2824,6 +2827,13 @@ export default function DashboardPage() {
       })
       .catch(() => {
         if (!cancelled) setAccountRole("");
+      });
+    void apiFetch("/integrations/facebook/status", token)
+      .then((data) => {
+        if (!cancelled) setFacebookConfigured(Boolean((data as { configured?: boolean }).configured));
+      })
+      .catch(() => {
+        if (!cancelled) setFacebookConfigured(false);
       });
     return () => {
       cancelled = true;
@@ -7695,6 +7705,27 @@ export default function DashboardPage() {
                 ? `Post selected to CT Seller (${ctSellerSelectedCount})`
                 : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
           </button>
+          {facebookConfigured ? (
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => {
+                const ids = lots.filter((l) => ctSellerPostSelected.has(l.id)).map((l) => l.id);
+                if (ids.length < 1) {
+                  setCtSellerBulkErr("Select one or more lots, then post to the Facebook Page.");
+                  return;
+                }
+                setCtSellerBulkErr("");
+                setFacebookLotIds(ids);
+              }}
+              disabled={busyProcessing || !selectedSaleId || selectedSaleClosed}
+              title="Draft Facebook Page posts for the checked lots. Nothing is sent until you approve each caption."
+            >
+              {ctSellerSelectedCount > 0
+                ? `Post selected to Facebook Page (${ctSellerSelectedCount})`
+                : "Post selected to Facebook Page"}
+            </button>
+          ) : null}
           {isAccountOwner ? (
             <button
               type="button"
@@ -9597,6 +9628,14 @@ export default function DashboardPage() {
         </div>
       ) : null}
       </div>
+      {facebookLotIds && token ? (
+        <FacebookPagePostModal
+          token={token}
+          lotIds={facebookLotIds}
+          source="selection"
+          onClose={() => setFacebookLotIds(null)}
+        />
+      ) : null}
     </AppShell>
   );
 }

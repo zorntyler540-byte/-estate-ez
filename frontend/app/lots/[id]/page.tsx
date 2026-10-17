@@ -9,6 +9,7 @@ import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
 import { MoveLotsToSale, type MoveSaleOption } from "../../../components/MoveLotsToSale";
 import { AppShell } from "../../../components/AppShell";
+import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
 import {
   AudienceHuntProgress,
   audienceHuntPhaseLabel,
@@ -302,6 +303,8 @@ export default function LotDetailPage() {
   const [ctSellerPostMode, setCtSellerPostMode] = useState<"" | "post" | "photos">("");
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
+  const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [facebookPostOpen, setFacebookPostOpen] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(() => new Set());
   const [transferTargetId, setTransferTargetId] = useState("");
   const [mergeSourceId, setMergeSourceId] = useState("");
@@ -389,6 +392,13 @@ export default function LotDetailPage() {
       })
       .catch(() => {
         if (!cancelled) setAccountRole("");
+      });
+    void apiFetch("/integrations/facebook/status", token)
+      .then((data) => {
+        if (!cancelled) setFacebookConfigured(Boolean((data as { configured?: boolean }).configured));
+      })
+      .catch(() => {
+        if (!cancelled) setFacebookConfigured(false);
       });
     return () => {
       cancelled = true;
@@ -2014,6 +2024,17 @@ export default function LotDetailPage() {
                     : "Add photos to CT Seller"}
                 </button>
               ) : null}
+              {facebookConfigured ? (
+                <button
+                  type="button"
+                  className="ct-btn"
+                  onClick={() => setFacebookPostOpen(true)}
+                  disabled={saving || showAiRegenProgress}
+                  title="Draft a Facebook Page post. Nothing is sent until you approve it."
+                >
+                  Post to Facebook Page
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={lot.ctseller_item_id ? "ct-btn ct-btn--ghost" : "ct-btn"}
@@ -3531,6 +3552,14 @@ export default function LotDetailPage() {
         </div>
       ) : null}
       </div>
+      {facebookPostOpen && lot && token ? (
+        <FacebookPagePostModal
+          token={token}
+          lotIds={[lot.id]}
+          source="lot"
+          onClose={() => setFacebookPostOpen(false)}
+        />
+      ) : null}
     </AppShell>
   );
 }

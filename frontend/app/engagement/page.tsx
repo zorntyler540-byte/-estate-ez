@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
 
@@ -187,6 +188,9 @@ export default function EngagementPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<number | null>(null);
+  const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
+  const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
 
   const loadSale = useCallback(
     async (t: string, id: number) => {
@@ -207,6 +211,9 @@ export default function EngagementPage() {
       setLoading(false);
       return;
     }
+    void apiFetch("/integrations/facebook/status", t)
+      .then((data) => setFacebookConfigured(Boolean((data as { configured?: boolean }).configured)))
+      .catch(() => setFacebookConfigured(false));
     void apiFetch("/engagement/sales", t)
       .then((data) => {
         const rows = data as SaleSummary[];
@@ -297,7 +304,8 @@ export default function EngagementPage() {
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
               The Watcher sends views, watchers, bids, price, and the lot link after each refresh.
-              Staff still post. Nothing here publishes to Facebook, Instagram, or TikTok.
+              Check cataloged lots and approve a Facebook Page post — Instagram, Stories, Groups,
+              and TikTok stay manual.
             </p>
           </div>
         </header>
@@ -375,10 +383,40 @@ export default function EngagementPage() {
               })}
             </section>
 
+            {facebookConfigured ? (
+              <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() =>
+                    setSelectedLotIds(new Set(visible.map((item) => item.lot_id).filter((id): id is string => Boolean(id))))
+                  }
+                >
+                  Select cataloged in {bucket}
+                </button>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--ghost"
+                  onClick={() => setSelectedLotIds(new Set())}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  disabled={selectedLotIds.size < 1}
+                  onClick={() => setFacebookLotIds([...selectedLotIds])}
+                >
+                  Post selected to Facebook Page ({selectedLotIds.size})
+                </button>
+              </div>
+            ) : null}
+
             <div className="ct-table-wrap">
               <table className="ct-table ct-table--engagement">
                 <thead>
                   <tr>
+                    {facebookConfigured ? <th>Post</th> : null}
                     {SORT_COLUMNS.map((column) => (
                       <SortHeader
                         key={column.key}
@@ -395,11 +433,33 @@ export default function EngagementPage() {
                 <tbody>
                   {visible.length === 0 ? (
                     <tr>
-                      <td colSpan={8}>No {bucket} lots in this snapshot.</td>
+                      <td colSpan={facebookConfigured ? 9 : 8}>No {bucket} lots in this snapshot.</td>
                     </tr>
                   ) : (
                     visible.map((item) => (
                       <tr key={`${item.ctseller_item_id}-${item.sku}`}>
+                        {facebookConfigured ? (
+                          <td>
+                            {item.lot_id ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedLotIds.has(item.lot_id)}
+                                onChange={(e) => {
+                                  const id = item.lot_id as string;
+                                  setSelectedLotIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(id);
+                                    else next.delete(id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={`Select ${item.sku || "lot"} for Facebook Page`}
+                              />
+                            ) : (
+                              <span className="ct-muted">—</span>
+                            )}
+                          </td>
+                        ) : null}
                         <td>{item.push_rank ?? "—"}</td>
                         <td>
                           {item.lot_id ? (
@@ -516,6 +576,14 @@ export default function EngagementPage() {
           </>
         ) : null}
       </div>
+      {facebookLotIds && token ? (
+        <FacebookPagePostModal
+          token={token}
+          lotIds={facebookLotIds}
+          source="push_queue"
+          onClose={() => setFacebookLotIds(null)}
+        />
+      ) : null}
     </AppShell>
   );
 }

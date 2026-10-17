@@ -1,0 +1,192 @@
+"""Facebook Page OAuth and approved feed posts (not Marketplace, Groups, or Instagram)."""
+
+from __future__ import annotations
+
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+
+from app.auth import get_current_user
+from app.db import get_db
+from app.models import Account, FacebookPagePost, User
+from app.schemas import (
+    FacebookOAuthStartOut,
+    FacebookPageChoiceOut,
+    FacebookPagePostOut,
+    FacebookPreviewIn,
+    FacebookPreviewOut,
+    FacebookPublishIn,
+    FacebookPublishOut,
+    FacebookPublishResultOut,
+    FacebookSelectPageIn,
+    FacebookStatusOut,
+)
+from app.services.facebook_page import (
+    complete_oauth,
+    connection_status,
+    disconnect,
+    frontend_oauth_redirect,
+    list_posts,
+    listed_pages,
+    oauth_start_url,
+    preview_posts,
+    publish_posts,
+    select_page,
+)
+from app.services.roles import can_manage_integrations, is_owner
+
+router = APIRouter()
+
+
+def _account(db: Session, current: User) -> Account:
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+def _status_out(account: Account) -> FacebookStatusOut:
+    return FacebookStatusOut.model_validate(connection_status(account))
+
+
+def _post_out(row: FacebookPagePost) -> FacebookPagePostOut:
+    try:
+        lot_ids = json.loads(row.lot_ids_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        lot_ids = []
+    try:
+        photo_ids = json.loads(row.photo_ids_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        photo_ids = []
+    if not isinstance(lot_ids, list):
+        lot_ids = []
+    if not isinstance(photo_ids, list):
+        photo_ids = []
+    return FacebookPagePostOut(
+        id=row.id,
+        lot_id=row.lot_id,
+        lot_ids=[str(x) for x in lot_ids],
+        photo_ids=[str(x) for x in photo_ids],
+        facebook_page_id=row.facebook_page_id or "",
+        facebook_post_id=row.facebook_post_id,
+        caption=row.caption or "",
+        include_follow_hook=bool(row.include_follow_hook),
+        source=row.source or "lot",
+        status=row.status,
+        scheduled_publish_time=row.scheduled_publish_time,
+        posted_at=row.posted_at,
+        error_message=row.error_message,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/integrations/facebook/status", response_model=FacebookStatusOut)
+def facebook_status(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookStatusOut:
+    return _status_out(_account(db, current))
+
+
+@router.get("/integrations/facebook/oauth/start", response_model=FacebookOAuthStartOut)
+def facebook_oauth_start(current: User = Depends(get_current_user)) -> FacebookOAuthStartOut:
+    return FacebookOAuthStartOut(url=oauth_start_url(current))
+
+
+@router.get("/integrations/facebook/oauth/callback")
+def facebook_oauth_callback(
+    db: Session = Depends(get_db),
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> RedirectResponse:
+    if error:
+        detail = (error_description or error or "Facebook sign-in was cancelled.").strip()
+        return RedirectResponse(frontend_oauth_redirect(status="error", error=detail), status_code=302)
+    if not code or not state:
+        return RedirectResponse(
+            frontend_oauth_redirect(status="error", error="Facebook did not return an authorization code."),
+            status_code=302,
+        )
+    url = complete_oauth(db, code=code, state=state)
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/integrations/facebook/pages", response_model=list[FacebookPageChoiceOut])
+def facebook_list_pages(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[FacebookPageChoiceOut]:
+    if not can_manage_integrations(current.role):
+        raise HTTPException(status_code=403, detail="Owner access required")
+    pages = listed_pages(db, _account(db, current))
+    return [FacebookPageChoiceOut.model_validate(row) for row in pages]
+
+
+@router.post("/integrations/facebook/pages/select", response_model=FacebookStatusOut)
+def facebook_select_page(
+    payload: FacebookSelectPageIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookStatusOut:
+    if not is_owner(current):
+        raise HTTPException(status_code=403, detail="Owner access required")
+    return FacebookStatusOut.model_validate(select_page(db, _account(db, current), payload.page_id.strip()))
+
+
+@router.delete("/integrations/facebook/connection", response_model=FacebookStatusOut)
+def facebook_disconnect(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookStatusOut:
+    if not is_owner(current):
+        raise HTTPException(status_code=403, detail="Owner access required")
+    return FacebookStatusOut.model_validate(disconnect(db, _account(db, current)))
+
+
+@router.post("/facebook/posts/preview", response_model=FacebookPreviewOut)
+def facebook_preview(
+    payload: FacebookPreviewIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookPreviewOut:
+    data = preview_posts(
+        db,
+        account=_account(db, current),
+        lot_ids=payload.lot_ids,
+        include_follow_hook=payload.include_follow_hook,
+    )
+    return FacebookPreviewOut.model_validate(data)
+
+
+@router.post("/facebook/posts", response_model=FacebookPublishOut)
+def facebook_publish(
+    payload: FacebookPublishIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookPublishOut:
+    results = publish_posts(
+        db,
+        account=_account(db, current),
+        user=current,
+        items=[item.model_dump() for item in payload.items],
+        include_follow_hook=payload.include_follow_hook,
+        confirm=payload.confirm,
+        force=payload.force,
+        source=payload.source or "lot",
+    )
+    return FacebookPublishOut(results=[FacebookPublishResultOut.model_validate(row) for row in results])
+
+
+@router.get("/facebook/posts", response_model=list[FacebookPagePostOut])
+def facebook_list_posts(
+    lot_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[FacebookPagePostOut]:
+    rows = list_posts(db, account_id=current.account_id, lot_id=lot_id, limit=limit)
+    return [_post_out(row) for row in rows]
