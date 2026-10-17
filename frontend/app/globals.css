@@ -672,6 +672,30 @@ a.ct-btn:hover {
   opacity: 0.85;
 }
 
+.ct-table--engagement .ct-table-sort {
+  white-space: nowrap;
+  max-width: none;
+}
+
+.ct-table--engagement .ct-table__num .ct-table-sort {
+  width: auto;
+}
+
+.ct-table--engagement .ct-table-sort__label,
+.ct-table--engagement .ct-table-sort__mark {
+  flex: 0 0 auto;
+}
+
+.ct-table--engagement .ct-table-sort__mark {
+  width: 0.85rem;
+  margin-left: 0.35rem;
+  text-align: center;
+}
+
+.ct-table--engagement th {
+  white-space: nowrap;
+}
+
 .ct-table-sort--link {
   text-transform: none;
   letter-spacing: 0;
