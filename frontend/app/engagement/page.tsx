@@ -63,6 +63,104 @@ type CalendarPost = {
 
 const FILTERS = ["Push", "Rescue", "Protect", "Let Ride"] as const;
 
+type SortKey = "rank" | "photo" | "lot" | "views" | "watchers" | "bids" | "price" | "note";
+type SortDir = "asc" | "desc";
+
+const SORT_COLUMNS: { key: SortKey; label: string; numeric?: boolean }[] = [
+  { key: "rank", label: "Rank" },
+  { key: "photo", label: "Photo" },
+  { key: "lot", label: "Lot" },
+  { key: "views", label: "Views", numeric: true },
+  { key: "watchers", label: "Watchers", numeric: true },
+  { key: "bids", label: "Bids", numeric: true },
+  { key: "price", label: "Price", numeric: true },
+  { key: "note", label: "Note" }
+];
+
+const DEFAULT_SORT_DIR: Record<SortKey, SortDir> = {
+  rank: "asc",
+  photo: "desc",
+  lot: "asc",
+  views: "desc",
+  watchers: "desc",
+  bids: "desc",
+  price: "desc",
+  note: "asc"
+};
+
+const SCORE_ORDER: Record<string, number> = { Weak: 0, Moderate: 1, Strong: 2 };
+
+function skuTie(a: QueueItem, b: QueueItem): number {
+  return (a.sku || "").localeCompare(b.sku || "", undefined, { numeric: true, sensitivity: "base" });
+}
+
+function compareQueueItems(a: QueueItem, b: QueueItem, key: SortKey, dir: SortDir): number {
+  if (key === "rank") {
+    if (a.push_rank == null && b.push_rank == null) return skuTie(a, b);
+    if (a.push_rank == null) return 1;
+    if (b.push_rank == null) return -1;
+    const diff = dir === "asc" ? a.push_rank - b.push_rank : b.push_rank - a.push_rank;
+    return diff || skuTie(a, b);
+  }
+  if (key === "photo") {
+    const av = a.lot_id && a.has_thumbnail ? 1 : 0;
+    const bv = b.lot_id && b.has_thumbnail ? 1 : 0;
+    const diff = dir === "asc" ? av - bv : bv - av;
+    return diff || skuTie(a, b);
+  }
+  if (key === "lot") {
+    const sku = skuTie(a, b);
+    const directed = dir === "asc" ? sku : -sku;
+    if (directed) return directed;
+    const title = (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
+    return dir === "asc" ? title : -title;
+  }
+  if (key === "note") {
+    const as = SCORE_ORDER[a.engagement_score] ?? 9;
+    const bs = SCORE_ORDER[b.engagement_score] ?? 9;
+    const score = dir === "asc" ? as - bs : bs - as;
+    if (score) return score;
+    const momentum = a.momentum.localeCompare(b.momentum);
+    if (momentum) return dir === "asc" ? momentum : -momentum;
+    const notes = a.notes.localeCompare(b.notes);
+    return (dir === "asc" ? notes : -notes) || skuTie(a, b);
+  }
+  const diff = a[key] - b[key];
+  const directed = dir === "asc" ? diff : -diff;
+  return directed || skuTie(a, b);
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  numeric,
+  onSort
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey | null;
+  dir: SortDir;
+  numeric?: boolean;
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sortKey === activeKey;
+  return (
+    <th
+      className={numeric ? "ct-table__num" : undefined}
+      aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button type="button" className="ct-table-sort" onClick={() => onSort(sortKey)}>
+        <span className="ct-table-sort__label">{label}</span>
+        <span className="ct-table-sort__mark" aria-hidden="true">
+          {active ? (dir === "asc" ? "▲" : "▼") : ""}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 function money(value: number): string {
   const rounded = Math.round(value);
   if (Math.abs(value - rounded) < 0.001) return `$${rounded}`;
@@ -84,6 +182,8 @@ export default function EngagementPage() {
   const [detail, setDetail] = useState<SaleDetail | null>(null);
   const [posts, setPosts] = useState<CalendarPost[]>([]);
   const [bucket, setBucket] = useState<(typeof FILTERS)[number]>("Push");
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<number | null>(null);
@@ -134,10 +234,20 @@ export default function EngagementPage() {
       .finally(() => setLoading(false));
   }, [token, saleId, loadSale]);
 
-  const visible = useMemo(
-    () => (detail?.items || []).filter((item) => item.bucket === bucket),
-    [detail, bucket]
-  );
+  const visible = useMemo(() => {
+    const rows = (detail?.items || []).filter((item) => item.bucket === bucket);
+    if (!sortKey) return rows;
+    return [...rows].sort((a, b) => compareQueueItems(a, b, sortKey, sortDir));
+  }, [detail, bucket, sortKey, sortDir]);
+
+  function onSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDir(DEFAULT_SORT_DIR[key]);
+  }
 
   function logout() {
     localStorage.removeItem("token");
@@ -266,17 +376,20 @@ export default function EngagementPage() {
             </section>
 
             <div className="ct-table-wrap">
-              <table className="ct-table">
+              <table className="ct-table ct-table--engagement">
                 <thead>
                   <tr>
-                    <th>Rank</th>
-                    <th>Photo</th>
-                    <th>Lot</th>
-                    <th className="ct-table__num">Views</th>
-                    <th className="ct-table__num">Watchers</th>
-                    <th className="ct-table__num">Bids</th>
-                    <th className="ct-table__num">Price</th>
-                    <th>Note</th>
+                    {SORT_COLUMNS.map((column) => (
+                      <SortHeader
+                        key={column.key}
+                        label={column.label}
+                        sortKey={column.key}
+                        activeKey={sortKey}
+                        dir={sortDir}
+                        numeric={column.numeric}
+                        onSort={onSort}
+                      />
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
