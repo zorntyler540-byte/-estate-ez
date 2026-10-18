@@ -190,7 +190,8 @@ export default function FacebookPage() {
               Facebook Marketplace
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Furniture captured for Marketplace only — separate from CT Bids / Sales dashboard.
+              Furniture captured for Marketplace only — separate from CT Bids / Sales dashboard
+              and from Facebook Page posts (lot details, dashboard selection, or the Push queue).
               {selectedSale ? ` Showing items for ${selectedSale.name}.` : ""}
             </p>
           </div>

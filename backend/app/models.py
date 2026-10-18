@@ -53,6 +53,19 @@ class Account(Base):
     ctseller_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_access_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_refresh_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Facebook Page (Graph API). One Page per account in v1; Instagram would be a sibling connection.
+    facebook_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    facebook_user_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    facebook_user_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    facebook_page_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    facebook_page_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    facebook_page_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    facebook_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    facebook_token_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When true, new in-window Push-calendar slots are scheduled as Page posts without a second click.
+    facebook_calendar_auto_approve: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
@@ -376,4 +389,37 @@ class AudienceHuntEvent(Base):
     actual_pro_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FacebookPagePost(Base):
+    """One Facebook Page feed post (or scheduled post) for catalog lot(s).
+
+    Push-calendar rows keep an intended spreadsheet platform; v1 still stores a
+    Page feed post here. Native Instagram / Stories / TikTok publishers should
+    get their own tables rather than reuse this row.
+    """
+
+    __tablename__ = "facebook_page_posts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    lot_id: Mapped[str | None] = mapped_column(ForeignKey("lots.id"), index=True, nullable=True)
+    lot_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    photo_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    facebook_page_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    facebook_post_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    include_follow_hook: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="lot", server_default="lot")
+    calendar_key: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
+    calendar_sale_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed", server_default="failed")
+    scheduled_publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 

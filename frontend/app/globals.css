@@ -4387,6 +4387,25 @@ select.ct-input option {
   color: var(--ct-text-muted);
 }
 
+.ct-fb-post-modal {
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+}
+
+.ct-fb-post-list {
+  max-height: min(52vh, 540px);
+  overflow: auto;
+}
+
+.ct-fb-caption {
+  width: 100%;
+  min-height: 8.5rem;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.4;
+}
+
 .ct-sale-covers-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));

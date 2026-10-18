@@ -1079,6 +1079,14 @@ class SocialCalendarPost(BaseModel):
     paste_copy: str = ""
     status: str = "Planned"
     preflight: str = ""
+    slot_key: str = ""
+    intended_platform: str = ""
+    publish_target: str = "facebook_page"
+    facebook_schedulable: bool = False
+    facebook_status: str = "not_applicable"
+    facebook_slot_at: datetime | None = None
+    facebook_post_id: str | None = None
+    facebook_error: str | None = None
 
 
 class EngagementIngestOut(BaseModel):
@@ -1089,6 +1097,155 @@ class EngagementIngestOut(BaseModel):
     push: int
     protect: int
     let_ride: int
+
+
+class FacebookStatusOut(BaseModel):
+    configured: bool
+    connected: bool
+    needs_reconnect: bool = False
+    page_id: str | None = None
+    page_name: str | None = None
+    user_id: str | None = None
+    connected_at: datetime | None = None
+    token_error: str | None = None
+    graph_api_version: str = ""
+    oauth_scopes: list[str] = Field(default_factory=list)
+    calendar_auto_approve: bool = False
+
+
+class FacebookOAuthStartOut(BaseModel):
+    url: str
+
+
+class FacebookPageChoiceOut(BaseModel):
+    id: str
+    name: str
+    can_post: bool = True
+    selected: bool = False
+
+
+class FacebookSelectPageIn(BaseModel):
+    page_id: str = Field(min_length=1, max_length=64)
+
+
+class FacebookSettingsIn(BaseModel):
+    calendar_auto_approve: bool
+
+
+class FacebookExistingPostOut(BaseModel):
+    id: str
+    status: str
+    facebook_post_id: str | None = None
+    scheduled_publish_time: datetime | None = None
+    posted_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class FacebookPreviewLotOut(BaseModel):
+    lot_id: str
+    sku: str | None = None
+    title: str = ""
+    item_url: str = ""
+    sale_ends_at: datetime | None = None
+    caption: str = ""
+    photo_ids: list[str] = Field(default_factory=list)
+    photo_count: int = 0
+    already_posted: bool = False
+    existing_posts: list[FacebookExistingPostOut] = Field(default_factory=list)
+    error: str | None = None
+    calendar_key: str | None = None
+    intended_platform: str | None = None
+    publish_target: str = "facebook_page"
+    local_time: str | None = None
+    hook: str | None = None
+
+
+class FacebookScheduleSuggestionOut(BaseModel):
+    at: datetime
+    label: str
+
+
+class FacebookPreviewIn(BaseModel):
+    lot_ids: list[str] = Field(min_length=1, max_length=80)
+    include_follow_hook: bool = False
+
+
+class FacebookPreviewOut(FacebookStatusOut):
+    include_follow_hook: bool = False
+    follow_hook_line: str = ""
+    schedule_suggestions: list[FacebookScheduleSuggestionOut] = Field(default_factory=list)
+    lots: list[FacebookPreviewLotOut] = Field(default_factory=list)
+
+
+class FacebookPublishItemIn(BaseModel):
+    lot_id: str = Field(min_length=1)
+    caption: str = Field(min_length=1, max_length=8000)
+    scheduled_publish_time: datetime | None = None
+    calendar_key: str | None = Field(default=None, max_length=80)
+    calendar_sale_id: int | None = None
+    photo_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class FacebookPublishIn(BaseModel):
+    confirm: bool = False
+    force: bool = False
+    include_follow_hook: bool = False
+    source: str = Field(default="lot", max_length=32)
+    items: list[FacebookPublishItemIn] = Field(min_length=1, max_length=80)
+
+
+class FacebookPublishResultOut(BaseModel):
+    lot_id: str
+    ok: bool
+    skipped: bool = False
+    post_id: str | None = None
+    facebook_post_id: str | None = None
+    status: str | None = None
+    scheduled_publish_time: datetime | None = None
+    needs_reconnect: bool = False
+    error: str | None = None
+    calendar_key: str | None = None
+
+
+class FacebookPublishOut(BaseModel):
+    queued: bool = False
+    batch_id: str | None = None
+    active: bool = False
+    total: int = 0
+    done: int = 0
+    posted: int = 0
+    failed: int = 0
+    results: list[FacebookPublishResultOut] = Field(default_factory=list)
+
+
+class FacebookCalendarApproveIn(BaseModel):
+    confirm: bool = False
+    force: bool = False
+    include_follow_hook: bool = False
+    slot_keys: list[str] = Field(default_factory=list)
+    captions: dict[str, str] = Field(default_factory=dict)
+
+
+class FacebookCalendarPreviewIn(BaseModel):
+    include_follow_hook: bool = False
+    slot_keys: list[str] = Field(default_factory=list)
+
+
+class FacebookPagePostOut(BaseModel):
+    id: str
+    lot_id: str | None = None
+    lot_ids: list[str] = Field(default_factory=list)
+    photo_ids: list[str] = Field(default_factory=list)
+    facebook_page_id: str = ""
+    facebook_post_id: str | None = None
+    caption: str = ""
+    include_follow_hook: bool = False
+    source: str = "lot"
+    status: str
+    scheduled_publish_time: datetime | None = None
+    posted_at: datetime | None = None
+    error_message: str | None = None
+    created_at: datetime
 
 
 class AppraisalCheckOut(BaseModel):

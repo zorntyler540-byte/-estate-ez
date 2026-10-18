@@ -225,6 +225,18 @@ def apply_engagement_snapshot(
             seen_lots.add(lot.id)
             matched += 1
     db.commit()
+    try:
+        from app.services.facebook_calendar import sync_facebook_calendar_after_snapshot
+
+        sync_facebook_calendar_after_snapshot(db, account_id, sale_id)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Facebook calendar sync after snapshot failed account=%s sale=%s",
+            account_id,
+            sale_id,
+        )
     counts = _bucket_counts(ranked)
     return EngagementIngestOut(
         ctseller_sale_id=sale_id,
@@ -363,7 +375,10 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
         captured_at=detail.captured_at,
         sale_ends_at=detail.sale_ends_at,
     )
-    return [SocialCalendarPost.model_validate(post) for post in posts]
+    from app.services.facebook_calendar import annotate_social_calendar
+
+    annotated = annotate_social_calendar(db, account_id, int(ctseller_sale_id), posts)
+    return [SocialCalendarPost.model_validate(post) for post in annotated]
 
 
 def reading_for_tests(item: EngagementItemIn) -> dict:

@@ -278,3 +278,8 @@ def test_calendar_uses_sale_end_and_stays_planned() -> None:
     assert posts[-1]["post_date"] == "2026-10-20"
     assert "Primitive sale" in posts[0]["paste_copy"]
     assert all(post["status"] == "Planned" for post in posts)
+    facebook = [post for post in posts if post["platform"] == "Facebook"]
+    assert facebook
+    assert all(post["local_time"] == "09:00" for post in facebook)
+    other = [post for post in posts if post["platform"] != "Facebook"]
+    assert {post["platform"] for post in other} <= {"Instagram", "FB + IG Stories", "TikTok"}
