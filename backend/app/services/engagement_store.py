@@ -374,6 +374,8 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
         sale_title=detail.sale_title,
         captured_at=detail.captured_at,
         sale_ends_at=detail.sale_ends_at,
+        auction_url=detail.auction_url,
+        ctseller_sale_id=int(ctseller_sale_id),
     )
     from app.services.facebook_calendar import annotate_social_calendar
 

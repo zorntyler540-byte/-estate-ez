@@ -16,6 +16,7 @@ from app.catalog_storage import resolve_catalog_storage_path
 from app.config import cors_allow_origins, settings
 from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, Photo, Sale, User
 from app.services.ctseller import jpeg_bytes_for_ctseller_post
+from app.services.ctbids_urls import CTBIDS_ITEM_URL, ctbids_sale_url
 from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_facebook_caption
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
 from app.services.meta_graph import (
@@ -39,7 +40,6 @@ MAX_PAGE_PHOTOS = 10
 MAX_PAGE_POSTS = 80
 SCHEDULE_MIN_LEAD = timedelta(minutes=10)
 SCHEDULE_MAX_LEAD = timedelta(days=75)
-CTBIDS_ITEM_URL = "https://ctbids.com/estate-sale/{sale_id}/item/{item_id}"
 FOLLOW_HOOK = FOLLOW_HOOK_LINE
 _LOG = logging.getLogger(__name__)
 
@@ -489,6 +489,11 @@ def preview_posts(
         snapshot = _latest_snapshot(db, lot)
         photos = _lot_photos(db, lot)
         item_url = ctbids_lot_url(lot, snapshot=snapshot)
+        sale_url = ctbids_sale_url(
+            sale_id=getattr(lot, "ctseller_sale_id", None),
+            auction_url=(snapshot.auction_url if snapshot else "") or "",
+            item_url=item_url,
+        )
         close_at = snapshot.sale_ends_at if snapshot else None
         if close_at is not None:
             close_times.append(close_at)
@@ -506,6 +511,7 @@ def preview_posts(
             current_bid=float(snapshot.price) if snapshot else None,
             watchers=int(snapshot.watchers) if snapshot else None,
             sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
+            sale_url=sale_url,
         )
         drafts.append(
             {
