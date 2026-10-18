@@ -53,6 +53,17 @@ type PublishResult = {
   error?: string | null;
 };
 
+type PublishOut = {
+  queued?: boolean;
+  batch_id?: string | null;
+  active?: boolean;
+  total?: number;
+  done?: number;
+  posted?: number;
+  failed?: number;
+  results?: PublishResult[];
+};
+
 type Props = {
   token: string;
   lotIds: string[];
@@ -91,6 +102,7 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
   const [slotAt, setSlotAt] = useState("");
   const [customAt, setCustomAt] = useState("");
   const [results, setResults] = useState<PublishResult[] | null>(null);
+  const [batchProgress, setBatchProgress] = useState("");
 
   const loadPreview = useCallback(
     async (hook: boolean) => {
@@ -153,6 +165,17 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
     }
   }
 
+  async function waitForBatch(batchId: string): Promise<PublishResult[]> {
+    for (;;) {
+      const row = (await apiFetch(`/facebook/posts/batches/${batchId}`, token)) as PublishOut;
+      const done = Number(row.done || 0);
+      const total = Number(row.total || 0);
+      if (total > 0) setBatchProgress(`Posting ${done} of ${total}…`);
+      if (!row.active) return row.results || [];
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+  }
+
   async function publish() {
     if (!preview?.connected || posting) return;
     const items = (preview.lots || [])
@@ -180,6 +203,7 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
     }
     setPosting(true);
     setError("");
+    setBatchProgress(items.length > 1 ? `Queueing ${items.length} posts…` : "Posting…");
     try {
       const res = (await apiFetch("/facebook/posts", token, {
         method: "POST",
@@ -190,12 +214,17 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
           source,
           items
         })
-      })) as { results: PublishResult[] };
-      setResults(res.results || []);
-      if ((res.results || []).some((row) => row.ok)) onPosted?.();
+      })) as PublishOut;
+      let rows = res.results || [];
+      if (res.queued && res.batch_id) {
+        rows = await waitForBatch(res.batch_id);
+      }
+      setResults(rows);
+      if (rows.some((row) => row.ok)) onPosted?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Facebook post failed");
     } finally {
+      setBatchProgress("");
       setPosting(false);
     }
   }
@@ -390,6 +419,7 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
               </div>
             ) : null}
 
+            {posting && batchProgress ? <p className="ct-muted">{batchProgress}</p> : null}
             <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -398,7 +428,7 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
                 onClick={() => void publish()}
               >
                 {posting
-                  ? "Posting…"
+                  ? batchProgress || "Posting…"
                   : scheduleMode === "now"
                     ? "Post to Page"
                     : "Schedule on Page"}

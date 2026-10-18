@@ -7,6 +7,7 @@ import { AppShell } from "../../components/AppShell";
 import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
+import { isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
 
 type SaleSummary = {
   ctseller_sale_id: number;
@@ -189,8 +190,10 @@ export default function EngagementPage() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<number | null>(null);
   const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [accountRole, setAccountRole] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
   const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
+  const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
 
   const loadSale = useCallback(
     async (t: string, id: number) => {
@@ -211,6 +214,14 @@ export default function EngagementPage() {
       setLoading(false);
       return;
     }
+    setAccountRole(storedAccountRole());
+    void apiFetch("/auth/me", t)
+      .then((data) => {
+        const role = String((data as { role?: string }).role || "");
+        rememberAccountRole(role);
+        setAccountRole(role);
+      })
+      .catch(() => setAccountRole(""));
     void apiFetch("/integrations/facebook/status", t)
       .then((data) => setFacebookConfigured(Boolean((data as { configured?: boolean }).configured)))
       .catch(() => setFacebookConfigured(false));
@@ -383,7 +394,7 @@ export default function EngagementPage() {
               })}
             </section>
 
-            {facebookConfigured ? (
+            {canPostFacebook ? (
               <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
                 <button
                   type="button"
@@ -416,7 +427,7 @@ export default function EngagementPage() {
               <table className="ct-table ct-table--engagement">
                 <thead>
                   <tr>
-                    {facebookConfigured ? <th>Post</th> : null}
+                    {canPostFacebook ? <th>Post</th> : null}
                     {SORT_COLUMNS.map((column) => (
                       <SortHeader
                         key={column.key}
@@ -433,12 +444,12 @@ export default function EngagementPage() {
                 <tbody>
                   {visible.length === 0 ? (
                     <tr>
-                      <td colSpan={facebookConfigured ? 9 : 8}>No {bucket} lots in this snapshot.</td>
+                      <td colSpan={canPostFacebook ? 9 : 8}>No {bucket} lots in this snapshot.</td>
                     </tr>
                   ) : (
                     visible.map((item) => (
                       <tr key={`${item.ctseller_item_id}-${item.sku}`}>
-                        {facebookConfigured ? (
+                        {canPostFacebook ? (
                           <td>
                             {item.lot_id ? (
                               <input

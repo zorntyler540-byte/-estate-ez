@@ -23,6 +23,7 @@ from app.schemas import (
     FacebookSelectPageIn,
     FacebookStatusOut,
 )
+from app import facebook_post_tasks
 from app.services.facebook_page import (
     complete_oauth,
     connection_status,
@@ -33,6 +34,7 @@ from app.services.facebook_page import (
     oauth_start_url,
     preview_posts,
     publish_posts,
+    require_facebook_poster,
     select_page,
 )
 from app.services.roles import can_manage_integrations, is_owner
@@ -153,6 +155,7 @@ def facebook_preview(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> FacebookPreviewOut:
+    require_facebook_poster(current)
     data = preview_posts(
         db,
         account=_account(db, current),
@@ -162,23 +165,100 @@ def facebook_preview(
     return FacebookPreviewOut.model_validate(data)
 
 
+def _publish_out(
+    *,
+    results: list[dict],
+    queued: bool = False,
+    batch_id: str | None = None,
+    active: bool = False,
+    total: int = 0,
+    done: int = 0,
+    posted: int = 0,
+    failed: int = 0,
+) -> FacebookPublishOut:
+    return FacebookPublishOut(
+        queued=queued,
+        batch_id=batch_id,
+        active=active,
+        total=total,
+        done=done,
+        posted=posted,
+        failed=failed,
+        results=[FacebookPublishResultOut.model_validate(row) for row in results],
+    )
+
+
 @router.post("/facebook/posts", response_model=FacebookPublishOut)
 def facebook_publish(
     payload: FacebookPublishIn,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> FacebookPublishOut:
+    require_facebook_poster(current)
+    items = [item.model_dump() for item in payload.items]
+    if len(items) > facebook_post_tasks.SYNC_LOT_LIMIT:
+        batch_id = facebook_post_tasks.start_facebook_posts_in_background(
+            account_id=current.account_id,
+            user_id=current.id,
+            items=items,
+            include_follow_hook=payload.include_follow_hook,
+            confirm=payload.confirm,
+            force=payload.force,
+            source=payload.source or "lot",
+        )
+        row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
+        return _publish_out(
+            results=list(row.get("results") or []),
+            queued=True,
+            batch_id=batch_id,
+            active=bool(row.get("active", True)),
+            total=int(row.get("total") or len(items)),
+            done=int(row.get("done") or 0),
+            posted=int(row.get("posted") or 0),
+            failed=int(row.get("failed") or 0),
+        )
     results = publish_posts(
         db,
         account=_account(db, current),
         user=current,
-        items=[item.model_dump() for item in payload.items],
+        items=items,
         include_follow_hook=payload.include_follow_hook,
         confirm=payload.confirm,
         force=payload.force,
         source=payload.source or "lot",
     )
-    return FacebookPublishOut(results=[FacebookPublishResultOut.model_validate(row) for row in results])
+    posted = sum(1 for row in results if row.get("ok"))
+    failed = sum(1 for row in results if not row.get("ok") and not row.get("skipped"))
+    return _publish_out(
+        results=results,
+        queued=False,
+        active=False,
+        total=len(items),
+        done=len(results),
+        posted=posted,
+        failed=failed,
+    )
+
+
+@router.get("/facebook/posts/batches/{batch_id}", response_model=FacebookPublishOut)
+def facebook_publish_batch(
+    batch_id: str,
+    current: User = Depends(get_current_user),
+) -> FacebookPublishOut:
+    require_facebook_poster(current)
+    row = facebook_post_tasks.facebook_post_batch_status(batch_id.strip(), current.account_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Facebook post batch not found")
+    return _publish_out(
+        results=list(row.get("results") or []),
+        queued=True,
+        batch_id=batch_id.strip(),
+        active=bool(row.get("active")),
+        total=int(row.get("total") or 0),
+        done=int(row.get("done") or 0),
+        posted=int(row.get("posted") or 0),
+        failed=int(row.get("failed") or 0),
+    )
 
 
 @router.get("/facebook/posts", response_model=list[FacebookPagePostOut])

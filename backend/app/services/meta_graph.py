@@ -14,7 +14,8 @@ from urllib.parse import urlencode
 import requests
 
 # Pin once. Bump this constant (and the tests that assert it) when Meta sunsets the version.
-GRAPH_API_VERSION = "v23.0"
+# Current stable as of 2026-10: Graph recognizes v26.0; v27.0 is not a Graph version yet.
+GRAPH_API_VERSION = "v26.0"
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 OAUTH_DIALOG_URL = f"https://www.facebook.com/{GRAPH_API_VERSION}/dialog/oauth"
 
@@ -77,11 +78,22 @@ def _parse_graph_error(payload: Any, status_code: int | None) -> MetaGraphError:
     except (TypeError, ValueError):
         sub_n = None
     low = message.lower()
+    # Do not match bare "session" / "expired" — those false-flag live Page tokens
+    # (rate-limit copy, publishing windows, etc.). Codes 102/190/463/467 are the
+    # reconnect cases; keep only unambiguous token phrases as a fallback.
+    token_phrases = (
+        "invalid oauth access token",
+        "invalid access token",
+        "cannot parse access token",
+        "error validating access token",
+        "session has expired",
+        "session has been invalidated",
+        "has been revoked",
+    )
     is_token = (
         code in _TOKEN_ERROR_CODES
         or sub_n in _TOKEN_ERROR_CODES
-        or kind == "OAuthException"
-        and any(tok in low for tok in ("expired", "revoked", "session", "invalid access token", "cannot parse access token"))
+        or (kind == "OAuthException" and any(tok in low for tok in token_phrases))
     )
     if is_token and "reconnect" not in low:
         message = f"{message} Reconnect the Facebook Page on Account settings."

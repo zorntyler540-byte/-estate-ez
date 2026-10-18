@@ -2024,7 +2024,7 @@ export default function LotDetailPage() {
                     : "Add photos to CT Seller"}
                 </button>
               ) : null}
-              {facebookConfigured ? (
+              {facebookConfigured && isAccountOwner ? (
                 <button
                   type="button"
                   className="ct-btn"

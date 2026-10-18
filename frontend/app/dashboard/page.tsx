@@ -7705,7 +7705,7 @@ export default function DashboardPage() {
                 ? `Post selected to CT Seller (${ctSellerSelectedCount})`
                 : `Post unposted to CT Seller (${ctSellerUnpostedEligible})`}
           </button>
-          {facebookConfigured ? (
+          {facebookConfigured && isAccountOwner ? (
             <button
               type="button"
               className="ct-btn"

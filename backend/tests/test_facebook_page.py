@@ -27,7 +27,7 @@ from app.services.meta_graph import GRAPH_API_VERSION, PAGE_OAUTH_SCOPES, _parse
 
 
 def test_graph_api_version_is_pinned() -> None:
-    assert GRAPH_API_VERSION == "v23.0"
+    assert GRAPH_API_VERSION == "v26.0"
     assert GRAPH_API_VERSION.startswith("v")
     assert "pages_manage_posts" in PAGE_OAUTH_SCOPES
     assert "pages_show_list" in PAGE_OAUTH_SCOPES
@@ -48,6 +48,20 @@ def test_token_error_parser_flags_reconnect() -> None:
     )
     assert err.is_token_error
     assert "Reconnect" in str(err)
+
+
+def test_token_error_parser_ignores_generic_oauth_copy() -> None:
+    err = _parse_graph_error(
+        {
+            "error": {
+                "message": "This session cannot publish because the post is outside the allowed window.",
+                "type": "OAuthException",
+                "code": 100,
+            }
+        },
+        400,
+    )
+    assert not err.is_token_error
 
 
 def test_listing_photos_drop_tape_and_use_hero_order() -> None:
@@ -346,6 +360,7 @@ def test_publish_uploads_unpublished_then_feed(tmp_path, monkeypatch) -> None:
         assert row["ok"] is True
         assert row["facebook_post_id"] == "111_555"
         assert row["status"] == "posted"
+        assert res.json().get("queued") is False
         assert uploads
         stored = db.query(FacebookPagePost).one()
         assert stored.facebook_post_id == "111_555"
@@ -440,4 +455,134 @@ def test_oauth_start_url_uses_pinned_graph_version(tmp_path, monkeypatch) -> Non
         assert "pages_manage_posts" in url
         assert "999" in url
     finally:
+        _clear_overrides()
+
+
+def test_preview_and_publish_are_owner_only(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, _db, _account, _user, lot = _client(tmp_path, role="catalogger", connected=True)
+    try:
+        preview = client.post("/facebook/posts/preview", json={"lot_ids": [lot.id]})
+        assert preview.status_code == 403
+        posted = client.post(
+            "/facebook/posts",
+            json={"confirm": True, "items": [{"lot_id": lot.id, "caption": "Hi"}]},
+        )
+        assert posted.status_code == 403
+    finally:
+        _clear_overrides()
+
+
+def test_expired_user_token_does_not_force_reconnect_when_page_token_present(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, _user, _lot = _client(tmp_path, connected=True)
+    account.facebook_user_token_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db.add(account)
+    db.commit()
+    try:
+        status = client.get("/integrations/facebook/status").json()
+        assert status["connected"] is True
+        assert status["needs_reconnect"] is False
+    finally:
+        _clear_overrides()
+
+
+def test_user_token_without_page_is_pick_not_reconnect(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, _user, _lot = _client(tmp_path, connected=True)
+    account.facebook_page_id = None
+    account.facebook_page_name = None
+    account.facebook_page_token_enc = None
+    db.add(account)
+    db.commit()
+    try:
+        status = client.get("/integrations/facebook/status").json()
+        assert status["connected"] is False
+        assert status["needs_reconnect"] is False
+    finally:
+        _clear_overrides()
+
+
+def test_multi_lot_publish_queues_background_batch(tmp_path, monkeypatch) -> None:
+    from app import facebook_post_tasks
+
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, user, lot = _client(tmp_path, connected=True)
+    lot2 = Lot(
+        id="lot-fb-2",
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=lot.sale_id,
+        sku="AA101",
+        auction_title="Second vase",
+        professional_description="Pair.",
+        ctseller_item_id=100,
+        ctseller_sale_id=12,
+    )
+    hero2 = Photo(
+        id="photo-hero-2",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot2.id,
+        original_name="hero2.jpg",
+        storage_path="catalog/hero2.jpg",
+        photo_role="hero",
+        sort_order=0,
+        shows_whole_lot=True,
+    )
+    db.add_all([lot2, hero2])
+    db.commit()
+
+    Session = db.get_bind()
+    from sqlalchemy.orm import sessionmaker
+
+    factory = sessionmaker(bind=Session, autoflush=False, autocommit=False, future=True)
+    facebook_post_tasks.reset_facebook_post_runtime_state()
+    monkeypatch.setattr(facebook_post_tasks, "SessionLocal", factory)
+
+    class ImmediateThread:
+        def __init__(self, target=None, **_kwargs):
+            self._target = target
+
+        def start(self):
+            assert self._target
+            self._target()
+
+    monkeypatch.setattr(facebook_post_tasks.threading, "Thread", ImmediateThread)
+
+    try:
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="media-x"),
+            patch("app.services.facebook_page.create_page_feed_post", return_value="111_777"),
+        ):
+            res = client.post(
+                "/facebook/posts",
+                json={
+                    "confirm": True,
+                    "source": "push_queue",
+                    "items": [
+                        {"lot_id": lot.id, "caption": "First lot on CT Bids"},
+                        {"lot_id": lot2.id, "caption": "Second lot on CT Bids"},
+                    ],
+                },
+            )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["queued"] is True
+        assert body["batch_id"]
+        poll = client.get(f"/facebook/posts/batches/{body['batch_id']}")
+        assert poll.status_code == 200, poll.text
+        done = poll.json()
+        assert done["active"] is False
+        assert done["total"] == 2
+        assert len(done["results"]) == 2
+        assert all(row["ok"] for row in done["results"])
+        assert db.query(FacebookPagePost).count() == 2
+    finally:
+        facebook_post_tasks.reset_facebook_post_runtime_state()
         _clear_overrides()

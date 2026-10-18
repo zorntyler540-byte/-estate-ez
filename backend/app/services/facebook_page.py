@@ -100,20 +100,23 @@ def decode_oauth_state(state: str) -> tuple[str, str]:
     return account_id, user_id
 
 
+def require_facebook_poster(current: User) -> None:
+    """Connect, pick a Page, and post are account-owner actions — not catalogger."""
+    if not can_manage_integrations(current.role):
+        raise HTTPException(status_code=403, detail="Owner access required to post to Facebook")
+
+
 def connection_status(account: Account) -> dict:
     page_id = str(getattr(account, "facebook_page_id", None) or "").strip()
     page_name = str(getattr(account, "facebook_page_name", None) or "").strip()
     page_token = unseal_facebook_secret(getattr(account, "facebook_page_token_enc", None))
-    user_token = unseal_facebook_secret(getattr(account, "facebook_user_token_enc", None))
     token_error = str(getattr(account, "facebook_token_error", None) or "").strip()
     configured = settings.meta_configured
     connected = bool(configured and page_id and page_token)
-    needs_reconnect = bool(connected and token_error) or bool(user_token and not page_token and configured)
-    expires_at = getattr(account, "facebook_user_token_expires_at", None)
-    if connected and expires_at is not None:
-        exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-        if exp <= datetime.now(timezone.utc):
-            needs_reconnect = True
+    # Page tokens from a long-lived user token typically do not expire. A stored
+    # user token without a selected Page is "pick a Page", not reconnect. Only a
+    # recorded Graph token error on an already-connected Page means reconnect.
+    needs_reconnect = bool(connected and token_error)
     return {
         "configured": configured,
         "connected": connected,
@@ -130,8 +133,7 @@ def connection_status(account: Account) -> dict:
 
 def oauth_start_url(current: User) -> str:
     require_meta_configured()
-    if not can_manage_integrations(current.role):
-        raise HTTPException(status_code=403, detail="Owner access required to connect Facebook")
+    require_facebook_poster(current)
     state = encode_oauth_state(account_id=current.account_id, user_id=current.id)
     return oauth_dialog_url(
         app_id=settings.meta_app_id.strip(),
@@ -305,11 +307,6 @@ def _page_token(account: Account) -> tuple[str, str]:
         raise HTTPException(
             status_code=400,
             detail="Connect a Facebook Page on Account settings before posting.",
-        )
-    if str(getattr(account, "facebook_token_error", None) or "").strip():
-        raise HTTPException(
-            status_code=401,
-            detail="Facebook access expired. Reconnect the Page on Account settings.",
         )
     return page_id, token
 
@@ -546,6 +543,8 @@ def publish_posts(
     force: bool,
     source: str,
     now: datetime | None = None,
+    on_lot=None,
+    on_result=None,
 ) -> list[dict]:
     require_meta_configured()
     if not confirm:
@@ -560,24 +559,33 @@ def publish_posts(
         raise HTTPException(status_code=400, detail="Post at most 40 lots at a time.")
 
     results: list[dict] = []
+
+    def _emit(row: dict) -> dict:
+        results.append(row)
+        if on_result is not None:
+            on_result(row)
+        return row
+
     for item in items:
         lot_id = str(item.get("lot_id") or "").strip()
         caption = str(item.get("caption") or "").strip()
         scheduled = item.get("scheduled_publish_time")
+        if on_lot is not None:
+            on_lot(lot_id)
         lot = (
             db.query(Lot)
             .filter(Lot.id == lot_id, Lot.account_id == account.id)
             .first()
         )
         if not lot:
-            results.append({"lot_id": lot_id, "ok": False, "error": "Lot not found"})
+            _emit({"lot_id": lot_id, "ok": False, "error": "Lot not found"})
             continue
         if not caption:
-            results.append({"lot_id": lot_id, "ok": False, "error": "Caption is empty"})
+            _emit({"lot_id": lot_id, "ok": False, "error": "Caption is empty"})
             continue
         existing = _existing_posts(db, account.id, lot.id)
         if existing and not force:
-            results.append(
+            _emit(
                 {
                     "lot_id": lot_id,
                     "ok": False,
@@ -588,7 +596,7 @@ def publish_posts(
             continue
         photos = _lot_photos(db, lot)
         if not photos:
-            results.append(
+            _emit(
                 {
                     "lot_id": lot_id,
                     "ok": False,
@@ -649,7 +657,7 @@ def publish_posts(
             db.commit()
             if exc.is_token_error:
                 _mark_token_error(db, account, str(exc))
-                results.append(
+                _emit(
                     {
                         "lot_id": lot_id,
                         "ok": False,
@@ -659,7 +667,7 @@ def publish_posts(
                     }
                 )
                 break
-            results.append({"lot_id": lot_id, "ok": False, "post_id": record.id, "error": str(exc)})
+            _emit({"lot_id": lot_id, "ok": False, "post_id": record.id, "error": str(exc)})
             continue
 
         record.facebook_post_id = post_id
@@ -669,7 +677,7 @@ def publish_posts(
         _clear_token_error(db, account)
         db.add(record)
         db.commit()
-        results.append(
+        _emit(
             {
                 "lot_id": lot_id,
                 "ok": True,

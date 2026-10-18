@@ -252,8 +252,10 @@ Instagram, Stories, Groups, and Marketplace are **not** implemented. There is no
 8. Set the Railway **API** variables from the table in §3 (`META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `PUBLIC_WEB_ORIGIN`). Redeploy the API.
 9. In Estate-EZ: **Account → Facebook Page → Connect Facebook Page**. Pick the Page if she admins more than one.
 
-Graph API version is pinned in code (`GRAPH_API_VERSION` in `backend/app/services/meta_graph.py`). Bump that constant when Meta sunsets the version.
+Graph API version is pinned in code (`GRAPH_API_VERSION` in `backend/app/services/meta_graph.py`, currently `v26.0`). Bump that constant when Meta sunsets the version.
 
 **If Connect is missing:** `META_APP_ID` is unset — the UI hides the feature on purpose.
 
-**If posting says reconnect:** the user token expired or was revoked. Connect again from Account settings.
+**If posting says reconnect:** Graph returned a real token error (revoked/invalid Page token). Connect again from Account settings. A still-valid Page token does not show this warning just because the user token’s 60-day expiry passed, or because a Page has not been picked yet.
+
+Owners/admins post; cataloggers do not. Multi-lot Push-queue posts run in the background so the dashboard request cannot time out.

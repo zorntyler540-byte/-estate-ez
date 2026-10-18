@@ -1186,7 +1186,14 @@ class FacebookPublishResultOut(BaseModel):
 
 
 class FacebookPublishOut(BaseModel):
-    results: list[FacebookPublishResultOut]
+    queued: bool = False
+    batch_id: str | None = None
+    active: bool = False
+    total: int = 0
+    done: int = 0
+    posted: int = 0
+    failed: int = 0
+    results: list[FacebookPublishResultOut] = Field(default_factory=list)
 
 
 class FacebookPagePostOut(BaseModel):
