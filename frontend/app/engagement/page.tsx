@@ -69,6 +69,7 @@ type CalendarPost = {
   intended_platform?: string;
   publish_target?: string;
   facebook_schedulable?: boolean;
+  facebook_can_post_now?: boolean;
   facebook_can_cancel?: boolean;
   facebook_status?: string;
   facebook_status_label?: string;
@@ -101,12 +102,12 @@ function facebookStatusLabel(post: CalendarPost): string {
 function facebookBlockedReason(post: CalendarPost): string {
   if (post.facebook_blocked_reason) return post.facebook_blocked_reason;
   const status = post.facebook_status || "";
-  if (status === "missed") return "This slot time has already passed.";
-  if (status === "too_soon") return "Too soon (under 10 min) — Facebook requires at least 10 minutes.";
+  if (status === "missed") return "Can't schedule: this slot time has already passed. Use Post now.";
+  if (status === "too_soon") return "Can't schedule: under 10 minutes. Facebook needs 10 minutes — use Post now.";
   if (status === "scheduled") return "Already scheduled on the Page.";
   if (status === "posted") return "Already posted to the Page.";
-  if (status === "out_of_window") return "Facebook allows scheduling at most 75 days ahead.";
-  if (status === "no_lot") return "Catalog this lot before scheduling a Page post.";
+  if (status === "out_of_window") return "Can't schedule: more than 75 days ahead. Use Post now to publish immediately.";
+  if (status === "no_lot") return "Catalog this lot before posting to the Page.";
   return "";
 }
 
@@ -254,14 +255,16 @@ export default function EngagementPage() {
   const [facebookLotSchedules, setFacebookLotSchedules] = useState<Record<string, string> | null>(null);
   const [facebookCalendarSlots, setFacebookCalendarSlots] = useState<FacebookCalendarSlot[] | null>(null);
   const [facebookModalSource, setFacebookModalSource] = useState<FacebookPostSource>("push_queue");
+  const [facebookPublishNow, setFacebookPublishNow] = useState(false);
   const [cancellingKey, setCancellingKey] = useState("");
   const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
   const upcomingSlots = posts.filter((post) => post.facebook_schedulable && post.lot_id && post.slot_key);
 
-  function openCalendarApprove(rows: CalendarPost[]) {
+  function openCalendarApprove(rows: CalendarPost[], { postNow = false } = {}) {
     const slots = rows.filter((post) => post.lot_id && post.slot_key).map(toCalendarSlot);
     if (!slots.length) return;
     setFacebookModalSource("push_calendar");
+    setFacebookPublishNow(postNow);
     setFacebookLotSchedules(null);
     setFacebookCalendarSlots(slots);
     setFacebookLotIds(slots.map((slot) => slot.lot_id));
@@ -508,7 +511,9 @@ export default function EngagementPage() {
                   disabled={selectedLotIds.size < 1}
                   onClick={() => {
                     setFacebookModalSource("push_queue");
+                    setFacebookPublishNow(false);
                     setFacebookLotSchedules(null);
+                    setFacebookCalendarSlots(null);
                     setFacebookLotIds([...selectedLotIds]);
                   }}
                 >
@@ -622,7 +627,8 @@ export default function EngagementPage() {
               Planned posts for Push lots only, from the snapshot through the close. Every spreadsheet
               slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing 17:40) is
               scheduled on the connected Facebook Page at that time after you approve it. Native
-              Instagram and TikTok publishers are not wired yet. Missed slots are skipped.
+              Instagram and TikTok publishers are not wired yet. Missed or too-soon slots cannot be
+              scheduled — use Post now to publish them immediately.
             </p>
             {canPostFacebook && posts.length > 0 ? (
               <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
@@ -719,6 +725,17 @@ export default function EngagementPage() {
                             >
                               Approve
                             </button>
+                            {post.facebook_can_post_now && post.lot_id && post.slot_key ? (
+                              <button
+                                type="button"
+                                className="ct-btn"
+                                style={{ marginTop: "0.35rem" }}
+                                title="Preview caption and photos, then publish this slot immediately"
+                                onClick={() => openCalendarApprove([post], { postNow: true })}
+                              >
+                                Post now
+                              </button>
+                            ) : null}
                             {post.facebook_can_cancel && post.slot_key ? (
                               <button
                                 type="button"
@@ -754,11 +771,13 @@ export default function EngagementPage() {
           lotSchedules={facebookLotSchedules || undefined}
           calendarSaleId={facebookModalSource === "push_calendar" ? saleId : null}
           calendarSlots={facebookCalendarSlots || undefined}
+          publishNow={facebookPublishNow}
           onClose={() => {
             setFacebookLotIds(null);
             setFacebookLotSchedules(null);
             setFacebookCalendarSlots(null);
             setFacebookModalSource("push_queue");
+            setFacebookPublishNow(false);
           }}
           onPosted={() => {
             if (token && saleId) void loadSale(token, saleId);

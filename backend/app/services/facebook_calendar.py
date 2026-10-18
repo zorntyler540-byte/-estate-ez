@@ -81,8 +81,8 @@ SLOT_PHOTO_OFFSETS: dict[str, int] = {
 
 PAGE_PREFLIGHT = (
     "Confirm the lot is still open, shipping is unchanged, and the current bid "
-    "matches the listing before you approve. Approving schedules a Facebook Page "
-    "feed post at this slot time. Missed slots are skipped."
+    "matches the listing before you approve. Approve schedules a Page post at the "
+    "slot time. Post now publishes immediately if the slot is missed or under 10 minutes."
 )
 
 FACEBOOK_STATUS_LABELS: dict[str, str] = {
@@ -99,12 +99,12 @@ FACEBOOK_STATUS_LABELS: dict[str, str] = {
 }
 
 FACEBOOK_BLOCKED_REASONS: dict[str, str] = {
-    "missed": "This slot time has already passed.",
-    "too_soon": "Too soon (under 10 min) — Facebook requires at least 10 minutes.",
-    "out_of_window": "Facebook allows scheduling at most 75 days ahead.",
+    "missed": "Can't schedule: this slot time has already passed. Use Post now.",
+    "too_soon": "Can't schedule: under 10 minutes. Facebook needs 10 minutes — use Post now.",
+    "out_of_window": "Can't schedule: more than 75 days ahead. Use Post now to publish immediately.",
     "scheduled": "Already scheduled on the Page.",
     "posted": "Already posted to the Page.",
-    "no_lot": "Catalog this lot before scheduling a Page post.",
+    "no_lot": "Catalog this lot before posting to the Page.",
     "not_applicable": "This slot is not posting to the Facebook Page.",
     "failed": "The last Page post for this slot failed.",
 }
@@ -334,6 +334,7 @@ def annotate_social_calendar(
             "intended_platform": intended,
             "publish_target": target,
             "facebook_schedulable": False,
+            "facebook_can_post_now": False,
             "facebook_can_cancel": False,
             "facebook_status": "not_applicable",
             "facebook_status_label": facebook_status_label("not_applicable"),
@@ -368,10 +369,12 @@ def annotate_social_calendar(
         schedulable = window == "ok" and (not row or row.status in {"failed", "cancelled"})
         if row and row.status == "scheduled":
             schedulable = False
+        can_post_now = not row or row.status in {"failed", "cancelled"}
         extra.update(
             {
                 "slot_key": key,
                 "facebook_schedulable": schedulable,
+                "facebook_can_post_now": can_post_now,
                 "facebook_can_cancel": bool(row and row.status == "scheduled"),
                 "facebook_status": status,
                 "facebook_status_label": facebook_status_label(status),
@@ -659,6 +662,7 @@ def calendar_publish_items(
     slot_keys: list[str],
     captions: dict[str, str] | None = None,
     include_follow_hook: bool = False,
+    post_now: bool = False,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (publishable items, skipped result rows) for Push-calendar Page slots."""
@@ -676,14 +680,14 @@ def calendar_publish_items(
         window = schedule_window_state(slot["when"], now=now)
         lot_id = str(slot["lot_id"])
         key = str(slot["slot_key"])
-        if window != "ok":
+        if not post_now and window != "ok":
             skipped.append(
                 {
                     "lot_id": lot_id,
                     "calendar_key": key,
                     "ok": False,
                     "skipped": True,
-                    "error": "This calendar slot is outside Facebook's 10-minute to 75-day window.",
+                    "error": "This calendar slot is outside Facebook's 10-minute to 75-day window. Use Post now to publish immediately.",
                 }
             )
             continue
@@ -705,6 +709,8 @@ def calendar_publish_items(
             or drafted["caption"]
         ).strip()
         drafted["caption"] = caption
+        if post_now:
+            drafted["scheduled_publish_time"] = None
         publishable.append(drafted)
     return publishable, skipped
 

@@ -370,6 +370,7 @@ def facebook_approve_calendar(
         slot_keys=list(payload.slot_keys or []),
         captions=dict(payload.captions or {}),
         include_follow_hook=payload.include_follow_hook,
+        post_now=bool(payload.post_now),
     )
     if not publishable:
         failed = sum(1 for row in skipped if not row.get("ok") and not row.get("skipped"))

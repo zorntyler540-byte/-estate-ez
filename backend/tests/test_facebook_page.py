@@ -705,6 +705,7 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert slot["facebook_status"] == "planned"
         assert slot["facebook_status_label"] == "Planned"
         assert slot["facebook_schedulable"] is True
+        assert slot["facebook_can_post_now"] is True
         assert slot["facebook_can_cancel"] is False
         assert slot["facebook_blocked_reason"] is None
         assert slot["slot_key"] == f"pushcal:12:{lot.id}:0900"
@@ -751,11 +752,13 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert fb["facebook_status_label"] == "Scheduled"
         assert fb["facebook_can_cancel"] is True
         assert fb["facebook_schedulable"] is False
+        assert fb["facebook_can_post_now"] is False
         assert "Already scheduled" in (fb["facebook_blocked_reason"] or "")
         assert fb["facebook_post_id"] == "111_cal"
         still_open = next(r for r in again if r["local_time"] == "17:40")
         assert still_open["facebook_status"] == "planned"
         assert still_open["facebook_schedulable"] is True
+        assert still_open["facebook_can_post_now"] is True
         dup = client.post(
             "/engagement/sales/12/calendar/facebook",
             json={"confirm": True, "slot_keys": [slot["slot_key"]]},
@@ -1080,6 +1083,7 @@ def test_legacy_calendar_key_still_matches_0900_slot(tmp_path, monkeypatch) -> N
         assert morning["facebook_status"] == "scheduled"
         assert morning["facebook_post_id"] == "111_legacy"
         assert morning["facebook_schedulable"] is False
+        assert morning["facebook_can_post_now"] is False
         dup = client.post(
             "/engagement/sales/12/calendar/facebook",
             json={"confirm": True, "slot_keys": [morning["slot_key"]]},
@@ -1115,8 +1119,10 @@ def test_push_calendar_missed_slot_is_skipped(tmp_path, monkeypatch) -> None:
         assert morning["facebook_status"] == "missed"
         assert morning["facebook_status_label"] == "Missed"
         assert morning["facebook_schedulable"] is False
+        assert morning["facebook_can_post_now"] is True
         assert morning["facebook_can_cancel"] is False
         assert "already passed" in (morning["facebook_blocked_reason"] or "").lower()
+        assert "post now" in (morning["facebook_blocked_reason"] or "").lower()
         skipped = client.post(
             "/engagement/sales/12/calendar/facebook",
             json={"confirm": True, "slot_keys": [morning["slot_key"]]},
@@ -1200,6 +1206,7 @@ def test_owner_can_unapprove_scheduled_calendar_slot(tmp_path, monkeypatch) -> N
         assert again["facebook_status_label"] == "Cancelled"
         assert again["facebook_can_cancel"] is False
         assert again["facebook_schedulable"] is True
+        assert again["facebook_can_post_now"] is True
         stored = db.query(FacebookPagePost).one()
         assert stored.status == "cancelled"
     finally:
@@ -1216,5 +1223,159 @@ def test_catalogger_cannot_unapprove_calendar_slot(tmp_path, monkeypatch) -> Non
             json={"slot_keys": ["pushcal:12:lot-fb:0900"]},
         )
         assert res.status_code == 403
+        now = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "post_now": True, "slot_keys": ["pushcal:12:lot-fb:0900"]},
+        )
+        assert now.status_code == 403
     finally:
         _clear_overrides()
+
+
+def test_push_calendar_missed_slot_post_now_publishes_immediately(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    client, db, _account, _user, lot = _client(tmp_path, connected=True)
+    from zoneinfo import ZoneInfo
+
+    pacific = ZoneInfo("America/Los_Angeles")
+    captured = (datetime.now(pacific) - timedelta(days=1)).replace(
+        hour=15, minute=0, second=0, microsecond=0
+    )
+    ends = captured + timedelta(days=5)
+    body = {
+        "ctseller_sale_id": 12,
+        "sale_title": "Estate",
+        "auction_url": "https://ctbids.com/estate-sale/12/",
+        "sale_ends_at": ends.isoformat(),
+        "captured_at": captured.isoformat(),
+        "items": _future_push_body(lot)["items"],
+    }
+    scheduled_unixes: list[int | None] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        scheduled_unixes.append(scheduled_unix)
+        return "111_now"
+
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
+        morning = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["local_time"] == "09:00"
+        )
+        assert morning["facebook_status"] == "missed"
+        assert morning["facebook_can_post_now"] is True
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "post_now": True, "slot_keys": [morning["slot_key"]]},
+            )
+        assert posted.status_code == 200, posted.text
+        row = posted.json()["results"][0]
+        assert row["ok"] is True
+        assert row["status"] == "posted"
+        assert row["calendar_key"] == morning["slot_key"]
+        assert scheduled_unixes == [None]
+        stored = db.query(FacebookPagePost).one()
+        assert stored.status == "posted"
+        assert stored.calendar_key == morning["slot_key"]
+        assert stored.scheduled_publish_time is None
+        again = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["local_time"] == "09:00"
+        )
+        assert again["facebook_status"] == "posted"
+        assert again["facebook_status_label"] == "Posted"
+        assert again["facebook_can_post_now"] is False
+        assert again["facebook_schedulable"] is False
+        dup = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "slot_keys": [morning["slot_key"]]},
+        )
+        assert dup.json()["results"][0]["skipped"] is True
+        again_now = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "post_now": True, "slot_keys": [morning["slot_key"]]},
+        )
+        assert again_now.json()["results"][0]["skipped"] is True
+        assert db.query(FacebookPagePost).count() == 1
+    finally:
+        _clear_overrides()
+
+
+def test_push_calendar_post_now_is_not_duplicated_by_snapshot_or_approve(tmp_path, monkeypatch) -> None:
+    from app import facebook_post_tasks
+
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
+    client, db, account, _user, lot = _client(tmp_path, connected=True)
+    feeds: list[int | None] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        feeds.append(scheduled_unix)
+        return f"111_{len(feeds)}"
+
+    try:
+        body = _future_push_body(lot)
+        assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
+        slot = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["local_time"] == "09:00"
+        )
+        assert slot["facebook_can_post_now"] is True
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "post_now": True, "slot_keys": [slot["slot_key"]]},
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["results"][0]["status"] == "posted"
+        assert feeds == [None]
+        later = dict(body)
+        later["captured_at"] = (
+            datetime.fromisoformat(body["captured_at"]) + timedelta(hours=1)
+        ).isoformat()
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            patched = client.patch(
+                "/integrations/facebook/settings",
+                json={"calendar_auto_approve": True},
+            )
+            assert patched.status_code == 200, patched.text
+            snap = client.post("/integrations/engagement/snapshots", json=later)
+        assert snap.status_code == 200, snap.text
+        morning_rows = [
+            row for row in db.query(FacebookPagePost).all() if row.calendar_key == slot["slot_key"]
+        ]
+        assert len(morning_rows) == 1
+        assert morning_rows[0].status == "posted"
+        assert morning_rows[0].scheduled_publish_time is None
+        dup = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+        )
+        assert dup.json()["results"][0]["skipped"] is True
+        assert feeds[0] is None
+        assert feeds.count(None) == 1
+    finally:
+        _clear_overrides()
+
+
+def test_calendar_too_soon_blocked_reason_points_to_post_now() -> None:
+    from app.services.facebook_calendar import facebook_blocked_reason, schedule_window_state
+
+    now = datetime(2026, 10, 18, 16, 55, tzinfo=timezone.utc)
+    assert schedule_window_state(now + timedelta(minutes=5), now=now) == "too_soon"
+    reason = facebook_blocked_reason("too_soon", schedulable=False) or ""
+    assert "Post now" in reason

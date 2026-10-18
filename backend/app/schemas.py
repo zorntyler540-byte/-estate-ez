@@ -1083,6 +1083,7 @@ class SocialCalendarPost(BaseModel):
     intended_platform: str = ""
     publish_target: str = "facebook_page"
     facebook_schedulable: bool = False
+    facebook_can_post_now: bool = False
     facebook_can_cancel: bool = False
     facebook_status: str = "not_applicable"
     facebook_status_label: str = ""
@@ -1225,6 +1226,7 @@ class FacebookCalendarApproveIn(BaseModel):
     confirm: bool = False
     force: bool = False
     include_follow_hook: bool = False
+    post_now: bool = False
     slot_keys: list[str] = Field(default_factory=list)
     captions: dict[str, str] = Field(default_factory=dict)
 
