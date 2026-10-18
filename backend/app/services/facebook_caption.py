@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
-from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
+from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_link_line
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 FOLLOW_HOOK_LINE = "Follow our Page for upcoming sales."
@@ -126,7 +127,15 @@ def template_caption(
     if include_follow_hook:
         lines.append("")
         lines.append(FOLLOW_HOOK_LINE)
-    return "\n".join(lines).strip()
+    return arrange_facebook_caption(
+        "\n".join(lines).strip(),
+        item_url=url,
+        sale_url=sale_url or ctbids_sale_url(item_url=url),
+        include_follow_hook=include_follow_hook,
+    )
+
+
+_BIDDING_LINE_RE = re.compile(r"^Bidding closes\b.+$", re.IGNORECASE)
 
 
 def apply_follow_hook(caption: str, *, include: bool) -> str:
@@ -141,23 +150,78 @@ def apply_follow_hook(caption: str, *, include: bool) -> str:
     return text
 
 
-def ensure_sale_link(caption: str, sale_url: str) -> str:
-    """Lot URL first; labeled sale URL second (before the follow hook)."""
-    line = sale_link_line(sale_url)
-    text = (caption or "").rstrip()
-    if not line:
-        return text
-    if line in text:
-        return text
-    has_hook = text.endswith(FOLLOW_HOOK_LINE)
-    body = text[: -len(FOLLOW_HOOK_LINE)].rstrip() if has_hook else text
+def _collapse_blank_lines(text: str) -> str:
+    lines = [line.rstrip() for line in (text or "").splitlines()]
+    out: list[str] = []
+    blank = False
+    for line in lines:
+        if not line.strip():
+            if out and not blank:
+                out.append("")
+            blank = True
+            continue
+        out.append(line)
+        blank = False
+    return "\n".join(out).strip()
+
+
+def arrange_facebook_caption(
+    caption: str,
+    *,
+    item_url: str = "",
+    sale_url: str = "",
+    include_follow_hook: bool | None = None,
+) -> str:
+    """Hook/description, bidding close, lot URL, sale URL, optional follow line."""
+    sale_line = sale_link_line(sale_url or ctbids_sale_url(item_url=item_url))
+    lot_url = (item_url or "").strip()
+    body_lines: list[str] = []
+    bidding_lines: list[str] = []
+    saw_follow = False
+    for raw in (caption or "").splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if body_lines and body_lines[-1] != "":
+                body_lines.append("")
+            continue
+        if stripped == FOLLOW_HOOK_LINE:
+            saw_follow = True
+            continue
+        if sale_line and stripped == sale_line:
+            continue
+        if stripped.startswith(SALE_LINK_PREFIX):
+            continue
+        if lot_url and (stripped == lot_url or stripped.rstrip("/.") == lot_url.rstrip("/")):
+            continue
+        if lot_url and stripped.startswith(lot_url):
+            rest = stripped[len(lot_url) :].strip(" -–—")
+            if rest:
+                body_lines.append(rest)
+            continue
+        if _BIDDING_LINE_RE.match(stripped):
+            bidding_lines.append(stripped if stripped.endswith(".") else f"{stripped}.")
+            continue
+        body_lines.append(line)
+    include_follow = bool(include_follow_hook) if include_follow_hook is not None else saw_follow
+    parts: list[str] = []
+    body = _collapse_blank_lines("\n".join(body_lines))
     if body:
-        body = f"{body}\n\n{line}"
-    else:
-        body = line
-    if has_hook:
-        return f"{body}\n\n{FOLLOW_HOOK_LINE}"
-    return body
+        parts.append(body)
+    if bidding_lines:
+        parts.append(bidding_lines[0])
+    if lot_url:
+        parts.append(lot_url)
+    if sale_line:
+        parts.append(sale_line)
+    if include_follow:
+        parts.append(FOLLOW_HOOK_LINE)
+    return "\n\n".join(parts).strip()
+
+
+def ensure_sale_link(caption: str, sale_url: str) -> str:
+    """Keep caption layout: body, close, lot URL, sale URL, follow."""
+    return arrange_facebook_caption(caption, sale_url=sale_url)
 
 
 def _ensure_gemini_env() -> None:
@@ -254,7 +318,9 @@ def _draft_with_gemini(
     parts = [
         "Write one Facebook Page caption for this estate-auction lot.\n"
         "Staff will post it to the franchise Facebook Page (not Marketplace, not Groups).\n"
-        "Include the CT Bids lot/item link verbatim first. Mention when bidding closes.\n"
+        "Order, top to bottom: hook and description first; then a 'Bidding closes …' line; "
+        "then the CT Bids lot/item URL on its own line; then the overall sale line; then the follow line.\n"
+        "Put links at the bottom, never at the top.\n"
         f"{sale_instruction}\n"
         "Buyers cannot navigate from an item page back to the sale, so both links are required.\n"
         "2–6 short sentences or line breaks. No hashtag dump. No invented prices or provenance.\n"
@@ -291,4 +357,9 @@ def _draft_with_gemini(
     if not caption:
         return fallback
     caption = apply_follow_hook(caption, include=include_follow_hook)
-    return ensure_sale_link(caption, sale_url or ctbids_sale_url(item_url=item_url))
+    return arrange_facebook_caption(
+        caption,
+        item_url=item_url,
+        sale_url=sale_url or ctbids_sale_url(item_url=item_url),
+        include_follow_hook=include_follow_hook,
+    )

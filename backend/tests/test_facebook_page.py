@@ -27,9 +27,15 @@ from app.services.facebook_calendar import (
     slot_angle_for,
     slot_id_from_local_time,
 )
-from app.services.facebook_caption import FOLLOW_HOOK_LINE, apply_follow_hook, template_caption
+from app.services.facebook_caption import (
+    FOLLOW_HOOK_LINE,
+    apply_follow_hook,
+    arrange_facebook_caption,
+    template_caption,
+)
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
 from app.services.facebook_page import (
+    MAX_PAGE_PHOTOS,
     encode_oauth_state,
     listing_photos_for_facebook,
     rotate_listing_photos,
@@ -85,6 +91,43 @@ def test_listing_photos_drop_tape_and_use_hero_order() -> None:
     assert [p.id for p in kept] == ["hero", "detail"]
 
 
+def test_listing_photos_drop_mis_tagged_capture_first_sku_tape() -> None:
+    """TG371AD leak: purple SKU tape tagged item_front became the 2nd Page image after listing sort."""
+    tape = SimpleNamespace(
+        id="tape",
+        photo_role="item_front",
+        sort_order=1,
+        original_name="mobile-draft-01.jpg",
+        label_legibility="clear",
+        shows_whole_lot=False,
+        is_primary_front=True,
+        captured_at=None,
+    )
+    hero = SimpleNamespace(
+        id="hero",
+        photo_role="hero",
+        sort_order=0,
+        original_name="mobile-draft-02.jpg",
+        label_legibility="none",
+        shows_whole_lot=False,
+        is_primary_front=False,
+        captured_at=None,
+    )
+    detail = SimpleNamespace(
+        id="detail",
+        photo_role="angle_only",
+        sort_order=2,
+        original_name="mobile-draft-03.jpg",
+        label_legibility="none",
+        shows_whole_lot=False,
+        is_primary_front=False,
+        captured_at=None,
+    )
+    kept = listing_photos_for_facebook([tape, hero, detail])
+    assert [p.id for p in kept] == ["hero", "detail"]
+    assert MAX_PAGE_PHOTOS == 4
+
+
 def test_caption_template_includes_link_close_and_follow_hook() -> None:
     close = datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc)
     text = template_caption(
@@ -103,10 +146,36 @@ def test_caption_template_includes_link_close_and_follow_hook() -> None:
     sale_at = text.index("See the whole sale: https://ctbids.com/estate-sale/1")
     assert lot_at < sale_at
     assert "Bidding closes" in text
+    assert text.index("Fenton vase") < text.index("Bidding closes")
+    assert text.index("Bidding closes") < lot_at
+    assert sale_at < text.index(FOLLOW_HOOK_LINE)
     assert FOLLOW_HOOK_LINE in text
     stripped = apply_follow_hook(text, include=False)
     assert FOLLOW_HOOK_LINE not in stripped
     assert FOLLOW_HOOK_LINE in apply_follow_hook(stripped, include=True)
+
+
+def test_arrange_facebook_caption_moves_links_to_the_bottom() -> None:
+    messy = (
+        "https://ctbids.com/estate-sale/48212/item/1\n\n"
+        "See the whole sale: https://ctbids.com/estate-sale/48212\n\n"
+        "Collector find: Blue Rhinestone Brooch\n"
+        "Purple glass stones on a silver-tone pin.\n\n"
+        "Bidding closes Tuesday, October 20 at 4:00 PM PT.\n\n"
+        f"{FOLLOW_HOOK_LINE}"
+    )
+    text = arrange_facebook_caption(
+        messy,
+        item_url="https://ctbids.com/estate-sale/48212/item/1",
+        sale_url="https://ctbids.com/estate-sale/48212",
+        include_follow_hook=True,
+    )
+    hook_at = text.index("Collector find:")
+    close_at = text.index("Bidding closes")
+    lot_at = text.index("https://ctbids.com/estate-sale/48212/item/1")
+    sale_at = text.index("See the whole sale: https://ctbids.com/estate-sale/48212")
+    follow_at = text.index(FOLLOW_HOOK_LINE)
+    assert hook_at < close_at < lot_at < sale_at < follow_at
 
 
 def test_caption_angles_differ_per_slot() -> None:
@@ -161,6 +230,18 @@ def test_rotate_listing_photos_wraps() -> None:
     assert [p.id for p in rotate_listing_photos(photos, 1)] == ["p1", "p2", "p0"]
     assert [p.id for p in rotate_listing_photos(photos, 4)] == ["p1", "p2", "p0"]
     assert rotate_listing_photos([], 2) == []
+
+
+def test_rotate_listing_photos_caps_at_four_and_varies_sets() -> None:
+    photos = [SimpleNamespace(id=f"p{i}", photo_role="angle_only") for i in range(6)]
+    zero = [p.id for p in rotate_listing_photos(photos, 0)]
+    one = [p.id for p in rotate_listing_photos(photos, 1)]
+    four = [p.id for p in rotate_listing_photos(photos, 4)]
+    assert zero == ["p0", "p1", "p2", "p3"]
+    assert one == ["p1", "p2", "p3", "p4"]
+    assert four == ["p4", "p5", "p0", "p1"]
+    assert len(zero) == MAX_PAGE_PHOTOS
+    assert set(zero) != set(four)
 
 
 def test_schedule_suggestions_keep_meta_window() -> None:

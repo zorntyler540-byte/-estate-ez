@@ -6,10 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.photo_roles import (
+    filename_looks_like_sku_tape,
     filter_photos_excluding_sku_tape,
     is_hero_eligible_photo_role,
     is_sku_tape_photo_role,
     listing_attrs_by_path,
+    looks_like_dedicated_sku_tape_photo,
     normalize_catalog_photo_role,
     photo_roles_by_path,
     photos_for_ctbids_listing,
@@ -72,6 +74,34 @@ def test_filter_photos_excluding_sku_tape() -> None:
     ]
     kept = filter_photos_excluding_sku_tape(photos)
     assert [p.id for p in kept] == ["2", "3", "4"]
+
+
+def test_filename_looks_like_sku_tape() -> None:
+    assert filename_looks_like_sku_tape("tape.jpg") is True
+    assert filename_looks_like_sku_tape("sku-tape.jpg") is True
+    assert filename_looks_like_sku_tape("hero.jpg") is False
+    assert filename_looks_like_sku_tape("detail.jpg") is False
+
+
+def test_filter_drops_capture_first_item_front_with_readable_sku() -> None:
+    tape = SimpleNamespace(
+        id="tape",
+        photo_role="item_front",
+        original_name="mobile-draft-01.jpg",
+        label_legibility="clear",
+        shows_whole_lot=False,
+    )
+    hero = SimpleNamespace(
+        id="hero",
+        photo_role="hero",
+        original_name="mobile-draft-02.jpg",
+        label_legibility="none",
+        shows_whole_lot=False,
+    )
+    assert looks_like_dedicated_sku_tape_photo(tape, [tape, hero]) is True
+    assert looks_like_dedicated_sku_tape_photo(hero, [tape, hero]) is False
+    kept = filter_photos_excluding_sku_tape([tape, hero])
+    assert [p.id for p in kept] == ["hero"]
 
 
 def test_filter_only_tape_leaves_empty() -> None:

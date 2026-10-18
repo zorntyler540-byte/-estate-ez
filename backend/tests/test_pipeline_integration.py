@@ -131,6 +131,36 @@ def test_select_analysis_photos_demotes_mis_tagged_tape_hero() -> None:
     assert "tape.jpg" in selected["tape_filenames"]
 
 
+def test_select_analysis_photos_demotes_mis_tagged_tape_item_front() -> None:
+    """Handwritten SKU-tape close-up tagged item_front is persisted as tape (TG371AD)."""
+    triage = [
+        _triage_row(
+            "mobile-01.jpg",
+            photo_role="item_front",
+            shows_whole_lot=False,
+            lot_tape_marking="TG371AD",
+            label_legibility="clear",
+            brand_text="TG371AD",
+            is_primary_front_for_item=True,
+            distinct_item_id="ITEM_1",
+        ),
+        _triage_row(
+            "mobile-02.jpg",
+            photo_role="hero",
+            shows_whole_lot=False,
+            distinct_item_id="BROOCH",
+            is_primary_front_for_item=True,
+            label_legibility="none",
+        ),
+    ]
+    selected = select_analysis_photos(triage)
+    by_name = {r["filename"]: r for r in triage}
+    assert by_name["mobile-01.jpg"]["photo_role"] == "tape"
+    assert selected["hero_filename"] == "mobile-02.jpg"
+    assert "mobile-01.jpg" in selected["tape_filenames"]
+    assert "mobile-01.jpg" not in selected["listing_filenames"]
+
+
 def test_select_analysis_photos_keeps_group_hero_with_tape_at_edge() -> None:
     """A real group shot with SKU tape visible at the edge stays hero."""
     triage = [

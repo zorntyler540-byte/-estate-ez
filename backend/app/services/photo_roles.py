@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -10,6 +11,11 @@ from app.catalog_limits import is_catalog_video_filename
 
 # Matches pipeline PhotoRole literals.
 CATALOG_PHOTO_ROLES = frozenset({"hero", "item_front", "angle_only", "tape", "unusable"})
+
+_SKU_TAPE_NAME_RE = re.compile(
+    r"(?:^|[-_\s.])(?:sku[-_]?tape|lot[-_]?tape|estate[-_]?tape)(?:[-_\s.]|$)|^tape$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,65 @@ def is_sku_tape_photo_role(role: object | None) -> bool:
     return normalize_catalog_photo_role(role) == "tape"
 
 
+def _natural_photo_name_key(name: str | None) -> list:
+    return [int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", name or "")]
+
+
+def filename_looks_like_sku_tape(name: object | None) -> bool:
+    stem = Path(str(name or "")).stem.strip()
+    if not stem:
+        return False
+    return bool(_SKU_TAPE_NAME_RE.search(stem.replace(" ", "-")))
+
+
+def _capture_sort_key(photo: Any) -> tuple:
+    captured = getattr(photo, "captured_at", None)
+    name = _natural_photo_name_key(getattr(photo, "original_name", None))
+    try:
+        ts = captured.timestamp() if captured is not None else None
+    except Exception:
+        ts = None
+    if ts is None:
+        return (1, 0.0, name)
+    return (0, float(ts), name)
+
+
+def _label_is_readable(photo: Any) -> bool:
+    return str(getattr(photo, "label_legibility", None) or "").strip().lower() in {"clear", "partial"}
+
+
+def _same_photo(left: Any, right: Any) -> bool:
+    if left is right:
+        return True
+    left_id = getattr(left, "id", None)
+    right_id = getattr(right, "id", None)
+    return left_id is not None and left_id == right_id
+
+
+def looks_like_dedicated_sku_tape_photo(photo: Any, siblings: list[Any]) -> bool:
+    """True for ``photo_role=tape`` and for capture-first SKU-tape frames Gemini mis-tagged.
+
+    Field lots open with a dedicated purple/blue estate-tape shot (often ``mobile-*-01``).
+    Stage-1 frequently stores that frame as ``item_front`` because the prompt calls a
+    handwritten tag filling the frame item_front. Listing sort then places it 2nd,
+    right after the hero — the leak on TG371AD.
+    """
+    if is_sku_tape_photo_role(getattr(photo, "photo_role", None)):
+        return True
+    if filename_looks_like_sku_tape(getattr(photo, "original_name", None)):
+        return True
+    if not siblings:
+        return False
+    earliest = min(siblings, key=_capture_sort_key)
+    if not _same_photo(photo, earliest):
+        return False
+    if bool(getattr(photo, "shows_whole_lot", False)):
+        return False
+    if normalize_catalog_photo_role(getattr(photo, "photo_role", None)) == "hero":
+        return False
+    return _label_is_readable(photo)
+
+
 def is_hero_eligible_photo_role(role: object | None) -> bool:
     """False for SKU-tape and unusable frames — they must never be the listing cover."""
     normalized = normalize_catalog_photo_role(role)
@@ -174,13 +239,9 @@ def photo_roles_by_path(
 
 
 def filter_photos_excluding_sku_tape(photos: Iterable[Any]) -> list[Any]:
-    """Keep catalog photos for CT Seller / CT Bids (drop dedicated ``tape`` role frames)."""
-    return [
-        p
-        for p in photos
-        if not is_sku_tape_photo_role(getattr(p, "photo_role", None))
-        and not is_catalog_video_filename(getattr(p, "original_name", None))
-    ]
+    """Keep catalog photos for CT Seller / CT Bids (drop dedicated SKU-tape frames)."""
+    rows = [p for p in photos if not is_catalog_video_filename(getattr(p, "original_name", None))]
+    return [p for p in rows if not looks_like_dedicated_sku_tape_photo(p, rows)]
 
 
 def photos_for_ctbids_listing(photos: Iterable[Any]) -> list[Any]:
