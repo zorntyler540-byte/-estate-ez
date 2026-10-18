@@ -401,7 +401,6 @@ class CTSellerClient:
                 "id",
                 "locationid",
                 "status",
-                "saleitemreceiptmethod",
                 "endtime",
                 "timezonename",
                 # SPA copies these onto each new item's Settings tab (setBuyerTax).
@@ -1004,6 +1003,16 @@ def _image_to_base64(raw: bytes, *, mime: str = "image/jpeg") -> str:
         return base64.b64encode(raw).decode("ascii")
 
 
+# New CT Seller items are always pickup and shipping. Staff change that on the
+# item in seller.ctbids.com. The sale's receipt method is not copied, and a
+# missing sale setting must not become pickup only.
+POSTED_ITEM_RECEIPT_METHOD: dict[str, bool] = {
+    "pickup": True,
+    "delivery": False,
+    "shipping": True,
+}
+
+
 def build_item_payload(
     *,
     sale_id: int,
@@ -1023,30 +1032,17 @@ def build_item_payload(
     tag: str | list[str] | None = None,
     reserve_price: float | None = None,
 ) -> dict[str, Any]:
-    """Build the item/add ``data`` object from catalog fields."""
-    irm: dict[str, bool]
-    if isinstance(item_receipt_method, str) and item_receipt_method.strip():
-        try:
-            parsed = json.loads(item_receipt_method)
-            irm = parsed if isinstance(parsed, dict) else {"pickup": True, "delivery": False, "shipping": False}
-        except json.JSONDecodeError:
-            irm = {"pickup": True, "delivery": False, "shipping": False}
-    elif isinstance(item_receipt_method, dict):
-        irm = {
-            "pickup": bool(item_receipt_method.get("pickup")),
-            "delivery": bool(item_receipt_method.get("delivery")),
-            "shipping": bool(item_receipt_method.get("shipping")),
-        }
-    else:
-        irm = {"pickup": True, "delivery": False, "shipping": False}
+    """Build the item/add ``data`` object from catalog fields.
+
+    ``item_receipt_method`` is accepted so callers stay stable, and ignored.
+    Every new item is pickup and shipping.
+    """
+    irm = dict(POSTED_ITEM_RECEIPT_METHOD)
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
     # CT Seller stores receipt method as a JSON string on items (see /item/detail).
-    if isinstance(item_receipt_method, str) and item_receipt_method.strip().startswith("{"):
-        irm_out = item_receipt_method.strip()
-    else:
-        irm_out = json.dumps(irm, separators=(",", ":"))
+    irm_out = json.dumps(irm, separators=(",", ":"))
 
     area_out = (area or "").strip() or infer_ct_area(cat, allowed_areas)
 
