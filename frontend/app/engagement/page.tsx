@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
-import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
+import { FacebookPagePostModal, type FacebookPostSource } from "../../components/FacebookPagePostModal";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
 import { isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
@@ -61,6 +61,12 @@ type CalendarPost = {
   paste_copy: string;
   status: string;
   preflight: string;
+  slot_key?: string;
+  facebook_schedulable?: boolean;
+  facebook_status?: string;
+  facebook_slot_at?: string | null;
+  facebook_post_id?: string | null;
+  facebook_error?: string | null;
 };
 
 const FILTERS = ["Push", "Rescue", "Protect", "Let Ride"] as const;
@@ -193,6 +199,8 @@ export default function EngagementPage() {
   const [accountRole, setAccountRole] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
   const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
+  const [facebookLotSchedules, setFacebookLotSchedules] = useState<Record<string, string> | null>(null);
+  const [facebookModalSource, setFacebookModalSource] = useState<FacebookPostSource>("push_queue");
   const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
 
   const loadSale = useCallback(
@@ -416,7 +424,11 @@ export default function EngagementPage() {
                   type="button"
                   className="ct-btn ct-btn--primary"
                   disabled={selectedLotIds.size < 1}
-                  onClick={() => setFacebookLotIds([...selectedLotIds])}
+                  onClick={() => {
+                    setFacebookModalSource("push_queue");
+                    setFacebookLotSchedules(null);
+                    setFacebookLotIds([...selectedLotIds]);
+                  }}
                 >
                   Post selected to Facebook Page ({selectedLotIds.size})
                 </button>
@@ -525,9 +537,30 @@ export default function EngagementPage() {
               Social calendar
             </h2>
             <p className="ct-muted">
-              Planned posts for Push lots only, from the snapshot through the close. Confirm the lot is
-              still open, then paste the copy yourself.
+              Planned posts for Push lots only, from the snapshot through the close. Facebook 9:00 AM PT
+              rows can be scheduled on the connected Page after you approve them. Instagram, Stories, and
+              TikTok stay paste-yourself — Estate-EZ does not post those.
             </p>
+            {canPostFacebook && posts.some((post) => post.facebook_schedulable && post.lot_id) ? (
+              <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary"
+                  onClick={() => {
+                    const slots = posts.filter((post) => post.facebook_schedulable && post.lot_id);
+                    const schedules: Record<string, string> = {};
+                    for (const slot of slots) {
+                      if (slot.lot_id && slot.facebook_slot_at) schedules[slot.lot_id] = slot.facebook_slot_at;
+                    }
+                    setFacebookModalSource("push_calendar");
+                    setFacebookLotSchedules(schedules);
+                    setFacebookLotIds(slots.map((slot) => slot.lot_id as string));
+                  }}
+                >
+                  Approve Facebook Page slots ({posts.filter((post) => post.facebook_schedulable && post.lot_id).length})
+                </button>
+              </div>
+            ) : null}
             {posts.length === 0 ? (
               <p className="ct-muted">No Push lots, so there is nothing to schedule.</p>
             ) : (
@@ -550,11 +583,36 @@ export default function EngagementPage() {
                             {post.local_time} {post.zone}
                           </div>
                           <div className="ct-muted">{post.status}</div>
+                          {post.platform === "Facebook" ? (
+                            <div>
+                              Page: {post.facebook_status || "planned"}
+                              {post.facebook_post_id ? ` · ${post.facebook_post_id}` : ""}
+                            </div>
+                          ) : (
+                            <div className="ct-muted">Paste only — not posted to the Page</div>
+                          )}
+                          {post.facebook_error ? <div className="ct-error">{post.facebook_error}</div> : null}
                         </td>
                         <td>
                           {post.platform}
                           <div className="ct-muted">{post.hook}</div>
                           <div className="ct-muted">{post.post_type}</div>
+                          {post.facebook_schedulable && post.lot_id && canPostFacebook ? (
+                            <button
+                              type="button"
+                              className="ct-btn ct-btn--ghost"
+                              style={{ marginTop: "0.35rem" }}
+                              onClick={() => {
+                                const schedules: Record<string, string> = {};
+                                if (post.facebook_slot_at) schedules[post.lot_id as string] = post.facebook_slot_at;
+                                setFacebookModalSource("push_calendar");
+                                setFacebookLotSchedules(schedules);
+                                setFacebookLotIds([post.lot_id as string]);
+                              }}
+                            >
+                              Approve this slot
+                            </button>
+                          ) : null}
                         </td>
                         <td>
                           {post.lot_id ? (
@@ -591,8 +649,17 @@ export default function EngagementPage() {
         <FacebookPagePostModal
           token={token}
           lotIds={facebookLotIds}
-          source="push_queue"
-          onClose={() => setFacebookLotIds(null)}
+          source={facebookModalSource}
+          lotSchedules={facebookLotSchedules || undefined}
+          calendarSaleId={facebookModalSource === "push_calendar" ? saleId : null}
+          onClose={() => {
+            setFacebookLotIds(null);
+            setFacebookLotSchedules(null);
+            setFacebookModalSource("push_queue");
+          }}
+          onPosted={() => {
+            if (token && saleId) void loadSale(token, saleId);
+          }}
         />
       ) : null}
     </AppShell>

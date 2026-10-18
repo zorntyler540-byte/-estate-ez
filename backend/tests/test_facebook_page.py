@@ -586,3 +586,191 @@ def test_multi_lot_publish_queues_background_batch(tmp_path, monkeypatch) -> Non
     finally:
         facebook_post_tasks.reset_facebook_post_runtime_state()
         _clear_overrides()
+
+
+def _future_push_body(lot: Lot) -> dict:
+    from zoneinfo import ZoneInfo
+
+    pacific = ZoneInfo("America/Los_Angeles")
+    captured = datetime.now(pacific) + timedelta(days=3)
+    captured = captured.replace(hour=8, minute=0, second=0, microsecond=0)
+    ends = captured + timedelta(days=5)
+    return {
+        "ctseller_sale_id": int(lot.ctseller_sale_id or 12),
+        "sale_title": "Estate",
+        "auction_url": "https://ctbids.com/estate-sale/12/",
+        "sale_ends_at": ends.isoformat(),
+        "captured_at": captured.isoformat(),
+        "items": [
+            {
+                "ctseller_item_id": int(lot.ctseller_item_id or 99),
+                "sku": lot.sku or "AA100",
+                "title": lot.auction_title or "Vase",
+                "views": 20,
+                "watchers": 6,
+                "bids": 2,
+                "price": 8,
+                "reserve": 5,
+                "item_url": "https://ctbids.com/estate-sale/12/item/99",
+                "item_status": "Ready",
+            }
+        ],
+    }
+
+
+def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, _account, _user, lot = _client(tmp_path, connected=True)
+    try:
+        snap = client.post("/integrations/engagement/snapshots", json=_future_push_body(lot))
+        assert snap.status_code == 200, snap.text
+        calendar = client.get("/engagement/sales/12/calendar").json()
+        facebook_rows = [row for row in calendar if row["platform"] == "Facebook"]
+        assert facebook_rows
+        slot = facebook_rows[0]
+        assert slot["lot_id"] == lot.id
+        assert slot["local_time"] == "09:00"
+        assert slot["facebook_status"] == "planned"
+        assert slot["facebook_schedulable"] is True
+        assert slot["slot_key"] == f"pushcal:12:{lot.id}"
+        assert client.get("/facebook/posts").json() == []
+
+        denied = client.post(
+            f"/engagement/sales/12/calendar/facebook",
+            json={"confirm": False, "slot_keys": [slot["slot_key"]]},
+        )
+        assert denied.status_code == 400
+
+        captured_unix: list[int] = []
+
+        def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+            assert scheduled_unix
+            captured_unix.append(int(scheduled_unix))
+            return "111_cal"
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m-cal"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            approved = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+            )
+        assert approved.status_code == 200, approved.text
+        row = approved.json()["results"][0]
+        assert row["ok"] is True
+        assert row["status"] == "scheduled"
+        assert captured_unix
+        again = client.get("/engagement/sales/12/calendar").json()
+        fb = next(r for r in again if r["platform"] == "Facebook")
+        assert fb["facebook_status"] == "scheduled"
+        assert fb["facebook_post_id"] == "111_cal"
+        dup = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+        )
+        assert dup.json()["results"][0]["skipped"] is True
+    finally:
+        _clear_overrides()
+
+
+def test_push_calendar_reschedule_and_removal(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, _user, lot = _client(tmp_path, connected=True)
+    updates: list[int] = []
+    deletes: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        return "111_move"
+
+    def fake_update(*, post_id, page_token, scheduled_unix):
+        updates.append(int(scheduled_unix))
+
+    def fake_delete(*, post_id, page_token):
+        deletes.append(post_id)
+
+    try:
+        body = _future_push_body(lot)
+        assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
+        slot = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["platform"] == "Facebook"
+        )
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            assert (
+                client.post(
+                    "/engagement/sales/12/calendar/facebook",
+                    json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+                ).status_code
+                == 200
+            )
+        later = dict(body)
+        later["captured_at"] = (
+            datetime.fromisoformat(body["captured_at"]) + timedelta(days=1)
+        ).isoformat()
+        with (
+            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
+            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
+        ):
+            moved = client.post("/integrations/engagement/snapshots", json=later)
+        assert moved.status_code == 200, moved.text
+        assert updates
+        rescued = dict(later)
+        rescued["items"] = [
+            {
+                **body["items"][0],
+                "watchers": 0,
+                "bids": 0,
+                "views": 1,
+            }
+        ]
+        with (
+            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
+            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
+        ):
+            gone = client.post("/integrations/engagement/snapshots", json=rescued)
+        assert gone.status_code == 200, gone.text
+        assert "111_move" in deletes
+        stored = db.query(FacebookPagePost).one()
+        assert stored.status == "cancelled"
+    finally:
+        _clear_overrides()
+
+
+def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, _user, lot = _client(tmp_path, connected=True)
+    feeds: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        feeds.append("called")
+        return "111_auto"
+
+    try:
+        status = client.get("/integrations/facebook/status").json()
+        assert status["calendar_auto_approve"] is False
+        with patch("app.services.facebook_page.create_page_feed_post", fake_feed):
+            client.post("/integrations/engagement/snapshots", json=_future_push_body(lot))
+        assert feeds == []
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            patched = client.patch(
+                "/integrations/facebook/settings",
+                json={"calendar_auto_approve": True},
+            )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["calendar_auto_approve"] is True
+        assert feeds
+        assert db.query(FacebookPagePost).filter(FacebookPagePost.status == "scheduled").count() == 1
+    finally:
+        _clear_overrides()

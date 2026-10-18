@@ -121,6 +121,7 @@ def connection_status(account: Account) -> dict:
         "configured": configured,
         "connected": connected,
         "needs_reconnect": needs_reconnect,
+        "calendar_auto_approve": bool(getattr(account, "facebook_calendar_auto_approve", False)),
         "page_id": page_id or None,
         "page_name": page_name or None,
         "user_id": str(getattr(account, "facebook_user_id", None) or "").strip() or None,
@@ -570,6 +571,12 @@ def publish_posts(
         lot_id = str(item.get("lot_id") or "").strip()
         caption = str(item.get("caption") or "").strip()
         scheduled = item.get("scheduled_publish_time")
+        calendar_key = str(item.get("calendar_key") or "").strip() or None
+        calendar_sale_id = item.get("calendar_sale_id")
+        try:
+            calendar_sale_id = int(calendar_sale_id) if calendar_sale_id is not None else None
+        except (TypeError, ValueError):
+            calendar_sale_id = None
         if on_lot is not None:
             on_lot(lot_id)
         lot = (
@@ -583,8 +590,30 @@ def publish_posts(
         if not caption:
             _emit({"lot_id": lot_id, "ok": False, "error": "Caption is empty"})
             continue
+        cal_row = None
+        if calendar_key:
+            cal_row = (
+                db.query(FacebookPagePost)
+                .filter(
+                    FacebookPagePost.account_id == account.id,
+                    FacebookPagePost.calendar_key == calendar_key,
+                )
+                .order_by(FacebookPagePost.created_at.desc())
+                .first()
+            )
         existing = _existing_posts(db, account.id, lot.id)
-        if existing and not force:
+        if cal_row and cal_row.status in {"posted", "scheduled"} and not force:
+            _emit(
+                {
+                    "lot_id": lot_id,
+                    "ok": False,
+                    "skipped": True,
+                    "error": "This Push-calendar slot is already scheduled or posted.",
+                }
+            )
+            continue
+        other_active = [row for row in existing if cal_row is None or row.id != cal_row.id]
+        if other_active and not force:
             _emit(
                 {
                     "lot_id": lot_id,
@@ -610,19 +639,39 @@ def publish_posts(
             scheduled_at = validate_scheduled_time(scheduled, now=now)
             scheduled_unix = int(scheduled_at.timestamp())
 
-        record = FacebookPagePost(
-            account_id=account.id,
-            user_id=user.id,
-            lot_id=lot.id,
-            lot_ids_json=json.dumps([lot.id]),
-            photo_ids_json=json.dumps([p.id for p in photos]),
-            facebook_page_id=page_id,
-            caption=caption,
-            include_follow_hook=include_follow_hook,
-            source=(source or "lot")[:32],
-            status="failed",
-            scheduled_publish_time=scheduled_at,
-        )
+        if cal_row is not None and cal_row.status in {"failed", "cancelled"}:
+            record = cal_row
+            record.user_id = user.id
+            record.lot_id = lot.id
+            record.lot_ids_json = json.dumps([lot.id])
+            record.photo_ids_json = json.dumps([p.id for p in photos])
+            record.facebook_page_id = page_id
+            record.caption = caption
+            record.include_follow_hook = include_follow_hook
+            record.source = (source or "lot")[:32]
+            record.status = "failed"
+            record.scheduled_publish_time = scheduled_at
+            record.facebook_post_id = None
+            record.posted_at = None
+            record.error_message = None
+            record.calendar_key = calendar_key
+            record.calendar_sale_id = calendar_sale_id
+        else:
+            record = FacebookPagePost(
+                account_id=account.id,
+                user_id=user.id,
+                lot_id=lot.id,
+                lot_ids_json=json.dumps([lot.id]),
+                photo_ids_json=json.dumps([p.id for p in photos]),
+                facebook_page_id=page_id,
+                caption=caption,
+                include_follow_hook=include_follow_hook,
+                source=(source or "lot")[:32],
+                calendar_key=calendar_key,
+                calendar_sale_id=calendar_sale_id,
+                status="failed",
+                scheduled_publish_time=scheduled_at,
+            )
         db.add(record)
         db.flush()
 

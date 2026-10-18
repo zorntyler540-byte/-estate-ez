@@ -259,3 +259,5 @@ Graph API version is pinned in code (`GRAPH_API_VERSION` in `backend/app/service
 **If posting says reconnect:** Graph returned a real token error (revoked/invalid Page token). Connect again from Account settings. A still-valid Page token does not show this warning just because the user token’s 60-day expiry passed, or because a Page has not been picked yet.
 
 Owners/admins post; cataloggers do not. Multi-lot Push-queue posts run in the background so the dashboard request cannot time out.
+
+The Push tab **Social calendar** is computed from the latest Watcher snapshot (not a stored slot table). Only **Facebook 9:00 AM PT** rows can be scheduled on the Page after an owner approves them (optional per-account auto-approve, off by default). Instagram, Stories, and TikTok rows stay paste-yourself. If a lot leaves Push or its 9:00 slot moves, Estate-EZ updates or deletes the unpublished Graph post.

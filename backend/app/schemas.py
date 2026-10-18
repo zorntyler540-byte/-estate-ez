@@ -1079,6 +1079,12 @@ class SocialCalendarPost(BaseModel):
     paste_copy: str = ""
     status: str = "Planned"
     preflight: str = ""
+    slot_key: str = ""
+    facebook_schedulable: bool = False
+    facebook_status: str = "not_applicable"
+    facebook_slot_at: datetime | None = None
+    facebook_post_id: str | None = None
+    facebook_error: str | None = None
 
 
 class EngagementIngestOut(BaseModel):
@@ -1102,6 +1108,7 @@ class FacebookStatusOut(BaseModel):
     token_error: str | None = None
     graph_api_version: str = ""
     oauth_scopes: list[str] = Field(default_factory=list)
+    calendar_auto_approve: bool = False
 
 
 class FacebookOAuthStartOut(BaseModel):
@@ -1117,6 +1124,10 @@ class FacebookPageChoiceOut(BaseModel):
 
 class FacebookSelectPageIn(BaseModel):
     page_id: str = Field(min_length=1, max_length=64)
+
+
+class FacebookSettingsIn(BaseModel):
+    calendar_auto_approve: bool
 
 
 class FacebookExistingPostOut(BaseModel):
@@ -1163,6 +1174,8 @@ class FacebookPublishItemIn(BaseModel):
     lot_id: str = Field(min_length=1)
     caption: str = Field(min_length=1, max_length=8000)
     scheduled_publish_time: datetime | None = None
+    calendar_key: str | None = Field(default=None, max_length=80)
+    calendar_sale_id: int | None = None
 
 
 class FacebookPublishIn(BaseModel):
@@ -1194,6 +1207,14 @@ class FacebookPublishOut(BaseModel):
     posted: int = 0
     failed: int = 0
     results: list[FacebookPublishResultOut] = Field(default_factory=list)
+
+
+class FacebookCalendarApproveIn(BaseModel):
+    confirm: bool = False
+    force: bool = False
+    include_follow_hook: bool = False
+    slot_keys: list[str] = Field(default_factory=list)
+    captions: dict[str, str] = Field(default_factory=dict)
 
 
 class FacebookPagePostOut(BaseModel):

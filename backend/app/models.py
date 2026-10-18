@@ -62,6 +62,10 @@ class Account(Base):
     facebook_page_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     facebook_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     facebook_token_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When true, new Push-calendar Facebook 9:00 AM slots are scheduled without a second click.
+    facebook_calendar_auto_approve: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
@@ -407,6 +411,8 @@ class FacebookPagePost(Base):
     caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
     include_follow_hook: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="lot", server_default="lot")
+    calendar_key: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
+    calendar_sale_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed", server_default="failed")
     scheduled_publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

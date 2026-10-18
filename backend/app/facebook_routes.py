@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import Account, FacebookPagePost, User
+from app.models import Account, EngagementSnapshot, FacebookPagePost, User
 from app.schemas import (
+    FacebookCalendarApproveIn,
     FacebookOAuthStartOut,
     FacebookPageChoiceOut,
     FacebookPagePostOut,
@@ -21,9 +22,15 @@ from app.schemas import (
     FacebookPublishOut,
     FacebookPublishResultOut,
     FacebookSelectPageIn,
+    FacebookSettingsIn,
     FacebookStatusOut,
 )
 from app import facebook_post_tasks
+from app.services.facebook_calendar import (
+    CALENDAR_SOURCE,
+    calendar_publish_items,
+    sync_facebook_calendar_after_snapshot,
+)
 from app.services.facebook_page import (
     complete_oauth,
     connection_status,
@@ -149,6 +156,34 @@ def facebook_disconnect(
     return FacebookStatusOut.model_validate(disconnect(db, _account(db, current)))
 
 
+@router.patch("/integrations/facebook/settings", response_model=FacebookStatusOut)
+def facebook_patch_settings(
+    payload: FacebookSettingsIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookStatusOut:
+    require_facebook_poster(current)
+    account = _account(db, current)
+    account.facebook_calendar_auto_approve = bool(payload.calendar_auto_approve)
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    if account.facebook_calendar_auto_approve:
+        sale_ids = {
+            int(row[0])
+            for row in db.query(EngagementSnapshot.ctseller_sale_id)
+            .filter(EngagementSnapshot.account_id == account.id)
+            .distinct()
+            .all()
+        }
+        for sale_id in sale_ids:
+            try:
+                sync_facebook_calendar_after_snapshot(db, account.id, sale_id)
+            except Exception:
+                continue
+    return _status_out(account)
+
+
 @router.post("/facebook/posts/preview", response_model=FacebookPreviewOut)
 def facebook_preview(
     payload: FacebookPreviewIn,
@@ -258,6 +293,79 @@ def facebook_publish_batch(
         done=int(row.get("done") or 0),
         posted=int(row.get("posted") or 0),
         failed=int(row.get("failed") or 0),
+    )
+
+
+@router.post(
+    "/engagement/sales/{ctseller_sale_id}/calendar/facebook",
+    response_model=FacebookPublishOut,
+)
+def facebook_approve_calendar(
+    ctseller_sale_id: int,
+    payload: FacebookCalendarApproveIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookPublishOut:
+    require_facebook_poster(current)
+    account = _account(db, current)
+    publishable, skipped = calendar_publish_items(
+        db,
+        account=account,
+        ctseller_sale_id=int(ctseller_sale_id),
+        slot_keys=list(payload.slot_keys or []),
+        captions=dict(payload.captions or {}),
+    )
+    if not publishable:
+        failed = sum(1 for row in skipped if not row.get("ok") and not row.get("skipped"))
+        return _publish_out(
+            results=skipped,
+            queued=False,
+            total=len(skipped),
+            done=len(skipped),
+            failed=failed,
+        )
+    if len(publishable) > facebook_post_tasks.SYNC_LOT_LIMIT:
+        batch_id = facebook_post_tasks.start_facebook_posts_in_background(
+            account_id=current.account_id,
+            user_id=current.id,
+            items=publishable,
+            include_follow_hook=payload.include_follow_hook,
+            confirm=payload.confirm,
+            force=payload.force,
+            source=CALENDAR_SOURCE,
+        )
+        row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
+        return _publish_out(
+            results=skipped + list(row.get("results") or []),
+            queued=True,
+            batch_id=batch_id,
+            active=bool(row.get("active", True)),
+            total=int(row.get("total") or len(publishable)) + len(skipped),
+            done=int(row.get("done") or 0) + len(skipped),
+            posted=int(row.get("posted") or 0),
+            failed=int(row.get("failed") or 0),
+        )
+    results = publish_posts(
+        db,
+        account=account,
+        user=current,
+        items=publishable,
+        include_follow_hook=payload.include_follow_hook,
+        confirm=payload.confirm,
+        force=payload.force,
+        source=CALENDAR_SOURCE,
+    )
+    combined = skipped + results
+    posted = sum(1 for row in combined if row.get("ok"))
+    failed = sum(1 for row in combined if not row.get("ok") and not row.get("skipped"))
+    return _publish_out(
+        results=combined,
+        queued=False,
+        active=False,
+        total=len(combined),
+        done=len(combined),
+        posted=posted,
+        failed=failed,
     )
 
 

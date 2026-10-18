@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 import { LotPhotoThumb } from "./LotPhotoThumb";
 
-export type FacebookPostSource = "lot" | "selection" | "push_queue";
+export type FacebookPostSource = "lot" | "selection" | "push_queue" | "push_calendar";
 
 type ExistingPost = {
   id: string;
@@ -68,6 +68,8 @@ type Props = {
   token: string;
   lotIds: string[];
   source: FacebookPostSource;
+  lotSchedules?: Record<string, string>;
+  calendarSaleId?: number | null;
   onClose: () => void;
   onPosted?: () => void;
 };
@@ -90,7 +92,16 @@ function applyFollowHook(caption: string, include: boolean): string {
   return text ? `${text}\n\n${FOLLOW_HOOK}` : FOLLOW_HOOK;
 }
 
-export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted }: Props) {
+export function FacebookPagePostModal({
+  token,
+  lotIds,
+  source,
+  lotSchedules,
+  calendarSaleId,
+  onClose,
+  onPosted
+}: Props) {
+  const calendarMode = source === "push_calendar" && Boolean(lotSchedules);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
@@ -185,14 +196,22 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
           lot_id: string;
           caption: string;
           scheduled_publish_time?: string;
+          calendar_key?: string;
+          calendar_sale_id?: number;
         } = {
           lot_id: lot.lot_id,
           caption: (captions[lot.lot_id] || "").trim()
         };
-        if (scheduleMode === "slot" && slotAt) row.scheduled_publish_time = slotAt;
-        if (scheduleMode === "custom" && customAt) {
+        if (calendarMode && lotSchedules?.[lot.lot_id]) {
+          row.scheduled_publish_time = lotSchedules[lot.lot_id];
+        } else if (scheduleMode === "slot" && slotAt) row.scheduled_publish_time = slotAt;
+        else if (scheduleMode === "custom" && customAt) {
           const iso = new Date(customAt).toISOString();
           row.scheduled_publish_time = iso;
+        }
+        if (calendarMode && calendarSaleId) {
+          row.calendar_key = `pushcal:${calendarSaleId}:${lot.lot_id}`;
+          row.calendar_sale_id = calendarSaleId;
         }
         return row;
       })
@@ -229,8 +248,13 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
     }
   }
 
-  const title =
-    lotIds.length === 1 ? "Post this lot to Facebook Page" : `Post ${lotIds.length} lots to Facebook Page`;
+  const title = calendarMode
+    ? lotIds.length === 1
+      ? "Approve this Push-calendar Facebook slot"
+      : `Approve ${lotIds.length} Push-calendar Facebook slots`
+    : lotIds.length === 1
+      ? "Post this lot to Facebook Page"
+      : `Post ${lotIds.length} lots to Facebook Page`;
 
   return (
     <div className="ct-sale-covers-modal" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
@@ -278,6 +302,12 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
               />
               <span>Add “{FOLLOW_HOOK}”</span>
             </label>
+            {calendarMode ? (
+              <p className="ct-muted">
+                Each lot uses its Push-calendar Facebook 9:00 AM PT slot. Nothing is sent until you
+                click Schedule on Page.
+              </p>
+            ) : (
             <div className="ct-field" style={{ marginBottom: "0.75rem" }}>
               <span className="ct-muted">When</span>
               <div className="ct-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.35rem" }}>
@@ -334,6 +364,7 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
                 />
               ) : null}
             </div>
+            )}
             {alreadyPosted > 0 ? (
               <label className="ct-row" style={{ gap: "0.4rem", marginBottom: "0.65rem" }}>
                 <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
@@ -367,6 +398,11 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
                         ? ` (${lot.existing_posts[0].facebook_post_id})`
                         : ""}
                       .
+                    </p>
+                  ) : null}
+                  {calendarMode && lotSchedules?.[lot.lot_id] ? (
+                    <p className="ct-muted" style={{ margin: "0.25rem 0 0" }}>
+                      Calendar slot: {new Date(lotSchedules[lot.lot_id]).toLocaleString()}
                     </p>
                   ) : null}
                   {lot.error ? (
@@ -429,9 +465,9 @@ export function FacebookPagePostModal({ token, lotIds, source, onClose, onPosted
               >
                 {posting
                   ? batchProgress || "Posting…"
-                  : scheduleMode === "now"
-                    ? "Post to Page"
-                    : "Schedule on Page"}
+                  : calendarMode || scheduleMode !== "now"
+                    ? "Schedule on Page"
+                    : "Post to Page"}
               </button>
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadPreview(followHook)}>
                 Redraft captions

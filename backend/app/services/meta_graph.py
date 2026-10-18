@@ -269,3 +269,32 @@ def create_page_feed_post(
     if not post_id:
         raise MetaGraphError("Facebook accepted the post but returned no id")
     return post_id
+
+
+def update_scheduled_page_post(
+    *,
+    post_id: str,
+    page_token: str,
+    scheduled_unix: int,
+) -> None:
+    """Move an unpublished scheduled feed post. No-op helpers must not publish it."""
+    graph_request(
+        "POST",
+        f"/{post_id}",
+        data={
+            "access_token": page_token,
+            "published": "false",
+            "is_published": "false",
+            "scheduled_publish_time": str(int(scheduled_unix)),
+        },
+        timeout=60.0,
+    )
+
+
+def delete_page_post(*, post_id: str, page_token: str) -> None:
+    graph_request(
+        "DELETE",
+        f"/{post_id}",
+        params={"access_token": page_token},
+        timeout=60.0,
+    )

@@ -89,6 +89,7 @@ export default function AccountPage() {
   const [facebookConfigured, setFacebookConfigured] = useState(false);
   const [facebookConnected, setFacebookConnected] = useState(false);
   const [facebookNeedsReconnect, setFacebookNeedsReconnect] = useState(false);
+  const [facebookCalendarAuto, setFacebookCalendarAuto] = useState(false);
   const [facebookPageName, setFacebookPageName] = useState("");
   const [facebookPages, setFacebookPages] = useState<Array<{ id: string; name: string; can_post: boolean; selected: boolean }>>(
     []
@@ -157,11 +158,13 @@ export default function AccountPage() {
           connected?: boolean;
           needs_reconnect?: boolean;
           page_name?: string | null;
+          calendar_auto_approve?: boolean;
         };
         setFacebookConfigured(Boolean(row.configured));
         setFacebookConnected(Boolean(row.connected));
         setFacebookNeedsReconnect(Boolean(row.needs_reconnect));
         setFacebookPageName((row.page_name || "").trim());
+        setFacebookCalendarAuto(Boolean(row.calendar_auto_approve));
         if (row.configured && (fbFlag === "pick" || (row.connected && !row.page_name))) {
           void apiFetch("/integrations/facebook/pages", t)
             .then((pages) => setFacebookPages(pages as typeof facebookPages))
@@ -231,6 +234,28 @@ export default function AccountPage() {
       setFacebookMsg(`Posting as ${res.page_name || "that Page"}.`);
     } catch (e) {
       setFacebookErr(e instanceof Error ? e.message : "Could not select that Page");
+    } finally {
+      setFacebookBusy(false);
+    }
+  }
+
+  async function toggleFacebookCalendarAuto(next: boolean) {
+    if (!token) return;
+    setFacebookBusy(true);
+    setFacebookErr("");
+    try {
+      const res = (await apiFetch("/integrations/facebook/settings", token, {
+        method: "PATCH",
+        body: JSON.stringify({ calendar_auto_approve: next })
+      })) as { calendar_auto_approve?: boolean };
+      setFacebookCalendarAuto(Boolean(res.calendar_auto_approve));
+      setFacebookMsg(
+        next
+          ? "New Push-calendar Facebook 9:00 AM slots will be scheduled automatically."
+          : "Push-calendar Facebook slots need an approve click before they go to the Page."
+      );
+    } catch (e) {
+      setFacebookErr(e instanceof Error ? e.message : "Could not save Facebook calendar setting");
     } finally {
       setFacebookBusy(false);
     }
@@ -694,6 +719,20 @@ export default function AccountPage() {
           ) : (
             <p className="ct-muted">Ask an account owner to connect the Facebook Page.</p>
           )}
+          {me?.role?.toLowerCase() === "owner" && facebookConnected ? (
+            <label className="ct-row" style={{ gap: "0.45rem", marginTop: "0.85rem" }}>
+              <input
+                type="checkbox"
+                checked={facebookCalendarAuto}
+                disabled={facebookBusy}
+                onChange={(e) => void toggleFacebookCalendarAuto(e.target.checked)}
+              />
+              <span>
+                Auto-approve new Push-calendar Facebook 9:00 AM PT slots (off by default). Instagram,
+                Stories, and TikTok rows are never posted.
+              </span>
+            </label>
+          ) : null}
           {facebookPages.length > 1 || (facebookPages.length === 1 && !facebookConnected) ? (
             <div style={{ marginTop: "0.85rem" }}>
               <p className="ct-muted" style={{ marginTop: 0 }}>

@@ -682,6 +682,29 @@ def _ensure_facebook_account_columns() -> None:
         stmts.append(f"ALTER TABLE accounts ADD COLUMN facebook_connected_at {nullable_datetime_ddl()}")
     if "facebook_token_error" not in cols:
         stmts.append("ALTER TABLE accounts ADD COLUMN facebook_token_error TEXT")
+    if "facebook_calendar_auto_approve" not in cols:
+        stmts.append(
+            "ALTER TABLE accounts ADD COLUMN facebook_calendar_auto_approve BOOLEAN DEFAULT 0 NOT NULL"
+        )
+    if stmts:
+        with engine.begin() as conn:
+            for stmt in stmts:
+                conn.execute(text(stmt))
+    _ensure_facebook_page_post_columns()
+
+
+def _ensure_facebook_page_post_columns() -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "facebook_page_posts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("facebook_page_posts")}
+    stmts: list[str] = []
+    if "calendar_key" not in cols:
+        stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_key VARCHAR(80)")
+    if "calendar_sale_id" not in cols:
+        stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_sale_id INTEGER")
     if not stmts:
         return
     with engine.begin() as conn:

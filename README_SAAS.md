@@ -82,7 +82,7 @@ Leave `META_APP_ID` empty to hide the feature. To enable it:
    `META_OAUTH_REDIRECT_URI` (local default `http://localhost:8000/integrations/facebook/oauth/callback`).
 2. Add the Page owner as an **app Admin/Developer**. They must also admin the Facebook Page. That keeps v1 off App Review.
 3. Set `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, and `PUBLIC_WEB_ORIGIN` (see `backend/.env.example` and `DEPLOY.md` §9).
-4. Dashboard: **Account → Facebook Page → Connect**, then an **account owner** posts from a lot, selected dashboard lots, or Push-queue lots. Captions are drafted with Gemini; **nothing posts until they click Post to Page**. Cataloggers cannot post. Multi-lot batches run in the background.
+4. Dashboard: **Account → Facebook Page → Connect**, then an **account owner** posts from a lot, selected dashboard lots, Push-queue lots, or **approved Push-calendar Facebook 9:00 AM PT slots**. Captions are drafted with Gemini; **nothing posts until they click Post/Schedule on Page** (auto-approve is off by default). Cataloggers cannot post. Multi-lot batches run in the background. Instagram / Stories / TikTok calendar rows are not posted.
 
 Not in v1: Instagram, Stories, Groups, Marketplace.
 
