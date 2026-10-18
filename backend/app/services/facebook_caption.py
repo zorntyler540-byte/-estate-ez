@@ -16,6 +16,36 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 FOLLOW_HOOK_LINE = "Follow our Page for upcoming sales."
 _LOG = logging.getLogger(__name__)
 
+SLOT_ANGLE_LEADS: dict[str, str] = {
+    "collector_find": "Collector find",
+    "midday": "Midday spotlight",
+    "stories": "Still on the table tonight",
+    "tiktok": "Would you bid on this?",
+    "closing": "Closing countdown",
+}
+
+_ANGLE_PROMPTS: dict[str, str] = {
+    "collector_find": (
+        "Angle: morning collector find. Lead with why a collector would want this piece."
+    ),
+    "midday": (
+        "Angle: midday listing spotlight. Fresh browse-the-photos energy. "
+        "Do not reuse a collector-find opener."
+    ),
+    "stories": (
+        "Angle: evening Stories-style urgency as a Page feed caption (not a poll sticker). "
+        "Short, still-open-tonight energy."
+    ),
+    "tiktok": (
+        "Angle: TikTok-style hook. Start with a punchy question or “Would you bid on this?” "
+        "then the facts. This is a Page feed caption, not a shot list."
+    ),
+    "closing": (
+        "Angle: closing-day countdown. Bidding is almost over. Urgent last-chance tone. "
+        "Include the close time."
+    ),
+}
+
 _SYSTEM = (
     "Identify brand/model details, condition flaws, and era. "
     "You are a professional estate specialist writing a Facebook Page post for an online estate auction. "
@@ -55,10 +85,17 @@ def template_caption(
     include_follow_hook: bool,
     current_bid: float | None = None,
     watchers: int | None = None,
+    angle: str = "",
 ) -> str:
     lines: list[str] = []
     name = (title or "").strip() or "Estate lot"
-    lines.append(name)
+    lead = SLOT_ANGLE_LEADS.get((angle or "").strip())
+    if (angle or "").strip() == "tiktok":
+        lines.append(f"Would you bid on this? {name}")
+    elif lead:
+        lines.append(f"{lead}: {name}")
+    else:
+        lines.append(name)
     desc = (description or "").strip()
     if desc:
         lines.append("")
@@ -116,6 +153,7 @@ def draft_facebook_caption(
     current_bid: float | None = None,
     watchers: int | None = None,
     sale_title: str = "",
+    angle: str = "",
 ) -> str:
     """Gemini Flash JSON caption, or the local template if the key is missing/fails."""
     fallback = template_caption(
@@ -126,6 +164,7 @@ def draft_facebook_caption(
         include_follow_hook=include_follow_hook,
         current_bid=current_bid,
         watchers=watchers,
+        angle=angle,
     )
     if not (settings.google_api_key or "").strip():
         return fallback
@@ -141,6 +180,7 @@ def draft_facebook_caption(
             watchers=watchers,
             sale_title=sale_title,
             fallback=fallback,
+            angle=angle,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.warning("Facebook caption Gemini failed; using template: %s", exc)
@@ -159,6 +199,7 @@ def _draft_with_gemini(
     watchers: int | None,
     sale_title: str,
     fallback: str,
+    angle: str = "",
 ) -> str:
     from google.genai import types
 
@@ -173,12 +214,14 @@ def _draft_with_gemini(
         if include_follow_hook
         else "Do not ask people to follow the Page."
     )
+    angle_line = _ANGLE_PROMPTS.get((angle or "").strip(), "")
     parts = [
         "Write one Facebook Page caption for this estate-auction lot.\n"
         "Staff will post it to the franchise Facebook Page (not Marketplace, not Groups).\n"
         "Include the CT Bids lot/auction link verbatim. Mention when bidding closes.\n"
         "2–6 short sentences or line breaks. No hashtag dump. No invented prices or provenance.\n"
-        f"{hook}\n\n"
+        f"{hook}\n"
+        f"{angle_line}\n\n"
         f"Sale: {(sale_title or '').strip() or '(unnamed)'}\n"
         f"SKU: {(sku or '').strip() or '(none)'}\n"
         f"Title: {(title or '').strip()}\n"

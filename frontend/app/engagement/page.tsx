@@ -4,7 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
-import { FacebookPagePostModal, type FacebookPostSource } from "../../components/FacebookPagePostModal";
+import {
+  FacebookPagePostModal,
+  type FacebookCalendarSlot,
+  type FacebookPostSource
+} from "../../components/FacebookPagePostModal";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
 import { isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
@@ -62,6 +66,8 @@ type CalendarPost = {
   status: string;
   preflight: string;
   slot_key?: string;
+  intended_platform?: string;
+  publish_target?: string;
   facebook_schedulable?: boolean;
   facebook_status?: string;
   facebook_slot_at?: string | null;
@@ -200,6 +206,7 @@ export default function EngagementPage() {
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
   const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
   const [facebookLotSchedules, setFacebookLotSchedules] = useState<Record<string, string> | null>(null);
+  const [facebookCalendarSlots, setFacebookCalendarSlots] = useState<FacebookCalendarSlot[] | null>(null);
   const [facebookModalSource, setFacebookModalSource] = useState<FacebookPostSource>("push_queue");
   const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
 
@@ -323,8 +330,8 @@ export default function EngagementPage() {
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
               The Watcher sends views, watchers, bids, price, and the lot link after each refresh.
-              Check cataloged lots and approve a Facebook Page post — Instagram, Stories, Groups,
-              and TikTok stay manual.
+              Check cataloged lots and approve Facebook Page posts from the social calendar.
+              Spreadsheet Instagram, Stories, and TikTok slots currently publish as Page feed posts.
             </p>
           </div>
         </header>
@@ -537,9 +544,10 @@ export default function EngagementPage() {
               Social calendar
             </h2>
             <p className="ct-muted">
-              Planned posts for Push lots only, from the snapshot through the close. Facebook 9:00 AM PT
-              rows can be scheduled on the connected Page after you approve them. Instagram, Stories, and
-              TikTok stay paste-yourself — Estate-EZ does not post those.
+              Planned posts for Push lots only, from the snapshot through the close. Every spreadsheet
+              slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing 17:40) is
+              scheduled on the connected Facebook Page at that time after you approve it. Native
+              Instagram and TikTok publishers are not wired yet. Missed slots are skipped.
             </p>
             {canPostFacebook && posts.some((post) => post.facebook_schedulable && post.lot_id) ? (
               <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
@@ -547,14 +555,22 @@ export default function EngagementPage() {
                   type="button"
                   className="ct-btn ct-btn--primary"
                   onClick={() => {
-                    const slots = posts.filter((post) => post.facebook_schedulable && post.lot_id);
-                    const schedules: Record<string, string> = {};
-                    for (const slot of slots) {
-                      if (slot.lot_id && slot.facebook_slot_at) schedules[slot.lot_id] = slot.facebook_slot_at;
-                    }
+                    const rows = posts.filter(
+                      (post) => post.facebook_schedulable && post.lot_id && post.slot_key
+                    );
                     setFacebookModalSource("push_calendar");
-                    setFacebookLotSchedules(schedules);
-                    setFacebookLotIds(slots.map((slot) => slot.lot_id as string));
+                    setFacebookLotSchedules(null);
+                    setFacebookCalendarSlots(
+                      rows.map((post) => ({
+                        slot_key: post.slot_key as string,
+                        lot_id: post.lot_id as string,
+                        at: post.facebook_slot_at || "",
+                        platform: post.platform,
+                        hook: post.hook,
+                        local_time: post.local_time
+                      }))
+                    );
+                    setFacebookLotIds(rows.map((slot) => slot.lot_id as string));
                   }}
                 >
                   Approve Facebook Page slots ({posts.filter((post) => post.facebook_schedulable && post.lot_id).length})
@@ -583,18 +599,21 @@ export default function EngagementPage() {
                             {post.local_time} {post.zone}
                           </div>
                           <div className="ct-muted">{post.status}</div>
-                          {post.platform === "Facebook" ? (
+                          {post.publish_target === "facebook_page" || post.facebook_status ? (
                             <div>
                               Page: {post.facebook_status || "planned"}
                               {post.facebook_post_id ? ` · ${post.facebook_post_id}` : ""}
                             </div>
-                          ) : (
-                            <div className="ct-muted">Paste only — not posted to the Page</div>
-                          )}
+                          ) : null}
                           {post.facebook_error ? <div className="ct-error">{post.facebook_error}</div> : null}
                         </td>
                         <td>
                           {post.platform}
+                          {post.publish_target === "facebook_page" && post.platform !== "Facebook" ? (
+                            <div className="ct-muted">Posting to Facebook in place of {post.platform}</div>
+                          ) : post.publish_target === "facebook_page" ? (
+                            <div className="ct-muted">Facebook Page feed</div>
+                          ) : null}
                           <div className="ct-muted">{post.hook}</div>
                           <div className="ct-muted">{post.post_type}</div>
                           {post.facebook_schedulable && post.lot_id && canPostFacebook ? (
@@ -603,10 +622,18 @@ export default function EngagementPage() {
                               className="ct-btn ct-btn--ghost"
                               style={{ marginTop: "0.35rem" }}
                               onClick={() => {
-                                const schedules: Record<string, string> = {};
-                                if (post.facebook_slot_at) schedules[post.lot_id as string] = post.facebook_slot_at;
                                 setFacebookModalSource("push_calendar");
-                                setFacebookLotSchedules(schedules);
+                                setFacebookLotSchedules(null);
+                                setFacebookCalendarSlots([
+                                  {
+                                    slot_key: post.slot_key as string,
+                                    lot_id: post.lot_id as string,
+                                    at: post.facebook_slot_at || "",
+                                    platform: post.platform,
+                                    hook: post.hook,
+                                    local_time: post.local_time
+                                  }
+                                ]);
                                 setFacebookLotIds([post.lot_id as string]);
                               }}
                             >
@@ -652,9 +679,11 @@ export default function EngagementPage() {
           source={facebookModalSource}
           lotSchedules={facebookLotSchedules || undefined}
           calendarSaleId={facebookModalSource === "push_calendar" ? saleId : null}
+          calendarSlots={facebookCalendarSlots || undefined}
           onClose={() => {
             setFacebookLotIds(null);
             setFacebookLotSchedules(null);
+            setFacebookCalendarSlots(null);
             setFacebookModalSource("push_queue");
           }}
           onPosted={() => {

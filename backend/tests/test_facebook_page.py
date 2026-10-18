@@ -15,11 +15,24 @@ from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 from app.models import Account, FacebookPagePost, Lot, Photo, Sale, User
+from app.services.facebook_calendar import (
+    PLATFORM_PUBLISH_TARGETS,
+    PUBLISH_TARGET_FACEBOOK_PAGE,
+    calendar_key_aliases,
+    calendar_slot_key,
+    current_publish_target,
+    is_legacy_calendar_key,
+    migrate_calendar_key,
+    photo_offset_for,
+    slot_angle_for,
+    slot_id_from_local_time,
+)
 from app.services.facebook_caption import FOLLOW_HOOK_LINE, apply_follow_hook, template_caption
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
 from app.services.facebook_page import (
     encode_oauth_state,
     listing_photos_for_facebook,
+    rotate_listing_photos,
     suggest_schedule_slots,
     validate_scheduled_time,
 )
@@ -90,6 +103,60 @@ def test_caption_template_includes_link_close_and_follow_hook() -> None:
     stripped = apply_follow_hook(text, include=False)
     assert FOLLOW_HOOK_LINE not in stripped
     assert FOLLOW_HOOK_LINE in apply_follow_hook(stripped, include=True)
+
+
+def test_caption_angles_differ_per_slot() -> None:
+    kwargs = dict(
+        title="Fenton vase",
+        description="Hobnail glass.",
+        item_url="https://ctbids.com/estate-sale/1/item/2",
+        close_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+        include_follow_hook=False,
+    )
+    lines = {angle: template_caption(**kwargs, angle=angle).split("\n", 1)[0] for angle in (
+        "collector_find",
+        "midday",
+        "stories",
+        "tiktok",
+        "closing",
+    )}
+    assert lines["collector_find"].startswith("Collector find:")
+    assert lines["midday"].startswith("Midday spotlight:")
+    assert lines["stories"].startswith("Still on the table tonight:")
+    assert lines["tiktok"].startswith("Would you bid on this?")
+    assert lines["closing"].startswith("Closing countdown:")
+    assert len(set(lines.values())) == 5
+
+
+def test_calendar_slot_keys_include_slot_and_migrate_legacy() -> None:
+    assert slot_id_from_local_time("09:00") == "0900"
+    assert slot_id_from_local_time("12:15") == "1215"
+    assert slot_id_from_local_time("16:30") == "1630"
+    assert slot_id_from_local_time("18:00") == "1800"
+    assert slot_id_from_local_time("17:40") == "1740"
+    assert calendar_slot_key(12, "lot-1", "0900") == "pushcal:12:lot-1:0900"
+    assert is_legacy_calendar_key("pushcal:12:lot-1")
+    assert migrate_calendar_key("pushcal:12:lot-1") == "pushcal:12:lot-1:0900"
+    assert migrate_calendar_key("pushcal:12:lot-1:1215") == "pushcal:12:lot-1:1215"
+    assert "pushcal:12:lot-1" in calendar_key_aliases("pushcal:12:lot-1:0900")
+    assert current_publish_target("Instagram") == PUBLISH_TARGET_FACEBOOK_PAGE
+    assert current_publish_target("TikTok") == PUBLISH_TARGET_FACEBOOK_PAGE
+    assert current_publish_target("FB + IG Stories") == PUBLISH_TARGET_FACEBOOK_PAGE
+    assert set(PLATFORM_PUBLISH_TARGETS.values()) == {PUBLISH_TARGET_FACEBOOK_PAGE}
+    assert slot_angle_for("09:00") == "collector_find"
+    assert slot_angle_for("12:15") == "midday"
+    assert slot_angle_for("16:30") == "stories"
+    assert slot_angle_for("18:00") == "tiktok"
+    assert slot_angle_for("17:40", hook="Closing countdown") == "closing"
+    assert photo_offset_for("1740") == 4
+
+
+def test_rotate_listing_photos_wraps() -> None:
+    photos = [SimpleNamespace(id=f"p{i}") for i in range(3)]
+    assert [p.id for p in rotate_listing_photos(photos, 0)] == ["p0", "p1", "p2"]
+    assert [p.id for p in rotate_listing_photos(photos, 1)] == ["p1", "p2", "p0"]
+    assert [p.id for p in rotate_listing_photos(photos, 4)] == ["p1", "p2", "p0"]
+    assert rotate_listing_photos([], 2) == []
 
 
 def test_schedule_suggestions_keep_meta_window() -> None:
@@ -633,7 +700,15 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert slot["local_time"] == "09:00"
         assert slot["facebook_status"] == "planned"
         assert slot["facebook_schedulable"] is True
-        assert slot["slot_key"] == f"pushcal:12:{lot.id}"
+        assert slot["slot_key"] == f"pushcal:12:{lot.id}:0900"
+        assert slot["publish_target"] == "facebook_page"
+        assert slot["intended_platform"] == "Facebook"
+        countdown = next(row for row in calendar if row["local_time"] == "17:40")
+        assert countdown["lot_id"] == lot.id
+        assert countdown["platform"] == "FB + IG Stories"
+        assert countdown["slot_key"] == f"pushcal:12:{lot.id}:1740"
+        assert countdown["facebook_schedulable"] is True
+        assert countdown["publish_target"] == "facebook_page"
         assert client.get("/facebook/posts").json() == []
 
         denied = client.post(
@@ -667,6 +742,9 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         fb = next(r for r in again if r["platform"] == "Facebook")
         assert fb["facebook_status"] == "scheduled"
         assert fb["facebook_post_id"] == "111_cal"
+        still_open = next(r for r in again if r["local_time"] == "17:40")
+        assert still_open["facebook_status"] == "planned"
+        assert still_open["facebook_schedulable"] is True
         dup = client.post(
             "/engagement/sales/12/calendar/facebook",
             json={"confirm": True, "slot_keys": [slot["slot_key"]]},
@@ -744,8 +822,11 @@ def test_push_calendar_reschedule_and_removal(tmp_path, monkeypatch) -> None:
 
 
 def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> None:
+    from app import facebook_post_tasks
+
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
     client, db, account, _user, lot = _client(tmp_path, connected=True)
     feeds: list[str] = []
 
@@ -771,6 +852,263 @@ def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> Non
         assert patched.status_code == 200, patched.text
         assert patched.json()["calendar_auto_approve"] is True
         assert feeds
-        assert db.query(FacebookPagePost).filter(FacebookPagePost.status == "scheduled").count() == 1
+        scheduled = db.query(FacebookPagePost).filter(FacebookPagePost.status == "scheduled").all()
+        assert {row.calendar_key for row in scheduled} == {
+            f"pushcal:12:{lot.id}:0900",
+            f"pushcal:12:{lot.id}:1740",
+        }
+    finally:
+        _clear_overrides()
+
+
+def _add_push_lot(db, account, user, sibling: Lot, *, lot_id: str, sku: str, item_id: int) -> Lot:
+    lot = Lot(
+        id=lot_id,
+        account_id=account.id,
+        user_id=user.id,
+        sale_id=sibling.sale_id,
+        sku=sku,
+        auction_title=f"{sku} lot",
+        professional_description="Cataloged.",
+        ctseller_item_id=item_id,
+        ctseller_sale_id=12,
+    )
+    hero = Photo(
+        id=f"photo-{lot_id}",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot.id,
+        original_name=f"{sku}.jpg",
+        storage_path=f"catalog/{sku}.jpg",
+        photo_role="hero",
+        sort_order=0,
+        shows_whole_lot=True,
+    )
+    db.add_all([lot, hero])
+    db.commit()
+    return lot
+
+
+def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatch) -> None:
+    from app import facebook_post_tasks
+
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
+    client, db, account, user, lot = _client(tmp_path, connected=True)
+    extras = [
+        _add_push_lot(db, account, user, lot, lot_id="lot-ig", sku="AA101", item_id=101),
+        _add_push_lot(db, account, user, lot, lot_id="lot-st", sku="AA102", item_id=102),
+        _add_push_lot(db, account, user, lot, lot_id="lot-tt", sku="AA103", item_id=103),
+    ]
+    body = _future_push_body(lot)
+    body["items"] = [
+        body["items"][0],
+        *[
+            {
+                "ctseller_item_id": extra.ctseller_item_id,
+                "sku": extra.sku,
+                "title": extra.auction_title,
+                "views": 20,
+                "watchers": 6,
+                "bids": 2,
+                "price": 8,
+                "reserve": 5,
+                "item_url": f"https://ctbids.com/estate-sale/12/item/{extra.ctseller_item_id}",
+                "item_status": "Ready",
+            }
+            for extra in extras
+        ],
+    ]
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
+        calendar = client.get("/engagement/sales/12/calendar").json()
+        by_time = {row["local_time"]: row for row in calendar if row["local_time"] != "17:40"}
+        assert by_time["09:00"]["platform"] == "Facebook"
+        assert by_time["12:15"]["platform"] == "Instagram"
+        assert by_time["16:30"]["platform"] == "FB + IG Stories"
+        assert by_time["18:00"]["platform"] == "TikTok"
+        for row in calendar:
+            assert row["publish_target"] == "facebook_page"
+            assert row["facebook_schedulable"] is True
+            assert row["slot_key"].endswith(f":{slot_id_from_local_time(row['local_time'])}")
+            assert row["facebook_status"] == "planned"
+        preview = client.post(
+            "/engagement/sales/12/calendar/facebook/preview",
+            json={"slot_keys": [by_time["12:15"]["slot_key"], by_time["18:00"]["slot_key"]]},
+        )
+        assert preview.status_code == 200, preview.text
+        captions = [row["caption"] for row in preview.json()["lots"]]
+        assert len(captions) == 2
+        assert "Midday spotlight" in captions[0]
+        assert "Would you bid on this?" in captions[1]
+        messages: list[str] = []
+
+        def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+            messages.append(message)
+            return f"111_{len(messages)}"
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            approved = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={
+                    "confirm": True,
+                    "slot_keys": [by_time["12:15"]["slot_key"], by_time["18:00"]["slot_key"]],
+                },
+            )
+        assert approved.status_code == 200, approved.text
+        assert all(row["ok"] for row in approved.json()["results"])
+        assert len(messages) == 2
+        assert messages[0] != messages[1]
+    finally:
+        _clear_overrides()
+
+
+def test_push_calendar_same_lot_second_slot_is_not_a_duplicate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    client, db, account, user, lot = _client(tmp_path, connected=True)
+    extra = Photo(
+        id="photo-detail",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot.id,
+        original_name="detail.jpg",
+        storage_path="catalog/detail.jpg",
+        photo_role="angle_only",
+        sort_order=2,
+    )
+    third = Photo(
+        id="photo-three",
+        account_id=account.id,
+        user_id=user.id,
+        lot_id=lot.id,
+        original_name="three.jpg",
+        storage_path="catalog/three.jpg",
+        photo_role="angle_only",
+        sort_order=3,
+    )
+    db.add_all([extra, third])
+    db.commit()
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=_future_push_body(lot)).status_code == 200
+        calendar = client.get("/engagement/sales/12/calendar").json()
+        morning = next(row for row in calendar if row["local_time"] == "09:00")
+        closing = next(row for row in calendar if row["local_time"] == "17:40")
+        preview = client.post(
+            "/engagement/sales/12/calendar/facebook/preview",
+            json={"slot_keys": [morning["slot_key"], closing["slot_key"]]},
+        ).json()
+        by_key = {row["calendar_key"]: row for row in preview["lots"]}
+        assert by_key[morning["slot_key"]]["photo_ids"][0] == "photo-hero"
+        assert by_key[closing["slot_key"]]["photo_ids"][0] == "photo-detail"
+        assert by_key[morning["slot_key"]]["caption"] != by_key[closing["slot_key"]]["caption"]
+        def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+            return f"111_{message[:8]}"
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", side_effect=["m0", "m1", "m2", "m3", "m4", "m5"]),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            first = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "slot_keys": [morning["slot_key"]]},
+            )
+            second = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "slot_keys": [closing["slot_key"]]},
+            )
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["results"][0]["ok"] is True
+        assert second.json()["results"][0]["ok"] is True
+        assert second.json()["results"][0]["skipped"] is False
+        keys = {row.calendar_key for row in db.query(FacebookPagePost).all()}
+        assert keys == {morning["slot_key"], closing["slot_key"]}
+        stored = {row.calendar_key: row.photo_ids_json for row in db.query(FacebookPagePost).all()}
+        assert stored[morning["slot_key"]].startswith('["photo-hero"')
+        assert stored[closing["slot_key"]].startswith('["photo-detail"')
+    finally:
+        _clear_overrides()
+
+
+def test_legacy_calendar_key_still_matches_0900_slot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, user, lot = _client(tmp_path, connected=True)
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=_future_push_body(lot)).status_code == 200
+        db.add(
+            FacebookPagePost(
+                account_id=account.id,
+                user_id=user.id,
+                lot_id=lot.id,
+                lot_ids_json=f'["{lot.id}"]',
+                photo_ids_json='["photo-hero"]',
+                facebook_page_id="111",
+                facebook_post_id="111_legacy",
+                caption="Collector find",
+                source="push_calendar",
+                calendar_key=f"pushcal:12:{lot.id}",
+                calendar_sale_id=12,
+                status="scheduled",
+                scheduled_publish_time=datetime.now(timezone.utc) + timedelta(days=4),
+            )
+        )
+        db.commit()
+        calendar = client.get("/engagement/sales/12/calendar").json()
+        morning = next(row for row in calendar if row["local_time"] == "09:00")
+        assert morning["slot_key"] == f"pushcal:12:{lot.id}:0900"
+        assert morning["facebook_status"] == "scheduled"
+        assert morning["facebook_post_id"] == "111_legacy"
+        assert morning["facebook_schedulable"] is False
+        dup = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "slot_keys": [morning["slot_key"]]},
+        )
+        assert dup.json()["results"][0]["skipped"] is True
+    finally:
+        _clear_overrides()
+
+
+def test_push_calendar_missed_slot_is_skipped(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, _account, _user, lot = _client(tmp_path, connected=True)
+    from zoneinfo import ZoneInfo
+
+    pacific = ZoneInfo("America/Los_Angeles")
+    captured = (datetime.now(pacific) - timedelta(days=1)).replace(
+        hour=15, minute=0, second=0, microsecond=0
+    )
+    ends = captured + timedelta(days=5)
+    body = {
+        "ctseller_sale_id": 12,
+        "sale_title": "Estate",
+        "auction_url": "https://ctbids.com/estate-sale/12/",
+        "sale_ends_at": ends.isoformat(),
+        "captured_at": captured.isoformat(),
+        "items": _future_push_body(lot)["items"],
+    }
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
+        calendar = client.get("/engagement/sales/12/calendar").json()
+        morning = next(row for row in calendar if row["local_time"] == "09:00")
+        assert morning["facebook_status"] == "missed"
+        assert morning["facebook_schedulable"] is False
+        skipped = client.post(
+            "/engagement/sales/12/calendar/facebook",
+            json={"confirm": True, "slot_keys": [morning["slot_key"]]},
+        )
+        assert skipped.status_code == 200, skipped.text
+        assert skipped.json()["results"][0]["skipped"] is True
+        assert db.query(FacebookPagePost).count() == 0
     finally:
         _clear_overrides()

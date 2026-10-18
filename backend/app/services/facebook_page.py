@@ -36,6 +36,7 @@ from app.services.roles import can_manage_integrations, is_owner
 PACIFIC = ZoneInfo("America/Los_Angeles")
 OAUTH_STATE_MINUTES = 15
 MAX_PAGE_PHOTOS = 10
+MAX_PAGE_POSTS = 80
 SCHEDULE_MIN_LEAD = timedelta(minutes=10)
 SCHEDULE_MAX_LEAD = timedelta(days=75)
 CTBIDS_ITEM_URL = "https://ctbids.com/estate-sale/{sale_id}/item/{item_id}"
@@ -355,6 +356,24 @@ def listing_photos_for_facebook(photos: list[Photo]) -> list[Photo]:
     return ordered_photos_for_listing(photos_for_ctbids_listing(photos))[:MAX_PAGE_PHOTOS]
 
 
+def rotate_listing_photos(photos: list[Photo], offset: int) -> list[Photo]:
+    """Start the gallery at ``offset`` (wraps) so same-lot slots are not identical."""
+    if not photos:
+        return []
+    start = int(offset or 0) % len(photos)
+    rotated = photos[start:] + photos[:start]
+    return rotated[:MAX_PAGE_PHOTOS]
+
+
+def _photos_for_item(db: Session, lot: Lot, photo_ids: list[str] | None) -> list[Photo]:
+    photos = _lot_photos(db, lot)
+    if not photo_ids:
+        return photos
+    by_id = {p.id: p for p in photos}
+    ordered = [by_id[pid] for pid in photo_ids if pid in by_id]
+    return ordered or photos
+
+
 def _lot_photos(db: Session, lot: Lot) -> list[Photo]:
     photos = (
         db.query(Photo)
@@ -451,8 +470,8 @@ def preview_posts(
     ids = [str(x).strip() for x in lot_ids if str(x).strip()]
     if not ids:
         raise HTTPException(status_code=400, detail="Pick at least one lot.")
-    if len(ids) > 40:
-        raise HTTPException(status_code=400, detail="Preview at most 40 lots at a time.")
+    if len(ids) > MAX_PAGE_POSTS:
+        raise HTTPException(status_code=400, detail=f"Preview at most {MAX_PAGE_POSTS} lots at a time.")
     lots = (
         db.query(Lot)
         .filter(Lot.account_id == account.id, Lot.id.in_(ids))
@@ -556,8 +575,8 @@ def publish_posts(
     page_id, page_token = _page_token(account)
     if not items:
         raise HTTPException(status_code=400, detail="Pick at least one lot.")
-    if len(items) > 40:
-        raise HTTPException(status_code=400, detail="Post at most 40 lots at a time.")
+    if len(items) > MAX_PAGE_POSTS:
+        raise HTTPException(status_code=400, detail=f"Post at most {MAX_PAGE_POSTS} lots at a time.")
 
     results: list[dict] = []
 
@@ -572,6 +591,10 @@ def publish_posts(
         caption = str(item.get("caption") or "").strip()
         scheduled = item.get("scheduled_publish_time")
         calendar_key = str(item.get("calendar_key") or "").strip() or None
+        if calendar_key:
+            from app.services.facebook_calendar import calendar_key_aliases, migrate_calendar_key
+
+            calendar_key = migrate_calendar_key(calendar_key) or None
         calendar_sale_id = item.get("calendar_sale_id")
         try:
             calendar_sale_id = int(calendar_sale_id) if calendar_sale_id is not None else None
@@ -585,18 +608,20 @@ def publish_posts(
             .first()
         )
         if not lot:
-            _emit({"lot_id": lot_id, "ok": False, "error": "Lot not found"})
+            _emit({"lot_id": lot_id, "calendar_key": calendar_key, "ok": False, "error": "Lot not found"})
             continue
         if not caption:
-            _emit({"lot_id": lot_id, "ok": False, "error": "Caption is empty"})
+            _emit({"lot_id": lot_id, "calendar_key": calendar_key, "ok": False, "error": "Caption is empty"})
             continue
         cal_row = None
         if calendar_key:
+            from app.services.facebook_calendar import calendar_key_aliases
+
             cal_row = (
                 db.query(FacebookPagePost)
                 .filter(
                     FacebookPagePost.account_id == account.id,
-                    FacebookPagePost.calendar_key == calendar_key,
+                    FacebookPagePost.calendar_key.in_(calendar_key_aliases(calendar_key)),
                 )
                 .order_by(FacebookPagePost.created_at.desc())
                 .first()
@@ -606,28 +631,36 @@ def publish_posts(
             _emit(
                 {
                     "lot_id": lot_id,
+                    "calendar_key": calendar_key,
                     "ok": False,
                     "skipped": True,
                     "error": "This Push-calendar slot is already scheduled or posted.",
                 }
             )
             continue
-        other_active = [row for row in existing if cal_row is None or row.id != cal_row.id]
-        if other_active and not force:
-            _emit(
-                {
-                    "lot_id": lot_id,
-                    "ok": False,
-                    "skipped": True,
-                    "error": "Already posted or scheduled to this Page. Confirm to post again.",
-                }
-            )
-            continue
-        photos = _lot_photos(db, lot)
+        # Calendar slots on the same lot must not block each other. Lot/queue posts
+        # still skip when this lot already has a posted/scheduled Page row.
+        if not calendar_key:
+            other_active = [row for row in existing if cal_row is None or row.id != cal_row.id]
+            if other_active and not force:
+                _emit(
+                    {
+                        "lot_id": lot_id,
+                        "ok": False,
+                        "skipped": True,
+                        "error": "Already posted or scheduled to this Page. Confirm to post again.",
+                    }
+                )
+                continue
+        raw_photo_ids = item.get("photo_ids") or []
+        if not isinstance(raw_photo_ids, list):
+            raw_photo_ids = []
+        photos = _photos_for_item(db, lot, [str(pid) for pid in raw_photo_ids if str(pid).strip()])
         if not photos:
             _emit(
                 {
                     "lot_id": lot_id,
+                    "calendar_key": calendar_key,
                     "ok": False,
                     "error": "This lot has no listing photos (SKU-tape frames are never posted).",
                 }
@@ -709,6 +742,7 @@ def publish_posts(
                 _emit(
                     {
                         "lot_id": lot_id,
+                        "calendar_key": calendar_key,
                         "ok": False,
                         "post_id": record.id,
                         "needs_reconnect": True,
@@ -716,7 +750,15 @@ def publish_posts(
                     }
                 )
                 break
-            _emit({"lot_id": lot_id, "ok": False, "post_id": record.id, "error": str(exc)})
+            _emit(
+                {
+                    "lot_id": lot_id,
+                    "calendar_key": calendar_key,
+                    "ok": False,
+                    "post_id": record.id,
+                    "error": str(exc),
+                }
+            )
             continue
 
         record.facebook_post_id = post_id
@@ -729,6 +771,7 @@ def publish_posts(
         _emit(
             {
                 "lot_id": lot_id,
+                "calendar_key": calendar_key,
                 "ok": True,
                 "post_id": record.id,
                 "facebook_post_id": post_id,

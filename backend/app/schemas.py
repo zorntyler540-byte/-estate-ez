@@ -1080,6 +1080,8 @@ class SocialCalendarPost(BaseModel):
     status: str = "Planned"
     preflight: str = ""
     slot_key: str = ""
+    intended_platform: str = ""
+    publish_target: str = "facebook_page"
     facebook_schedulable: bool = False
     facebook_status: str = "not_applicable"
     facebook_slot_at: datetime | None = None
@@ -1151,6 +1153,11 @@ class FacebookPreviewLotOut(BaseModel):
     already_posted: bool = False
     existing_posts: list[FacebookExistingPostOut] = Field(default_factory=list)
     error: str | None = None
+    calendar_key: str | None = None
+    intended_platform: str | None = None
+    publish_target: str = "facebook_page"
+    local_time: str | None = None
+    hook: str | None = None
 
 
 class FacebookScheduleSuggestionOut(BaseModel):
@@ -1159,7 +1166,7 @@ class FacebookScheduleSuggestionOut(BaseModel):
 
 
 class FacebookPreviewIn(BaseModel):
-    lot_ids: list[str] = Field(min_length=1, max_length=40)
+    lot_ids: list[str] = Field(min_length=1, max_length=80)
     include_follow_hook: bool = False
 
 
@@ -1176,6 +1183,7 @@ class FacebookPublishItemIn(BaseModel):
     scheduled_publish_time: datetime | None = None
     calendar_key: str | None = Field(default=None, max_length=80)
     calendar_sale_id: int | None = None
+    photo_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
 class FacebookPublishIn(BaseModel):
@@ -1183,7 +1191,7 @@ class FacebookPublishIn(BaseModel):
     force: bool = False
     include_follow_hook: bool = False
     source: str = Field(default="lot", max_length=32)
-    items: list[FacebookPublishItemIn] = Field(min_length=1, max_length=40)
+    items: list[FacebookPublishItemIn] = Field(min_length=1, max_length=80)
 
 
 class FacebookPublishResultOut(BaseModel):
@@ -1196,6 +1204,7 @@ class FacebookPublishResultOut(BaseModel):
     scheduled_publish_time: datetime | None = None
     needs_reconnect: bool = False
     error: str | None = None
+    calendar_key: str | None = None
 
 
 class FacebookPublishOut(BaseModel):
@@ -1215,6 +1224,11 @@ class FacebookCalendarApproveIn(BaseModel):
     include_follow_hook: bool = False
     slot_keys: list[str] = Field(default_factory=list)
     captions: dict[str, str] = Field(default_factory=dict)
+
+
+class FacebookCalendarPreviewIn(BaseModel):
+    include_follow_hook: bool = False
+    slot_keys: list[str] = Field(default_factory=list)
 
 
 class FacebookPagePostOut(BaseModel):

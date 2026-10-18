@@ -6,6 +6,15 @@ import { LotPhotoThumb } from "./LotPhotoThumb";
 
 export type FacebookPostSource = "lot" | "selection" | "push_queue" | "push_calendar";
 
+export type FacebookCalendarSlot = {
+  slot_key: string;
+  lot_id: string;
+  at: string;
+  platform: string;
+  hook?: string;
+  local_time?: string;
+};
+
 type ExistingPost = {
   id: string;
   status: string;
@@ -27,6 +36,11 @@ type PreviewLot = {
   already_posted: boolean;
   existing_posts: ExistingPost[];
   error?: string | null;
+  calendar_key?: string | null;
+  intended_platform?: string | null;
+  publish_target?: string | null;
+  local_time?: string | null;
+  hook?: string | null;
 };
 
 type ScheduleSuggestion = { at: string; label: string };
@@ -51,6 +65,7 @@ type PublishResult = {
   status?: string | null;
   needs_reconnect?: boolean;
   error?: string | null;
+  calendar_key?: string | null;
 };
 
 type PublishOut = {
@@ -69,6 +84,7 @@ type Props = {
   lotIds: string[];
   source: FacebookPostSource;
   lotSchedules?: Record<string, string>;
+  calendarSlots?: FacebookCalendarSlot[];
   calendarSaleId?: number | null;
   onClose: () => void;
   onPosted?: () => void;
@@ -92,16 +108,22 @@ function applyFollowHook(caption: string, include: boolean): string {
   return text ? `${text}\n\n${FOLLOW_HOOK}` : FOLLOW_HOOK;
 }
 
+function previewKey(lot: PreviewLot): string {
+  return lot.calendar_key || lot.lot_id;
+}
+
 export function FacebookPagePostModal({
   token,
   lotIds,
   source,
   lotSchedules,
+  calendarSlots,
   calendarSaleId,
   onClose,
   onPosted
 }: Props) {
-  const calendarMode = source === "push_calendar" && Boolean(lotSchedules);
+  const calendarMode =
+    source === "push_calendar" && Boolean(calendarSlots?.length || lotSchedules);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
@@ -121,14 +143,27 @@ export function FacebookPagePostModal({
       setError("");
       setResults(null);
       try {
-        const data = (await apiFetch("/facebook/posts/preview", token, {
-          method: "POST",
-          body: JSON.stringify({ lot_ids: lotIds, include_follow_hook: hook })
-        })) as Preview;
+        const data = (await apiFetch(
+          calendarMode && calendarSaleId
+            ? `/engagement/sales/${calendarSaleId}/calendar/facebook/preview`
+            : "/facebook/posts/preview",
+          token,
+          {
+            method: "POST",
+            body: JSON.stringify(
+              calendarMode && calendarSaleId
+                ? {
+                    include_follow_hook: hook,
+                    slot_keys: (calendarSlots || []).map((slot) => slot.slot_key)
+                  }
+                : { lot_ids: lotIds, include_follow_hook: hook }
+            )
+          }
+        )) as Preview;
         setPreview(data);
         setFollowHook(Boolean(data.include_follow_hook));
         const next: Record<string, string> = {};
-        for (const lot of data.lots) next[lot.lot_id] = lot.caption;
+        for (const lot of data.lots) next[previewKey(lot)] = lot.caption;
         setCaptions(next);
         if (data.schedule_suggestions[0]) {
           setSlotAt(data.schedule_suggestions[0].at);
@@ -140,13 +175,18 @@ export function FacebookPagePostModal({
         setLoading(false);
       }
     },
-    [lotIds, token]
+    [calendarMode, calendarSaleId, calendarSlots, lotIds, token]
   );
 
   useEffect(() => {
-    if (!token || lotIds.length < 1) return;
+    if (!token) return;
+    if (calendarMode) {
+      if (!calendarSaleId || !(calendarSlots || []).length) return;
+    } else if (lotIds.length < 1) {
+      return;
+    }
     void loadPreview(false);
-  }, [token, lotIds, loadPreview]);
+  }, [token, lotIds, calendarMode, calendarSaleId, calendarSlots, loadPreview]);
 
   const alreadyPosted = useMemo(
     () => (preview?.lots || []).filter((lot) => lot.already_posted).length,
@@ -192,27 +232,32 @@ export function FacebookPagePostModal({
     const items = (preview.lots || [])
       .filter((lot) => !lot.error)
       .map((lot) => {
+        const key = previewKey(lot);
         const row: {
           lot_id: string;
           caption: string;
           scheduled_publish_time?: string;
           calendar_key?: string;
           calendar_sale_id?: number;
+          photo_ids?: string[];
         } = {
           lot_id: lot.lot_id,
-          caption: (captions[lot.lot_id] || "").trim()
+          caption: (captions[key] || "").trim()
         };
-        if (calendarMode && lotSchedules?.[lot.lot_id]) {
-          row.scheduled_publish_time = lotSchedules[lot.lot_id];
+        const slotAtIso =
+          lot.calendar_key && calendarSlots?.find((slot) => slot.slot_key === lot.calendar_key)?.at;
+        if (calendarMode && (slotAtIso || lotSchedules?.[lot.lot_id])) {
+          row.scheduled_publish_time = slotAtIso || lotSchedules?.[lot.lot_id];
         } else if (scheduleMode === "slot" && slotAt) row.scheduled_publish_time = slotAt;
         else if (scheduleMode === "custom" && customAt) {
           const iso = new Date(customAt).toISOString();
           row.scheduled_publish_time = iso;
         }
         if (calendarMode && calendarSaleId) {
-          row.calendar_key = `pushcal:${calendarSaleId}:${lot.lot_id}`;
+          row.calendar_key = lot.calendar_key || `pushcal:${calendarSaleId}:${lot.lot_id}`;
           row.calendar_sale_id = calendarSaleId;
         }
+        if (lot.photo_ids?.length) row.photo_ids = lot.photo_ids;
         return row;
       })
       .filter((row) => row.caption);
@@ -224,15 +269,29 @@ export function FacebookPagePostModal({
     setError("");
     setBatchProgress(items.length > 1 ? `Queueing ${items.length} posts…` : "Posting…");
     try {
-      const res = (await apiFetch("/facebook/posts", token, {
+      const path =
+        calendarMode && calendarSaleId
+          ? `/engagement/sales/${calendarSaleId}/calendar/facebook`
+          : "/facebook/posts";
+      const body =
+        calendarMode && calendarSaleId
+          ? {
+              confirm: true,
+              force,
+              include_follow_hook: followHook,
+              slot_keys: items.map((row) => row.calendar_key).filter(Boolean),
+              captions: Object.fromEntries(items.map((row) => [row.calendar_key || row.lot_id, row.caption]))
+            }
+          : {
+              confirm: true,
+              force,
+              include_follow_hook: followHook,
+              source,
+              items
+            };
+      const res = (await apiFetch(path, token, {
         method: "POST",
-        body: JSON.stringify({
-          confirm: true,
-          force,
-          include_follow_hook: followHook,
-          source,
-          items
-        })
+        body: JSON.stringify(body)
       })) as PublishOut;
       let rows = res.results || [];
       if (res.queued && res.batch_id) {
@@ -267,7 +326,7 @@ export function FacebookPagePostModal({
         </div>
         <p className="ct-muted" style={{ marginTop: "0.35rem" }}>
           Nothing goes to Facebook until you click Post to Page. SKU-tape photos stay off the Page.
-          Instagram, Stories, Groups, and Marketplace are not part of this.
+          Native Instagram, Stories, Groups, Marketplace, and TikTok publishers are not wired yet.
         </p>
         {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
         {loading ? <p className="ct-muted">Drafting captions…</p> : null}
@@ -304,8 +363,8 @@ export function FacebookPagePostModal({
             </label>
             {calendarMode ? (
               <p className="ct-muted">
-                Each lot uses its Push-calendar Facebook 9:00 AM PT slot. Nothing is sent until you
-                click Schedule on Page.
+                Each spreadsheet slot is scheduled as a Facebook Page feed post at its calendar time.
+                Captions and photos vary by slot. Nothing is sent until you click Schedule on Page.
               </p>
             ) : (
             <div className="ct-field" style={{ marginBottom: "0.75rem" }}>
@@ -376,10 +435,19 @@ export function FacebookPagePostModal({
 
             <div className="ct-fb-post-list">
               {preview.lots.map((lot) => (
-                <article key={lot.lot_id} className="ct-card ct-card--padded" style={{ marginBottom: "0.65rem" }}>
+                <article key={previewKey(lot)} className="ct-card ct-card--padded" style={{ marginBottom: "0.65rem" }}>
                   <strong>
                     {lot.sku || "Lot"} — {lot.title || "Untitled"}
                   </strong>
+                  {calendarMode && (lot.intended_platform || lot.local_time) ? (
+                    <p className="ct-muted" style={{ margin: "0.25rem 0 0" }}>
+                      {lot.local_time ? `${lot.local_time} PT · ` : ""}
+                      {lot.intended_platform && lot.intended_platform !== "Facebook"
+                        ? `Posting to Facebook in place of ${lot.intended_platform}`
+                        : "Facebook Page feed"}
+                      {lot.hook ? ` · ${lot.hook}` : ""}
+                    </p>
+                  ) : null}
                   {lot.item_url ? (
                     <div>
                       <a href={lot.item_url} target="_blank" rel="noreferrer">
@@ -400,9 +468,14 @@ export function FacebookPagePostModal({
                       .
                     </p>
                   ) : null}
-                  {calendarMode && lotSchedules?.[lot.lot_id] ? (
+                  {calendarMode ? (
                     <p className="ct-muted" style={{ margin: "0.25rem 0 0" }}>
-                      Calendar slot: {new Date(lotSchedules[lot.lot_id]).toLocaleString()}
+                      Calendar slot:{" "}
+                      {new Date(
+                        calendarSlots?.find((slot) => slot.slot_key === lot.calendar_key)?.at ||
+                          lotSchedules?.[lot.lot_id] ||
+                          ""
+                      ).toLocaleString()}
                     </p>
                   ) : null}
                   {lot.error ? (
@@ -430,9 +503,9 @@ export function FacebookPagePostModal({
                       </div>
                       <textarea
                         className="ct-input ct-fb-caption"
-                        value={captions[lot.lot_id] || ""}
+                        value={captions[previewKey(lot)] || ""}
                         onChange={(e) =>
-                          setCaptions((prev) => ({ ...prev, [lot.lot_id]: e.target.value }))
+                          setCaptions((prev) => ({ ...prev, [previewKey(lot)]: e.target.value }))
                         }
                         rows={8}
                         aria-label={`Caption for ${lot.sku || lot.title}`}
@@ -446,7 +519,7 @@ export function FacebookPagePostModal({
             {results ? (
               <div className="ct-banner" style={{ marginBottom: "0.75rem" }}>
                 {results.map((row) => (
-                  <div key={row.lot_id}>
+                  <div key={row.calendar_key || row.lot_id}>
                     {row.ok
                       ? `${row.status === "scheduled" ? "Scheduled" : "Posted"} ${row.facebook_post_id || ""}`
                       : row.error || "Failed"}

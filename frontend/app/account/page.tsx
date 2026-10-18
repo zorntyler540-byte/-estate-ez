@@ -251,8 +251,8 @@ export default function AccountPage() {
       setFacebookCalendarAuto(Boolean(res.calendar_auto_approve));
       setFacebookMsg(
         next
-          ? "New Push-calendar Facebook 9:00 AM slots will be scheduled automatically."
-          : "Push-calendar Facebook slots need an approve click before they go to the Page."
+          ? "New Push-calendar slots will be scheduled automatically as Facebook Page posts."
+          : "Push-calendar slots need an approve click before they go to the Page."
       );
     } catch (e) {
       setFacebookErr(e instanceof Error ? e.message : "Could not save Facebook calendar setting");
@@ -680,7 +680,8 @@ export default function AccountPage() {
           </h2>
           <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
             Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption).
-            Instagram, Stories, Groups, and Marketplace are not available here. Owners only to connect.
+            Push-calendar Instagram, Stories, and TikTok slots currently publish as Page feed posts.
+            Native Instagram, Groups, and Marketplace are not available here. Owners only to connect.
           </p>
           {facebookMsg ? <div className="ct-banner ct-banner--success">{facebookMsg}</div> : null}
           {facebookErr ? <div className="ct-banner ct-banner--error">{facebookErr}</div> : null}
@@ -728,8 +729,9 @@ export default function AccountPage() {
                 onChange={(e) => void toggleFacebookCalendarAuto(e.target.checked)}
               />
               <span>
-                Auto-approve new Push-calendar Facebook 9:00 AM PT slots (off by default). Instagram,
-                Stories, and TikTok rows are never posted.
+                Auto-approve new Push-calendar slots as Facebook Page posts (off by default). Every
+                spreadsheet slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing
+                17:40) is scheduled on the Page until a native publisher exists.
               </span>
             </label>
           ) : null}

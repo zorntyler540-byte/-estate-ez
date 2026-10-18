@@ -705,11 +705,12 @@ def _ensure_facebook_page_post_columns() -> None:
         stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_key VARCHAR(80)")
     if "calendar_sale_id" not in cols:
         stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_sale_id INTEGER")
-    if not stmts:
-        return
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+        from app.services.facebook_calendar import rewrite_legacy_calendar_keys
+
+        rewrite_legacy_calendar_keys(conn)
 
 
 def _ensure_lot_engagement_column() -> None:

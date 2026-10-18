@@ -13,6 +13,7 @@ from app.db import get_db
 from app.models import Account, EngagementSnapshot, FacebookPagePost, User
 from app.schemas import (
     FacebookCalendarApproveIn,
+    FacebookCalendarPreviewIn,
     FacebookOAuthStartOut,
     FacebookPageChoiceOut,
     FacebookPagePostOut,
@@ -28,6 +29,7 @@ from app.schemas import (
 from app import facebook_post_tasks
 from app.services.facebook_calendar import (
     CALENDAR_SOURCE,
+    calendar_preview,
     calendar_publish_items,
     sync_facebook_calendar_after_snapshot,
 )
@@ -297,6 +299,27 @@ def facebook_publish_batch(
 
 
 @router.post(
+    "/engagement/sales/{ctseller_sale_id}/calendar/facebook/preview",
+    response_model=FacebookPreviewOut,
+)
+def facebook_preview_calendar(
+    ctseller_sale_id: int,
+    payload: FacebookCalendarPreviewIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookPreviewOut:
+    require_facebook_poster(current)
+    data = calendar_preview(
+        db,
+        account=_account(db, current),
+        ctseller_sale_id=int(ctseller_sale_id),
+        slot_keys=list(payload.slot_keys or []),
+        include_follow_hook=payload.include_follow_hook,
+    )
+    return FacebookPreviewOut.model_validate(data)
+
+
+@router.post(
     "/engagement/sales/{ctseller_sale_id}/calendar/facebook",
     response_model=FacebookPublishOut,
 )
@@ -314,6 +337,7 @@ def facebook_approve_calendar(
         ctseller_sale_id=int(ctseller_sale_id),
         slot_keys=list(payload.slot_keys or []),
         captions=dict(payload.captions or {}),
+        include_follow_hook=payload.include_follow_hook,
     )
     if not publishable:
         failed = sum(1 for row in skipped if not row.get("ok") and not row.get("skipped"))

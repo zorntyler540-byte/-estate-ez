@@ -62,7 +62,7 @@ class Account(Base):
     facebook_page_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     facebook_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     facebook_token_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # When true, new Push-calendar Facebook 9:00 AM slots are scheduled without a second click.
+    # When true, new in-window Push-calendar slots are scheduled as Page posts without a second click.
     facebook_calendar_auto_approve: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
@@ -394,8 +394,9 @@ class AudienceHuntEvent(Base):
 class FacebookPagePost(Base):
     """One Facebook Page feed post (or scheduled post) for catalog lot(s).
 
-    Instagram / Stories / Groups / Marketplace are out of v1 — do not reuse this row
-    for those surfaces. A later Instagram publisher should get its own table.
+    Push-calendar rows keep an intended spreadsheet platform; v1 still stores a
+    Page feed post here. Native Instagram / Stories / TikTok publishers should
+    get their own tables rather than reuse this row.
     """
 
     __tablename__ = "facebook_page_posts"
