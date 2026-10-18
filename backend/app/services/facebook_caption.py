@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
+from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 FOLLOW_HOOK_LINE = "Follow our Page for upcoming sales."
@@ -86,6 +87,7 @@ def template_caption(
     current_bid: float | None = None,
     watchers: int | None = None,
     angle: str = "",
+    sale_url: str = "",
 ) -> str:
     lines: list[str] = []
     name = (title or "").strip() or "Estate lot"
@@ -117,6 +119,10 @@ def template_caption(
     if url:
         lines.append("")
         lines.append(url)
+    sale_line = sale_link_line(sale_url or ctbids_sale_url(item_url=url))
+    if sale_line:
+        lines.append("")
+        lines.append(sale_line)
     if include_follow_hook:
         lines.append("")
         lines.append(FOLLOW_HOOK_LINE)
@@ -133,6 +139,25 @@ def apply_follow_hook(caption: str, *, include: bool) -> str:
             return f"{text}\n\n{hook}"
         return hook
     return text
+
+
+def ensure_sale_link(caption: str, sale_url: str) -> str:
+    """Lot URL first; labeled sale URL second (before the follow hook)."""
+    line = sale_link_line(sale_url)
+    text = (caption or "").rstrip()
+    if not line:
+        return text
+    if line in text:
+        return text
+    has_hook = text.endswith(FOLLOW_HOOK_LINE)
+    body = text[: -len(FOLLOW_HOOK_LINE)].rstrip() if has_hook else text
+    if body:
+        body = f"{body}\n\n{line}"
+    else:
+        body = line
+    if has_hook:
+        return f"{body}\n\n{FOLLOW_HOOK_LINE}"
+    return body
 
 
 def _ensure_gemini_env() -> None:
@@ -154,8 +179,10 @@ def draft_facebook_caption(
     watchers: int | None = None,
     sale_title: str = "",
     angle: str = "",
+    sale_url: str = "",
 ) -> str:
     """Gemini Flash JSON caption, or the local template if the key is missing/fails."""
+    sale_url = sale_url or ctbids_sale_url(item_url=item_url)
     fallback = template_caption(
         title=title,
         description=description,
@@ -165,6 +192,7 @@ def draft_facebook_caption(
         current_bid=current_bid,
         watchers=watchers,
         angle=angle,
+        sale_url=sale_url,
     )
     if not (settings.google_api_key or "").strip():
         return fallback
@@ -181,6 +209,7 @@ def draft_facebook_caption(
             sale_title=sale_title,
             fallback=fallback,
             angle=angle,
+            sale_url=sale_url,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.warning("Facebook caption Gemini failed; using template: %s", exc)
@@ -200,6 +229,7 @@ def _draft_with_gemini(
     sale_title: str,
     fallback: str,
     angle: str = "",
+    sale_url: str = "",
 ) -> str:
     from google.genai import types
 
@@ -215,10 +245,18 @@ def _draft_with_gemini(
         else "Do not ask people to follow the Page."
     )
     angle_line = _ANGLE_PROMPTS.get((angle or "").strip(), "")
+    sale_line = sale_link_line(sale_url or ctbids_sale_url(item_url=item_url))
+    sale_instruction = (
+        f'After the lot URL, include this exact line: "{sale_line}"'
+        if sale_line
+        else "If you have no overall sale URL, omit it."
+    )
     parts = [
         "Write one Facebook Page caption for this estate-auction lot.\n"
         "Staff will post it to the franchise Facebook Page (not Marketplace, not Groups).\n"
-        "Include the CT Bids lot/auction link verbatim. Mention when bidding closes.\n"
+        "Include the CT Bids lot/item link verbatim first. Mention when bidding closes.\n"
+        f"{sale_instruction}\n"
+        "Buyers cannot navigate from an item page back to the sale, so both links are required.\n"
         "2–6 short sentences or line breaks. No hashtag dump. No invented prices or provenance.\n"
         f"{hook}\n"
         f"{angle_line}\n\n"
@@ -226,7 +264,8 @@ def _draft_with_gemini(
         f"SKU: {(sku or '').strip() or '(none)'}\n"
         f"Title: {(title or '').strip()}\n"
         f"Description: {(description or '').strip() or '(none)'}\n"
-        f"Link: {(item_url or '').strip() or '(none)'}\n"
+        f"Lot link: {(item_url or '').strip() or '(none)'}\n"
+        f"Sale link: {sale_line or '(none)'}\n"
         f"Closes: {close_s}\n"
         f"Watchers: {watchers if watchers is not None else '(unknown)'}\n"
         f"Current bid: {current_bid if current_bid is not None else '(unknown)'}\n"
@@ -251,4 +290,5 @@ def _draft_with_gemini(
     caption = (draft.caption or "").strip()
     if not caption:
         return fallback
-    return apply_follow_hook(caption, include=include_follow_hook)
+    caption = apply_follow_hook(caption, include=include_follow_hook)
+    return ensure_sale_link(caption, sale_url or ctbids_sale_url(item_url=item_url))

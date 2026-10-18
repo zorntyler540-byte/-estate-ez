@@ -277,6 +277,12 @@ def test_calendar_uses_sale_end_and_stays_planned() -> None:
     assert posts[-1]["hook"] == "Closing countdown"
     assert posts[-1]["post_date"] == "2026-10-20"
     assert "Primitive sale" in posts[0]["paste_copy"]
+    assert "https://ctbids.com/estate-sale/1/item/2" in posts[0]["paste_copy"]
+    assert "See the whole sale: https://ctbids.com/estate-sale/1" in posts[0]["paste_copy"]
+    assert posts[0]["paste_copy"].index("https://ctbids.com/estate-sale/1/item/2") < posts[0][
+        "paste_copy"
+    ].index("See the whole sale:")
+    assert "See the whole sale: https://ctbids.com/estate-sale/1" in posts[-1]["paste_copy"]
     assert all(post["status"] == "Planned" for post in posts)
     facebook = [post for post in posts if post["platform"] == "Facebook"]
     assert facebook

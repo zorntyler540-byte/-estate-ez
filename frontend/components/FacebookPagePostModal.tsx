@@ -86,6 +86,7 @@ type Props = {
   lotSchedules?: Record<string, string>;
   calendarSlots?: FacebookCalendarSlot[];
   calendarSaleId?: number | null;
+  publishNow?: boolean;
   onClose: () => void;
   onPosted?: () => void;
 };
@@ -119,6 +120,7 @@ export function FacebookPagePostModal({
   lotSchedules,
   calendarSlots,
   calendarSaleId,
+  publishNow = false,
   onClose,
   onPosted
 }: Props) {
@@ -131,11 +133,13 @@ export function FacebookPagePostModal({
   const [captions, setCaptions] = useState<Record<string, string>>({});
   const [followHook, setFollowHook] = useState(false);
   const [force, setForce] = useState(false);
+  const [confirmImmediate, setConfirmImmediate] = useState(false);
   const [scheduleMode, setScheduleMode] = useState<"now" | "slot" | "custom">("now");
   const [slotAt, setSlotAt] = useState("");
   const [customAt, setCustomAt] = useState("");
   const [results, setResults] = useState<PublishResult[] | null>(null);
   const [batchProgress, setBatchProgress] = useState("");
+  const immediate = publishNow || (!calendarMode && scheduleMode === "now");
 
   const loadPreview = useCallback(
     async (hook: boolean) => {
@@ -162,6 +166,7 @@ export function FacebookPagePostModal({
         )) as Preview;
         setPreview(data);
         setFollowHook(Boolean(data.include_follow_hook));
+        setConfirmImmediate(false);
         const next: Record<string, string> = {};
         for (const lot of data.lots) next[previewKey(lot)] = lot.caption;
         setCaptions(next);
@@ -229,6 +234,10 @@ export function FacebookPagePostModal({
 
   async function publish() {
     if (!preview?.connected || posting) return;
+    if (immediate && !confirmImmediate) {
+      setError("Check the confirmation box before posting now. It will go live on the Page immediately.");
+      return;
+    }
     const items = (preview.lots || [])
       .filter((lot) => !lot.error)
       .map((lot) => {
@@ -246,10 +255,11 @@ export function FacebookPagePostModal({
         };
         const slotAtIso =
           lot.calendar_key && calendarSlots?.find((slot) => slot.slot_key === lot.calendar_key)?.at;
-        if (calendarMode && (slotAtIso || lotSchedules?.[lot.lot_id])) {
+        if (calendarMode && !publishNow && (slotAtIso || lotSchedules?.[lot.lot_id])) {
           row.scheduled_publish_time = slotAtIso || lotSchedules?.[lot.lot_id];
-        } else if (scheduleMode === "slot" && slotAt) row.scheduled_publish_time = slotAt;
-        else if (scheduleMode === "custom" && customAt) {
+        } else if (!calendarMode && scheduleMode === "slot" && slotAt) {
+          row.scheduled_publish_time = slotAt;
+        } else if (!calendarMode && scheduleMode === "custom" && customAt) {
           const iso = new Date(customAt).toISOString();
           row.scheduled_publish_time = iso;
         }
@@ -279,6 +289,7 @@ export function FacebookPagePostModal({
               confirm: true,
               force,
               include_follow_hook: followHook,
+              post_now: publishNow,
               slot_keys: items.map((row) => row.calendar_key).filter(Boolean),
               captions: Object.fromEntries(items.map((row) => [row.calendar_key || row.lot_id, row.caption]))
             }
@@ -308,9 +319,13 @@ export function FacebookPagePostModal({
   }
 
   const title = calendarMode
-    ? lotIds.length === 1
-      ? "Approve this Push-calendar Facebook slot"
-      : `Approve ${lotIds.length} Push-calendar Facebook slots`
+    ? publishNow
+      ? lotIds.length === 1
+        ? "Post this Push-calendar Facebook slot now"
+        : `Post ${lotIds.length} Push-calendar Facebook slots now`
+      : lotIds.length === 1
+        ? "Approve this Push-calendar Facebook slot"
+        : `Approve ${lotIds.length} Push-calendar Facebook slots`
     : lotIds.length === 1
       ? "Post this lot to Facebook Page"
       : `Post ${lotIds.length} lots to Facebook Page`;
@@ -363,8 +378,9 @@ export function FacebookPagePostModal({
             </label>
             {calendarMode ? (
               <p className="ct-muted">
-                Each spreadsheet slot is scheduled as a Facebook Page feed post at its calendar time.
-                Captions and photos vary by slot. Nothing is sent until you click Schedule on Page.
+                {publishNow
+                  ? "This publishes to the Facebook Page immediately. The spreadsheet time is ignored, and Facebook's 10-minute schedule window does not apply. Nothing is sent until you confirm and click Post to Page now."
+                  : "Each spreadsheet slot is scheduled as a Facebook Page feed post at its calendar time. Captions and photos vary by slot. Nothing is sent until you click Schedule on Page."}
               </p>
             ) : (
             <div className="ct-field" style={{ marginBottom: "0.75rem" }}>
@@ -429,6 +445,18 @@ export function FacebookPagePostModal({
                 <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
                 <span>
                   {alreadyPosted} already posted or scheduled. Check this to post again.
+                </span>
+              </label>
+            ) : null}
+            {immediate ? (
+              <label className="ct-row" style={{ gap: "0.4rem", marginBottom: "0.65rem", alignItems: "flex-start" }}>
+                <input
+                  type="checkbox"
+                  checked={confirmImmediate}
+                  onChange={(e) => setConfirmImmediate(e.target.checked)}
+                />
+                <span>
+                  Post now — this goes live on the Page immediately. I have checked the listing.
                 </span>
               </label>
             ) : null}
@@ -533,14 +561,14 @@ export function FacebookPagePostModal({
               <button
                 type="button"
                 className="ct-btn ct-btn--primary"
-                disabled={posting || blocked === preview.lots.length}
+                disabled={posting || blocked === preview.lots.length || (immediate && !confirmImmediate)}
                 onClick={() => void publish()}
               >
                 {posting
                   ? batchProgress || "Posting…"
-                  : calendarMode || scheduleMode !== "now"
-                    ? "Schedule on Page"
-                    : "Post to Page"}
+                  : immediate
+                    ? "Post to Page now"
+                    : "Schedule on Page"}
               </button>
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadPreview(followHook)}>
                 Redraft captions

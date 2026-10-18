@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
+
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 # A thin bid under this current price is still a social Push. The Oct 15 gold
@@ -236,6 +238,13 @@ PREFLIGHT = (
 )
 
 
+def _with_sale_link(text: str, *, item_url: str, auction_url: str = "") -> str:
+    line = sale_link_line(ctbids_sale_url(auction_url=auction_url, item_url=item_url))
+    if not line or line in text:
+        return text
+    return f"{text}\n{line}"
+
+
 def _copy_for(
     platform: str,
     *,
@@ -245,36 +254,39 @@ def _copy_for(
     watchers: int,
     item_url: str,
     closing: bool,
+    auction_url: str = "",
 ) -> str:
     place = (sale_title or "Estate auction").strip()
     dollars = _whole_dollars(price)
     watch = f"{watchers} watcher" if watchers == 1 else f"{watchers} watchers"
     if platform == "Instagram":
-        return (
+        body = (
             f"{place}: {title}. Swipe the listing photos. "
             f"{watch} and the current bid is ${dollars}. {item_url}"
         )
-    if platform == "FB + IG Stories":
+    elif platform == "FB + IG Stories":
         hook = "Closing countdown" if closing else "Which would you check out first?"
-        return (
+        body = (
             f"POLL: {hook}\n"
             f"A: {title}\n"
             f"Current bid ${dollars}. Open the lot and bid if it is still up.\n"
             f"{item_url}"
         )
-    if platform == "TikTok":
-        return (
+    elif platform == "TikTok":
+        body = (
             "ON-SCREEN: “Would you bid on this?”\n"
             "CLIP 1 (0–3s): Show the full item.\n"
             "CLIP 2 (3–12s): Details from the listing photos.\n"
             f"{title} — current bid ${dollars}.\n"
             f"{item_url}"
         )
-    lead = "Closing day" if closing else "Collector find"
-    return (
-        f"{place} — {lead}: {title}. {watch}, current bid ${dollars}. "
-        f"Listing photos only. {item_url}"
-    )
+    else:
+        lead = "Closing day" if closing else "Collector find"
+        body = (
+            f"{place} — {lead}: {title}. {watch}, current bid ${dollars}. "
+            f"Listing photos only. {item_url}"
+        )
+    return _with_sale_link(body, item_url=item_url, auction_url=auction_url)
 
 
 def build_social_calendar(
@@ -283,6 +295,8 @@ def build_social_calendar(
     sale_title: str = "",
     captured_at: datetime | None = None,
     sale_ends_at: datetime | None = None,
+    auction_url: str = "",
+    ctseller_sale_id: int | None = None,
 ) -> list[dict]:
     """Planned posts for Push lots only. Status stays Planned."""
     ordered = sorted(push_rows, key=lambda row: int(row.get("push_rank") or 9999))
@@ -322,6 +336,8 @@ def build_social_calendar(
                         watchers=int(row.get("watchers") or 0),
                         item_url=url,
                         closing=closing,
+                        auction_url=auction_url
+                        or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url),
                     ),
                     "status": "Planned",
                     "preflight": PREFLIGHT,
@@ -357,6 +373,8 @@ def build_social_calendar(
                         watchers=int(top.get("watchers") or 0),
                         item_url=url,
                         closing=True,
+                        auction_url=auction_url
+                        or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url),
                     ),
                     "status": "Planned",
                     "preflight": PREFLIGHT,
