@@ -36,7 +36,7 @@ from app.services.roles import can_manage_integrations, is_owner
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 OAUTH_STATE_MINUTES = 15
-MAX_PAGE_PHOTOS = 10
+MAX_PAGE_PHOTOS = 4
 MAX_PAGE_POSTS = 80
 SCHEDULE_MIN_LEAD = timedelta(minutes=10)
 SCHEDULE_MAX_LEAD = timedelta(days=75)
@@ -352,8 +352,12 @@ def _latest_snapshot(db: Session, lot: Lot) -> EngagementSnapshot | None:
 
 
 def listing_photos_for_facebook(photos: list[Photo]) -> list[Photo]:
-    """SKU-tape frames stay off the Page, same as CT Seller. Hero/listing order."""
-    return ordered_photos_for_listing(photos_for_ctbids_listing(photos))[:MAX_PAGE_PHOTOS]
+    """SKU-tape frames stay off the Page, same as CT Seller. Hero/listing order.
+
+    Does not cap length — calendar rotation needs the full listing set so each
+    slot can pick a different group of up to ``MAX_PAGE_PHOTOS``.
+    """
+    return ordered_photos_for_listing(photos_for_ctbids_listing(photos))
 
 
 def rotate_listing_photos(photos: list[Photo], offset: int) -> list[Photo]:
@@ -368,10 +372,10 @@ def rotate_listing_photos(photos: list[Photo], offset: int) -> list[Photo]:
 def _photos_for_item(db: Session, lot: Lot, photo_ids: list[str] | None) -> list[Photo]:
     photos = _lot_photos(db, lot)
     if not photo_ids:
-        return photos
+        return photos[:MAX_PAGE_PHOTOS]
     by_id = {p.id: p for p in photos}
     ordered = [by_id[pid] for pid in photo_ids if pid in by_id]
-    return ordered or photos
+    return (ordered or photos)[:MAX_PAGE_PHOTOS]
 
 
 def _lot_photos(db: Session, lot: Lot) -> list[Photo]:
@@ -487,7 +491,7 @@ def preview_posts(
     for lid in ids:
         lot = by_id[lid]
         snapshot = _latest_snapshot(db, lot)
-        photos = _lot_photos(db, lot)
+        photos = _lot_photos(db, lot)[:MAX_PAGE_PHOTOS]
         item_url = ctbids_lot_url(lot, snapshot=snapshot)
         sale_url = ctbids_sale_url(
             sale_id=getattr(lot, "ctseller_sale_id", None),

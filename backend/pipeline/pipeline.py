@@ -593,21 +593,43 @@ def _parse_triage_rows(triage_results: list[dict[str, Any]]) -> list[PhotoTriage
     return rows
 
 
+def _alnum_upper(value: object | None) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
 def is_dedicated_sku_tape_triage_row(row: dict[str, Any] | PhotoTriageResult) -> bool:
     """True when this frame is (or was mis-tagged as) a dedicated estate SKU-tape shot."""
     if isinstance(row, PhotoTriageResult):
-        role = row.photo_role
+        role = str(row.photo_role or "").strip().lower()
         marking = (row.lot_tape_marking or "").strip()
         shows_whole_lot = bool(row.shows_whole_lot)
+        primary = bool(row.is_primary_front_for_item)
+        item_id = str(row.distinct_item_id or "").strip()
+        brand = str(row.brand_text or "").strip()
     else:
         role = str(row.get("photo_role") or "").strip().lower()
         marking = str(row.get("lot_tape_marking") or "").strip()
         shows_whole_lot = bool(row.get("shows_whole_lot"))
+        primary = bool(row.get("is_primary_front_for_item"))
+        item_id = str(row.get("distinct_item_id") or "").strip()
+        brand = str(row.get("brand_text") or "").strip()
     if role == "tape":
         return True
+    if shows_whole_lot or not marking:
+        return False
     # Gemini sometimes labels a tape close-up as hero. A readable SKU strip that is not a
     # wide lot/group shot is still a tape frame — never a listing cover.
-    if role == "hero" and marking and not shows_whole_lot:
+    if role == "hero":
+        return True
+    # The Stage-1 prompt also tags handwritten SKU tape as item_front ("tag fills the frame").
+    # Keep a real product face whose brand text is not the lot SKU.
+    if role in {"item_front", "angle_only"}:
+        mark_key = _alnum_upper(marking)
+        brand_key = _alnum_upper(brand)
+        if primary and item_id and brand_key and brand_key != mark_key:
+            return False
+        if primary and item_id and not brand_key:
+            return False
         return True
     return False
 
@@ -619,6 +641,14 @@ def apply_sku_tape_never_hero_roles(triage_results: list[dict[str, Any]]) -> lis
             continue
         if is_dedicated_sku_tape_triage_row(raw) and raw.get("photo_role") != "tape":
             raw["photo_role"] = "tape"
+    # Capture order: the first frame of each lot is the estate-tape shot that opened it.
+    if triage_results and isinstance(triage_results[0], dict):
+        first = triage_results[0]
+        marking = str(first.get("lot_tape_marking") or "").strip()
+        whole = bool(first.get("shows_whole_lot"))
+        role = str(first.get("photo_role") or "").strip().lower()
+        if marking and not whole and role != "hero" and first.get("photo_role") != "tape":
+            first["photo_role"] = "tape"
     return triage_results
 
 
