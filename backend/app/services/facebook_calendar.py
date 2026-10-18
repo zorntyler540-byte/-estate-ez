@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, User
 from app.services.engagement import PACIFIC, build_social_calendar
+from app.services.ctbids_urls import ctbids_sale_url
 from app.services.facebook_caption import draft_facebook_caption
 from app.services.facebook_crypto import unseal_facebook_secret
 from app.services.facebook_page import (
@@ -83,6 +84,42 @@ PAGE_PREFLIGHT = (
     "matches the listing before you approve. Approving schedules a Facebook Page "
     "feed post at this slot time. Missed slots are skipped."
 )
+
+FACEBOOK_STATUS_LABELS: dict[str, str] = {
+    "planned": "Planned",
+    "missed": "Missed",
+    "too_soon": "Too soon (under 10 min)",
+    "out_of_window": "Too far (over 75 days)",
+    "scheduled": "Scheduled",
+    "posted": "Posted",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "no_lot": "No cataloged lot",
+    "not_applicable": "Not posting to the Page",
+}
+
+FACEBOOK_BLOCKED_REASONS: dict[str, str] = {
+    "missed": "This slot time has already passed.",
+    "too_soon": "Too soon (under 10 min) — Facebook requires at least 10 minutes.",
+    "out_of_window": "Facebook allows scheduling at most 75 days ahead.",
+    "scheduled": "Already scheduled on the Page.",
+    "posted": "Already posted to the Page.",
+    "no_lot": "Catalog this lot before scheduling a Page post.",
+    "not_applicable": "This slot is not posting to the Facebook Page.",
+    "failed": "The last Page post for this slot failed.",
+}
+
+
+def facebook_status_label(status: str) -> str:
+    key = (status or "").strip() or "planned"
+    return FACEBOOK_STATUS_LABELS.get(key, key.replace("_", " ").title())
+
+
+def facebook_blocked_reason(status: str, *, schedulable: bool) -> str | None:
+    if schedulable:
+        return None
+    key = (status or "").strip()
+    return FACEBOOK_BLOCKED_REASONS.get(key)
 
 
 def current_publish_target(intended_platform: str) -> str:
@@ -241,6 +278,8 @@ def facebook_page_slots(
         sale_title=latest.sale_title or "",
         captured_at=latest.captured_at,
         sale_ends_at=latest.sale_ends_at,
+        auction_url=latest.auction_url or "",
+        ctseller_sale_id=int(ctseller_sale_id),
     )
     out: list[dict[str, Any]] = []
     for post in posts:
@@ -295,7 +334,10 @@ def annotate_social_calendar(
             "intended_platform": intended,
             "publish_target": target,
             "facebook_schedulable": False,
+            "facebook_can_cancel": False,
             "facebook_status": "not_applicable",
+            "facebook_status_label": facebook_status_label("not_applicable"),
+            "facebook_blocked_reason": facebook_blocked_reason("not_applicable", schedulable=False),
             "facebook_slot_at": None,
             "facebook_post_id": None,
             "facebook_error": None,
@@ -305,6 +347,8 @@ def annotate_social_calendar(
             continue
         if not lot_id:
             extra["facebook_status"] = "no_lot"
+            extra["facebook_status_label"] = facebook_status_label("no_lot")
+            extra["facebook_blocked_reason"] = facebook_blocked_reason("no_lot", schedulable=False)
             annotated.append({**data, **extra, "preflight": PAGE_PREFLIGHT})
             continue
         slot_id = slot_id_from_local_time(str(data.get("local_time") or "09:00"))
@@ -321,19 +365,23 @@ def annotate_social_calendar(
             status = "too_soon"
         elif window == "too_far":
             status = "out_of_window"
+        schedulable = window == "ok" and (not row or row.status in {"failed", "cancelled"})
+        if row and row.status == "scheduled":
+            schedulable = False
         extra.update(
             {
                 "slot_key": key,
-                "facebook_schedulable": window == "ok" and (not row or row.status in {"failed", "cancelled"}),
+                "facebook_schedulable": schedulable,
+                "facebook_can_cancel": bool(row and row.status == "scheduled"),
                 "facebook_status": status,
+                "facebook_status_label": facebook_status_label(status),
+                "facebook_blocked_reason": facebook_blocked_reason(status, schedulable=schedulable),
                 "facebook_slot_at": when,
                 "facebook_post_id": (row.facebook_post_id if row else None),
                 "facebook_error": (row.error_message if row else None),
                 "preflight": PAGE_PREFLIGHT,
             }
         )
-        if row and row.status == "scheduled":
-            extra["facebook_schedulable"] = False
         annotated.append({**data, **extra})
     return annotated
 
@@ -433,6 +481,11 @@ def _draft_item(
         .first()
     )
     item_url = ctbids_lot_url(lot, snapshot=snapshot)
+    sale_url = ctbids_sale_url(
+        sale_id=int(slot.get("ctseller_sale_id") or getattr(lot, "ctseller_sale_id", 0) or 0) or None,
+        auction_url=(snapshot.auction_url if snapshot else "") or "",
+        item_url=item_url,
+    )
     close_at = snapshot.sale_ends_at if snapshot else None
     angle = str(slot.get("slot_angle") or slot_angle_for(str(slot.get("local_time") or ""), hook=str(slot.get("hook") or "")))
     caption = draft_facebook_caption(
@@ -446,6 +499,7 @@ def _draft_item(
         watchers=int(snapshot.watchers) if snapshot else None,
         sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
         angle=angle,
+        sale_url=sale_url,
     )
     return {
         "lot_id": lot.id,
@@ -653,6 +707,82 @@ def calendar_publish_items(
         drafted["caption"] = caption
         publishable.append(drafted)
     return publishable, skipped
+
+
+def cancel_calendar_slots(
+    db: Session,
+    *,
+    account: Account,
+    ctseller_sale_id: int,
+    slot_keys: list[str],
+) -> list[dict[str, Any]]:
+    """Delete unpublished Graph posts and mark those calendar slots cancelled."""
+    wanted_raw = [key.strip() for key in slot_keys if key and str(key).strip()]
+    if not wanted_raw:
+        raise HTTPException(status_code=400, detail="Pick at least one calendar slot to unapprove.")
+    records = (
+        db.query(FacebookPagePost)
+        .filter(
+            FacebookPagePost.account_id == account.id,
+            FacebookPagePost.source == CALENDAR_SOURCE,
+            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
+        )
+        .order_by(FacebookPagePost.created_at.desc())
+        .all()
+    )
+    by_key = _index_calendar_rows(records)
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in wanted_raw:
+        key = migrate_calendar_key(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = None
+        for alias in calendar_key_aliases(key):
+            row = by_key.get(alias)
+            if row is not None:
+                break
+        lot_id = str(row.lot_id) if row and row.lot_id else ""
+        if row is None or row.status != "scheduled":
+            results.append(
+                {
+                    "lot_id": lot_id,
+                    "calendar_key": key,
+                    "ok": False,
+                    "skipped": True,
+                    "error": "No scheduled Page post for this slot.",
+                }
+            )
+            continue
+        _cancel_scheduled(
+            db,
+            account,
+            row,
+            reason="Owner unapproved this Push calendar slot.",
+        )
+        db.refresh(row)
+        if row.status != "cancelled":
+            results.append(
+                {
+                    "lot_id": lot_id,
+                    "calendar_key": key,
+                    "ok": False,
+                    "needs_reconnect": bool(getattr(account, "facebook_token_error", None)),
+                    "error": row.error_message or "Could not remove the scheduled Page post.",
+                }
+            )
+            continue
+        results.append(
+            {
+                "lot_id": lot_id,
+                "calendar_key": key,
+                "ok": True,
+                "status": "cancelled",
+                "facebook_post_id": row.facebook_post_id,
+            }
+        )
+    return results
 
 
 def calendar_preview(

@@ -98,6 +98,10 @@ def test_caption_template_includes_link_close_and_follow_hook() -> None:
     )
     assert "Fenton vase" in text
     assert "https://ctbids.com/estate-sale/1/item/2" in text
+    assert "See the whole sale: https://ctbids.com/estate-sale/1" in text
+    lot_at = text.index("https://ctbids.com/estate-sale/1/item/2")
+    sale_at = text.index("See the whole sale: https://ctbids.com/estate-sale/1")
+    assert lot_at < sale_at
     assert "Bidding closes" in text
     assert FOLLOW_HOOK_LINE in text
     stripped = apply_follow_hook(text, include=False)
@@ -699,7 +703,10 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert slot["lot_id"] == lot.id
         assert slot["local_time"] == "09:00"
         assert slot["facebook_status"] == "planned"
+        assert slot["facebook_status_label"] == "Planned"
         assert slot["facebook_schedulable"] is True
+        assert slot["facebook_can_cancel"] is False
+        assert slot["facebook_blocked_reason"] is None
         assert slot["slot_key"] == f"pushcal:12:{lot.id}:0900"
         assert slot["publish_target"] == "facebook_page"
         assert slot["intended_platform"] == "Facebook"
@@ -741,6 +748,10 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         again = client.get("/engagement/sales/12/calendar").json()
         fb = next(r for r in again if r["platform"] == "Facebook")
         assert fb["facebook_status"] == "scheduled"
+        assert fb["facebook_status_label"] == "Scheduled"
+        assert fb["facebook_can_cancel"] is True
+        assert fb["facebook_schedulable"] is False
+        assert "Already scheduled" in (fb["facebook_blocked_reason"] or "")
         assert fb["facebook_post_id"] == "111_cal"
         still_open = next(r for r in again if r["local_time"] == "17:40")
         assert still_open["facebook_status"] == "planned"
@@ -1102,7 +1113,10 @@ def test_push_calendar_missed_slot_is_skipped(tmp_path, monkeypatch) -> None:
         calendar = client.get("/engagement/sales/12/calendar").json()
         morning = next(row for row in calendar if row["local_time"] == "09:00")
         assert morning["facebook_status"] == "missed"
+        assert morning["facebook_status_label"] == "Missed"
         assert morning["facebook_schedulable"] is False
+        assert morning["facebook_can_cancel"] is False
+        assert "already passed" in (morning["facebook_blocked_reason"] or "").lower()
         skipped = client.post(
             "/engagement/sales/12/calendar/facebook",
             json={"confirm": True, "slot_keys": [morning["slot_key"]]},
@@ -1110,5 +1124,97 @@ def test_push_calendar_missed_slot_is_skipped(tmp_path, monkeypatch) -> None:
         assert skipped.status_code == 200, skipped.text
         assert skipped.json()["results"][0]["skipped"] is True
         assert db.query(FacebookPagePost).count() == 0
+    finally:
+        _clear_overrides()
+
+
+def test_ctbids_sale_url_strips_item_and_slash() -> None:
+    from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
+
+    assert ctbids_sale_url(item_url="https://ctbids.com/estate-sale/48212/item/5667527") == (
+        "https://ctbids.com/estate-sale/48212"
+    )
+    assert ctbids_sale_url(auction_url="https://ctbids.com/estate-sale/48212/") == (
+        "https://ctbids.com/estate-sale/48212"
+    )
+    assert ctbids_sale_url(sale_id=12) == "https://ctbids.com/estate-sale/12"
+    assert sale_link_line("https://ctbids.com/estate-sale/12/") == (
+        "See the whole sale: https://ctbids.com/estate-sale/12"
+    )
+
+
+def test_calendar_status_too_soon_label() -> None:
+    from app.services.facebook_calendar import facebook_blocked_reason, facebook_status_label
+
+    assert facebook_status_label("too_soon") == "Too soon (under 10 min)"
+    assert "10 min" in (facebook_blocked_reason("too_soon", schedulable=False) or "")
+    assert facebook_blocked_reason("planned", schedulable=True) is None
+
+
+def test_owner_can_unapprove_scheduled_calendar_slot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    client, db, _account, _user, lot = _client(tmp_path, connected=True)
+    deletes: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        assert "https://ctbids.com/estate-sale/12/item/99" in message
+        assert "See the whole sale: https://ctbids.com/estate-sale/12" in message
+        assert message.index("https://ctbids.com/estate-sale/12/item/99") < message.index(
+            "See the whole sale:"
+        )
+        return "111_unapprove"
+
+    def fake_delete(*, post_id, page_token):
+        deletes.append(post_id)
+
+    try:
+        assert client.post("/integrations/engagement/snapshots", json=_future_push_body(lot)).status_code == 200
+        slot = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["local_time"] == "09:00"
+        )
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            approved = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+            )
+        assert approved.status_code == 200, approved.text
+        with patch("app.services.facebook_calendar.delete_page_post", fake_delete):
+            cancelled = client.post(
+                "/engagement/sales/12/calendar/facebook/cancel",
+                json={"slot_keys": [slot["slot_key"]]},
+            )
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["results"][0]["ok"] is True
+        assert cancelled.json()["results"][0]["status"] == "cancelled"
+        assert "111_unapprove" in deletes
+        again = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["local_time"] == "09:00"
+        )
+        assert again["facebook_status"] == "cancelled"
+        assert again["facebook_status_label"] == "Cancelled"
+        assert again["facebook_can_cancel"] is False
+        assert again["facebook_schedulable"] is True
+        stored = db.query(FacebookPagePost).one()
+        assert stored.status == "cancelled"
+    finally:
+        _clear_overrides()
+
+
+def test_catalogger_cannot_unapprove_calendar_slot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, _db, _account, _user, _lot = _client(tmp_path, role="catalogger", connected=True)
+    try:
+        res = client.post(
+            "/engagement/sales/12/calendar/facebook/cancel",
+            json={"slot_keys": ["pushcal:12:lot-fb:0900"]},
+        )
+        assert res.status_code == 403
     finally:
         _clear_overrides()

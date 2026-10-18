@@ -1083,7 +1083,10 @@ class SocialCalendarPost(BaseModel):
     intended_platform: str = ""
     publish_target: str = "facebook_page"
     facebook_schedulable: bool = False
+    facebook_can_cancel: bool = False
     facebook_status: str = "not_applicable"
+    facebook_status_label: str = ""
+    facebook_blocked_reason: str | None = None
     facebook_slot_at: datetime | None = None
     facebook_post_id: str | None = None
     facebook_error: str | None = None
@@ -1229,6 +1232,10 @@ class FacebookCalendarApproveIn(BaseModel):
 class FacebookCalendarPreviewIn(BaseModel):
     include_follow_hook: bool = False
     slot_keys: list[str] = Field(default_factory=list)
+
+
+class FacebookCalendarCancelIn(BaseModel):
+    slot_keys: list[str] = Field(min_length=1)
 
 
 class FacebookPagePostOut(BaseModel):
