@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+
+from fastapi import HTTPException
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 # CT Seller hard-caps listings at 40 photos.
 # Set to None to disable the per-listing cap.
@@ -14,6 +19,102 @@ MAX_VIDEO_BYTES = 80 * 1024 * 1024
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm"})
 
 _CATALOG_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
+
+
+def job_photo_cap(*, single_lot_mode: bool) -> int | None:
+    """Max stills for one catalog job. Single-lot follows CT Bids; batch has a separate ceiling."""
+    if single_lot_mode:
+        return CTBIDS_MAX_PHOTOS_PER_LOT
+    from app.config import settings
+
+    return int(settings.catalog_max_photos_per_job)
+
+
+def job_photo_count_error(*, current: int, delta: int, single_lot_mode: bool) -> str | None:
+    cap = job_photo_cap(single_lot_mode=single_lot_mode)
+    if cap is None or delta <= 0:
+        return None
+    if current > cap:
+        return (
+            f"This job already has {current} photos (limit {cap}). "
+            "Remove photos before adding more."
+        )
+    if current >= cap:
+        return f"This job already has {current} photos (limit {cap})."
+    if current + delta > cap:
+        kind = "listing" if single_lot_mode else "batch"
+        return (
+            f"A {kind} upload may have at most {cap} photos; "
+            f"this job has {current} and adding {delta} would exceed the limit."
+        )
+    return None
+
+
+def assert_account_catalog_quota(
+    db: Session,
+    account_id: str,
+    *,
+    extra_jobs: int = 0,
+    extra_photos: int = 0,
+) -> None:
+    """Reject when the account is over queued-job or daily-photo spend brakes."""
+    from app.config import settings
+    from app.models import JobStatus, Photo, ProcessingJob
+
+    queued_cap = int(settings.catalog_max_queued_jobs_per_account)
+    photo_cap = int(settings.catalog_max_photos_per_account_per_day)
+    queued_n = int(
+        db.query(func.count())
+        .select_from(ProcessingJob)
+        .where(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status.in_((JobStatus.receiving, JobStatus.queued)),
+        )
+        .scalar()
+        or 0
+    )
+    if extra_jobs and queued_n + extra_jobs > queued_cap:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"This account already has {queued_n} catalog job(s) waiting "
+                f"(limit {queued_cap}). Wait for them to finish or cancel extras."
+            ),
+        )
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    stored_photos = int(
+        db.query(func.count())
+        .select_from(Photo)
+        .where(Photo.account_id == account_id, Photo.created_at >= start)
+        .scalar()
+        or 0
+    )
+    pending_photos = 0
+    pending_jobs = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.status.in_((JobStatus.receiving, JobStatus.queued)),
+            ProcessingJob.created_at >= start,
+        )
+        .all()
+    )
+    from app.job_batch_storage import confined_job_folder
+
+    for job in pending_jobs:
+        folder = confined_job_folder(Path(job.input_folder), account_id)
+        if folder is None:
+            continue
+        pending_photos += count_catalog_image_files(folder)
+    if stored_photos + pending_photos + extra_photos > photo_cap:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"This account has already cataloged or queued {stored_photos + pending_photos} "
+                f"photos today (limit {photo_cap}). Try again tomorrow or ask an admin to raise "
+                "CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY."
+            ),
+        )
 
 
 def ctbids_lot_photo_delta_error(*, current: int, delta: int) -> str | None:

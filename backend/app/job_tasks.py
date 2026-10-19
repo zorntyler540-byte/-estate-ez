@@ -497,15 +497,15 @@ def _clear_stale_registration(job_id: str, account_id: str) -> None:
             _job_accounts.pop(job_id, None)
 
 
-def _stage_job_folder_from_r2(job_id: str, folder_s: str) -> None:
+def _stage_job_folder_from_r2(job_id: str, folder_s: str, account_id: str | None = None) -> None:
     """Restore/mirror the batch without holding a QueuePool connection."""
     try:
         from app.job_batch_storage import ensure_job_input_folder, mirror_folder_to_r2
 
         folder = Path(folder_s)
         if folder.is_dir():
-            mirror_folder_to_r2(folder)
-        ensure_job_input_folder(folder)
+            mirror_folder_to_r2(folder, account_id=account_id)
+        ensure_job_input_folder(folder, account_id=account_id)
     except Exception:
         _LOG.exception("job-batch R2 ensure failed job_id=%s", job_id)
 
@@ -523,7 +523,7 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
                 return
             folder_s = job.input_folder
         if folder_s:
-            _stage_job_folder_from_r2(job_id, folder_s)
+            _stage_job_folder_from_r2(job_id, folder_s, account_id=account_id)
         with SessionLocal() as db:
             job = (
                 db.query(ProcessingJob)

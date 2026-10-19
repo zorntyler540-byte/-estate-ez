@@ -35,16 +35,45 @@ def parse_batch_folder(folder: Path) -> tuple[str, str] | None:
     return account_id, batch_id
 
 
+def confined_job_folder(folder: Path, account_id: str) -> Path | None:
+    """Resolve ``folder`` only when it sits under this account's upload directory."""
+    if not account_id:
+        return None
+    try:
+        resolved = folder.resolve()
+        resolved.relative_to((upload_root() / account_id).resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def resolve_job_batch(folder: Path, account_id: str) -> tuple[str, str] | None:
+    """R2 batch coordinates derived from the job's account, never from another tenant's path."""
+    parsed = parse_batch_folder(folder)
+    if not parsed:
+        return None
+    path_account, batch_id = parsed
+    if path_account != account_id:
+        logger.warning(
+            "Refusing job-batch path for account=%s (path account=%s batch=%s)",
+            account_id,
+            path_account,
+            batch_id,
+        )
+        return None
+    return account_id, batch_id
+
+
 def r2_key_for_file(account_id: str, batch_id: str, relative_name: str) -> str:
     rel = relative_name.replace("\\", "/").lstrip("/")
     return f"{_JOB_BATCH_PREFIX}/{account_id}/{batch_id}/{rel}"
 
 
-def mirror_local_file_to_r2(local_path: Path, dest_root: Path) -> None:
+def mirror_local_file_to_r2(local_path: Path, dest_root: Path, account_id: str | None = None) -> None:
     """Best-effort upload of one saved job file to R2 (no-op if R2 unset)."""
     if not object_storage.r2_configured():
         return
-    parsed = parse_batch_folder(dest_root)
+    parsed = resolve_job_batch(dest_root, account_id) if account_id else parse_batch_folder(dest_root)
     if not parsed:
         return
     account_id, batch_id = parsed
@@ -59,11 +88,11 @@ def mirror_local_file_to_r2(local_path: Path, dest_root: Path) -> None:
         logger.warning("R2 job-batch mirror failed key=%s err=%s", key, exc)
 
 
-def mirror_folder_to_r2(folder: Path) -> int:
+def mirror_folder_to_r2(folder: Path, account_id: str | None = None) -> int:
     """Mirror all images in a job batch folder to R2. Returns files uploaded."""
     if not object_storage.r2_configured():
         return 0
-    parsed = parse_batch_folder(folder)
+    parsed = resolve_job_batch(folder, account_id) if account_id else parse_batch_folder(folder)
     if not parsed or not folder.is_dir():
         return 0
     account_id, batch_id = parsed
@@ -84,14 +113,14 @@ def mirror_folder_to_r2(folder: Path) -> int:
     return n
 
 
-def restore_job_folder_from_r2(folder: Path) -> int:
+def restore_job_folder_from_r2(folder: Path, account_id: str | None = None) -> int:
     """
     If ``folder`` is missing or empty, download ``job-batches/…`` objects into it.
     Returns number of files restored (0 if nothing to restore).
     """
     if not object_storage.r2_configured():
         return 0
-    parsed = parse_batch_folder(folder)
+    parsed = resolve_job_batch(folder, account_id) if account_id else parse_batch_folder(folder)
     if not parsed:
         return 0
     account_id, batch_id = parsed
@@ -128,11 +157,11 @@ def restore_job_folder_from_r2(folder: Path) -> int:
     return restored
 
 
-def count_staged_job_files(folder: Path) -> int:
+def count_staged_job_files(folder: Path, account_id: str | None = None) -> int:
     """Number of image objects already staged in R2 for this batch (0 if R2 unset / none staged)."""
     if not object_storage.r2_configured():
         return 0
-    parsed = parse_batch_folder(folder)
+    parsed = resolve_job_batch(folder, account_id) if account_id else parse_batch_folder(folder)
     if not parsed:
         return 0
     account_id, batch_id = parsed
@@ -141,7 +170,7 @@ def count_staged_job_files(folder: Path) -> int:
     return sum(1 for k in keys if Path(k).suffix.lower() in _IMAGE_SUFFIXES)
 
 
-def ensure_job_input_folder(folder: Path) -> Path:
+def ensure_job_input_folder(folder: Path, account_id: str | None = None) -> Path:
     """
     Ensure the job input directory exists with at least one image.
     Restores from R2 when the local path was lost (redeploy / other replica / worker).
@@ -152,5 +181,5 @@ def ensure_job_input_folder(folder: Path) -> Path:
     )
     if has_images:
         return folder
-    restore_job_folder_from_r2(folder)
+    restore_job_folder_from_r2(folder, account_id=account_id)
     return folder

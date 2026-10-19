@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -14,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.catalog_storage import resolve_catalog_storage_path
 from app.config import cors_allow_origins, settings
-from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, Photo, Sale, User
+from app.models import Account, EngagementSnapshot, FacebookOAuthState, FacebookPagePost, Lot, Photo, Sale, User
 from app.services.ctseller import jpeg_bytes_for_ctseller_post
 from app.services.ctbids_urls import CTBIDS_ITEM_URL, ctbids_sale_url
 from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_facebook_caption, group_post_copy
@@ -36,6 +38,7 @@ from app.services.roles import can_manage_integrations, is_owner
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 OAUTH_STATE_MINUTES = 15
+OAUTH_COOKIE_NAME = "fb_oauth_jti"
 MAX_PAGE_PHOTOS = 4
 MAX_PAGE_POSTS = 80
 SCHEDULE_MIN_LEAD = timedelta(minutes=10)
@@ -70,19 +73,20 @@ def require_meta_configured() -> None:
         )
 
 
-def encode_oauth_state(*, account_id: str, user_id: str) -> str:
+def encode_oauth_state(*, account_id: str, user_id: str, jti: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "purpose": "meta_oauth",
         "account_id": account_id,
         "user_id": user_id,
+        "jti": jti,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=OAUTH_STATE_MINUTES)).timestamp()),
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def decode_oauth_state(state: str) -> tuple[str, str]:
+def decode_oauth_state(state: str) -> tuple[str, str, str]:
     try:
         payload = jwt.decode(
             state,
@@ -96,8 +100,49 @@ def decode_oauth_state(state: str) -> tuple[str, str]:
         raise HTTPException(status_code=400, detail="Invalid Facebook sign-in state.")
     account_id = str(payload.get("account_id") or "").strip()
     user_id = str(payload.get("user_id") or "").strip()
-    if not account_id or not user_id:
+    jti = str(payload.get("jti") or "").strip()
+    if not account_id or not user_id or not jti:
         raise HTTPException(status_code=400, detail="Invalid Facebook sign-in state.")
+    return account_id, user_id, jti
+
+
+def issue_oauth_state(db: Session, *, account_id: str, user_id: str) -> tuple[str, str, int]:
+    """Persist a one-time Connect nonce. Returns ``(state_jwt, jti, max_age_seconds)``."""
+    jti = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
+    db.add(
+        FacebookOAuthState(
+            jti=jti,
+            account_id=account_id,
+            user_id=user_id,
+            expires_at=now + timedelta(minutes=OAUTH_STATE_MINUTES),
+        )
+    )
+    db.commit()
+    return encode_oauth_state(account_id=account_id, user_id=user_id, jti=jti), jti, OAUTH_STATE_MINUTES * 60
+
+
+def consume_oauth_state(db: Session, *, state: str, cookie_jti: str | None) -> tuple[str, str]:
+    account_id, user_id, jti = decode_oauth_state(state)
+    cookie = (cookie_jti or "").strip()
+    if not cookie or not hmac.compare_digest(cookie, jti):
+        raise HTTPException(
+            status_code=400,
+            detail="Facebook sign-in must be finished in the same browser that started Connect.",
+        )
+    row = db.query(FacebookOAuthState).filter(FacebookOAuthState.jti == jti).first()
+    if row is None or row.used_at is not None:
+        raise HTTPException(status_code=400, detail="Facebook sign-in expired. Start Connect again.")
+    expires = row.expires_at
+    if expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires is not None and expires < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Facebook sign-in expired. Start Connect again.")
+    if row.account_id != account_id or row.user_id != user_id:
+        raise HTTPException(status_code=400, detail="Invalid Facebook sign-in state.")
+    row.used_at = datetime.now(timezone.utc)
+    db.add(row)
+    db.commit()
     return account_id, user_id
 
 
@@ -133,15 +178,16 @@ def connection_status(account: Account) -> dict:
     }
 
 
-def oauth_start_url(current: User) -> str:
+def oauth_start_url(db: Session, current: User) -> tuple[str, str, int]:
     require_meta_configured()
     require_facebook_poster(current)
-    state = encode_oauth_state(account_id=current.account_id, user_id=current.id)
-    return oauth_dialog_url(
+    state, jti, max_age = issue_oauth_state(db, account_id=current.account_id, user_id=current.id)
+    url = oauth_dialog_url(
         app_id=settings.meta_app_id.strip(),
         redirect_uri=meta_oauth_redirect_uri(),
         state=state,
     )
+    return url, jti, max_age
 
 
 def frontend_oauth_redirect(*, status: str, error: str = "", pick: bool = False) -> str:
@@ -173,9 +219,12 @@ def _clear_token_error(db: Session, account: Account) -> None:
         db.add(account)
 
 
-def complete_oauth(db: Session, *, code: str, state: str) -> str:
+def complete_oauth(db: Session, *, code: str, state: str, cookie_jti: str | None = None) -> str:
     require_meta_configured()
-    account_id, user_id = decode_oauth_state(state)
+    try:
+        account_id, user_id = consume_oauth_state(db, state=state, cookie_jti=cookie_jti)
+    except HTTPException as exc:
+        return frontend_oauth_redirect(status="error", error=str(exc.detail))
     account = _account(db, account_id)
     user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
     if not user or not is_owner(user):

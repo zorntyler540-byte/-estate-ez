@@ -6,6 +6,8 @@ from typing import Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_WEAK_SECRET_KEYS = frozenset({"", "change-me", "change-me-dev-secret"})
+
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 # Load cwd `.env` first, then `backend/.env` so repo-root env does not override API secrets
 # (pydantic-settings: later files win on duplicate keys). Always end with backend/.env when present.
@@ -27,7 +29,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "CaringTransitions API"
-    secret_key: str = Field(default="change-me-dev-secret", alias="SECRET_KEY")
+    secret_key: str = Field(default="", alias="SECRET_KEY")
     database_url: str = Field(
         default="sqlite:///./app.db",
         alias="DATABASE_URL",
@@ -85,6 +87,17 @@ class Settings(BaseSettings):
     gemini_global_concurrency: int = Field(default=3, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
     # Stacked Add-one-lot uploads queue automatically when this many jobs are already running.
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
+    # Per-account catalog spend brakes (Gemini runs on the shared operator key).
+    catalog_max_queued_jobs_per_account: int = Field(
+        default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"
+    )
+    catalog_max_photos_per_account_per_day: int = Field(
+        default=800, ge=40, le=50000, alias="CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY"
+    )
+    # Multi-lot folder jobs (single-lot jobs still use the 40-photo CT Bids cap).
+    catalog_max_photos_per_job: int = Field(
+        default=250, ge=40, le=2000, alias="CATALOG_MAX_PHOTOS_PER_JOB"
+    )
     # When false, this process only enqueues catalog jobs; a separate ``python -m app.worker`` claims them.
     # Set false on the Railway API service and true (default) on the worker service.
     run_catalog_jobs_in_process: bool = Field(default=True, alias="RUN_CATALOG_JOBS_IN_PROCESS")
@@ -141,13 +154,20 @@ class Settings(BaseSettings):
     # Comma-separated hostnames for TrustedHostMiddleware (e.g. ``api.example.com``). Empty = disabled (typical dev).
     trusted_hosts: str = Field(default="", alias="TRUSTED_HOSTS")
 
-    # When ``ENVIRONMENT=production`` and this is false, ``POST /auth/register`` returns 403 (set true only to bootstrap users).
-    allow_open_registration: bool = Field(default=True, alias="ALLOW_OPEN_REGISTRATION")
-    # Comma-separated global admin emails that can manage all accounts across the server.
+    # Unset follows ENVIRONMENT: open in development/test, closed in production.
+    # Set true only to bootstrap the first real account, then turn it off.
+    allow_open_registration: bool | None = Field(default=None, alias="ALLOW_OPEN_REGISTRATION")
+    # Comma-separated global admin emails. Register/invite of these addresses is blocked;
+    # add an email here only after that user already exists.
     master_admin_emails: str = Field(default="", alias="MASTER_ADMIN_EMAILS")
+    # Comma-separated user ids that are master admin even if their email is not listed.
+    master_admin_user_ids: str = Field(default="", alias="MASTER_ADMIN_USER_IDS")
 
     # JWT lifetime (minutes). Mobile field sessions stay signed in longer; raise via env if needed (max 90 days).
     access_token_expire_minutes: int = Field(default=43200, ge=15, le=129600, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    sse_ticket_expire_minutes: int = Field(default=15, ge=5, le=120, alias="SSE_TICKET_EXPIRE_MINUTES")
+    click_raw_per_code_per_day: int = Field(default=100, ge=1, le=5000, alias="CLICK_RAW_PER_CODE_PER_DAY")
+    click_raw_retention_days: int = Field(default=30, ge=1, le=365, alias="CLICK_RAW_RETENTION_DAYS")
 
     # Recycle pooled DB connections periodically (seconds); helps with stale TLS routers on managed Postgres.
     db_pool_recycle: int = Field(default=280, ge=60, le=3600, alias="DB_POOL_RECYCLE")
@@ -185,9 +205,28 @@ class Settings(BaseSettings):
     # Production default is the Railway API when this is left empty.
     public_api_origin: str = Field(default="", alias="PUBLIC_API_ORIGIN")
 
+    @field_validator("allow_open_registration", mode="before")
+    @classmethod
+    def empty_registration_flag_is_unset(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
     @property
     def is_production(self) -> bool:
         return (self.environment or "").strip().lower() in ("production", "prod")
+
+    @property
+    def is_test(self) -> bool:
+        return (self.environment or "").strip().lower() in ("test", "testing")
+
+    def registration_is_open(self) -> bool:
+        """Public ``POST /auth/register``. Closed by default in production."""
+        if self.allow_open_registration is None:
+            return not self.is_production
+        return bool(self.allow_open_registration)
 
     def trusted_host_list(self) -> list[str]:
         hosts = [h.strip() for h in (self.trusted_hosts or "").split(",") if h.strip()]
@@ -209,17 +248,29 @@ class Settings(BaseSettings):
             out.append(v)
         return out
 
+    def master_admin_user_id_list(self) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in (self.master_admin_user_ids or "").split(","):
+            v = raw.strip()
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            out.append(v)
+        return out
+
     @model_validator(mode="after")
-    def production_must_be_safe(self) -> Self:
+    def runtime_must_be_safe(self) -> Self:
+        if not self.is_test:
+            sk = (self.secret_key or "").strip()
+            if secret_key_is_weak(sk):
+                raise ValueError(
+                    "SECRET_KEY must be a long random string (at least 32 characters) and must not "
+                    "be empty or a documented placeholder (change-me / change-me-dev-secret). "
+                    "Generate one with: openssl rand -hex 32"
+                )
         if not self.is_production:
             return self
-        sk = (self.secret_key or "").strip()
-        weak = {"", "change-me", "change-me-dev-secret"}
-        if sk.lower() in weak or len(sk) < 32:
-            raise ValueError(
-                "In production, SECRET_KEY must be a long random string (at least 32 characters), "
-                "e.g. generate with: openssl rand -hex 32"
-            )
         if (self.database_url or "").strip().lower().startswith("sqlite"):
             raise ValueError("In production, DATABASE_URL must not use SQLite; use Postgres.")
         if not (self.cors_origins or "").strip():
@@ -228,6 +279,11 @@ class Settings(BaseSettings):
                 "(e.g. https://your-app.up.railway.app)."
             )
         return self
+
+
+def secret_key_is_weak(secret_key: str) -> bool:
+    sk = (secret_key or "").strip()
+    return sk.lower() in _WEAK_SECRET_KEYS or len(sk) < 32
 
 
 settings = Settings()

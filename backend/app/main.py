@@ -12,6 +12,8 @@ import shutil
 import smtplib
 import mimetypes
 import tempfile
+import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -31,12 +33,18 @@ from app.engagement_routes import router as engagement_router
 from app.click_routes import router as click_router
 from app.facebook_routes import router as facebook_router
 from app.auth import (
+    bump_token_version,
     create_access_token,
+    create_sse_ticket,
     get_current_user,
     get_current_user_sse,
+    get_current_user_upload,
     hash_password,
+    is_master_admin,
     is_master_admin_email,
+    is_reserved_master_admin_email,
     oauth2_scheme,
+    token_version_of,
     user_from_access_token,
     verify_password,
 )
@@ -83,6 +91,7 @@ from app.schemas import (
     RestorePlainBackgroundIn,
     HealthResponse,
     JobOut,
+    JobSseTicketOut,
     LoginRequest,
     MergeLotsIn,
     LotOut,
@@ -273,9 +282,11 @@ from app.services.photo_rotate import rotate_image_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
+    assert_account_catalog_quota,
     count_catalog_image_files,
     ctbids_lot_photo_delta_error,
     is_catalog_video_filename,
+    job_photo_count_error,
     list_catalog_image_files_sorted,
     lot_video_delta_error,
     lot_video_size_error,
@@ -451,7 +462,7 @@ def _require_can_run_audience_hunt(current: User) -> None:
 
 
 def _require_master_admin(current: User) -> None:
-    if not is_master_admin_email(current.email):
+    if not is_master_admin(current):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Master admin access required")
 
 
@@ -573,9 +584,29 @@ def startup() -> None:
     _ensure_reserve_price_columns()
     _ensure_lot_ctseller_sale_id_column()
     _ensure_user_assigned_sale_column()
+    _ensure_user_token_version_column()
     _ensure_lot_engagement_column()
     _ensure_facebook_account_columns()
     _ensure_engagement_bucket_names()
+    _start_in_process_maintenance()
+
+
+def _start_in_process_maintenance() -> None:
+    """When catalog jobs run in this process there is no worker loop for auto-approve / retention."""
+    if settings.is_test or not settings.run_catalog_jobs_in_process:
+        return
+
+    def _loop() -> None:
+        from app.worker import run_idle_maintenance
+
+        while True:
+            time.sleep(60)
+            try:
+                run_idle_maintenance()
+            except Exception:
+                _LOG.exception("in-process idle maintenance failed")
+
+    threading.Thread(target=_loop, name="idle-maintenance", daemon=True).start()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -804,6 +835,19 @@ def _ensure_user_assigned_sale_column() -> None:
         conn.execute(text("ALTER TABLE users ADD COLUMN assigned_sale_id VARCHAR(36)"))
 
 
+def _ensure_user_token_version_column() -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("users")}
+    if "token_version" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0 NOT NULL"))
+
+
 def _ensure_lot_ctseller_sale_id_column() -> None:
     """Local SQLite ``create_all`` does not ALTER existing lots / zip export tables."""
     from sqlalchemy import inspect, text
@@ -867,12 +911,18 @@ def health() -> HealthResponse:
 
 @app.post("/auth/register", response_model=TokenResponse)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    if settings.is_production and not settings.allow_open_registration:
+    if not settings.registration_is_open():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="New account registration is disabled on this server.",
         )
-    existing = db.query(User).filter(User.email == payload.email).first()
+    email = payload.email.lower()
+    if is_reserved_master_admin_email(email):
+        raise HTTPException(
+            status_code=400,
+            detail="This email is reserved and cannot be used to register.",
+        )
+    existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
     account = Account(name=payload.account_name.strip(), plan_code="beta_free", is_active=True)
@@ -884,7 +934,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     user = User(
         account_id=account.id,
-        email=payload.email.lower(),
+        email=email,
         password_hash=pw_hash,
         role="owner",
     )
@@ -892,7 +942,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     db.flush()
     db.add(Sale(account_id=account.id, user_id=user.id, name="General"))
     db.commit()
-    token = create_access_token(user.id, account.id, user.role)
+    token = create_access_token(user.id, account.id, user.role, token_version=token_version_of(user))
     return TokenResponse(access_token=token)
 
 
@@ -904,7 +954,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     acct_active = db.query(Account.is_active).filter(Account.id == user.account_id).scalar()
     if acct_active is False:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
-    token = create_access_token(user.id, user.account_id, user.role)
+    token = create_access_token(
+        user.id, user.account_id, user.role, token_version=token_version_of(user)
+    )
     return TokenResponse(access_token=token)
 
 
@@ -945,6 +997,20 @@ def change_own_password(
         row.password_hash = hash_password(payload.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    bump_token_version(row)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/auth/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+def logout_all_sessions(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    row = db.query(User).filter(User.id == current.id, User.account_id == current.account_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    bump_token_version(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -985,6 +1051,11 @@ def create_team_member(
 ) -> TeamMemberOut:
     _require_owner(current)
     email = payload.email.lower().strip()
+    if is_reserved_master_admin_email(email):
+        raise HTTPException(
+            status_code=400,
+            detail="This email is reserved and cannot be invited.",
+        )
     existing = db.query(User).filter(User.email == email).first()
     if existing is not None:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -1037,6 +1108,7 @@ def reset_team_member_password(
         row.password_hash = hash_password(payload.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    bump_token_version(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1531,7 +1603,7 @@ def r2_cors_apply(current: User = Depends(get_current_user)) -> CatalogR2CorsOut
     """
     if not catalog_r2_configured():
         raise HTTPException(status_code=400, detail="R2 is not configured on this API")
-    if not is_owner(current) and not is_master_admin_email(current.email):
+    if not is_owner(current) and not is_master_admin(current):
         raise HTTPException(status_code=403, detail="Owner required")
     origins = cors_allow_origins()
     try:
@@ -5363,7 +5435,7 @@ def purge_all_lots(
 
 @app.post("/jobs/upload", response_model=JobOut)
 async def create_job_from_upload(
-    current: User = Depends(get_current_user_sse),
+    current: User = Depends(get_current_user_upload),
     sale_id: str = Form(),
     files: list[UploadFile] = File(),
     inherit_sku_from_subfolder: bool = Form(False),
@@ -5383,19 +5455,12 @@ async def create_job_from_upload(
         sale = _sale_for_user(sale_id, current, db)
         _require_open_sale(sale)
         sale_pk = sale.id
-        if (
-            single
-            and channel != LISTING_CHANNEL_FACEBOOK
-            and CTBIDS_MAX_PHOTOS_PER_LOT is not None
-            and len(files) > CTBIDS_MAX_PHOTOS_PER_LOT
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing; "
-                    f"this upload has {len(files)} files."
-                ),
-            )
+        photo_err = job_photo_count_error(current=0, delta=len(files), single_lot_mode=single)
+        if photo_err:
+            raise HTTPException(status_code=400, detail=photo_err)
+        assert_account_catalog_quota(
+            db, account_id, extra_jobs=1, extra_photos=len(files)
+        )
     dest = new_batch_dir(account_id)
     # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O
     # (auth used a short-lived session so multipart receive also does not hold a connection).
@@ -5443,7 +5508,7 @@ def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
 @app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
 async def append_files_to_queued_job(
     job_id: str,
-    current: User = Depends(get_current_user_sse),
+    current: User = Depends(get_current_user_upload),
     files: list[UploadFile] = File(),
     captured_at_ms: str | None = Form(None),
 ) -> JobOut:
@@ -5466,16 +5531,17 @@ async def append_files_to_queued_job(
                 detail="Job must still be receiving uploads to add files (wait if it is processing, or cancel first).",
             )
         dest = _queued_job_upload_folder(current.account_id, job)
-        if bool(getattr(job, "single_lot_mode", False)) and CTBIDS_MAX_PHOTOS_PER_LOT is not None:
-            existing = count_catalog_image_files(dest)
-            if existing + len(files) > CTBIDS_MAX_PHOTOS_PER_LOT:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"CTBids allows at most {CTBIDS_MAX_PHOTOS_PER_LOT} photos per listing. "
-                        f"This job already has {existing} image(s); adding {len(files)} would exceed the limit."
-                    ),
-                )
+        existing = count_catalog_image_files(dest)
+        photo_err = job_photo_count_error(
+            current=existing,
+            delta=len(files),
+            single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
+        )
+        if photo_err:
+            raise HTTPException(status_code=400, detail=photo_err)
+        assert_account_catalog_quota(
+            db, current.account_id, extra_jobs=0, extra_photos=len(files)
+        )
     # Compress + R2 per photo while the phone is still shooting — no pool connection during body I/O.
     await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
     with SessionLocal() as db2:
@@ -5499,15 +5565,31 @@ def create_job(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
     sale = _sale_for_user(payload.sale_id, current, db)
     _require_open_sale(sale)
+    from app.job_batch_storage import confined_job_folder
+
+    folder = confined_job_folder(Path(payload.input_folder), current.account_id)
+    if folder is None or not folder.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail="Job folder must be an existing directory under this account's upload path.",
+        )
+    single = bool(payload.single_lot_mode)
+    n_photos = count_catalog_image_files(folder)
+    photo_err = job_photo_count_error(current=0, delta=n_photos, single_lot_mode=single)
+    if photo_err:
+        raise HTTPException(status_code=400, detail=photo_err)
+    assert_account_catalog_quota(
+        db, current.account_id, extra_jobs=1, extra_photos=n_photos
+    )
     _manual_sku = (payload.single_lot_manual_sku or "").strip() or None
     job = ProcessingJob(
         account_id=current.account_id,
         user_id=current.id,
         sale_id=sale.id,
         status=JobStatus.queued,
-        input_folder=payload.input_folder,
+        input_folder=str(folder),
         inherit_sku_from_subfolder=bool(payload.inherit_sku_from_subfolder),
-        single_lot_mode=bool(payload.single_lot_mode),
+        single_lot_mode=single,
         single_lot_manual_sku=_manual_sku,
         listing_channel=normalize_listing_channel(payload.listing_channel),
     )
@@ -5579,12 +5661,15 @@ def run_job(
     elif job.status != JobStatus.queued:
         raise HTTPException(status_code=409, detail="Job must be receiving, queued, or failed to run")
 
-    from app.job_batch_storage import count_staged_job_files, mirror_folder_to_r2
+    from app.job_batch_storage import confined_job_folder, count_staged_job_files, mirror_folder_to_r2
 
     # Dedicated worker mode: phone Sync leaves the row queued for ``app.worker``.
     # Dashboard **Run now** passes force_in_process so staff are not stuck if the worker is wedged.
     run_remote = not job_tasks.catalog_jobs_run_in_process() and not force_in_process
-    folder = Path(job.input_folder)
+    confined = confined_job_folder(Path(job.input_folder), current.account_id)
+    if confined is None:
+        raise HTTPException(status_code=400, detail="Invalid job upload path")
+    folder = confined
     account_id = current.account_id
     # R2 of a full lot can take longer than pool_timeout. Return this connection first
     # (QueuePool 10+20 was exhausting while phones waited on /run).
@@ -5597,10 +5682,10 @@ def run_job(
         # silent "queued" job the worker can never read ("Input folder not found").
         local_images = count_catalog_image_files(folder)
         try:
-            mirror_folder_to_r2(folder)
+            mirror_folder_to_r2(folder, account_id=account_id)
         except Exception:  # noqa: BLE001
             pass
-        staged = count_staged_job_files(folder)
+        staged = count_staged_job_files(folder, account_id=account_id)
         with SessionLocal() as db2:
             job = _owned_processing_job(db2, job_id, account_id)
             if not job:
@@ -5637,7 +5722,7 @@ def run_job(
 
     # In-process (or forced Run now): files are on this host; mirror best-effort for durability.
     try:
-        mirror_folder_to_r2(folder)
+        mirror_folder_to_r2(folder, account_id=account_id)
     except Exception:
         pass
 
@@ -5779,6 +5864,26 @@ def _queue_get_line(q: queue.Queue[str], timeout: float) -> str | None:
         return None
 
 
+@app.post("/jobs/{job_id}/events-ticket", response_model=JobSseTicketOut)
+def create_job_events_ticket(
+    job_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> JobSseTicketOut:
+    job = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == current.account_id)
+        .first()
+    )
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _assert_client_job(current, job)
+    return JobSseTicketOut(
+        ticket=create_sse_ticket(current, job_id),
+        expires_in=int(settings.sse_ticket_expire_minutes) * 60,
+    )
+
+
 @app.get("/jobs/{job_id}/events")
 async def job_events_sse(
     job_id: str,
@@ -5786,8 +5891,8 @@ async def job_events_sse(
     current: User = Depends(get_current_user_sse),
 ) -> EventSourceResponse:
     """
-    Server-Sent Events for one processing job. Auth: ``Authorization: Bearer`` or query ``access_token``
-    (EventSource cannot set custom headers in all browsers).
+    Server-Sent Events for one processing job. Auth: ``Authorization: Bearer`` or query ``sse_ticket``
+    from ``POST /jobs/{id}/events-ticket`` (EventSource cannot set custom headers in all browsers).
     Events are persisted by the catalog worker and replayed from Postgres so the dashboard still
     sees live progress when Gemini runs in a separate Railway service (in-memory pub/sub cannot
     cross processes).

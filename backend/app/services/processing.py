@@ -856,14 +856,23 @@ def _process_job_body(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    folder = Path(job.input_folder)
-    try:
-        from app.job_batch_storage import ensure_job_input_folder, mirror_folder_to_r2
+    from app.job_batch_storage import confined_job_folder, ensure_job_input_folder, mirror_folder_to_r2
 
+    folder = Path(job.input_folder)
+    confined = confined_job_folder(folder, job.account_id)
+    if confined is None:
+        job.status = JobStatus.failed
+        job.error_message = "Job folder is outside this account's upload directory"
+        job.cancel_requested = False
+        db.commit()
+        _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+    folder = confined
+    try:
         # Last-chance mirror if files are local but never made it to R2 (e.g. older deploys).
         if folder.is_dir():
-            mirror_folder_to_r2(folder)
-        folder = ensure_job_input_folder(folder)
+            mirror_folder_to_r2(folder, account_id=job.account_id)
+        folder = ensure_job_input_folder(folder, account_id=job.account_id)
     except Exception:
         _LOG.exception("job-batch R2 ensure failed job_id=%s", job.id)
 
@@ -886,7 +895,7 @@ def _process_job_body(
         try:
             from app.job_batch_storage import ensure_job_input_folder
 
-            folder = ensure_job_input_folder(folder)
+            folder = ensure_job_input_folder(folder, account_id=job.account_id)
             raw_photos = sorted(
                 [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
                 key=lambda p: str(p).lower(),

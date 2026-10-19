@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -22,6 +23,9 @@ CREDENTIALS_EXCEPTION = HTTPException(
     headers={"WWW-Authenticate": "Bearer"},
 )
 
+SSE_TICKET_PURPOSE = "job_sse"
+ACCESS_TOKEN_PURPOSES = frozenset({None, "access"})
+
 
 def hash_password(password: str) -> str:
     raw = password.encode("utf-8")
@@ -40,35 +44,69 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str, account_id: str, role: str, minutes: int | None = None) -> str:
+def token_version_of(user: User) -> int:
+    return int(getattr(user, "token_version", 0) or 0)
+
+
+def bump_token_version(user: User) -> int:
+    user.token_version = token_version_of(user) + 1
+    return user.token_version
+
+
+def create_access_token(
+    user_id: str,
+    account_id: str,
+    role: str,
+    minutes: int | None = None,
+    token_version: int = 0,
+) -> str:
     ttl = minutes if minutes is not None else settings.access_token_expire_minutes
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "account_id": account_id,
         "role": role,
+        "ver": int(token_version or 0),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ttl)).timestamp()),
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def user_from_access_token(token: str, db: Session) -> User:
+def create_sse_ticket(user: User, job_id: str, minutes: int | None = None) -> str:
+    ttl = minutes if minutes is not None else settings.sse_ticket_expire_minutes
+    now = datetime.now(timezone.utc)
+    payload = {
+        "purpose": SSE_TICKET_PURPOSE,
+        "sub": user.id,
+        "account_id": user.account_id,
+        "role": user.role,
+        "job_id": job_id,
+        "ver": token_version_of(user),
+        "jti": secrets.token_urlsafe(16),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ttl)).timestamp()),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm="HS256")
+
+
+def _decode_hs256(token: str, *, require_sub: bool = True) -> dict:
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             token,
             settings.secret_key,
             algorithms=["HS256"],
-            options={"require_sub": True, "verify_aud": False},
+            options={"require_sub": require_sub, "verify_aud": False},
         )
-        user_id = payload.get("sub")
-        account_id = payload.get("account_id")
-        if not user_id or not account_id:
-            raise CREDENTIALS_EXCEPTION
     except JWTError as exc:
         raise CREDENTIALS_EXCEPTION from exc
+
+
+def _load_active_user(db: Session, user_id: str, account_id: str, token_version: int) -> User:
     user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
     if not user:
+        raise CREDENTIALS_EXCEPTION
+    if token_version_of(user) != int(token_version or 0):
         raise CREDENTIALS_EXCEPTION
     acct_active = (
         db.query(Account.is_active)
@@ -78,6 +116,39 @@ def user_from_access_token(token: str, db: Session) -> User:
     if acct_active is False:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
     return user
+
+
+def user_from_access_token(token: str, db: Session) -> User:
+    payload = _decode_hs256(token, require_sub=True)
+    if payload.get("purpose") not in ACCESS_TOKEN_PURPOSES:
+        raise CREDENTIALS_EXCEPTION
+    user_id = payload.get("sub")
+    account_id = payload.get("account_id")
+    if not user_id or not account_id:
+        raise CREDENTIALS_EXCEPTION
+    # Tokens minted before versioning omit ``ver``; treat missing as 0.
+    try:
+        ver = int(payload.get("ver") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CREDENTIALS_EXCEPTION from exc
+    return _load_active_user(db, str(user_id), str(account_id), ver)
+
+
+def user_from_sse_ticket(token: str, db: Session, job_id: str) -> User:
+    payload = _decode_hs256(token, require_sub=True)
+    if payload.get("purpose") != SSE_TICKET_PURPOSE:
+        raise CREDENTIALS_EXCEPTION
+    if str(payload.get("job_id") or "") != str(job_id or ""):
+        raise CREDENTIALS_EXCEPTION
+    user_id = payload.get("sub")
+    account_id = payload.get("account_id")
+    if not user_id or not account_id:
+        raise CREDENTIALS_EXCEPTION
+    try:
+        ver = int(payload.get("ver") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CREDENTIALS_EXCEPTION from exc
+    return _load_active_user(db, str(user_id), str(account_id), ver)
 
 
 def get_current_user(
@@ -90,19 +161,12 @@ def get_current_user(
     return user
 
 
-def get_current_user_sse(
+def get_current_user_upload(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer_optional),
-    access_token: str | None = Query(
-        None,
-        description="Same JWT as Authorization Bearer; required for browser EventSource (no header support).",
-    ),
 ) -> User:
-    """
-    Short-lived DB session only. Do not use ``Depends(get_db)`` here: SSE requests stay open for minutes and
-    would otherwise hold a pooled connection for the entire stream (pool exhaustion).
-    """
-    token = (credentials.credentials if credentials else None) or (access_token or "").strip()
+    """Short-lived DB session for multipart catalog ingest (do not pin ``Depends(get_db)``)."""
+    token = credentials.credentials if credentials else ""
     if not token:
         raise CREDENTIALS_EXCEPTION
     with SessionLocal() as db:
@@ -111,6 +175,46 @@ def get_current_user_sse(
         return user
 
 
+def get_current_user_sse(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer_optional),
+    sse_ticket: str | None = Query(
+        None,
+        description="Short-lived job SSE ticket from POST /jobs/{id}/events-ticket.",
+    ),
+) -> User:
+    """
+    Short-lived DB session only. Do not use ``Depends(get_db)`` here: SSE requests stay open for minutes and
+    would otherwise hold a pooled connection for the entire stream (pool exhaustion).
+    Accepts Authorization Bearer or a single-purpose ``sse_ticket`` query (EventSource cannot set headers).
+    """
+    job_id = str(request.path_params.get("job_id") or "")
+    bearer = credentials.credentials if credentials else ""
+    ticket = (sse_ticket or "").strip()
+    if ticket:
+        with SessionLocal() as db:
+            user = user_from_sse_ticket(ticket, db, job_id)
+            enforce_client_http(user, request.method, request.url.path)
+            return user
+    if not bearer:
+        raise CREDENTIALS_EXCEPTION
+    with SessionLocal() as db:
+        user = user_from_access_token(bearer, db)
+        enforce_client_http(user, request.method, request.url.path)
+        return user
+
+
 def is_master_admin_email(email: str) -> bool:
     return (email or "").strip().lower() in set(settings.master_admin_email_list())
 
+
+def is_reserved_master_admin_email(email: str) -> bool:
+    """True when this mailbox is listed for master admin and must not be registered or invited."""
+    return is_master_admin_email(email)
+
+
+def is_master_admin(user: User) -> bool:
+    uid = (getattr(user, "id", None) or "").strip()
+    if uid and uid in set(settings.master_admin_user_id_list()):
+        return True
+    return is_master_admin_email(getattr(user, "email", "") or "")
