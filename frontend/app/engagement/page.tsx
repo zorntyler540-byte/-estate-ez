@@ -20,7 +20,9 @@ type SaleSummary = {
   sale_ends_at?: string | null;
   captured_at?: string | null;
   item_count: number;
-  rescue: number;
+  no_interest: number;
+  needs_eyes: number;
+  rescue?: number;
   push: number;
   protect: number;
   let_ride: number;
@@ -64,6 +66,7 @@ type CalendarPost = {
   photo_ids: string[];
   paste_copy: string;
   group_copy?: string;
+  bucket?: string;
   status: string;
   preflight: string;
   slot_key?: string;
@@ -123,7 +126,30 @@ function toCalendarSlot(post: CalendarPost): FacebookCalendarSlot {
   };
 }
 
-const FILTERS = ["Push", "Rescue", "Protect", "Let Ride"] as const;
+const FILTERS = ["Push", "Needs eyes", "No interest", "Protect", "Let Ride"] as const;
+
+const FILTER_COLORS: Record<(typeof FILTERS)[number], string> = {
+  Push: "var(--ct-primary)",
+  "Needs eyes": "#c47b16",
+  "No interest": "#6b7280",
+  Protect: "#1f7a4d",
+  "Let Ride": "#2563eb"
+};
+
+function displayBucket(item: { bucket: string; watchers: number; bids: number }): string {
+  if (item.bucket === "Rescue") {
+    return item.watchers === 0 && item.bids === 0 ? "No interest" : "Needs eyes";
+  }
+  return item.bucket;
+}
+
+function filterCount(detail: SaleDetail, name: (typeof FILTERS)[number]): number {
+  if (name === "Push") return detail.push;
+  if (name === "Needs eyes") return detail.needs_eyes;
+  if (name === "No interest") return detail.no_interest;
+  if (name === "Protect") return detail.protect;
+  return detail.let_ride;
+}
 
 type SortKey = "rank" | "photo" | "lot" | "views" | "watchers" | "bids" | "price" | "note";
 type SortDir = "asc" | "desc";
@@ -348,7 +374,7 @@ export default function EngagementPage() {
   }, [token, saleId, loadSale]);
 
   const visible = useMemo(() => {
-    const rows = (detail?.items || []).filter((item) => item.bucket === bucket);
+    const rows = (detail?.items || []).filter((item) => displayBucket(item) === bucket);
     if (!sortKey) return rows;
     return [...rows].sort((a, b) => compareQueueItems(a, b, sortKey, sortDir));
   }, [detail, bucket, sortKey, sortDir]);
@@ -475,14 +501,8 @@ export default function EngagementPage() {
             </p>
             <section className="ct-dash-stats" aria-label="Engagement buckets" style={{ marginBottom: "1rem" }}>
               {FILTERS.map((name) => {
-                const count =
-                  name === "Push"
-                    ? detail.push
-                    : name === "Rescue"
-                      ? detail.rescue
-                      : name === "Protect"
-                        ? detail.protect
-                        : detail.let_ride;
+                const count = filterCount(detail, name);
+                const color = FILTER_COLORS[name];
                 return (
                   <button
                     key={name}
@@ -492,10 +512,13 @@ export default function EngagementPage() {
                     style={{
                       textAlign: "left",
                       cursor: "pointer",
-                      outline: bucket === name ? "2px solid var(--ct-primary)" : undefined
+                      outline: bucket === name ? `2px solid ${color}` : undefined,
+                      borderColor: color
                     }}
                   >
-                    <span className="ct-stat-card__value">{count}</span>
+                    <span className="ct-stat-card__value" style={{ color }}>
+                      {count}
+                    </span>
                     <span className="ct-stat-card__label">{name}</span>
                   </button>
                 );
@@ -639,11 +662,12 @@ export default function EngagementPage() {
               Social calendar
             </h2>
             <p className="ct-muted">
-              Planned posts for Push lots only, from the snapshot through the close. Every spreadsheet
-              slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing 17:40) is
-              scheduled on the connected Facebook Page at that time after you approve it. Native
-              Instagram and TikTok publishers are not wired yet. Missed or too-soon slots cannot be
-              scheduled — use Post now to publish them immediately.
+              Top Push lots get two or three slots before close (09:00 and 16:30 on different days,
+              plus a closing-day 17:40 countdown for #1). Lower-ranked Push lots get at least one;
+              Needs eyes lots fill leftover slots lightly (at most one per day). No interest lots
+              stay off the calendar. Every spreadsheet slot is scheduled on the connected Facebook
+              Page after you approve it. Native Instagram and TikTok publishers are not wired yet.
+              Missed or too-soon slots cannot be scheduled — use Post now to publish them immediately.
             </p>
             {canPostFacebook && posts.length > 0 ? (
               <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
@@ -663,7 +687,7 @@ export default function EngagementPage() {
               </div>
             ) : null}
             {posts.length === 0 ? (
-              <p className="ct-muted">No Push lots, so there is nothing to schedule.</p>
+              <p className="ct-muted">No Push or Needs eyes lots, so there is nothing to schedule.</p>
             ) : (
               <div className="ct-table-wrap">
                 <table className="ct-table">
@@ -710,6 +734,7 @@ export default function EngagementPage() {
                             post.sku
                           )}
                           <div>{post.title}</div>
+                          {post.bucket ? <div className="ct-muted">{post.bucket}</div> : null}
                           {post.item_url ? (
                             <a href={post.item_url} target="_blank" rel="noreferrer">
                               Listing

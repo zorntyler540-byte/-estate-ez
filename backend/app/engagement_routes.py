@@ -31,7 +31,7 @@ def ingest_engagement_snapshot(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EngagementIngestOut:
-    """Store one sale's live counts and score Push / Rescue / Protect / Let Ride.
+    """Store one sale's live counts and score Push / Needs eyes / No interest / Protect / Let Ride.
 
     The body has no bidder fields. Unknown keys are rejected.
     """

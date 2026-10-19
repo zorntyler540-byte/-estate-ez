@@ -15,11 +15,23 @@ from app.services.facebook_caption import group_post_copy
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
-# A thin bid under this current price is still a social Push. The Oct 15 gold
-# ring (12 watchers, 1 bid, $450) stayed Rescue.
-PUSH_PRICE_MAX = 100.0
+# Watcher floor for Push once there is at least one bid. Under $100 the floor
+# stays 2 so every previous Push lot still qualifies. Above that it rises
+# slowly: a $450 lot needs 6 watchers (the Oct 15 gold ring has 12 and 1 bid).
+PUSH_WATCHER_TIERS = (
+    (100.0, 2),
+    (250.0, 4),
+    (500.0, 6),
+    (1000.0, 8),
+)
+PUSH_WATCHER_FLOOR_TOP = 10
 
-BUCKETS = ("Rescue", "Push", "Protect", "Let Ride")
+BUCKETS = ("No interest", "Needs eyes", "Push", "Protect", "Let Ride")
+RESCUE_BUCKETS = frozenset({"No interest", "Needs eyes", "Rescue"})
+# Rank 1–3 get a second daily slot (09:00 / 16:30 on different days). Rank 1
+# also gets the closing-day 17:40 countdown.
+PUSH_MULTI_SLOT_RANKS = 3
+PREFERRED_PUSH_TIMES = ("09:00", "16:30")
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,25 @@ def momentum_status(views: int, watchers: int, bids: int) -> str:
     return f"{direction}-{'Stable' if stable else 'Unstable'}"
 
 
+def push_watcher_floor(price: float) -> int:
+    """Watchers required for Push after Protect / Let Ride, given current price."""
+    amount = float(price or 0)
+    for limit, floor in PUSH_WATCHER_TIERS:
+        if amount < limit:
+            return floor
+    return PUSH_WATCHER_FLOOR_TOP
+
+
+def display_bucket(bucket: str, *, watchers: int = 0, bids: int = 0) -> str:
+    """Map stored names onto the live buckets. Legacy Rescue splits by interest."""
+    name = (bucket or "").strip()
+    if name == "Rescue":
+        if int(watchers or 0) == 0 and int(bids or 0) == 0:
+            return "No interest"
+        return "Needs eyes"
+    return name
+
+
 def operational_bucket(watchers: int, bids: int, price: float, reserve: float) -> str:
     price = float(price or 0)
     reserve = float(reserve or 0)
@@ -80,9 +111,11 @@ def operational_bucket(watchers: int, bids: int, price: float, reserve: float) -
         return "Protect"
     if bids >= 5 and watchers <= 1 and reserve > 0 and price >= reserve:
         return "Let Ride"
-    if watchers >= 2 and bids >= 1 and price < PUSH_PRICE_MAX:
+    if bids >= 1 and watchers >= push_watcher_floor(price):
         return "Push"
-    return "Rescue"
+    if watchers == 0 and bids == 0:
+        return "No interest"
+    return "Needs eyes"
 
 
 def trajectory_band(views: int, watchers: int, bids: int, bucket: str) -> str:
@@ -144,7 +177,7 @@ def score_item(
         engagement_score=engagement_score(watchers_n, bids_n),
         momentum=momentum,
         notes=momentum_notes(views_n, watchers_n, bids_n, price_n),
-        rescue_candidate=bucket == "Rescue",
+        rescue_candidate=bucket in RESCUE_BUCKETS,
         late_surge=late_surge(bucket, momentum, bids_n, watchers_n),
         trajectory=trajectory_band(views_n, watchers_n, bids_n, bucket),
         bucket=bucket,
@@ -290,112 +323,182 @@ def _copy_for(
     return _with_sale_link(body, item_url=item_url, auction_url=auction_url)
 
 
+def _lot_key(row: dict) -> str:
+    return str(row.get("lot_id") or row.get("sku") or "")
+
+
+def _push_daily_quota(rank: int) -> int:
+    if rank <= PUSH_MULTI_SLOT_RANKS:
+        return 2
+    return 1
+
+
 def build_social_calendar(
     push_rows: list[dict],
     *,
+    needs_eyes_rows: list[dict] | None = None,
     sale_title: str = "",
     captured_at: datetime | None = None,
     sale_ends_at: datetime | None = None,
     auction_url: str = "",
     ctseller_sale_id: int | None = None,
 ) -> list[dict]:
-    """Planned posts for Push lots only. Status stays Planned."""
+    """Push lots get multiple slots; Needs eyes fill leftovers lightly. Status stays Planned."""
     ordered = sorted(push_rows, key=lambda row: int(row.get("push_rank") or 9999))
-    if not ordered:
+    needs_eyes = list(needs_eyes_rows or [])
+    if not ordered and not needs_eyes:
         return []
     days = calendar_days(captured_at, sale_ends_at)
-    posts: list[dict] = []
-    index = 0
+    end_day = _pacific(sale_ends_at).date() if sale_ends_at is not None else None
+
+    class _Cell:
+        __slots__ = ("day", "slot_time", "platform", "hook", "fmt", "row")
+
+        def __init__(self, day: date, slot_time: time, platform: str, hook: str, fmt: str):
+            self.day = day
+            self.slot_time = slot_time
+            self.platform = platform
+            self.hook = hook
+            self.fmt = fmt
+            self.row: dict | None = None
+
+    cells: list[_Cell] = []
     for day in days:
-        closing = sale_ends_at is not None and day == _pacific(sale_ends_at).date()
+        closing = end_day is not None and day == end_day
         for slot_time, platform, hook, fmt in _SLOTS:
-            if index >= len(ordered):
-                break
-            row = ordered[index]
-            index += 1
-            title = str(row.get("title") or row.get("sku") or "Lot").strip()
-            url = str(row.get("item_url") or "").strip()
-            sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
             slot_hook = "Closing day: " + hook if closing else hook
-            posts.append(
-                {
-                    "order": len(posts) + 1,
-                    "post_date": day.isoformat(),
-                    "local_time": slot_time.strftime("%H:%M"),
-                    "zone": "PT",
-                    "platform": platform,
-                    "hook": slot_hook,
-                    "post_type": fmt,
-                    "sku": row.get("sku") or "",
-                    "title": title,
-                    "item_url": url,
-                    "lot_id": row.get("lot_id"),
-                    "photo_ids": list(row.get("photo_ids") or []),
-                    "paste_copy": _copy_for(
-                        platform,
-                        sale_title=sale_title,
-                        title=title,
-                        price=float(row.get("price") or 0),
-                        watchers=int(row.get("watchers") or 0),
-                        item_url=url,
-                        closing=closing,
-                        auction_url=sale_url,
-                    ),
-                    "group_copy": group_post_copy(
-                        title=title,
-                        hook=slot_hook,
-                        item_url=url,
-                        close_at=sale_ends_at,
-                        sale_url=sale_url,
-                    ),
-                    "status": "Planned",
-                    "preflight": PREFLIGHT,
-                }
+            cells.append(_Cell(day, slot_time, platform, slot_hook, fmt))
+
+    used_days: dict[str, set[date]] = {}
+
+    def _skip_days_for(row: dict, *, rank: int | None = None) -> set[date]:
+        blocked = set(used_days.get(_lot_key(row), set()))
+        if rank == 1 and end_day is not None:
+            blocked.add(end_day)
+        return blocked
+
+    def _find_cell(row: dict, *, preferred_times: tuple[str, ...], rank: int | None = None) -> _Cell | None:
+        blocked = _skip_days_for(row, rank=rank)
+        empty = [cell for cell in cells if cell.row is None and cell.day not in blocked]
+        if not empty:
+            return None
+        for stamp in preferred_times:
+            for cell in empty:
+                if cell.slot_time.strftime("%H:%M") == stamp:
+                    return cell
+        return empty[0]
+
+    def _place(row: dict, cell: _Cell) -> None:
+        cell.row = row
+        used_days.setdefault(_lot_key(row), set()).add(cell.day)
+
+    for row in ordered:
+        rank = int(row.get("push_rank") or 9999)
+        cell = _find_cell(row, preferred_times=(), rank=rank)
+        if cell is not None:
+            _place(row, cell)
+
+    for row in ordered:
+        rank = int(row.get("push_rank") or 9999)
+        extra = _push_daily_quota(rank) - 1
+        for _ in range(max(0, extra)):
+            cell = _find_cell(
+                row,
+                preferred_times=(*PREFERRED_PUSH_TIMES[::-1], "12:15", "18:00"),
+                rank=rank,
             )
-        if index >= len(ordered):
+            if cell is None:
+                break
+            _place(row, cell)
+
+    needs_days: set[date] = set()
+    for row in needs_eyes:
+        empty = [
+            cell
+            for cell in cells
+            if cell.row is None
+            and cell.day not in needs_days
+            and cell.day not in used_days.get(_lot_key(row), set())
+        ]
+        if not empty:
             break
-    if sale_ends_at is not None and ordered:
+        midday = next((cell for cell in empty if cell.slot_time.strftime("%H:%M") in {"12:15", "18:00"}), empty[0])
+        _place(row, midday)
+        needs_days.add(midday.day)
+
+    posts: list[dict] = []
+
+    def _append(row: dict, *, day: date, local_time: str, platform: str, hook: str, fmt: str, closing: bool) -> None:
+        title = str(row.get("title") or row.get("sku") or "Lot").strip()
+        url = str(row.get("item_url") or "").strip()
+        sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
+        posts.append(
+            {
+                "order": 0,
+                "post_date": day.isoformat(),
+                "local_time": local_time,
+                "zone": "PT",
+                "platform": platform,
+                "hook": hook,
+                "post_type": fmt,
+                "sku": row.get("sku") or "",
+                "title": title,
+                "item_url": url,
+                "lot_id": row.get("lot_id"),
+                "photo_ids": list(row.get("photo_ids") or []),
+                "bucket": row.get("bucket") or "",
+                "paste_copy": _copy_for(
+                    platform,
+                    sale_title=sale_title,
+                    title=title,
+                    price=float(row.get("price") or 0),
+                    watchers=int(row.get("watchers") or 0),
+                    item_url=url,
+                    closing=closing,
+                    auction_url=sale_url,
+                ),
+                "group_copy": group_post_copy(
+                    title=title,
+                    hook=hook,
+                    item_url=url,
+                    close_at=sale_ends_at,
+                    sale_url=sale_url,
+                ),
+                "status": "Planned",
+                "preflight": PREFLIGHT,
+            }
+        )
+
+    for cell in cells:
+        if cell.row is None:
+            continue
+        _append(
+            cell.row,
+            day=cell.day,
+            local_time=cell.slot_time.strftime("%H:%M"),
+            platform=cell.platform,
+            hook=cell.hook,
+            fmt=cell.fmt,
+            closing=end_day is not None and cell.day == end_day,
+        )
+
+    if end_day is not None and ordered and end_day >= days[0]:
         top = ordered[0]
-        end_day = _pacific(sale_ends_at).date()
-        if end_day >= days[0]:
-            title = str(top.get("title") or top.get("sku") or "Lot").strip()
-            url = str(top.get("item_url") or "").strip()
-            sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
-            posts.append(
-                {
-                    "order": len(posts) + 1,
-                    "post_date": end_day.isoformat(),
-                    "local_time": "17:40",
-                    "zone": "PT",
-                    "platform": "FB + IG Stories",
-                    "hook": "Closing countdown",
-                    "post_type": "Story Countdown Sticker",
-                    "sku": top.get("sku") or "",
-                    "title": title,
-                    "item_url": url,
-                    "lot_id": top.get("lot_id"),
-                    "photo_ids": list(top.get("photo_ids") or []),
-                    "paste_copy": _copy_for(
-                        "FB + IG Stories",
-                        sale_title=sale_title,
-                        title=title,
-                        price=float(top.get("price") or 0),
-                        watchers=int(top.get("watchers") or 0),
-                        item_url=url,
-                        closing=True,
-                        auction_url=sale_url,
-                    ),
-                    "group_copy": group_post_copy(
-                        title=title,
-                        hook="Closing countdown",
-                        item_url=url,
-                        close_at=sale_ends_at,
-                        sale_url=sale_url,
-                    ),
-                    "status": "Planned",
-                    "preflight": PREFLIGHT,
-                }
+        top_key = _lot_key(top)
+        if end_day not in used_days.get(top_key, set()):
+            _append(
+                top,
+                day=end_day,
+                local_time="17:40",
+                platform="FB + IG Stories",
+                hook="Closing countdown",
+                fmt="Story Countdown Sticker",
+                closing=True,
             )
+
+    posts.sort(key=lambda post: (post["post_date"], post["local_time"]))
+    for index, post in enumerate(posts, start=1):
+        post["order"] = index
     return posts
 
 

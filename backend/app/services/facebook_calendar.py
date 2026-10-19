@@ -14,9 +14,11 @@ Each row keeps its spreadsheet **intended platform**. A separate
 Today every target is the Facebook Page feed; flipping Instagram or TikTok
 to a native publisher later does not require new slot tables or keys.
 
-Calendar identity is per slot: ``pushcal:{sale}:{lot}:{slot}`` (slot is
-``0900`` / ``1215`` / ``1630`` / ``1800`` / ``1740``). Legacy keys
-``pushcal:{sale}:{lot}`` are treated as the 09:00 Facebook row.
+Calendar identity is per lot + day + slot:
+``pushcal:{sale}:{lot}:{YYYYMMDD}:{slot}`` (slot is ``0900`` / ``1215`` /
+``1630`` / ``1800`` / ``1740``). A lot can appear on more than one day.
+Legacy keys ``pushcal:{sale}:{lot}`` are the 09:00 Facebook row; undated
+``pushcal:{sale}:{lot}:{slot}`` keys pick up the scheduled date on migrate.
 """
 
 from __future__ import annotations
@@ -136,8 +138,36 @@ def slot_id_from_local_time(local_time: str) -> str:
     return "0900"
 
 
-def calendar_slot_key(ctseller_sale_id: int, lot_id: str, slot_id: str) -> str:
+def _key_date_token(post_date: str | date | datetime | None) -> str:
+    if post_date is None:
+        return ""
+    if isinstance(post_date, datetime):
+        moment = post_date if post_date.tzinfo else post_date.replace(tzinfo=UTC)
+        return moment.astimezone(PACIFIC).date().strftime("%Y%m%d")
+    if isinstance(post_date, date):
+        return post_date.strftime("%Y%m%d")
+    text = str(post_date).strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        return digits[:8]
+    try:
+        return date.fromisoformat(text[:10]).strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def calendar_slot_key(
+    ctseller_sale_id: int,
+    lot_id: str,
+    slot_id: str,
+    post_date: str | date | datetime | None = None,
+) -> str:
     sid = (slot_id or "0900").strip() or "0900"
+    ymd = _key_date_token(post_date)
+    if ymd:
+        return f"pushcal:{int(ctseller_sale_id)}:{lot_id}:{ymd}:{sid}"
     return f"pushcal:{int(ctseller_sale_id)}:{lot_id}:{sid}"
 
 
@@ -150,30 +180,74 @@ def is_legacy_calendar_key(key: str) -> bool:
     return len(parts) == 3 and parts[0] == "pushcal"
 
 
-def migrate_calendar_key(key: str | None) -> str:
+def is_undated_slot_key(key: str) -> bool:
+    parts = (key or "").split(":")
+    return len(parts) == 4 and parts[0] == "pushcal" and len(parts[3]) == 4 and parts[3].isdigit()
+
+
+def is_dated_slot_key(key: str) -> bool:
+    parts = (key or "").split(":")
+    return (
+        len(parts) == 5
+        and parts[0] == "pushcal"
+        and len(parts[3]) == 8
+        and parts[3].isdigit()
+        and len(parts[4]) == 4
+        and parts[4].isdigit()
+    )
+
+
+def migrate_calendar_key(
+    key: str | None,
+    *,
+    when: str | date | datetime | None = None,
+) -> str:
     raw = (key or "").strip()
     if not raw:
         return ""
+    ymd = _key_date_token(when)
+    if is_dated_slot_key(raw):
+        return raw
     if is_legacy_calendar_key(raw):
-        return f"{raw}:0900"
+        undated = f"{raw}:0900"
+        if ymd:
+            return f"{raw}:{ymd}:0900"
+        return undated
+    if is_undated_slot_key(raw) and ymd:
+        sale, lot, slot = raw.split(":")[1], raw.split(":")[2], raw.split(":")[3]
+        return f"pushcal:{sale}:{lot}:{ymd}:{slot}"
     return raw
 
 
 def calendar_key_aliases(key: str | None) -> list[str]:
-    """New slot key plus the pre-slot 09:00 form, for safe lookup."""
+    """Dated key plus undated slot and pre-slot 09:00 forms, for safe lookup."""
     raw = (key or "").strip()
     if not raw:
         return []
     migrated = migrate_calendar_key(raw)
     out: list[str] = []
-    for value in (migrated, raw):
+
+    def _add(value: str) -> None:
         if value and value not in out:
             out.append(value)
-    if migrated.endswith(":0900"):
-        legacy = migrated[: -len(":0900")]
-        if legacy and legacy not in out:
-            out.append(legacy)
+
+    _add(migrated)
+    _add(raw)
+    parts = migrated.split(":")
+    if is_dated_slot_key(migrated):
+        sale, lot, _ymd, slot = parts[1], parts[2], parts[3], parts[4]
+        _add(f"pushcal:{sale}:{lot}:{slot}")
+        if slot == "0900":
+            _add(f"pushcal:{sale}:{lot}")
+    elif is_undated_slot_key(migrated) and migrated.endswith(":0900"):
+        _add(migrated[: -len(":0900")])
     return out
+
+
+def calendar_keys_match(slot_key: str, wanted: set[str]) -> bool:
+    if not wanted:
+        return True
+    return bool(wanted.intersection(calendar_key_aliases(slot_key)))
 
 
 def slot_angle_for(local_time: str, *, hook: str = "") -> str:
@@ -232,7 +306,7 @@ def _slot_dict(
         **post,
         "when": when,
         "slot_id": slot_id,
-        "slot_key": calendar_slot_key(int(ctseller_sale_id), lot_id, slot_id),
+        "slot_key": calendar_slot_key(int(ctseller_sale_id), lot_id, slot_id, post.get("post_date")),
         "lot_id": lot_id,
         "ctseller_sale_id": int(ctseller_sale_id),
         "intended_platform": intended,
@@ -256,25 +330,31 @@ def facebook_page_slots(
     )
     if not rows:
         return []
+    from app.services.engagement import display_bucket
+
     latest = max(rows, key=lambda row: row.captured_at or datetime.min.replace(tzinfo=UTC))
     push_rows = []
+    needs_eyes_rows = []
     for row in rows:
-        if row.bucket != "Push":
-            continue
-        push_rows.append(
-            {
-                "push_rank": row.push_rank,
-                "sku": row.sku,
-                "title": row.title,
-                "price": row.price,
-                "watchers": row.watchers,
-                "item_url": row.item_url,
-                "lot_id": row.lot_id,
-                "photo_ids": [],
-            }
-        )
+        bucket = display_bucket(row.bucket or "", watchers=row.watchers, bids=row.bids)
+        payload = {
+            "push_rank": row.push_rank,
+            "sku": row.sku,
+            "title": row.title,
+            "price": row.price,
+            "watchers": row.watchers,
+            "item_url": row.item_url,
+            "lot_id": row.lot_id,
+            "photo_ids": [],
+            "bucket": bucket,
+        }
+        if bucket == "Push":
+            push_rows.append(payload)
+        elif bucket == "Needs eyes":
+            needs_eyes_rows.append(payload)
     posts = build_social_calendar(
         push_rows,
+        needs_eyes_rows=needs_eyes_rows,
         sale_title=latest.sale_title or "",
         captured_at=latest.captured_at,
         sale_ends_at=latest.sale_ends_at,
@@ -353,10 +433,15 @@ def annotate_social_calendar(
             annotated.append({**data, **extra, "preflight": PAGE_PREFLIGHT})
             continue
         slot_id = slot_id_from_local_time(str(data.get("local_time") or "09:00"))
-        key = calendar_slot_key(int(ctseller_sale_id), lot_id, slot_id)
+        key = calendar_slot_key(int(ctseller_sale_id), lot_id, slot_id, data.get("post_date"))
         when = slot_datetime(str(data["post_date"]), str(data["local_time"]), zone=str(data.get("zone") or "PT"))
         window = schedule_window_state(when, now=now)
         row = by_key.get(key)
+        if row is None:
+            for alias in calendar_key_aliases(key):
+                row = by_key.get(alias)
+                if row is not None:
+                    break
         status = "planned"
         if row and row.status in {"scheduled", "posted", "failed", "cancelled"}:
             status = row.status
@@ -554,7 +639,12 @@ def sync_facebook_calendar_after_snapshot(
     if not account:
         return
     slots = facebook_page_slots(db, account_id, ctseller_sale_id)
-    by_key = {str(slot["slot_key"]): slot for slot in slots}
+    by_key: dict[str, dict[str, Any]] = {}
+    for slot in slots:
+        key = str(slot["slot_key"])
+        by_key[key] = slot
+        for alias in calendar_key_aliases(key):
+            by_key.setdefault(alias, slot)
     scheduled_rows = (
         db.query(FacebookPagePost)
         .filter(
@@ -567,8 +657,14 @@ def sync_facebook_calendar_after_snapshot(
     )
     for row in scheduled_rows:
         key = str(getattr(row, "calendar_key", None) or "").strip()
-        migrated = migrate_calendar_key(key)
+        migrated = migrate_calendar_key(key, when=row.scheduled_publish_time or row.posted_at)
         slot = by_key.get(migrated) or by_key.get(key)
+        if slot is None:
+            for alias in calendar_key_aliases(key) + calendar_key_aliases(migrated):
+                slot = by_key.get(alias)
+                if slot is not None:
+                    migrated = str(slot["slot_key"])
+                    break
         if slot is None:
             _cancel_scheduled(
                 db,
@@ -577,8 +673,9 @@ def sync_facebook_calendar_after_snapshot(
                 reason="Lot left this Push calendar slot.",
             )
             continue
-        if key and key != migrated:
-            row.calendar_key = migrated
+        dated = str(slot["slot_key"])
+        if key and key != dated:
+            row.calendar_key = dated
             db.add(row)
             db.commit()
         window = schedule_window_state(slot["when"], now=now)
@@ -682,7 +779,7 @@ def calendar_publish_items(
     for key in wanted_raw:
         wanted.update(calendar_key_aliases(key))
         wanted.add(migrate_calendar_key(key))
-    chosen = [slot for slot in slots if not wanted_raw or slot["slot_key"] in wanted]
+    chosen = [slot for slot in slots if not wanted_raw or calendar_keys_match(str(slot["slot_key"]), wanted)]
     captions = captions or {}
     publishable: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -825,7 +922,7 @@ def calendar_preview(
     for key in wanted_raw:
         wanted.update(calendar_key_aliases(key))
         wanted.add(migrate_calendar_key(key))
-    chosen = [slot for slot in slots if not wanted_raw or slot["slot_key"] in wanted]
+    chosen = [slot for slot in slots if not wanted_raw or calendar_keys_match(str(slot["slot_key"]), wanted)]
     records = (
         db.query(FacebookPagePost)
         .filter(
@@ -894,26 +991,30 @@ def calendar_preview(
 
 
 def rewrite_legacy_calendar_keys(conn) -> int:
-    """Rewrite ``pushcal:{sale}:{lot}`` rows to ``:0900``. Returns update count."""
+    """Rewrite undated Push-calendar keys to include Pacific YYYYMMDD. Returns update count."""
     from sqlalchemy import text
 
     try:
         rows = conn.execute(
             text(
-                "SELECT id, calendar_key FROM facebook_page_posts "
+                "SELECT id, calendar_key, scheduled_publish_time, posted_at, created_at "
+                "FROM facebook_page_posts "
                 "WHERE calendar_key IS NOT NULL AND calendar_key LIKE 'pushcal:%'"
             )
         ).fetchall()
     except Exception:
         return 0
     updated = 0
-    for row_id, key in rows:
-        raw = str(key or "").strip()
-        if not is_legacy_calendar_key(raw):
+    for row in rows:
+        row_id = row[0]
+        raw = str(row[1] or "").strip()
+        when = row[2] or row[3] or row[4]
+        migrated = migrate_calendar_key(raw, when=when)
+        if not migrated or migrated == raw:
             continue
         conn.execute(
             text("UPDATE facebook_page_posts SET calendar_key = :new WHERE id = :id"),
-            {"new": f"{raw}:0900", "id": row_id},
+            {"new": migrated, "id": row_id},
         )
         updated += 1
     return updated

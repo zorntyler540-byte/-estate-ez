@@ -19,7 +19,13 @@ from app.schemas import (
     EngagementSnapshotIn,
     SocialCalendarPost,
 )
-from app.services.engagement import assign_push_ranks, build_social_calendar, reading_dict, score_item
+from app.services.engagement import (
+    assign_push_ranks,
+    build_social_calendar,
+    display_bucket,
+    reading_dict,
+    score_item,
+)
 from app.services.photo_order import listing_photo_sort_key
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.sale_zip_export import pick_lot_hero_photo
@@ -39,6 +45,11 @@ def engagement_payload_for_lot(lot: Lot) -> dict | None:
         return None
     if not isinstance(data, dict) or not str(data.get("bucket") or "").strip():
         return None
+    data["bucket"] = display_bucket(
+        str(data.get("bucket") or ""),
+        watchers=int(data.get("watchers") or 0),
+        bids=int(data.get("bids") or 0),
+    )
     return data
 
 
@@ -113,7 +124,7 @@ def _write_lot_engagement(lot: Lot, row: EngagementSnapshot) -> None:
         "reserve": row.reserve,
         "item_url": row.item_url,
         "captured_at": row.captured_at.isoformat() if row.captured_at else None,
-        "bucket": row.bucket,
+        "bucket": display_bucket(row.bucket or "", watchers=row.watchers, bids=row.bids),
         "engagement_score": row.engagement_score,
         "momentum": row.momentum,
         "notes": row.notes,
@@ -247,10 +258,28 @@ def apply_engagement_snapshot(
 
 
 def _bucket_counts(rows) -> dict[str, int]:
-    counts = {"rescue": 0, "push": 0, "protect": 0, "let_ride": 0}
+    counts = {
+        "no_interest": 0,
+        "needs_eyes": 0,
+        "rescue": 0,
+        "push": 0,
+        "protect": 0,
+        "let_ride": 0,
+    }
     for row in rows:
-        bucket = getattr(row, "bucket", None) or (row.get("bucket") if isinstance(row, dict) else "")
-        if bucket == "Rescue":
+        raw = getattr(row, "bucket", None) or (row.get("bucket") if isinstance(row, dict) else "")
+        watchers = getattr(row, "watchers", None)
+        if watchers is None and isinstance(row, dict):
+            watchers = row.get("watchers")
+        bids = getattr(row, "bids", None)
+        if bids is None and isinstance(row, dict):
+            bids = row.get("bids")
+        bucket = display_bucket(raw or "", watchers=int(watchers or 0), bids=int(bids or 0))
+        if bucket == "No interest":
+            counts["no_interest"] += 1
+            counts["rescue"] += 1
+        elif bucket == "Needs eyes":
+            counts["needs_eyes"] += 1
             counts["rescue"] += 1
         elif bucket == "Push":
             counts["push"] += 1
@@ -316,7 +345,7 @@ def _queue_item(db: Session, account_id: str, row: EngagementSnapshot) -> Engage
         reserve=row.reserve,
         item_url=row.item_url or "",
         captured_at=row.captured_at,
-        bucket=row.bucket or "",
+        bucket=display_bucket(row.bucket or "", watchers=row.watchers, bids=row.bids),
         engagement_score=row.engagement_score or "",
         momentum=row.momentum or "",
         notes=row.notes or "",
@@ -354,23 +383,26 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
     if detail is None:
         return None
     push_rows = []
+    needs_eyes_rows = []
     for item in detail.items:
-        if item.bucket != "Push":
-            continue
-        push_rows.append(
-            {
-                "push_rank": item.push_rank,
-                "sku": item.sku,
-                "title": item.title,
-                "price": item.price,
-                "watchers": item.watchers,
-                "item_url": item.item_url,
-                "lot_id": item.lot_id,
-                "photo_ids": item.photo_ids,
-            }
-        )
+        payload = {
+            "push_rank": item.push_rank,
+            "sku": item.sku,
+            "title": item.title,
+            "price": item.price,
+            "watchers": item.watchers,
+            "item_url": item.item_url,
+            "lot_id": item.lot_id,
+            "photo_ids": item.photo_ids,
+            "bucket": item.bucket,
+        }
+        if item.bucket == "Push":
+            push_rows.append(payload)
+        elif item.bucket == "Needs eyes":
+            needs_eyes_rows.append(payload)
     posts = build_social_calendar(
         push_rows,
+        needs_eyes_rows=needs_eyes_rows,
         sale_title=detail.sale_title,
         captured_at=detail.captured_at,
         sale_ends_at=detail.sale_ends_at,
@@ -381,6 +413,55 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
 
     annotated = annotate_social_calendar(db, account_id, int(ctseller_sale_id), posts)
     return [SocialCalendarPost.model_validate(post) for post in annotated]
+
+
+def rewrite_stored_rescue_buckets(conn) -> int:
+    """Split stored ``Rescue`` rows into No interest / Needs eyes. Returns update count."""
+    from sqlalchemy import text
+
+    updated = 0
+    try:
+        rows = conn.execute(
+            text(
+                "SELECT id, bucket, watchers, bids FROM engagement_snapshots "
+                "WHERE bucket = 'Rescue'"
+            )
+        ).fetchall()
+    except Exception:
+        rows = []
+    for row_id, bucket, watchers, bids in rows:
+        mapped = display_bucket(bucket or "", watchers=int(watchers or 0), bids=int(bids or 0))
+        if mapped == (bucket or ""):
+            continue
+        conn.execute(
+            text("UPDATE engagement_snapshots SET bucket = :bucket WHERE id = :id"),
+            {"bucket": mapped, "id": row_id},
+        )
+        updated += 1
+    try:
+        lots = conn.execute(
+            text("SELECT id, engagement_json FROM lots WHERE engagement_json LIKE '%Rescue%'")
+        ).fetchall()
+    except Exception:
+        lots = []
+    for lot_id, raw in lots:
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or str(data.get("bucket") or "") != "Rescue":
+            continue
+        data["bucket"] = display_bucket(
+            "Rescue",
+            watchers=int(data.get("watchers") or 0),
+            bids=int(data.get("bids") or 0),
+        )
+        conn.execute(
+            text("UPDATE lots SET engagement_json = :payload WHERE id = :id"),
+            {"payload": json.dumps(data), "id": lot_id},
+        )
+        updated += 1
+    return updated
 
 
 def reading_for_tests(item: EngagementItemIn) -> dict:

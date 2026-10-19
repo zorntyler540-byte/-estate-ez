@@ -1084,6 +1084,8 @@ class EngagementSaleSummary(BaseModel):
     sale_ends_at: datetime | None = None
     captured_at: datetime | None = None
     item_count: int = 0
+    no_interest: int = 0
+    needs_eyes: int = 0
     rescue: int = 0
     push: int = 0
     protect: int = 0
@@ -1109,6 +1111,7 @@ class SocialCalendarPost(BaseModel):
     photo_ids: list[str] = Field(default_factory=list)
     paste_copy: str = ""
     group_copy: str = ""
+    bucket: str = ""
     status: str = "Planned"
     preflight: str = ""
     slot_key: str = ""
@@ -1129,10 +1132,12 @@ class EngagementIngestOut(BaseModel):
     ctseller_sale_id: int
     item_count: int
     matched_lots: int
-    rescue: int
-    push: int
-    protect: int
-    let_ride: int
+    no_interest: int = 0
+    needs_eyes: int = 0
+    rescue: int = 0
+    push: int = 0
+    protect: int = 0
+    let_ride: int = 0
 
 
 class FacebookStatusOut(BaseModel):
@@ -1218,7 +1223,7 @@ class FacebookPublishItemIn(BaseModel):
     lot_id: str = Field(min_length=1)
     caption: str = Field(min_length=1, max_length=8000)
     scheduled_publish_time: datetime | None = None
-    calendar_key: str | None = Field(default=None, max_length=80)
+    calendar_key: str | None = Field(default=None, max_length=120)
     calendar_sale_id: int | None = None
     photo_ids: list[str] = Field(default_factory=list, max_length=10)
 

@@ -573,6 +573,7 @@ def startup() -> None:
     _ensure_user_assigned_sale_column()
     _ensure_lot_engagement_column()
     _ensure_facebook_account_columns()
+    _ensure_engagement_bucket_names()
 
 
 def _ensure_sale_zip_kind_column() -> None:
@@ -702,7 +703,7 @@ def _ensure_facebook_page_post_columns() -> None:
     cols = {c["name"] for c in insp.get_columns("facebook_page_posts")}
     stmts: list[str] = []
     if "calendar_key" not in cols:
-        stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_key VARCHAR(80)")
+        stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_key VARCHAR(120)")
     if "calendar_sale_id" not in cols:
         stmts.append("ALTER TABLE facebook_page_posts ADD COLUMN calendar_sale_id INTEGER")
     with engine.begin() as conn:
@@ -711,6 +712,21 @@ def _ensure_facebook_page_post_columns() -> None:
         from app.services.facebook_calendar import rewrite_legacy_calendar_keys
 
         rewrite_legacy_calendar_keys(conn)
+
+
+def _ensure_engagement_bucket_names() -> None:
+    from sqlalchemy import inspect, text
+
+    from app.services.engagement_store import rewrite_stored_rescue_buckets
+
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        if "engagement_snapshots" in insp.get_table_names():
+            rewrite_stored_rescue_buckets(conn)
+        if "facebook_page_posts" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("facebook_page_posts")}
+            if "calendar_key" in cols and engine.dialect.name.startswith("postgres"):
+                conn.execute(text("ALTER TABLE facebook_page_posts ALTER COLUMN calendar_key TYPE VARCHAR(120)"))
 
 
 def _ensure_lot_engagement_column() -> None:
