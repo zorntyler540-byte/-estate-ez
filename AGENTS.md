@@ -140,16 +140,17 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `photo_role=tape`. Tape stays in the Estate-Ez gallery for SKU reference. Lots that were
   already posted keep whatever photos are on CT Bids until someone edits that item there;
   do not Resend all. Posting is dashboard-only — there is no browser extension.
-- **Audience hunt is public groups only.** `POST /lots/{id}/audience-hunt` uses Gemini Pro + Google
-  Search, then a separate structured JSON call (schema + search tools 400 together). It stores
-  group names/URLs and two paste-ready blurbs on the lot. It does not scrape Facebook members,
-  harvest emails, or auto-post. **United States groups only** — drop UK/Canada/EU/worldwide clubs
-  (small items can ship inside the US). Everyday household lots skip the model unless `force=true`.
-  `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
+- **Find groups is public groups only (Facebook tab).** `POST /lots/{id}/audience-hunt` and
+  `POST /sales/{id}/audience-hunt` use Gemini Pro + Google Search (`tools=[GoogleSearch()]`),
+  then a separate structured JSON call (schema + search tools 400 together). That is how real
+  Facebook group names/URLs are found — not Meta's Graph API (which cannot search Groups).
+  Results are stored on the lot; `GET /sales/{id}/facebook-groups` aggregates them and adds
+  facebook.com/search/groups fallback links. It does not scrape members, harvest emails, or
+  auto-post. **United States groups only.** Everyday household lots skip the model unless
+  `force=true`. `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
   Hunt copies `GOOGLE_API_KEY` from app settings into `os.environ` (same as catalog jobs) because
   `pipeline._get_client` does not read `.env` itself.
-  Existing lots: lot page **Find audience**, or dashboard **Find audience for this sale**
-  (`POST /sales/{id}/audience-hunt`) which queues unhunted specialist lots sequentially.
+  UI: Facebook tab **Find groups** (sale-wide sequential hunt). Lot page and dashboard link there.
   Sale-wide progress is `GET /sales/{id}/audience-hunt` (in-memory in the API process; poll ~1.5s).
   Lot rows include `audience_hunting` + `audience_hunt_phase` (`queued` / `searching` / `structuring`).
   Each hunt/skip writes `audience_hunt_events` (metered Pro tokens). Admin analytics

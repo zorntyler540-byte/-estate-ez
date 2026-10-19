@@ -17,7 +17,7 @@ from app.config import cors_allow_origins, settings
 from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, Photo, Sale, User
 from app.services.ctseller import jpeg_bytes_for_ctseller_post
 from app.services.ctbids_urls import CTBIDS_ITEM_URL, ctbids_sale_url
-from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_facebook_caption
+from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_facebook_caption, group_post_copy
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
 from app.services.meta_graph import (
     GRAPH_API_VERSION,
@@ -517,6 +517,14 @@ def preview_posts(
             sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
             sale_url=sale_url,
         )
+        group_caption = group_post_copy(
+            title=lot.auction_title or "",
+            description=lot.professional_description or "",
+            caption=caption,
+            item_url=item_url,
+            close_at=close_at,
+            sale_url=sale_url,
+        )
         drafts.append(
             {
                 "lot_id": lot.id,
@@ -525,6 +533,7 @@ def preview_posts(
                 "item_url": item_url,
                 "sale_ends_at": close_at,
                 "caption": caption,
+                "group_caption": group_caption,
                 "photo_ids": [p.id for p in photos],
                 "photo_count": len(photos),
                 "already_posted": bool(existing),

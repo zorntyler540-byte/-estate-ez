@@ -448,7 +448,7 @@ def save_audience_payload(lot: Lot, payload: dict[str, Any]) -> None:
     lot.audience_json = json.dumps(parse_audience_payload(payload), ensure_ascii=True)
 
 
-def _lot_research_text(lot: Lot) -> str:
+def _lot_research_text(lot: Lot, *, location: str = "") -> str:
     brands = []
     try:
         brands = json.loads(lot.brands_json or "[]")
@@ -461,7 +461,10 @@ def _lot_research_text(lot: Lot) -> str:
         specs = []
     brand_s = ", ".join(str(b) for b in brands if str(b).strip()) or "(none)"
     spec_s = "\n".join(f"- {s}" for s in specs[:12]) or "(none)"
+    loc = (location or "").strip()
+    loc_line = f"Estate sale location (United States): {loc}\n" if loc else ""
     return (
+        f"{loc_line}"
         f"Title: {(lot.auction_title or '').strip() or '(untitled)'}\n"
         f"SKU: {(lot.sku or '').strip() or '(none)'}\n"
         f"CT category: {(lot.ct_category or '').strip() or '(none)'}\n"
@@ -469,6 +472,58 @@ def _lot_research_text(lot: Lot) -> str:
         f"Condition: {(lot.condition_text or '').strip() or '(none)'}\n"
         f"Description: {(lot.professional_description or '').strip() or '(none)'}\n"
         f"Specs:\n{spec_s}\n"
+    )
+
+
+def location_for_lot(lot: Lot) -> str:
+    """City/metro from the franchise account, Facebook Page, or sale name."""
+    from app.models import Account, Sale
+    from app.services.facebook_groups import infer_location_label
+
+    try:
+        session = object_session(lot)
+    except Exception:
+        session = None
+    account_name = ""
+    page_name = ""
+    sale_name = ""
+    if session is not None:
+        if lot.account_id:
+            account = session.get(Account, lot.account_id)
+            if account is not None:
+                account_name = account.name or ""
+                page_name = account.facebook_page_name or ""
+        if lot.sale_id:
+            sale = session.get(Sale, lot.sale_id)
+            if sale is not None:
+                sale_name = sale.name or ""
+    return infer_location_label(
+        account_name=account_name,
+        sale_name=sale_name,
+        page_name=page_name,
+    )
+
+
+def audience_research_prompt(lot: Lot, *, location: str = "") -> str:
+    """Plain-text research brief sent to Gemini Pro + Google Search."""
+    loc = (location or "").strip()
+    loc_bit = ""
+    if loc:
+        loc_bit = (
+            f"The estate sale is in {loc} (United States). Also search for public local Facebook "
+            f"groups in that city/metro (estate sales, buy/sell/trade, garage sale, antiques) in "
+            "addition to collector groups for this object.\n"
+        )
+    return (
+        "Find public United States collector communities for this estate lot.\n"
+        "Search for Facebook groups, collector clubs, forums, and association pages that would "
+        "care about this object. Prefer official/group URLs. Do not invent member names or emails.\n"
+        "United States only: staff paste into US groups; small items can ship inside the US; "
+        "pickup is at a US estate sale. Do not list UK, Canada, Australia, EU, or worldwide-only "
+        "clubs. US groups that collect foreign-made objects (English china, Japanese pottery) are OK.\n"
+        f"{loc_bit}"
+        "If this is generic household junk, say so.\n\n"
+        f"{_lot_research_text(lot, location=loc)}"
     )
 
 
@@ -497,20 +552,12 @@ def run_audience_research_and_structure(
     bag = usage if usage is not None else empty_hunt_usage()
     _ensure_gemini_env()
     client = _get_client()
-    listing = _lot_research_text(lot)
+    location = location_for_lot(lot)
+    listing = _lot_research_text(lot, location=location)
     if on_phase:
         on_phase("searching")
 
-    research_parts = [
-        "Find public United States collector communities for this estate lot.\n"
-        "Search for Facebook groups, collector clubs, forums, and association pages that would "
-        "care about this object. Prefer official/group URLs. Do not invent member names or emails.\n"
-        "United States only: staff paste into US groups; small items can ship inside the US; "
-        "pickup is at a US estate sale. Do not list UK, Canada, Australia, EU, or worldwide-only "
-        "clubs. US groups that collect foreign-made objects (English china, Japanese pottery) are OK.\n"
-        "If this is generic household junk, say so.\n\n"
-        f"{listing}"
-    ]
+    research_parts = [audience_research_prompt(lot, location=location)]
     research_config = types.GenerateContentConfig(
         system_instruction=(
             "You research where United States collectors of estate-sale items gather online. "

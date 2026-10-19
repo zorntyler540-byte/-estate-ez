@@ -30,10 +30,6 @@ import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
 import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
-import {
-  AudienceHuntProgress,
-  audienceHuntPhaseLabel
-} from "../../components/AudienceHuntProgress";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import { isClientRole, isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
 import {
@@ -1107,34 +1103,6 @@ type Lot = {
   audience_hold?: boolean;
 };
 
-type SaleAudienceHuntStatus = {
-  active: boolean;
-  total: number;
-  done: number;
-  current_lot_id?: string | null;
-  current_sku?: string | null;
-  current_phase?: string | null;
-  lots?: Array<{
-    lot_id: string;
-    sku?: string | null;
-    status: string;
-    phase?: string | null;
-  }>;
-};
-
-function saleHuntBarPercent(st: SaleAudienceHuntStatus): number {
-  if (st.total < 1) return 0;
-  const frac =
-    st.current_phase === "structuring"
-      ? 0.75
-      : st.current_phase === "searching"
-        ? 0.4
-        : st.active
-          ? 0.08
-          : 0;
-  return Math.min(100, ((st.done + (st.active ? frac : 0)) / st.total) * 100);
-}
-
 type CTSellerRemoteSale = {
   id: number;
   title: string;
@@ -2099,11 +2067,6 @@ export default function DashboardPage() {
   const [facebookConfigured, setFacebookConfigured] = useState(false);
   const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
   const [pendingMoveLotIds, setPendingMoveLotIds] = useState<string[] | null>(null);
-  const [audienceHuntBusy, setAudienceHuntBusy] = useState(false);
-  const [audienceHuntMsg, setAudienceHuntMsg] = useState("");
-  const [audienceHuntErr, setAudienceHuntErr] = useState("");
-  const [audienceHuntStatus, setAudienceHuntStatus] = useState<SaleAudienceHuntStatus | null>(null);
-  const [audienceHuntKick, setAudienceHuntKick] = useState(0);
   const [pullingCtSellerSales, setPullingCtSellerSales] = useState(false);
   const [pullCtSellerSalesMsg, setPullCtSellerSalesMsg] = useState("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
@@ -3010,42 +2973,6 @@ export default function DashboardPage() {
         setPhotoAdds([]);
       });
   }, [token, selectedSaleId, router, dataReloadNonce, inventorySkuFlagFilter]);
-
-  useEffect(() => {
-    if (!token || !selectedSaleId) {
-      setAudienceHuntStatus(null);
-      return;
-    }
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const pull = async () => {
-      try {
-        const st = (await apiFetch(
-          `/sales/${encodeURIComponent(selectedSaleId)}/audience-hunt`,
-          token
-        )) as SaleAudienceHuntStatus;
-        if (cancelled) return;
-        setAudienceHuntStatus(st);
-        if (st.active) {
-          setAudienceHuntMsg("");
-          timer = setTimeout(() => void pull(), 1500);
-        } else if (st.total > 0 && st.done >= st.total) {
-          setAudienceHuntMsg(
-            `Finished hunting ${st.done} lot${st.done === 1 ? "" : "s"}. Open Details → Audience for group links.`
-          );
-        }
-      } catch {
-        if (!cancelled) {
-          timer = setTimeout(() => void pull(), 2500);
-        }
-      }
-    };
-    void pull();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [token, selectedSaleId, audienceHuntKick]);
 
   useEffect(() => {
     if (!token) {
@@ -5975,65 +5902,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function bulkHuntSaleAudience() {
-    if (!token || !selectedSaleId) return;
-    const selectedIds = lots.filter((l) => ctSellerPostSelected.has(l.id)).map((l) => l.id);
-    const useSelection = selectedIds.length > 0;
-    const targetHint = useSelection ? selectedIds.length : lots.length;
-    if (targetHint < 1) {
-      setAudienceHuntErr("This sale has no lots yet.");
-      return;
-    }
-    if (
-      !window.confirm(
-        useSelection
-          ? `Find United States collector groups for ${selectedIds.length} selected lot${selectedIds.length === 1 ? "" : "s"}?\n\nEveryday household lots are skipped. Already-hunted lots are skipped. International/worldwide clubs are omitted. Does not recatalog photos or auto-post.`
-          : `Find United States collector groups for nicer lots already in this sale?\n\nEveryday household lots are skipped. Lots that already have a hunt are skipped. International/worldwide clubs are omitted. Gemini runs one lot at a time (about half a minute each). Does not recatalog photos or auto-post.`
-      )
-    ) {
-      return;
-    }
-    setAudienceHuntBusy(true);
-    setAudienceHuntErr("");
-    setAudienceHuntMsg(useSelection ? "Queueing selected lots…" : "Queueing specialist lots in this sale…");
-    try {
-      const body: { force: boolean; only_unhunted: boolean; limit: number; lot_ids?: string[] } = {
-        force: false,
-        only_unhunted: true,
-        limit: 40
-      };
-      if (useSelection) body.lot_ids = selectedIds;
-      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/audience-hunt`, token, {
-        method: "POST",
-        body: JSON.stringify(body)
-      })) as {
-        queued: number;
-        skipped: number;
-        results?: Array<{ sku?: string | null; skipped?: boolean; error?: string | null }>;
-      };
-      const skipSamples = (res.results || [])
-        .filter((r) => r.skipped && r.error)
-        .slice(0, 3)
-        .map((r) => `${r.sku || "lot"}: ${r.error}`);
-      if (res.queued < 1) {
-        setAudienceHuntMsg(
-          `Nothing queued — ${res.skipped} skipped (household, already hunted, or already running).`
-        );
-      } else {
-        setAudienceHuntMsg("");
-        setAudienceHuntKick((n) => n + 1);
-      }
-      if (skipSamples.length && res.queued < 1) {
-        setAudienceHuntErr(skipSamples.join(" · "));
-      }
-    } catch (e) {
-      setAudienceHuntErr(e instanceof Error ? e.message : "Audience hunt failed");
-      setAudienceHuntMsg("");
-    } finally {
-      setAudienceHuntBusy(false);
-    }
-  }
-
   async function purgeCurrentSaleCatalog() {
     if (!selectedSaleId) {
       setError("Select a sale first.");
@@ -7727,36 +7595,13 @@ export default function DashboardPage() {
             </button>
           ) : null}
           {isAccountOwner ? (
-            <button
-              type="button"
+            <Link
+              href="/facebook"
               className="ct-btn"
-              onClick={() => void bulkHuntSaleAudience()}
-              disabled={
-                audienceHuntBusy ||
-                Boolean(audienceHuntStatus?.active) ||
-                busyProcessing ||
-                !selectedSaleId ||
-                lots.length < 1
-              }
-              title={
-                audienceHuntStatus?.active
-                  ? "Audience hunt is running for this sale"
-                  : ctSellerSelectedCount > 0
-                    ? `Hunt United States collector groups for ${ctSellerSelectedCount} selected lot(s)`
-                    : "Hunt nicer lots already in this sale (US groups only; skips everyday household and already-hunted lots)"
-              }
+              title="Find public Facebook groups for this sale — moved to the Facebook tab"
             >
-              {audienceHuntBusy && !audienceHuntStatus?.active
-                ? "Queueing audience hunt…"
-                : audienceHuntStatus?.active
-                  ? `Hunting ${Math.min(
-                      audienceHuntStatus.total,
-                      audienceHuntStatus.done + 1
-                    )}/${audienceHuntStatus.total}…`
-                  : ctSellerSelectedCount > 0
-                    ? `Find audience for selected (${ctSellerSelectedCount})`
-                    : "Find audience for this sale"}
-            </button>
+              Find groups
+            </Link>
           ) : null}
           {ctSellerEligibleIds.length > 0 ? (
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
@@ -7848,38 +7693,6 @@ export default function DashboardPage() {
         {ctSellerBulkErr ? (
           <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
             {ctSellerBulkErr}
-          </div>
-        ) : null}
-        {audienceHuntStatus?.active ? (
-          <div style={{ marginTop: "0.75rem" }}>
-            <AudienceHuntProgress
-              title="Audience hunt"
-              done={
-                audienceHuntStatus.active
-                  ? Math.min(audienceHuntStatus.total, audienceHuntStatus.done + 1)
-                  : audienceHuntStatus.done
-              }
-              total={audienceHuntStatus.total}
-              percent={saleHuntBarPercent(audienceHuntStatus)}
-              phaseLabel={
-                audienceHuntStatus.current_sku
-                  ? `Lot ${audienceHuntStatus.current_sku}: ${audienceHuntPhaseLabel(
-                      audienceHuntStatus.current_phase
-                    )}`
-                  : audienceHuntPhaseLabel(audienceHuntStatus.current_phase)
-              }
-              lots={audienceHuntStatus.lots}
-            />
-          </div>
-        ) : null}
-        {audienceHuntMsg ? (
-          <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
-            {audienceHuntMsg}
-          </div>
-        ) : null}
-        {audienceHuntErr ? (
-          <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
-            {audienceHuntErr}
           </div>
         ) : null}
       </header>

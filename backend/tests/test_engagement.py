@@ -283,6 +283,11 @@ def test_calendar_uses_sale_end_and_stays_planned() -> None:
         "paste_copy"
     ].index("See the whole sale:")
     assert "See the whole sale: https://ctbids.com/estate-sale/1" in posts[-1]["paste_copy"]
+    assert "Cards" in posts[0]["group_copy"]
+    assert "Follow our Page" not in posts[0]["group_copy"]
+    assert "https://ctbids.com/estate-sale/1/item/2" in posts[0]["group_copy"]
+    assert "See the whole sale: https://ctbids.com/estate-sale/1" in posts[0]["group_copy"]
+    assert posts[0]["group_copy"].index("Cards") < posts[0]["group_copy"].index("https://ctbids.com/estate-sale/1/item/2")
     assert all(post["status"] == "Planned" for post in posts)
     facebook = [post for post in posts if post["platform"] == "Facebook"]
     assert facebook

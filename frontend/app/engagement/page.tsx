@@ -63,6 +63,7 @@ type CalendarPost = {
   lot_id?: string | null;
   photo_ids: string[];
   paste_copy: string;
+  group_copy?: string;
   status: string;
   preflight: string;
   slot_key?: string;
@@ -248,6 +249,7 @@ export default function EngagementPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<number | null>(null);
+  const [copiedGroup, setCopiedGroup] = useState<number | null>(null);
   const [facebookConfigured, setFacebookConfigured] = useState(false);
   const [accountRole, setAccountRole] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
@@ -369,8 +371,21 @@ export default function EngagementPage() {
     try {
       await navigator.clipboard.writeText(post.paste_copy);
       setCopied(post.order);
+      setCopiedGroup(null);
     } catch {
       setCopied(null);
+    }
+  }
+
+  async function copyGroupPost(post: CalendarPost) {
+    const text = (post.group_copy || "").trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedGroup(post.order);
+      setCopied(null);
+    } catch {
+      setCopiedGroup(null);
     }
   }
 
@@ -708,6 +723,17 @@ export default function EngagementPage() {
                           <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void copyPost(post)}>
                             {copied === post.order ? "Copied" : "Copy"}
                           </button>
+                          {post.group_copy ? (
+                            <button
+                              type="button"
+                              className="ct-btn ct-btn--ghost"
+                              style={{ marginLeft: "0.35rem" }}
+                              title="Shorter caption for sharing a Page post into a Facebook group"
+                              onClick={() => void copyGroupPost(post)}
+                            >
+                              {copiedGroup === post.order ? "Copied for groups" : "Copy for groups"}
+                            </button>
+                          ) : null}
                           <div className="ct-muted">{post.preflight}</div>
                         </td>
                         {canPostFacebook ? (

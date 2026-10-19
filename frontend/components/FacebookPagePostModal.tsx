@@ -31,6 +31,7 @@ type PreviewLot = {
   item_url: string;
   sale_ends_at?: string | null;
   caption: string;
+  group_caption?: string;
   photo_ids: string[];
   photo_count: number;
   already_posted: boolean;
@@ -113,6 +114,42 @@ function previewKey(lot: PreviewLot): string {
   return lot.calendar_key || lot.lot_id;
 }
 
+const SALE_PREFIX = "See the whole sale:";
+
+function groupFriendlyCopy(caption: string, itemUrl: string, fallback: string): string {
+  if (fallback && !caption.trim()) return fallback;
+  let text = caption.replace(/\s+$/, "");
+  if (text.endsWith(FOLLOW_HOOK)) {
+    text = text.slice(0, -FOLLOW_HOOK.length).replace(/\s+$/, "");
+  }
+  const body: string[] = [];
+  let bidding = "";
+  let saleLine = "";
+  let lotLine = "";
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line === FOLLOW_HOOK) continue;
+    if (/^#\w/.test(line) && !line.includes(" ")) continue;
+    if (/^Bidding closes\b/i.test(line)) {
+      bidding = line.endsWith(".") ? line : `${line}.`;
+      continue;
+    }
+    if (line.startsWith(SALE_PREFIX)) {
+      saleLine = line;
+      continue;
+    }
+    if (itemUrl && (line === itemUrl || line.replace(/\/$/, "") === itemUrl.replace(/\/$/, ""))) {
+      lotLine = itemUrl;
+      continue;
+    }
+    if (body.join(" ").length < 180) body.push(line);
+  }
+  const hook = body.join(" ").slice(0, 240).trim();
+  const parts = [hook, bidding, lotLine || itemUrl, saleLine].filter(Boolean);
+  return parts.join("\n\n").trim() || fallback;
+}
+
 export function FacebookPagePostModal({
   token,
   lotIds,
@@ -139,6 +176,7 @@ export function FacebookPagePostModal({
   const [customAt, setCustomAt] = useState("");
   const [results, setResults] = useState<PublishResult[] | null>(null);
   const [batchProgress, setBatchProgress] = useState("");
+  const [copiedGroup, setCopiedGroup] = useState("");
   const immediate = publishNow || (!calendarMode && scheduleMode === "now");
 
   const loadPreview = useCallback(
@@ -538,6 +576,24 @@ export function FacebookPagePostModal({
                         rows={8}
                         aria-label={`Caption for ${lot.sku || lot.title}`}
                       />
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        style={{ marginTop: "0.4rem" }}
+                        onClick={() => {
+                          const text = groupFriendlyCopy(
+                            captions[previewKey(lot)] || "",
+                            lot.item_url,
+                            lot.group_caption || ""
+                          );
+                          void navigator.clipboard.writeText(text).then(
+                            () => setCopiedGroup(previewKey(lot)),
+                            () => setError("Could not copy group caption")
+                          );
+                        }}
+                      >
+                        {copiedGroup === previewKey(lot) ? "Copied for groups" : "Copy for groups"}
+                      </button>
                     </>
                   )}
                 </article>

@@ -224,6 +224,81 @@ def ensure_sale_link(caption: str, sale_url: str) -> str:
     return arrange_facebook_caption(caption, sale_url=sale_url)
 
 
+_HASHTAG_LINE_RE = re.compile(r"^(?:#\w[\w-]*\s*)+$")
+
+
+def group_post_copy(
+    *,
+    title: str = "",
+    hook: str = "",
+    description: str = "",
+    caption: str = "",
+    item_url: str = "",
+    close_at: datetime | None = None,
+    sale_url: str = "",
+) -> str:
+    """Shorter paste for Facebook Groups: hook, close time, lot URL, sale URL. No follow, no hashtags."""
+    lot_url = (item_url or "").strip()
+    sale_line = sale_link_line(sale_url or ctbids_sale_url(item_url=lot_url))
+    close_s = _format_close_time_portable(close_at)
+    hook_line = ""
+    bidding = ""
+    source = (caption or "").strip()
+    if source:
+        arranged = arrange_facebook_caption(
+            source,
+            item_url=lot_url,
+            sale_url=sale_url or ctbids_sale_url(item_url=lot_url),
+            include_follow_hook=False,
+        )
+        body_lines: list[str] = []
+        for raw in arranged.splitlines():
+            stripped = raw.strip()
+            if not stripped:
+                if body_lines:
+                    break
+                continue
+            if stripped == FOLLOW_HOOK_LINE:
+                continue
+            if _HASHTAG_LINE_RE.match(stripped):
+                continue
+            if _BIDDING_LINE_RE.match(stripped):
+                bidding = stripped if stripped.endswith(".") else f"{stripped}."
+                continue
+            if lot_url and (stripped == lot_url or stripped.rstrip("/.") == lot_url.rstrip("/")):
+                continue
+            if sale_line and stripped == sale_line:
+                continue
+            if stripped.startswith(SALE_LINK_PREFIX):
+                continue
+            body_lines.append(stripped)
+            if sum(len(line) for line in body_lines) >= 180:
+                break
+        hook_line = " ".join(body_lines).strip()
+        if len(hook_line) > 240:
+            hook_line = hook_line[:237].rstrip() + "…"
+    if not hook_line:
+        hook_line = (hook or "").strip() or (title or "").strip() or "Estate lot"
+        name = (title or "").strip()
+        if name and name.lower() not in hook_line.lower():
+            hook_line = f"{hook_line}: {name}"
+        desc = (description or "").strip()
+        if desc and len(hook_line) < 80:
+            first = re.split(r"(?<=[.!?])\s+", desc, maxsplit=1)[0].strip()
+            if first and first.lower() not in hook_line.lower() and len(first) <= 140:
+                hook_line = f"{hook_line} {first}".strip()
+    if not bidding and close_s:
+        bidding = f"Bidding closes {close_s}."
+    parts = [hook_line]
+    if bidding:
+        parts.append(bidding)
+    if lot_url:
+        parts.append(lot_url)
+    if sale_line:
+        parts.append(sale_line)
+    return "\n\n".join(parts).strip()
+
+
 def _ensure_gemini_env() -> None:
     key = (settings.google_api_key or "").strip()
     if key:
