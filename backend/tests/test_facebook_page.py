@@ -21,7 +21,9 @@ from app.services.facebook_calendar import (
     calendar_key_aliases,
     calendar_slot_key,
     current_publish_target,
+    is_dated_slot_key,
     is_legacy_calendar_key,
+    is_undated_slot_key,
     migrate_calendar_key,
     photo_offset_for,
     slot_angle_for,
@@ -208,10 +210,17 @@ def test_calendar_slot_keys_include_slot_and_migrate_legacy() -> None:
     assert slot_id_from_local_time("18:00") == "1800"
     assert slot_id_from_local_time("17:40") == "1740"
     assert calendar_slot_key(12, "lot-1", "0900") == "pushcal:12:lot-1:0900"
+    assert calendar_slot_key(12, "lot-1", "0900", "2026-10-15") == "pushcal:12:lot-1:20261015:0900"
     assert is_legacy_calendar_key("pushcal:12:lot-1")
+    assert is_undated_slot_key("pushcal:12:lot-1:1215")
+    assert is_dated_slot_key("pushcal:12:lot-1:20261015:0900")
     assert migrate_calendar_key("pushcal:12:lot-1") == "pushcal:12:lot-1:0900"
+    assert migrate_calendar_key("pushcal:12:lot-1", when="2026-10-15") == "pushcal:12:lot-1:20261015:0900"
     assert migrate_calendar_key("pushcal:12:lot-1:1215") == "pushcal:12:lot-1:1215"
+    assert migrate_calendar_key("pushcal:12:lot-1:1215", when="2026-10-16") == "pushcal:12:lot-1:20261016:1215"
     assert "pushcal:12:lot-1" in calendar_key_aliases("pushcal:12:lot-1:0900")
+    assert "pushcal:12:lot-1:0900" in calendar_key_aliases("pushcal:12:lot-1:20261015:0900")
+    assert "pushcal:12:lot-1" in calendar_key_aliases("pushcal:12:lot-1:20261015:0900")
     assert current_publish_target("Instagram") == PUBLISH_TARGET_FACEBOOK_PAGE
     assert current_publish_target("TikTok") == PUBLISH_TARGET_FACEBOOK_PAGE
     assert current_publish_target("FB + IG Stories") == PUBLISH_TARGET_FACEBOOK_PAGE
@@ -793,13 +802,13 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert slot["facebook_can_post_now"] is True
         assert slot["facebook_can_cancel"] is False
         assert slot["facebook_blocked_reason"] is None
-        assert slot["slot_key"] == f"pushcal:12:{lot.id}:0900"
+        assert slot["slot_key"] == calendar_slot_key(12, lot.id, "0900", slot["post_date"])
         assert slot["publish_target"] == "facebook_page"
         assert slot["intended_platform"] == "Facebook"
         countdown = next(row for row in calendar if row["local_time"] == "17:40")
         assert countdown["lot_id"] == lot.id
         assert countdown["platform"] == "FB + IG Stories"
-        assert countdown["slot_key"] == f"pushcal:12:{lot.id}:1740"
+        assert countdown["slot_key"] == calendar_slot_key(12, lot.id, "1740", countdown["post_date"])
         assert countdown["facebook_schedulable"] is True
         assert countdown["publish_target"] == "facebook_page"
         assert client.get("/facebook/posts").json() == []
@@ -952,10 +961,12 @@ def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> Non
         assert patched.json()["calendar_auto_approve"] is True
         assert feeds
         scheduled = db.query(FacebookPagePost).filter(FacebookPagePost.status == "scheduled").all()
-        assert {row.calendar_key for row in scheduled} == {
-            f"pushcal:12:{lot.id}:0900",
-            f"pushcal:12:{lot.id}:1740",
-        }
+        keys = {row.calendar_key for row in scheduled}
+        assert keys
+        assert all(str(lot.id) in (key or "") for key in keys)
+        assert any((key or "").endswith(":0900") for key in keys)
+        assert any((key or "").endswith(":1740") for key in keys)
+        assert all(is_dated_slot_key(key or "") for key in keys)
     finally:
         _clear_overrides()
 
@@ -1023,7 +1034,9 @@ def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatc
     try:
         assert client.post("/integrations/engagement/snapshots", json=body).status_code == 200
         calendar = client.get("/engagement/sales/12/calendar").json()
-        by_time = {row["local_time"]: row for row in calendar if row["local_time"] != "17:40"}
+        by_time = {}
+        for row in calendar:
+            by_time.setdefault(row["local_time"], row)
         assert by_time["09:00"]["platform"] == "Facebook"
         assert by_time["12:15"]["platform"] == "Instagram"
         assert by_time["16:30"]["platform"] == "FB + IG Stories"
@@ -1032,6 +1045,7 @@ def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatc
             assert row["publish_target"] == "facebook_page"
             assert row["facebook_schedulable"] is True
             assert row["slot_key"].endswith(f":{slot_id_from_local_time(row['local_time'])}")
+            assert is_dated_slot_key(row["slot_key"])
             assert row["facebook_status"] == "planned"
         preview = client.post(
             "/engagement/sales/12/calendar/facebook/preview",
@@ -1164,7 +1178,7 @@ def test_legacy_calendar_key_still_matches_0900_slot(tmp_path, monkeypatch) -> N
         db.commit()
         calendar = client.get("/engagement/sales/12/calendar").json()
         morning = next(row for row in calendar if row["local_time"] == "09:00")
-        assert morning["slot_key"] == f"pushcal:12:{lot.id}:0900"
+        assert morning["slot_key"] == calendar_slot_key(12, lot.id, "0900", morning["post_date"])
         assert morning["facebook_status"] == "scheduled"
         assert morning["facebook_post_id"] == "111_legacy"
         assert morning["facebook_schedulable"] is False
