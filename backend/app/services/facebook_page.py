@@ -492,11 +492,34 @@ def preview_posts(
         lot = by_id[lid]
         snapshot = _latest_snapshot(db, lot)
         photos = _lot_photos(db, lot)[:MAX_PAGE_PHOTOS]
-        item_url = ctbids_lot_url(lot, snapshot=snapshot)
-        sale_url = ctbids_sale_url(
+        dest_item = ctbids_lot_url(lot, snapshot=snapshot)
+        dest_sale = ctbids_sale_url(
             sale_id=getattr(lot, "ctseller_sale_id", None),
             auction_url=(snapshot.auction_url if snapshot else "") or "",
-            item_url=item_url,
+            item_url=dest_item,
+        )
+        from app.services.click_tracking import (
+            CHANNEL_GROUP_SHARE,
+            CHANNEL_PAGE_POST,
+            apply_tracked_urls,
+            tracked_pair,
+        )
+
+        _di, _ds, item_url, sale_url = tracked_pair(
+            db,
+            account_id=account.id,
+            lot=lot,
+            channel=CHANNEL_PAGE_POST,
+            item_url=dest_item,
+            sale_url=dest_sale,
+        )
+        _gdi, _gds, group_item_url, group_sale_url = tracked_pair(
+            db,
+            account_id=account.id,
+            lot=lot,
+            channel=CHANNEL_GROUP_SHARE,
+            item_url=dest_item,
+            sale_url=dest_sale,
         )
         close_at = snapshot.sale_ends_at if snapshot else None
         if close_at is not None:
@@ -517,13 +540,27 @@ def preview_posts(
             sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
             sale_url=sale_url,
         )
+        caption = apply_tracked_urls(
+            caption,
+            dest_item=dest_item,
+            dest_sale=dest_sale,
+            short_item=item_url,
+            short_sale=sale_url,
+        )
         group_caption = group_post_copy(
             title=lot.auction_title or "",
             description=lot.professional_description or "",
             caption=caption,
-            item_url=item_url,
+            item_url=group_item_url,
             close_at=close_at,
-            sale_url=sale_url,
+            sale_url=group_sale_url,
+        )
+        group_caption = apply_tracked_urls(
+            group_caption,
+            dest_item=dest_item,
+            dest_sale=dest_sale,
+            short_item=group_item_url,
+            short_sale=group_sale_url,
         )
         drafts.append(
             {
@@ -552,6 +589,7 @@ def preview_posts(
             }
         )
     close_at = min(close_times) if close_times else None
+    db.commit()
     return {
         **status,
         "include_follow_hook": include_follow_hook,
@@ -726,6 +764,30 @@ def publish_posts(
             )
         db.add(record)
         db.flush()
+        from app.services.click_tracking import (
+            CHANNEL_PAGE_POST,
+            bind_links_to_post,
+            rewrite_copy_with_tracked_links,
+        )
+
+        caption = rewrite_copy_with_tracked_links(
+            db,
+            account_id=account.id,
+            lot=lot,
+            text=caption,
+            channel=CHANNEL_PAGE_POST,
+            calendar_key=calendar_key or "",
+            facebook_post_id=record.id,
+        )
+        record.caption = caption
+        bind_links_to_post(
+            db,
+            account_id=account.id,
+            lot_id=lot.id,
+            channel=CHANNEL_PAGE_POST,
+            calendar_key=calendar_key or "",
+            facebook_post_id=record.id,
+        )
 
         try:
             media_ids: list[str] = []

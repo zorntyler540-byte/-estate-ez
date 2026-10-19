@@ -57,7 +57,15 @@ def engagement_out_for_lot(lot: Lot) -> EngagementOut | None:
     data = engagement_payload_for_lot(lot)
     if not data:
         return None
-    return EngagementOut.model_validate(data)
+    out = EngagementOut.model_validate(data)
+    from sqlalchemy.orm import object_session
+
+    from app.services.click_tracking import click_counts_by_lot
+
+    sess = object_session(lot)
+    if sess is not None and lot.id:
+        out.facebook_clicks = click_counts_by_lot(sess, lot.account_id, [lot.id]).get(lot.id, 0)
+    return out
 
 
 def _match_lot(
@@ -329,7 +337,13 @@ def list_engagement_sales(db: Session, account_id: str) -> list[EngagementSaleSu
     return summaries
 
 
-def _queue_item(db: Session, account_id: str, row: EngagementSnapshot) -> EngagementQueueItem:
+def _queue_item(
+    db: Session,
+    account_id: str,
+    row: EngagementSnapshot,
+    *,
+    facebook_clicks: int = 0,
+) -> EngagementQueueItem:
     photo_ids = _listing_photo_ids(db, account_id, row.lot_id) if row.lot_id else []
     return EngagementQueueItem(
         sku=row.sku or "",
@@ -355,6 +369,7 @@ def _queue_item(db: Session, account_id: str, row: EngagementSnapshot) -> Engage
         push_rank=row.push_rank,
         ctseller_sale_id=row.ctseller_sale_id,
         ctseller_item_id=row.ctseller_item_id,
+        facebook_clicks=int(facebook_clicks or 0),
     )
 
 
@@ -363,7 +378,17 @@ def engagement_sale_detail(db: Session, account_id: str, ctseller_sale_id: int) 
     if not rows:
         return None
     latest = max(rows, key=lambda row: row.captured_at or datetime.min.replace(tzinfo=timezone.utc))
-    items = [_queue_item(db, account_id, row) for row in rows]
+    from app.services.click_tracking import click_counts_by_lot
+
+    click_map = click_counts_by_lot(
+        db,
+        account_id,
+        [str(row.lot_id) for row in rows if row.lot_id],
+    )
+    items = [
+        _queue_item(db, account_id, row, facebook_clicks=click_map.get(str(row.lot_id or ""), 0))
+        for row in rows
+    ]
     items.sort(key=lambda item: (item.push_rank is None, item.push_rank or 0, item.sku))
     counts = _bucket_counts(rows)
     return EngagementSaleOut(

@@ -1066,6 +1066,9 @@ class EngagementOut(BaseModel):
     push_rank: int | None = None
     ctseller_sale_id: int | None = None
     ctseller_item_id: int | None = None
+    # Counted Facebook /go/ clicks for this lot. Available to Push/Rescue scoring;
+    # bucket thresholds are unchanged.
+    facebook_clicks: int = 0
 
 
 class EngagementQueueItem(EngagementOut):
@@ -1293,6 +1296,37 @@ class FacebookPagePostOut(BaseModel):
     posted_at: datetime | None = None
     error_message: str | None = None
     created_at: datetime
+
+
+class FacebookClickDayOut(BaseModel):
+    day: str
+    clicks: int
+
+
+class FacebookClickLotOut(BaseModel):
+    lot_id: str | None = None
+    sku: str = ""
+    title: str = ""
+    clicks: int = 0
+
+
+class FacebookClickPostOut(BaseModel):
+    facebook_post_id: str | None = None
+    calendar_key: str = ""
+    channel: str = "page_post"
+    lot_id: str | None = None
+    sku: str = ""
+    title: str = ""
+    label: str = ""
+    clicks: int = 0
+
+
+class FacebookClickReportOut(BaseModel):
+    sale_id: str
+    total: int = 0
+    by_day: list[FacebookClickDayOut] = Field(default_factory=list)
+    by_lot: list[FacebookClickLotOut] = Field(default_factory=list)
+    by_post: list[FacebookClickPostOut] = Field(default_factory=list)
 
 
 class AppraisalCheckOut(BaseModel):

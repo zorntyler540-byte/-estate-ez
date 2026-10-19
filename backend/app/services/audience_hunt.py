@@ -659,6 +659,19 @@ def run_audience_hunt_for_lot(
     try:
         payload = run_audience_research_and_structure(lot, usage, on_phase=on_phase)
         save_audience_payload(lot, payload)
+        blurb = str(payload.get("blurb_ctbids") or "").strip()
+        if blurb:
+            from app.services.click_tracking import CHANNEL_GROUP_SHARE, rewrite_copy_with_tracked_links
+
+            payload["blurb_ctbids"] = rewrite_copy_with_tracked_links(
+                db,
+                account_id=lot.account_id,
+                lot=lot,
+                text=blurb,
+                channel=CHANNEL_GROUP_SHARE,
+                append_if_missing=True,
+            )
+            save_audience_payload(lot, payload)
         if payload.get("recommend_hold") and not lot.audience_hold:
             lot.audience_hold = True
         record_audience_hunt_event(lot, payload=payload, usage=usage)

@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sse_starlette import EventSourceResponse
 
 from app.engagement_routes import router as engagement_router
+from app.click_routes import router as click_router
 from app.facebook_routes import router as facebook_router
 from app.auth import (
     create_access_token,
@@ -284,6 +285,7 @@ from app.catalog_limits import (
 app = FastAPI(title=settings.app_name)
 app.include_router(engagement_router)
 app.include_router(facebook_router)
+app.include_router(click_router)
 _LOG = logging.getLogger("app.main")
 
 
