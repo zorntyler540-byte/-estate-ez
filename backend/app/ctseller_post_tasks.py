@@ -259,7 +259,6 @@ def _run_sale_post(
             return
 
         location_id = detail.get("locationid")
-        irm = detail.get("saleitemreceiptmethod")
         tax = detail.get("tax")
         buyers_premium = detail.get("buyerspremium")
 
@@ -296,7 +295,8 @@ def _run_sale_post(
                         client=client,
                         remote_sale_id=int(remote_sale_id),
                         location_id=location_id,
-                        item_receipt_method=irm,
+                        # Always pickup and shipping. Staff change it on the item.
+                        item_receipt_method=None,
                         force=force,
                         allowed_areas=allowed_areas,
                         tax=tax,
