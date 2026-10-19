@@ -951,6 +951,37 @@ class SaleAudienceHuntStatusOut(BaseModel):
     lots: list[SaleAudienceHuntLotProgress] = Field(default_factory=list)
 
 
+class FacebookGroupHitOut(BaseModel):
+    name: str
+    url: str = ""
+    why: str = ""
+    kind: str = "interest"
+    lot_id: str | None = None
+    sku: str | None = None
+
+
+class FacebookGroupSearchOut(BaseModel):
+    query: str
+    url: str
+    why: str = ""
+    kind: str = "interest"
+
+
+class FacebookGroupsOut(BaseModel):
+    """Real Google-Search group hits for a sale, plus Facebook search-link fallbacks."""
+
+    sale_id: str
+    sale_name: str = ""
+    location: str = ""
+    locations: list[str] = Field(default_factory=list)
+    groups: list[FacebookGroupHitOut] = Field(default_factory=list)
+    searches: list[FacebookGroupSearchOut] = Field(default_factory=list)
+    hunted_lots: int = 0
+    lot_count: int = 0
+    tips: str = ""
+    hunt: SaleAudienceHuntStatusOut = Field(default_factory=SaleAudienceHuntStatusOut)
+
+
 class MergeLotsIn(BaseModel):
     """Merge ``source_lot_id`` into this lot: all photos move here, then the source lot row is deleted."""
 
@@ -1077,6 +1108,7 @@ class SocialCalendarPost(BaseModel):
     lot_id: str | None = None
     photo_ids: list[str] = Field(default_factory=list)
     paste_copy: str = ""
+    group_copy: str = ""
     status: str = "Planned"
     preflight: str = ""
     slot_key: str = ""
@@ -1152,6 +1184,7 @@ class FacebookPreviewLotOut(BaseModel):
     item_url: str = ""
     sale_ends_at: datetime | None = None
     caption: str = ""
+    group_caption: str = ""
     photo_ids: list[str] = Field(default_factory=list)
     photo_count: int = 0
     already_posted: bool = False

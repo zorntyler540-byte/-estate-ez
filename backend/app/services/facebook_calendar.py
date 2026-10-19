@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, User
 from app.services.engagement import PACIFIC, build_social_calendar
 from app.services.ctbids_urls import ctbids_sale_url
-from app.services.facebook_caption import draft_facebook_caption
+from app.services.facebook_caption import draft_facebook_caption, group_post_copy
 from app.services.facebook_crypto import unseal_facebook_secret
 from app.services.facebook_page import (
     SCHEDULE_MAX_LEAD,
@@ -504,6 +504,15 @@ def _draft_item(
         angle=angle,
         sale_url=sale_url,
     )
+    group_caption = group_post_copy(
+        title=lot.auction_title or slot.get("title") or "",
+        hook=str(slot.get("hook") or ""),
+        description=lot.professional_description or "",
+        caption=caption,
+        item_url=item_url,
+        close_at=close_at,
+        sale_url=sale_url,
+    )
     return {
         "lot_id": lot.id,
         "sku": lot.sku,
@@ -511,6 +520,7 @@ def _draft_item(
         "item_url": item_url,
         "sale_ends_at": close_at,
         "caption": caption,
+        "group_caption": group_caption,
         "photo_ids": [p.id for p in photos],
         "photo_count": len(photos),
         "scheduled_publish_time": slot["when"],

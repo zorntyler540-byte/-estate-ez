@@ -11,6 +11,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
+from app.services.facebook_caption import group_post_copy
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -314,6 +315,8 @@ def build_social_calendar(
             index += 1
             title = str(row.get("title") or row.get("sku") or "Lot").strip()
             url = str(row.get("item_url") or "").strip()
+            sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
+            slot_hook = "Closing day: " + hook if closing else hook
             posts.append(
                 {
                     "order": len(posts) + 1,
@@ -321,7 +324,7 @@ def build_social_calendar(
                     "local_time": slot_time.strftime("%H:%M"),
                     "zone": "PT",
                     "platform": platform,
-                    "hook": "Closing day: " + hook if closing else hook,
+                    "hook": slot_hook,
                     "post_type": fmt,
                     "sku": row.get("sku") or "",
                     "title": title,
@@ -336,8 +339,14 @@ def build_social_calendar(
                         watchers=int(row.get("watchers") or 0),
                         item_url=url,
                         closing=closing,
-                        auction_url=auction_url
-                        or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url),
+                        auction_url=sale_url,
+                    ),
+                    "group_copy": group_post_copy(
+                        title=title,
+                        hook=slot_hook,
+                        item_url=url,
+                        close_at=sale_ends_at,
+                        sale_url=sale_url,
                     ),
                     "status": "Planned",
                     "preflight": PREFLIGHT,
@@ -351,6 +360,7 @@ def build_social_calendar(
         if end_day >= days[0]:
             title = str(top.get("title") or top.get("sku") or "Lot").strip()
             url = str(top.get("item_url") or "").strip()
+            sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
             posts.append(
                 {
                     "order": len(posts) + 1,
@@ -373,8 +383,14 @@ def build_social_calendar(
                         watchers=int(top.get("watchers") or 0),
                         item_url=url,
                         closing=True,
-                        auction_url=auction_url
-                        or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url),
+                        auction_url=sale_url,
+                    ),
+                    "group_copy": group_post_copy(
+                        title=title,
+                        hook="Closing countdown",
+                        item_url=url,
+                        close_at=sale_ends_at,
+                        sale_url=sale_url,
                     ),
                     "status": "Planned",
                     "preflight": PREFLIGHT,

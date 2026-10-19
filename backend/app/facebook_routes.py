@@ -10,11 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import Account, EngagementSnapshot, FacebookPagePost, User
+from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, Sale, User
 from app.schemas import (
     FacebookCalendarApproveIn,
     FacebookCalendarCancelIn,
     FacebookCalendarPreviewIn,
+    FacebookGroupsOut,
     FacebookOAuthStartOut,
     FacebookPageChoiceOut,
     FacebookPagePostOut,
@@ -48,7 +49,9 @@ from app.services.facebook_page import (
     require_facebook_poster,
     select_page,
 )
+from app.services.facebook_groups import sale_facebook_groups_payload
 from app.services.roles import can_manage_integrations, is_owner
+from app import audience_tasks
 
 router = APIRouter()
 
@@ -423,6 +426,36 @@ def facebook_approve_calendar(
         done=len(combined),
         posted=posted,
         failed=failed,
+    )
+
+
+@router.get("/sales/{sale_id}/facebook-groups", response_model=FacebookGroupsOut)
+def sale_facebook_groups(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookGroupsOut:
+    """Real Gemini/Search group hits for this sale, plus Facebook search-link fallbacks.
+
+    Does not call the Graph API. Hunt itself is ``POST /sales/{id}/audience-hunt``.
+    """
+    sale = (
+        db.query(Sale)
+        .filter(Sale.id == sale_id, Sale.account_id == current.account_id)
+        .first()
+    )
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    account = _account(db, current)
+    lots = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .order_by(Lot.created_at.asc())
+        .all()
+    )
+    hunt = audience_tasks.sale_hunt_status(sale_id=sale.id, account_id=current.account_id)
+    return FacebookGroupsOut.model_validate(
+        sale_facebook_groups_payload(sale=sale, account=account, lots=lots, hunt_status=hunt)
     )
 
 

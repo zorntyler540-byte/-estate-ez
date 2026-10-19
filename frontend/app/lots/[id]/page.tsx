@@ -324,7 +324,6 @@ export default function LotDetailPage() {
   const [audienceHuntError, setAudienceHuntError] = useState("");
   const [audienceHuntNotice, setAudienceHuntNotice] = useState("");
   const [audienceCopyMsg, setAudienceCopyMsg] = useState("");
-  const [audienceForce, setAudienceForce] = useState(false);
   const [audienceHoldBusy, setAudienceHoldBusy] = useState(false);
   const audienceHuntPostAckRef = useRef(false);
   const audienceHuntSawActiveRef = useRef(false);
@@ -996,50 +995,6 @@ export default function LotDetailPage() {
         e instanceof Error ? parseFastApiErrorMessage(e.message) || "AI regenerate failed" : "AI regenerate failed"
       );
       setAiRegenerating(false);
-    }
-  }
-
-  async function findAudience() {
-    if (!lot || !token) return;
-    audienceHuntPostAckRef.current = false;
-    audienceHuntSawActiveRef.current = false;
-    setAudienceHunting(true);
-    setAudienceHuntError("");
-    setAudienceHuntNotice("");
-    setAudienceCopyMsg("");
-    try {
-      const updated = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/audience-hunt`, token, {
-        method: "POST",
-        body: JSON.stringify({ force: audienceForce })
-      })) as Lot;
-      setLot(updated);
-      audienceHuntPostAckRef.current = true;
-      if (updated.audience_hunting) {
-        audienceHuntSawActiveRef.current = true;
-        setAudienceHunting(true);
-        return;
-      }
-      setAudienceHunting(false);
-      if (updated.audience_hunt_error) {
-        setAudienceHuntError(parseFastApiErrorMessage(updated.audience_hunt_error));
-        return;
-      }
-      const skipped = Boolean(updated.audience?.skip_reason) && !(updated.audience?.groups?.length);
-      setAudienceHuntNotice(
-        skipped
-          ? updated.audience?.skip_reason || "Skipped — everyday household lot."
-          : updated.audience?.groups?.length
-            ? `Found ${updated.audience.groups.length} public group${updated.audience.groups.length === 1 ? "" : "s"}.`
-            : "Hunt finished — no public groups found."
-      );
-    } catch (e) {
-      audienceHuntPostAckRef.current = false;
-      audienceHuntSawActiveRef.current = false;
-      setAudienceHuntNotice("");
-      setAudienceHuntError(
-        e instanceof Error ? parseFastApiErrorMessage(e.message) || "Audience hunt failed" : "Audience hunt failed"
-      );
-      setAudienceHunting(false);
     }
   }
 
@@ -1841,7 +1796,7 @@ export default function LotDetailPage() {
       ) : null}
       {showAudienceHuntProgress ? (
         <AudienceHuntProgress
-          title="Audience hunt"
+          title="Finding groups"
           phaseLabel={audienceHuntPhaseLabel(lot?.audience_hunt_phase)}
           done={lot?.audience_hunt_phase === "structuring" ? 1 : 0}
           total={2}
@@ -1850,7 +1805,7 @@ export default function LotDetailPage() {
       ) : null}
       {audienceHuntError ? (
         <div className="ct-banner ct-banner--error" role="alert">
-          <strong style={{ display: "block", marginBottom: "0.2rem" }}>Audience hunt failed</strong>
+          <strong style={{ display: "block", marginBottom: "0.2rem" }}>Group hunt failed</strong>
           {audienceHuntError}
         </div>
       ) : null}
@@ -2096,12 +2051,11 @@ export default function LotDetailPage() {
         </section>
 
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
-          <h2 className="ct-dash-panel__title">Audience</h2>
+          <h2 className="ct-dash-panel__title">Groups</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            Find public **United States** collector groups for nicer or niche lots. Staff still paste
-            into the groups — this only hunts names and URLs. Everyday household lots are skipped unless
-            you force a hunt. International / worldwide clubs are omitted (small items can ship inside
-            the US). Does not scrape members or auto-post.
+            National US collector groups for this lot (from Gemini + Google Search; ships nationwide).
+            Hunt more groups on the <Link href="/facebook">Facebook</Link> tab. Staff still join and
+            share by hand — this does not scrape members or auto-post.
           </p>
           {audienceCopyMsg ? (
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">
@@ -2110,38 +2064,14 @@ export default function LotDetailPage() {
           ) : null}
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
             {isAccountOwner ? (
-              <button
-                type="button"
-                className="ct-btn ct-btn--primary"
-                onClick={() => void findAudience()}
-                disabled={showAudienceHuntProgress || saving}
-                aria-busy={showAudienceHuntProgress}
-              >
-                {showAudienceHuntProgress ? (
-                  <span className="ct-row" style={{ gap: "0.4rem", alignItems: "center" }}>
-                    <Loader2 size={16} className="ct-spin" aria-hidden />
-                    Hunting…
-                  </span>
-                ) : (
-                  "Find audience"
-                )}
-              </button>
+              <Link href="/facebook" className="ct-btn">
+                Find groups
+              </Link>
             ) : (
               <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-                Ask an owner to run a collector-group hunt. Existing results stay visible.
+                Ask an owner to run a group hunt on the Facebook tab. Existing results stay visible.
               </p>
             )}
-            {isAccountOwner ? (
-            <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
-              <input
-                type="checkbox"
-                checked={audienceForce}
-                onChange={(e) => setAudienceForce(e.target.checked)}
-                disabled={showAudienceHuntProgress}
-              />
-              <span className="ct-muted">Force hunt (even everyday lots)</span>
-            </label>
-            ) : null}
             <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
               <input
                 type="checkbox"

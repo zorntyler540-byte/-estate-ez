@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { FindGroupsPanel } from "../../components/FindGroupsPanel";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
+import { isOwnerRole, rememberAccountRole } from "../../lib/roles";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
@@ -61,6 +63,8 @@ function marketplaceText(lot: Lot): string {
 export default function FacebookPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
+  const [accountRole, setAccountRole] = useState("");
+  const isAccountOwner = isOwnerRole(accountRole);
   const [sales, setSales] = useState<Sale[]>([]);
   const [selectedSaleId, setSelectedSaleId] = useState("");
   const [lots, setLots] = useState<Lot[]>([]);
@@ -76,6 +80,13 @@ export default function FacebookPage() {
       return;
     }
     setSelectedSaleId(readStoredSaleId());
+    void apiFetch("/auth/me", t)
+      .then((me) => {
+        const role = String((me as { role?: string }).role || "");
+        rememberAccountRole(role);
+        setAccountRole(role);
+      })
+      .catch(() => setAccountRole(""));
     void apiFetch("/sales", t)
       .then((rows) => {
         const list = (rows as Sale[]).filter((s) => !s.closed_at);
@@ -187,12 +198,13 @@ export default function FacebookPage() {
         <header className="ct-page-header">
           <div>
             <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
-              Facebook Marketplace
+              Facebook
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Furniture captured for Marketplace only — separate from CT Bids / Sales dashboard
-              and from Facebook Page posts (lot details, dashboard selection, or the Push queue).
-              {selectedSale ? ` Showing items for ${selectedSale.name}.` : ""}
+              Find national US collector groups for this sale (Gemini + Google Search, not the
+              Groups API; items ship nationwide), copy group-friendly captions from Page posts, and
+              list furniture captured for Marketplace.
+              {selectedSale ? ` Showing ${selectedSale.name}.` : ""}
             </p>
           </div>
           <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadLots()} disabled={loading}>
@@ -203,7 +215,32 @@ export default function FacebookPage() {
         {error ? <p className="ct-error">{error}</p> : null}
         {copyStatus ? <p className="ct-muted" style={{ marginTop: 0 }}>{copyStatus}</p> : null}
 
+        {selectedSaleId ? (
+          <FindGroupsPanel
+            token={token}
+            saleId={selectedSaleId}
+            saleName={selectedSale?.name}
+            isOwner={isAccountOwner}
+          />
+        ) : (
+          <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
+            <h2 className="ct-dash-panel__title" style={{ margin: 0 }}>
+              Find groups
+            </h2>
+            <p className="ct-muted" style={{ margin: "0.35rem 0 0" }}>
+              Select a sale to hunt public Facebook groups and see search-link fallbacks.
+            </p>
+          </section>
+        )}
+
         <section className="ct-card ct-card--padded">
+          <h2 className="ct-dash-panel__title" style={{ marginTop: 0 }}>
+            Facebook Marketplace
+          </h2>
+          <p className="ct-muted" style={{ margin: "0 0 0.85rem" }}>
+            Furniture captured for Marketplace only — separate from CT Bids lots and from Facebook
+            Page posts.
+          </p>
           {loading && !lots.length ? (
             <p className="ct-muted" style={{ margin: 0 }}>
               Loading Facebook items…

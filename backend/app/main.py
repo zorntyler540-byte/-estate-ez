@@ -5103,7 +5103,7 @@ def hunt_lot_audience(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LotOut:
-    """Find public collector groups and draft outreach blurbs. Does not scrape or auto-post."""
+    """Find public US Facebook/collector groups (Gemini Pro + Google Search). Does not scrape or auto-post."""
     _require_can_run_audience_hunt(current)
     from app.services.audience_hunt import apply_skip_without_model, should_run_audience_hunt
 
@@ -5160,7 +5160,7 @@ def hunt_sale_audience(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SaleAudienceHuntOut:
-    """Queue collector-group hunts for existing lots. Does not recatalog photos or auto-post."""
+    """Queue Gemini + Google Search group hunts for existing lots. Does not recatalog or auto-post."""
     _require_can_run_audience_hunt(current)
     from app.services.audience_hunt import plan_sale_audience_hunts
 
