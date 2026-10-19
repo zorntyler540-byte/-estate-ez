@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -16,11 +17,13 @@ from app.models import Account, Lot, Photo, Sale, TrackedLink, TrackedLinkClick,
 from app.services.click_tracking import (
     CHANNEL_PAGE_POST,
     KIND_LOT,
+    click_tracking_in_captions,
     get_or_create_tracked_link,
     is_allowed_destination,
     is_preview_bot,
     purge_old_tracked_clicks,
     reset_rate_limits,
+    restore_ctbids_urls,
 )
 from app.services.facebook_crypto import seal_facebook_secret
 
@@ -202,10 +205,159 @@ def test_facebook_preview_crawler_is_not_counted(tmp_path) -> None:
         _clear()
 
 
-def test_preview_and_publish_use_short_links(tmp_path, monkeypatch) -> None:
+def test_local_and_railway_origins_are_not_printed_in_captions(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    assert click_tracking_in_captions() is False
+    monkeypatch.setattr(settings, "public_api_origin", "http://localhost:8000")
+    assert click_tracking_in_captions() is False
+    monkeypatch.setattr(
+        settings,
+        "public_api_origin",
+        "https://caringtransitions-ai-production.up.railway.app",
+    )
+    assert click_tracking_in_captions() is False
+    monkeypatch.setattr(settings, "public_api_origin", "https://go.example.com")
+    assert click_tracking_in_captions() is True
+
+
+def test_restore_go_urls_back_to_ctbids(tmp_path) -> None:
+    _client_http, db, account, _user, _sale, lot = _client(tmp_path)
+    try:
+        link = get_or_create_tracked_link(
+            db,
+            account_id=account.id,
+            sale_id=lot.sale_id,
+            lot_id=lot.id,
+            destination_url="https://ctbids.com/estate-sale/12/item/99",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert link is not None
+        leftover = (
+            f"Bid here\nhttps://caringtransitions-ai-production.up.railway.app/go/{link.code}\n"
+            "See the whole sale: https://ctbids.com/estate-sale/12"
+        )
+        restored = restore_ctbids_urls(db, leftover, account_id=account.id)
+        assert "/go/" not in restored
+        assert "https://ctbids.com/estate-sale/12/item/99" in restored
+        assert "railway.app" not in restored
+    finally:
+        _clear()
+
+
+def test_restore_does_not_resolve_other_account_code(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    client, db, account_a, _user, _sale, lot_a = _client(tmp_path)
+    published: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        published.append(message)
+        return "111_foreign"
+
+    try:
+        account_b = Account(id="acct-other", name="Other Franchise")
+        db.add(account_b)
+        db.flush()
+        link_b = get_or_create_tracked_link(
+            db,
+            account_id=account_b.id,
+            sale_id=None,
+            lot_id=None,
+            destination_url="https://ctbids.com/estate-sale/99/item/88",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert link_b is not None
+        leftover = (
+            f"Bid here\nhttps://caringtransitions-ai-production.up.railway.app/go/{link_b.code}"
+        )
+        restored = restore_ctbids_urls(
+            db,
+            leftover,
+            account_id=account_a.id,
+            fallback_item_url="https://ctbids.com/estate-sale/12/item/99",
+        )
+        assert "estate-sale/99/item/88" not in restored
+        assert "/go/" not in restored
+        assert "https://ctbids.com/estate-sale/12/item/99" in restored
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="media-1"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/facebook/posts",
+                json={"confirm": True, "items": [{"lot_id": lot_a.id, "caption": leftover}]},
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["results"][0]["ok"] is True
+        assert published
+        assert "estate-sale/99/item/88" not in published[0]
+        assert "/go/" not in published[0]
+        assert "https://ctbids.com/estate-sale/12/item/99" in published[0]
+    finally:
+        _clear()
+
+
+def test_publish_restores_leftover_go_urls_to_ctbids(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    client, db, account, _user, _sale, lot = _client(tmp_path)
+    published: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        published.append(message)
+        return "111_restore"
+
+    try:
+        link = get_or_create_tracked_link(
+            db,
+            account_id=account.id,
+            sale_id=lot.sale_id,
+            lot_id=lot.id,
+            destination_url="https://ctbids.com/estate-sale/12/item/99",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert link is not None
+        leftover = (
+            f"Bid here\nhttps://caringtransitions-ai-production.up.railway.app/go/{link.code}\n"
+            "See the whole sale: https://ctbids.com/estate-sale/12"
+        )
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="media-1"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/facebook/posts",
+                json={"confirm": True, "items": [{"lot_id": lot.id, "caption": leftover}]},
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["results"][0]["ok"] is True
+        assert published
+        assert "/go/" not in published[0]
+        assert "railway.app" not in published[0]
+        assert "https://ctbids.com/estate-sale/12/item/99" in published[0]
+        assert "See the whole sale: https://ctbids.com/estate-sale/12" in published[0]
+    finally:
+        _clear()
+
+
+def test_preview_and_publish_use_ctbids_urls_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "public_api_origin", "")
     client, db, _account, _user, sale, lot = _client(tmp_path)
     published: list[str] = []
 
@@ -217,11 +369,63 @@ def test_preview_and_publish_use_short_links(tmp_path, monkeypatch) -> None:
         preview = client.post("/facebook/posts/preview", json={"lot_ids": [lot.id]})
         assert preview.status_code == 200, preview.text
         row = preview.json()["lots"][0]
-        assert "/go/" in row["caption"]
+        assert "/go/" not in row["caption"]
+        assert "https://ctbids.com/estate-sale/" in row["caption"]
+        assert "/go/" not in row["group_caption"]
+        assert "https://ctbids.com/estate-sale/" in row["group_caption"]
+        assert "ctbids.com" in (row["item_url"] or "")
+        assert "/go/" not in (row["item_url"] or "")
+        db.expire_all()
+        assert db.query(TrackedLink).count() == 0
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="media-1"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/facebook/posts",
+                json={
+                    "confirm": True,
+                    "items": [{"lot_id": lot.id, "caption": row["caption"]}],
+                },
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["results"][0]["ok"] is True
+        assert published
+        assert "/go/" not in published[0]
+        assert "https://ctbids.com/estate-sale/" in published[0]
+
+        report = client.get(f"/facebook/clicks?sale_id={sale.id}")
+        assert report.status_code == 200
+        body = report.json()
+        assert body["total"] == 0
+        assert body["sale_id"] == sale.id
+    finally:
+        _clear()
+
+
+def test_preview_and_publish_use_short_links_when_tracking_host_set(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "public_api_origin", "https://go.example.com")
+    client, db, _account, _user, sale, lot = _client(tmp_path)
+    published: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        published.append(message)
+        return "111_clk"
+
+    try:
+        preview = client.post("/facebook/posts/preview", json={"lot_ids": [lot.id]})
+        assert preview.status_code == 200, preview.text
+        row = preview.json()["lots"][0]
+        assert "https://go.example.com/go/" in row["caption"]
         assert "ctbids.com" not in row["caption"]
-        assert "/go/" in row["group_caption"]
+        assert "https://go.example.com/go/" in row["group_caption"]
         assert "ctbids.com" not in row["group_caption"]
-        assert "/go/" in (row["item_url"] or "")
+        assert "https://go.example.com/go/" in (row["item_url"] or "")
         db.expire_all()
         links = db.query(TrackedLink).all()
         assert len(links) >= 2
@@ -243,7 +447,7 @@ def test_preview_and_publish_use_short_links(tmp_path, monkeypatch) -> None:
         assert posted.status_code == 200, posted.text
         assert posted.json()["results"][0]["ok"] is True
         assert published
-        assert "/go/" in published[0]
+        assert "https://go.example.com/go/" in published[0]
         assert "ctbids.com" not in published[0]
 
         report = client.get(f"/facebook/clicks?sale_id={sale.id}")
@@ -308,5 +512,71 @@ def test_click_raw_rows_are_capped_and_report_uses_daily_counts(tmp_path, monkey
         assert report["total"] == 2
         n = purge_old_tracked_clicks(db, older_than_days=1)
         assert n == 0
+    finally:
+        _clear()
+
+
+def test_lot_payload_share_caption_restores_owned_go_and_ignores_foreign(
+    tmp_path, monkeypatch
+) -> None:
+    """Find-groups share caption comes from GET /lots/{id} → audience.blurb_ctbids."""
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    client, db, account_a, _user, _sale, lot_a = _client(tmp_path)
+    try:
+        empty = client.get(f"/lots/{lot_a.id}")
+        assert empty.status_code == 200, empty.text
+        assert (empty.json().get("audience") or {}).get("blurb_ctbids") == ""
+
+        own = get_or_create_tracked_link(
+            db,
+            account_id=account_a.id,
+            sale_id=lot_a.sale_id,
+            lot_id=lot_a.id,
+            destination_url="https://ctbids.com/estate-sale/12/item/99",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        account_b = Account(id="acct-other-blurb", name="Other Franchise")
+        db.add(account_b)
+        db.flush()
+        foreign = get_or_create_tracked_link(
+            db,
+            account_id=account_b.id,
+            sale_id=None,
+            lot_id=None,
+            destination_url="https://ctbids.com/estate-sale/99/item/88",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert own is not None and foreign is not None
+
+        lot_a.audience_json = json.dumps(
+            {
+                "worthy": True,
+                "groups": [
+                    {
+                        "name": "Fenton Glass Collectors USA",
+                        "url": "https://www.facebook.com/groups/fentonusa",
+                        "why": "glass",
+                    }
+                ],
+                "blurb_ctbids": (
+                    f"Come bid.\n"
+                    f"https://caringtransitions-ai-production.up.railway.app/go/{own.code}\n"
+                    f"https://caringtransitions-ai-production.up.railway.app/go/{foreign.code}"
+                ),
+            }
+        )
+        db.add(lot_a)
+        db.commit()
+
+        res = client.get(f"/lots/{lot_a.id}")
+        assert res.status_code == 200, res.text
+        blurb = (res.json().get("audience") or {}).get("blurb_ctbids") or ""
+        assert "Come bid." in blurb
+        assert "https://ctbids.com/estate-sale/12/item/99" in blurb
+        assert "estate-sale/99/item/88" not in blurb
+        assert "/go/" not in blurb
     finally:
         _clear()
