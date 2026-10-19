@@ -1,0 +1,55 @@
+{
+  "proposed_verdict": "needs_validation",
+  "fingerprint": "supply.eas.production-ota-unbound-from-git",
+  "title": "Production EAS Update channel can replace phone JS without an in-repo git digest gate",
+  "description": "TestFlight/production binaries load JS from the Expo updates URL for project dfb4d2a5-1b94-449c-bc28-43466a46803d on channel production, with checkAutomatically ON_LOAD and runtimeVersion 1.1.0. The repo has no GitHub Actions to build, attest, or promote that payload from a git SHA. Anyone who can run eas update --channel production against that project can change field-app behavior independently of git. Expo collaborator lists and token holders were not observed and must not be probed.",
+  "claimed_root_cause": "The phone updater is bound to a mutable EAS channel name and Expo project URL, not to an in-repo immutable digest or CI promotion workflow.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "mobile/eas.json",
+      "line": 27,
+      "scope": "build.production.channel",
+      "description": "EAS production profile publishes to channel production."
+    },
+    {
+      "kind": "propagation",
+      "file": "mobile/app.json",
+      "line": 11,
+      "scope": "expo.updates",
+      "description": "Enabled updates.url points at u.expo.dev for this project, checkAutomatically ON_LOAD, fallbackToCacheTimeout 0."
+    },
+    {
+      "kind": "sink",
+      "file": "mobile/app.json",
+      "line": 10,
+      "scope": "runtimeVersion 1.1.0",
+      "description": "Installed 1.1.0 binaries accept any update Expo serves for that runtime and production channel, with no in-repo workflow binding the bundle to a git commit."
+    }
+  ],
+  "evidence": [
+    {
+      "file": "mobile/app.json",
+      "line": 16,
+      "description": "updates.checkAutomatically is ON_LOAD so a published channel payload is applied at app start."
+    },
+    {
+      "file": "mobile/eas.json",
+      "line": 29,
+      "description": "Production EAS build.env pins EXPO_PUBLIC_API_BASE to the Railway API; eas update is a separate publish path that does not require this repo's CI."
+    },
+    {
+      "file": "DEPLOY.md",
+      "line": 193,
+      "description": "Server updates are git-push rebuilds; mobile OTA is not described as a digest-pinned promotion in that deploy path, and no .github workflows exist in scope."
+    }
+  ],
+  "blockers": [
+    "Expo project membership, token scope, and last production-channel publish SHA are account facts, not source.",
+    "This run must not call Expo or eas whoami, and must not publish an update.",
+    "Whether runtime 1.1.0 binaries are what field phones run is an owner-observed install fact."
+  ],
+  "validation_plan": {
+    "deployment": "Owner, in the Expo dashboard, lists production-channel publishes against git SHAs, reviews who can run eas update, and confirms runtimeVersion 1.1.0 is the only live binary. Do not publish or roll back from this agent."
+  }
+}

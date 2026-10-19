@@ -1,0 +1,77 @@
+{
+  "proposed_verdict": "needs_validation",
+  "fingerprint": "facebook.oauth.callback.state-only-binding",
+  "title": "Unauthenticated Facebook OAuth callback writes Page tokens from HS256 state alone",
+  "description": "GET /integrations/facebook/oauth/callback is unauthenticated. A 15-minute HS256 JWT signed with SECRET_KEY (purpose=meta_oauth, account_id, user_id, exp; no aud, iss, or jti) is enough to exchange a Facebook code and persist user and Page access tokens on the account named in state. There is no PKCE verifier, no one-time state store, and no check that the browser is the owner who called /oauth/start. A signed start URL is therefore a transferable capability: a Facebook admin who completes an attacker-started dialog binds their Page tokens to the attacker tenant, and a stolen owner start URL lets another Facebook user overwrite that tenant's stored Page connection. Staff JWTs are not accepted as state because they lack purpose=meta_oauth. Meta redirect_uri is taken from settings, not Host.",
+  "claimed_root_cause": "The callback trusts only decode_oauth_state on a SECRET_KEY HS256 JWT and then complete_oauth writes sealed Facebook tokens without session binding, PKCE, audience, or single-use state.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/facebook_routes.py",
+      "line": 114,
+      "scope": "facebook_oauth_callback",
+      "description": "Unauthenticated GET receives Facebook code and state and calls complete_oauth."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 85,
+      "scope": "decode_oauth_state",
+      "description": "jwt.decode verifies HS256 and exp with verify_aud False; only purpose, account_id, and user_id are checked."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 176,
+      "scope": "complete_oauth",
+      "description": "State account/user are loaded; is_owner is required, but no current Bearer or cookie is required."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 211,
+      "scope": "complete_oauth",
+      "description": "Facebook user and Page tokens are sealed onto the state-selected account and committed."
+    }
+  ],
+  "evidence": [
+    {
+      "file": "backend/app/facebook_routes.py",
+      "line": 114,
+      "description": "Callback route declares no Depends(get_current_user)."
+    },
+    {
+      "file": "backend/app/services/facebook_page.py",
+      "line": 73,
+      "description": "State claims are purpose, account_id, user_id, iat, exp; no aud, iss, jti, or nonce."
+    },
+    {
+      "file": "backend/app/services/facebook_page.py",
+      "line": 91,
+      "description": "decode options require exp and disable audience verification."
+    },
+    {
+      "file": "backend/app/services/meta_graph.py",
+      "line": 49,
+      "description": "oauth_dialog_url sends code flow without code_challenge."
+    },
+    {
+      "file": "backend/app/auth.py",
+      "line": 46,
+      "description": "Staff access tokens use the same SECRET_KEY and also set verify_aud False, but omit purpose."
+    },
+    {
+      "file": "backend/tests/test_facebook_page.py",
+      "line": 408,
+      "description": "Unit test completes OAuth and stores a Page token using only code and state."
+    }
+  ],
+  "blockers": [
+    "No OS-enforced sandbox and no parent scratch-promotion procedure, so target code was not executed.",
+    "Facebook authorization-code single-use, consent-screen behavior, and the deployed Meta Valid OAuth Redirect URIs list are not observable from source."
+  ],
+  "validation_plan": {
+    "local": "With Graph helpers mocked as in test_oauth_callback_stores_encrypted_page_token, GET the callback without Authorization using encode_oauth_state for account A and a dummy code; assert A receives the sealed tokens. Repeat with a staff JWT as state and expect 400. Repeat with account A state while the TestClient is authenticated as a different user and assert tokens still land on A.",
+    "deployment": "Owner compares META_OAUTH_REDIRECT_URI to the Meta app allowlist and confirms Facebook will not send a code to any other URI. Confirm production sets PUBLIC_WEB_ORIGIN so the post-callback 302 is not the first CORS origin by accident."
+  }
+}

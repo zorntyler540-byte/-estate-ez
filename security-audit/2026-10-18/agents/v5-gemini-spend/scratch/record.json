@@ -1,0 +1,72 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "Photo-count enforcement is tied to single_lot_mode plus non-facebook channel, and there is no per-account job-count or Gemini token/$ quota on the shared key.",
+  "title": "Client and catalogger can stack uncapped batch catalog jobs on the shared operator Gemini key",
+  "description": "Catalog /jobs/{id}/run is intentionally allowed for catalogger and client on their jobs. The missing bound is cardinality, not the run permission. POST /jobs/upload defaults to single_lot_mode=false, and the 40-photo CT Bids cap is skipped for batch mode and for facebook listing_channel. upload-files repeats that single-lot-only cap. One /run then Flash-triages every file (plus tape-verify and a Pro author pass per tape segment) using the process-wide GOOGLE_API_KEY. Callers can also enqueue an unbounded number of jobs; only catalog_job_max_concurrent (default 1) and gemini_global_concurrency (default 3, shared across tenants) limit in-flight work. Attacker is a client or catalogger. Affected principal is the operator Gemini bill and other tenants waiting on the global Gemini semaphore. Execution identity is the API/worker with the operator key.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/main.py",
+      "line": 5362,
+      "scope": "create_job_from_upload",
+      "description": "Authenticated client or staff uploads files; single_lot_mode defaults false; the 40-photo reject runs only for single-lot non-facebook jobs."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/main.py",
+      "line": 5467,
+      "scope": "upload-files",
+      "description": "Appending files applies CTBIDS_MAX_PHOTOS_PER_LOT only when the job is already single_lot_mode."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/main.py",
+      "line": 5546,
+      "scope": "run_job",
+      "description": "Client or catalogger may start their job; no spend quota is checked before queueing Gemini work."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/services/processing.py",
+      "line": 567,
+      "scope": "_process_job_batch_pipeline",
+      "description": "Every uploaded image is sent through triage_ordered_photo_batch (one Flash call per file) before per-segment Pro inventory, billed to the operator key."
+    }
+  ],
+  "validation_plan": {
+    "local": "With Gemini and R2 mocked, POST /jobs/upload single_lot_mode=false with 41 tiny JPEGs, then POST /jobs/{id}/run. Assert HTTP 200 and that process_job/triage receives 41 paths. Repeat upload+run to show a second queued job is stored. Do not call live Gemini.",
+    "deployment": "Owner checks whether an upstream proxy already rejects large multipart batches and whether the billed Gemini project has a hard daily cap that would contain a stacked client."
+  },
+  "blockers": [
+    "No OS-enforced sandbox; executing /jobs/upload and /run would spend the real operator Gemini key or require a mocked pipeline that was not run.",
+    "Deployed Google Cloud/Gemini project quotas, Railway body-size limits, and reverse-proxy request limits are not source-visible."
+  ],
+  "fingerprint": "gemini.jobs.uncapped-batch-queue-spend",
+  "evidence": [
+    {
+      "file": "backend/app/services/roles.py",
+      "line": 111,
+      "description": "Clients may POST /jobs/{id}/run and /jobs/upload."
+    },
+    {
+      "file": "backend/app/catalog_limits.py",
+      "line": 9,
+      "description": "The only catalog still-photo count cap is CTBIDS_MAX_PHOTOS_PER_LOT=40; job ingest applies it only for single-lot non-facebook uploads."
+    },
+    {
+      "file": "backend/app/upload_storage.py",
+      "line": 30,
+      "description": "save_uploaded_files has no maximum file count."
+    },
+    {
+      "file": "backend/app/job_tasks.py",
+      "line": 108,
+      "description": "can_start_job_for_account only caps concurrent running jobs, not queued jobs or tokens."
+    },
+    {
+      "file": "backend/app/core/gemini_slots.py",
+      "line": 25,
+      "description": "gemini_slot is a process-wide semaphore (default 3) shared by all accounts."
+    }
+  ]
+}

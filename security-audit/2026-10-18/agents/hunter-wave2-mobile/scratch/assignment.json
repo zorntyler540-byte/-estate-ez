@@ -1,0 +1,40 @@
+[
+  {
+    "coverage_id": "mobile%2Fcontext%2FAuthContext.tsx%23loginWithPassword::mobile%2Flib%2FsecureStorage.ts%23AFTER_FIRST_UNLOCK::mobile::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Credential-store%20and%20local-secret%20boundary%20mismatch",
+    "surface": "Remembered mobile password in SecureStore",
+    "boundary": "Device backup or other OS profile versus staff password",
+    "subsystem": "Expo field app",
+    "attack_class": "Credential-store and local-secret boundary mismatch",
+    "starting_paths": [
+      "mobile/context/AuthContext.tsx",
+      "mobile/lib/secureStorage.ts",
+      "mobile/app.json"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Cryptography and secrets",
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Credential-store and local-secret boundary mismatch",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Account switch, logout, and device restore leakage"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Custom-scheme and deep-link ambiguity",
+        "reason": "Covered by the mobile sync unit."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "No unsafe native surface."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML."
+      },
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP."
+      }
+    ]
+  }
+]

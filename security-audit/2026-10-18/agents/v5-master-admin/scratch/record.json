@@ -1,0 +1,79 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "Master-admin authorization is a case-folded email membership test on the current User row, while self-service register and owner team-invite can mint that email without an enrollment or possession check.",
+  "title": "Master-admin email can be claimed by open registration or team invite",
+  "description": "All-tenant admin is not a stored role. Any authenticated non-client user whose users.email is in MASTER_ADMIN_EMAILS may list, archive, restore, and delete every Account. POST /auth/register (unauthenticated, unless production and ALLOW_OPEN_REGISTRATION is false) and POST /team/members (any owner, password chosen by that owner) will create a user with that email if it is globally unused, and neither path proves mailbox possession or env-list enrollment. An unused listed address therefore becomes a first-claimer privilege to cross-tenant admin.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/main.py",
+      "line": 866,
+      "scope": "register",
+      "description": "Unauthenticated POST /auth/register creates a new Account and owner User. It blocks only when ENVIRONMENT is production and ALLOW_OPEN_REGISTRATION is false; it never consults MASTER_ADMIN_EMAILS."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/main.py",
+      "line": 885,
+      "scope": "User.email assignment",
+      "description": "The new owner's email is stored as payload.email.lower(). Collision control is a global unique lookup (User.email == raw payload.email at line 873 plus the unique column) and does not reserve listed admin addresses."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/main.py",
+      "line": 978,
+      "scope": "create_team_member",
+      "description": "Alternate mint: any owner may POST /team/members with role owner or catalogger, a password they choose, and a globally unused email, including an address from MASTER_ADMIN_EMAILS. A client-role mint would be blocked later by enforce_client_http on /admin/*."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/auth.py",
+      "line": 114,
+      "scope": "is_master_admin_email",
+      "description": "After login, every request loads User from JWT sub+account_id. Admin is decided only by stripping/lowercasing that DB email and testing membership in settings.master_admin_email_list()."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/main.py",
+      "line": 1242,
+      "scope": "admin_list_accounts",
+      "description": "_require_master_admin(current) is the sole admin gate on GET /admin/accounts (and the sibling archive/restore/delete/analytics routes). A claimed listed email yields cross-tenant account names, owner emails, and destructive admin actions."
+    }
+  ],
+  "validation_plan": {
+    "local": "On an isolated SQLite API with dummy tenants already seeded, set MASTER_ADMIN_EMAILS to an unused mailbox and ALLOW_OPEN_REGISTRATION=true. POST /auth/register with that email, then GET /admin/accounts with the returned JWT and confirm 200 listing the seed tenants. Repeat from a second dummy owner via POST /team/members creating a catalogger with another unused listed email and a password the owner sets, POST /auth/login as that catalogger, and confirm that JWT also passes GET /admin/accounts while a third owner whose email is not listed receives 403.",
+    "deployment": "Owner-observed only: inspect production MASTER_ADMIN_EMAILS and ALLOW_OPEN_REGISTRATION, and whether each listed address already exists as a users.email. Do not register or invite those addresses on a live system."
+  },
+  "blockers": [
+    "This run forbids executing target code and has no OS-enforced sandbox (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion), so the register-then-GET /admin/accounts result was not observed on dummy tenants.",
+    "Whether a deployment's MASTER_ADMIN_EMAILS addresses are already enrolled User rows, and whether ALLOW_OPEN_REGISTRATION is false in production, is env-only and not source-visible."
+  ],
+  "fingerprint": "master-admin-email-claim-via-register-or-invite",
+  "evidence": [
+    {
+      "file": "backend/app/config.py",
+      "line": 145,
+      "description": "allow_open_registration defaults true; production register is denied only when this flag is explicitly false."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 147,
+      "description": "master_admin_emails is a comma-separated env string, not a user-id enrollment table."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 451,
+      "description": "_require_master_admin checks only is_master_admin_email(current.email); role and account_id are ignored."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 1420,
+      "description": "DELETE /admin/accounts/{account_id} deletes another tenant's users, sales, lots, photos, jobs, and account row after the same email check (blocked only when account_id equals the caller's own account)."
+    },
+    {
+      "file": "backend/app/auth.py",
+      "line": 83,
+      "description": "get_current_user does not add an admin claim or second factor; a normal HS256 staff JWT is enough once the email matches."
+    }
+  ]
+}

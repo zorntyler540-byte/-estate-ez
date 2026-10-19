@@ -1,0 +1,61 @@
+{
+  "run_id": "estate-ez-security-audit-2026-10-18",
+  "repo": "zorntyler540-byte/-caringtransitions-ai",
+  "target": "/workspace",
+  "source_ref": {
+    "commit": "c661a8fd15d52afa473d81574ec28308f7ae9fb0",
+    "branch": "cursor/security-audit-96d1",
+    "based_on": "origin/main",
+    "dirty": true,
+    "dirty_note": "Unreviewed untracked files at start were the Cloudflare skill install (.agents/, skills-lock.json) only. Audit outputs under security-audit/2026-10-18/ are this run's artifacts and are not treated as another revision of the target."
+  },
+  "profile": "standard",
+  "scope_paths": [
+    "backend/",
+    "frontend/",
+    "mobile/",
+    "infra/",
+    "main.py",
+    "listings/",
+    "Procfile",
+    "DEPLOY.md",
+    "README_SAAS.md",
+    ".github/",
+    "alembic.ini"
+  ],
+  "budget": null,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "sandbox_available": false,
+  "sandbox_blockers": [
+    "No OS-enforced empty-allowlist environment",
+    "No guaranteed no-external-network namespace",
+    "No read-only target/toolchain mounts",
+    "No trusted parent-side no-follow descriptor promotion procedure"
+  ],
+  "selected_companions": [],
+  "prior_run_paths": [],
+  "prior_ledger_status": "none_compatible_prior_ledger",
+  "shared_file_owners": {
+    "run-metadata.json": "parent",
+    "architecture.md": "parent",
+    "coverage-ledger.json": "parent",
+    "findings.json": "parent",
+    "REPORT.md": "parent",
+    "FINDINGS-DETAIL.md": "parent",
+    "NEEDS-VALIDATION.md": "parent"
+  },
+  "run_status": "complete",
+  "validation": {
+    "confirmed": 0,
+    "needs_validation": 16,
+    "rejected": 7,
+    "phase3_verifiers": 21,
+    "phase5_verifiers": 16,
+    "all_nv_phase5": "verified"
+  },
+  "final_critic": {
+    "stop": true,
+    "missing_units": [],
+    "reassign_ids": []
+  }
+}
