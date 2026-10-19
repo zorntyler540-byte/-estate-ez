@@ -2053,9 +2053,9 @@ export default function LotDetailPage() {
         <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
           <h2 className="ct-dash-panel__title">Groups</h2>
           <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            Public United States Facebook groups for this lot (from Gemini + Google Search). Hunt
-            more groups on the <Link href="/facebook">Facebook</Link> tab. Staff still join and share
-            by hand — this does not scrape members or auto-post.
+            National US collector groups for this lot (from Gemini + Google Search; ships nationwide).
+            Hunt more groups on the <Link href="/facebook">Facebook</Link> tab. Staff still join and
+            share by hand — this does not scrape members or auto-post.
           </p>
           {audienceCopyMsg ? (
             <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">

@@ -13,7 +13,12 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import Account, Lot, Sale, User
 from app.services.audience_hunt import audience_research_prompt
-from app.services.facebook_caption import FOLLOW_HOOK_LINE, group_post_copy, template_caption
+from app.services.facebook_caption import (
+    FOLLOW_HOOK_LINE,
+    SHIPS_NATIONWIDE_LINE,
+    group_post_copy,
+    template_caption,
+)
 from app.services.facebook_groups import (
     FACEBOOK_GROUP_SEARCH,
     classify_group_kind,
@@ -63,6 +68,10 @@ def test_fallback_searches_split_local_and_interest() -> None:
     assert all(r["url"].startswith(FACEBOOK_GROUP_SEARCH) for r in rows)
     assert interest
     assert interest[0]["query"] == "vintage costume jewelry collectors"
+    assert rows[0]["kind"] == "interest"
+    interest_idx = [i for i, row in enumerate(rows) if row["kind"] == "interest"]
+    local_idx = [i for i, row in enumerate(rows) if row["kind"] == "local"]
+    assert max(interest_idx) < min(local_idx)
 
 
 def test_found_groups_dedupe_and_classify() -> None:
@@ -108,6 +117,9 @@ def test_found_groups_dedupe_and_classify() -> None:
     kinds = {r["name"]: r["kind"] for r in rows}
     assert kinds["Las Vegas Estate Sales"] == "local"
     assert kinds["Fenton Glass Collectors"] == "interest"
+    assert rows[0]["kind"] == "interest"
+    assert rows[0]["name"] == "Fenton Glass Collectors"
+    assert rows[-1]["kind"] == "local"
     assert classify_group_kind("Buy Sell Trade Henderson", places=["Henderson"]) == "local"
 
 
@@ -131,12 +143,14 @@ def test_group_post_copy_is_short_and_skips_follow_and_hashtags() -> None:
     )
     assert "Blue Rhinestone Brooch" in text
     assert "Bidding closes" in text
+    assert SHIPS_NATIONWIDE_LINE in text
     assert "https://ctbids.com/estate-sale/48212/item/1" in text
     assert "See the whole sale: https://ctbids.com/estate-sale/48212" in text
     assert FOLLOW_HOOK_LINE not in text
     assert "#" not in text
     assert text.index("Blue Rhinestone Brooch") < text.index("Bidding closes")
-    assert text.index("Bidding closes") < text.index("https://ctbids.com/estate-sale/48212/item/1")
+    assert text.index("Bidding closes") < text.index(SHIPS_NATIONWIDE_LINE)
+    assert text.index(SHIPS_NATIONWIDE_LINE) < text.index("https://ctbids.com/estate-sale/48212/item/1")
     assert len(text) < len(page)
 
 
@@ -153,8 +167,12 @@ def test_audience_research_prompt_keeps_google_search_brief_and_location() -> No
     prompt = audience_research_prompt(lot, location="Las Vegas")
     assert "Google" not in prompt  # the tool is attached on the API call, not the prose
     assert "Facebook groups" in prompt
+    assert "national" in prompt.lower() or "US-wide" in prompt
+    assert "ships nationwide" in prompt.lower()
+    assert "never a filter" in prompt.lower()
+    assert "SECONDARY" in prompt
     assert "Las Vegas" in prompt
-    assert "buy/sell/trade" in prompt
+    assert prompt.lower().index("primary") < prompt.lower().index("secondary")
     assert "Fenton hobnail vase" in prompt
 
 
@@ -223,9 +241,13 @@ def test_sale_facebook_groups_endpoint_returns_hits_and_search_links(tmp_path) -
         assert body["location"] == "Las Vegas"
         assert body["groups"][0]["name"] == "Costume Jewelry Collectors"
         assert body["groups"][0]["url"] == "https://www.facebook.com/groups/cj"
+        assert body["groups"][0]["kind"] == "interest"
         queries = {row["query"] for row in body["searches"]}
         assert "Las Vegas estate sales" in queries
         assert any("jewelry" in q.lower() for q in queries)
+        kinds = [row["kind"] for row in body["searches"]]
+        assert "interest" in kinds and "local" in kinds
+        assert kinds.index("interest") < kinds.index("local")
         assert "Share → Share to a group" in body["tips"] or "Share to a group" in body["tips"]
         payload = sale_facebook_groups_payload(sale=sale, account=account, lots=[lot], hunt_status=None)
         assert payload["hunted_lots"] == 1

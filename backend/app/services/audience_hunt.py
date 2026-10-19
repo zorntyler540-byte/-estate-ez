@@ -462,7 +462,11 @@ def _lot_research_text(lot: Lot, *, location: str = "") -> str:
     brand_s = ", ".join(str(b) for b in brands if str(b).strip()) or "(none)"
     spec_s = "\n".join(f"- {s}" for s in specs[:12]) or "(none)"
     loc = (location or "").strip()
-    loc_line = f"Estate sale location (United States): {loc}\n" if loc else ""
+    loc_line = (
+        f"Pickup city (United States; ships nationwide — city is never a filter): {loc}\n"
+        if loc
+        else "Pickup is at a US estate sale; items ship nationwide inside the US.\n"
+    )
     return (
         f"{loc_line}"
         f"Title: {(lot.auction_title or '').strip() or '(untitled)'}\n"
@@ -510,17 +514,18 @@ def audience_research_prompt(lot: Lot, *, location: str = "") -> str:
     loc_bit = ""
     if loc:
         loc_bit = (
-            f"The estate sale is in {loc} (United States). Also search for public local Facebook "
-            f"groups in that city/metro (estate sales, buy/sell/trade, garage sale, antiques) in "
-            "addition to collector groups for this object.\n"
+            f"SECONDARY only — never a filter: pickup is in {loc}. After national groups, you may "
+            "add a few local public Facebook groups there (estate sales, buy/sell/trade, garage sale). "
+            "Do not limit, rank, or drop national collector groups because they are not in that city. "
+            "Items ship nationwide.\n"
         )
     return (
-        "Find public United States collector communities for this estate lot.\n"
-        "Search for Facebook groups, collector clubs, forums, and association pages that would "
-        "care about this object. Prefer official/group URLs. Do not invent member names or emails.\n"
-        "United States only: staff paste into US groups; small items can ship inside the US; "
-        "pickup is at a US estate sale. Do not list UK, Canada, Australia, EU, or worldwide-only "
-        "clubs. US groups that collect foreign-made objects (English china, Japanese pottery) are OK.\n"
+        "Find public United States collector, hobby, and interest communities for this estate lot.\n"
+        "PRIMARY: national / US-wide Facebook groups, collector clubs, forums, and association pages "
+        "for this object type or brand. Items ship nationwide inside the US, so do not limit results "
+        "to the sale city. Prefer official/group URLs. Do not invent member names or emails.\n"
+        "United States only: drop UK, Canada, Australia, EU, or worldwide-only clubs. US groups that "
+        "collect foreign-made objects (English china, Japanese pottery) are OK.\n"
         f"{loc_bit}"
         "If this is generic household junk, say so.\n\n"
         f"{_lot_research_text(lot, location=loc)}"
@@ -561,7 +566,9 @@ def run_audience_research_and_structure(
     research_config = types.GenerateContentConfig(
         system_instruction=(
             "You research where United States collectors of estate-sale items gather online. "
-            "Use Google Search. Name public US groups/clubs/forums with URLs when you can find them. "
+            "Use Google Search. Primary target: national/US-wide public collector, hobby, and "
+            "interest groups for this object — shipping is available nationwide, so do not filter "
+            "by sale city. Local city groups are a short extra section only. "
             "Skip international, worldwide, and non-US country communities. "
             "Never harvest personal emails or private member lists. Plain text memo only."
         ),
@@ -583,9 +590,12 @@ def run_audience_research_and_structure(
     structure_parts = [
         "Turn the research memo into structured JSON for staff. "
         "groups: United States public communities only (name, url, why). Empty url is OK if the name is real. "
+        "List national/US-wide collector, hobby, and interest groups FIRST. Local sale-city groups "
+        "SECOND if present. Do not drop a national group because it is not in the sale city — items "
+        "ship nationwide. City is never a filter. "
         "Drop UK/Canada/Australia/EU/worldwide clubs even if they collect this brand. "
-        "blurb_ctbids: 2–4 sentences inviting those US people to bid on a local CT Bids estate auction "
-        "(bidding often starts at $1; pickup at the sale). Do not invent a sale URL. "
+        "blurb_ctbids: 2–4 sentences inviting those US people to bid on a CT Bids estate auction "
+        "(bidding often starts at $1; pickup at the sale; ships nationwide). Do not invent a sale URL. "
         "blurb_hold: 2–4 sentences offering the piece to a US collector group before it goes to auction. "
         "worthy true only if a named US collector community is realistic. "
         "recommend_hold true only for clearly niche/high-interest pieces.\n\n"
@@ -596,6 +606,7 @@ def run_audience_research_and_structure(
         response_schema=pydantic_model_to_gemini_schema(AudienceHuntResult),
         system_instruction=(
             "You convert collector-community research into structured JSON only. "
+            "National/US-wide public groups first, local city groups second. City is never a filter. "
             "United States public group/club/forum names and official URLs — no international clubs, "
             "no personal contact harvesting."
         ),

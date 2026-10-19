@@ -146,7 +146,11 @@ function groupFriendlyCopy(caption: string, itemUrl: string, fallback: string): 
     if (body.join(" ").length < 180) body.push(line);
   }
   const hook = body.join(" ").slice(0, 240).trim();
-  const parts = [hook, bidding, lotLine || itemUrl, saleLine].filter(Boolean);
+  const ships = "Ships nationwide.";
+  const shipLine = [hook, bidding].some((part) => (part || "").toLowerCase().includes("ships nationwide"))
+    ? ""
+    : ships;
+  const parts = [hook, bidding, shipLine, lotLine || itemUrl, saleLine].filter(Boolean);
   return parts.join("\n\n").trim() || fallback;
 }
 

@@ -44,27 +44,27 @@ _GENERIC_LOCAL: tuple[tuple[str, str], ...] = (
 )
 
 _HINT_QUERIES: tuple[tuple[str, str, str], ...] = (
-    ("jewelry", "vintage costume jewelry collectors", "Collector groups for jewelry lots in this sale."),
-    ("glass", "vintage glass collectors", "Collector groups for glass lots in this sale."),
-    ("crystal", "crystal collectors", "Collector groups for crystal lots in this sale."),
-    ("china", "vintage china collectors", "Collector groups for china lots in this sale."),
-    ("porcelain", "porcelain collectors", "Collector groups for porcelain lots in this sale."),
-    ("pottery", "pottery collectors", "Collector groups for pottery lots in this sale."),
-    ("coin", "coin collectors", "Collector groups for coin lots in this sale."),
-    ("stamp", "stamp collectors", "Collector groups for stamp lots in this sale."),
-    ("doll", "doll collectors", "Collector groups for doll lots in this sale."),
-    ("figurine", "figurine collectors", "Collector groups for figurine lots in this sale."),
-    ("camera", "vintage camera collectors", "Collector groups for camera lots in this sale."),
-    ("watch", "vintage watch collectors", "Collector groups for watch lots in this sale."),
-    ("clock", "antique clock collectors", "Collector groups for clock lots in this sale."),
-    ("military", "military collectors", "Collector groups for military lots in this sale."),
-    ("toy", "vintage toy collectors", "Collector groups for toy lots in this sale."),
-    ("train", "model train collectors", "Collector groups for train lots in this sale."),
-    ("silver", "sterling silver collectors", "Collector groups for silver lots in this sale."),
-    ("book", "rare book collectors", "Collector groups for book lots in this sale."),
-    ("comic", "comic book collectors", "Collector groups for comic lots in this sale."),
-    ("art", "art collectors", "Collector groups for art lots in this sale."),
-    ("antique", "antiques collectors", "Collector groups for antique lots in this sale."),
+    ("jewelry", "vintage costume jewelry collectors", "National US collector groups for jewelry lots (ships nationwide)."),
+    ("glass", "vintage glass collectors", "National US collector groups for glass lots (ships nationwide)."),
+    ("crystal", "crystal collectors", "National US collector groups for crystal lots (ships nationwide)."),
+    ("china", "vintage china collectors", "National US collector groups for china lots (ships nationwide)."),
+    ("porcelain", "porcelain collectors", "National US collector groups for porcelain lots (ships nationwide)."),
+    ("pottery", "pottery collectors", "National US collector groups for pottery lots (ships nationwide)."),
+    ("coin", "coin collectors", "National US collector groups for coin lots (ships nationwide)."),
+    ("stamp", "stamp collectors", "National US collector groups for stamp lots (ships nationwide)."),
+    ("doll", "doll collectors", "National US collector groups for doll lots (ships nationwide)."),
+    ("figurine", "figurine collectors", "National US collector groups for figurine lots (ships nationwide)."),
+    ("camera", "vintage camera collectors", "National US collector groups for camera lots (ships nationwide)."),
+    ("watch", "vintage watch collectors", "National US collector groups for watch lots (ships nationwide)."),
+    ("clock", "antique clock collectors", "National US collector groups for clock lots (ships nationwide)."),
+    ("military", "military collectors", "National US collector groups for military lots (ships nationwide)."),
+    ("toy", "vintage toy collectors", "National US collector groups for toy lots (ships nationwide)."),
+    ("train", "model train collectors", "National US collector groups for train lots (ships nationwide)."),
+    ("silver", "sterling silver collectors", "National US collector groups for silver lots (ships nationwide)."),
+    ("book", "rare book collectors", "National US collector groups for book lots (ships nationwide)."),
+    ("comic", "comic book collectors", "National US collector groups for comic lots (ships nationwide)."),
+    ("art", "art collectors", "National US collector groups for art lots (ships nationwide)."),
+    ("antique", "antiques collectors", "National US collector groups for antique lots (ships nationwide)."),
 )
 
 
@@ -203,14 +203,17 @@ def collect_sale_themes(lots: list[Lot]) -> list[tuple[str, str]]:
 
     for lot in lots:
         for brand in lot_brands(lot):
-            add(f"{brand} collectors", f"Brand from lot {(lot.sku or '').strip() or 'in this sale'}.")
+            add(
+                f"{brand} collectors",
+                f"National US groups for this brand from lot {(lot.sku or '').strip() or 'in this sale'} (ships nationwide).",
+            )
         blob = f"{lot.ct_category or ''} {lot.auction_title or ''}".lower()
         for hint, query, why in _HINT_QUERIES:
             if hint in blob:
                 add(query, why)
         for hint in COLLECTOR_CATEGORY_HINTS:
             if hint in blob and not any(hint in q.lower() for q, _why in out):
-                add(f"{hint} collectors", f"Theme from lots in this sale ({hint}).")
+                add(f"{hint} collectors", f"National US groups for {hint} lots (ships nationwide).")
     return out[:10]
 
 
@@ -232,6 +235,10 @@ def fallback_group_searches(
         seen.add(key)
         rows.append({"query": q, "url": facebook_group_search_url(q), "why": why, "kind": kind})
 
+    for query, why in themes:
+        add(query, why, "interest")
+        if sum(1 for r in rows if r["kind"] == "interest") >= 8:
+            break
     local_places = [p for p in places if p][:3]
     if local_places:
         for place in local_places:
@@ -244,10 +251,6 @@ def fallback_group_searches(
     else:
         for query, why in _GENERIC_LOCAL:
             add(query, why, "local")
-    for query, why in themes:
-        add(query, why, "interest")
-        if sum(1 for r in rows if r["kind"] == "interest") >= 8:
-            break
     return rows
 
 
@@ -283,6 +286,7 @@ def found_groups_from_lots(lots: list[Lot], places: list[str] | None = None) -> 
                     "sku": (lot.sku or "").strip() or None,
                 }
             )
+    rows.sort(key=lambda row: 1 if row.get("kind") == "local" else 0)
     return rows
 
 

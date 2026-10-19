@@ -159,8 +159,8 @@ export function FindGroupsPanel({ token, saleId, saleName, isOwner }: Props) {
     if (
       !window.confirm(
         force
-          ? "Find public United States Facebook groups for lots in this sale, including everyday household lots?\n\nUses Gemini Pro + Google Search (not the Graph API). Does not scrape members or auto-post."
-          : "Find public United States Facebook groups for nicer lots already in this sale?\n\nEveryday household lots are skipped. Already-hunted lots are skipped. Uses Gemini Pro + Google Search (not the Graph API). Does not recatalog photos or auto-post."
+          ? "Find national US collector groups for lots in this sale, including everyday household lots?\n\nPrimary: US-wide hobby/interest groups (ships nationwide). Local city groups are extra only. Uses Gemini Pro + Google Search (not the Graph API). Does not scrape members or auto-post."
+          : "Find national US collector groups for nicer lots already in this sale?\n\nPrimary: US-wide hobby/interest groups (ships nationwide). Local city groups are extra only — city is not a filter. Everyday household lots are skipped. Already-hunted lots are skipped. Uses Gemini Pro + Google Search (not the Graph API). Does not recatalog photos or auto-post."
       )
     ) {
       return;
@@ -214,11 +214,11 @@ export function FindGroupsPanel({ token, saleId, saleName, isOwner }: Props) {
             Find groups
           </h2>
           <p className="ct-muted" style={{ margin: "0.35rem 0 0", maxWidth: 720 }}>
-            Real public US Facebook groups from Gemini + Google Search
-            {location ? ` for ${location}` : ""}
-            {saleName ? ` · ${saleName}` : ""}. Meta cannot search Groups through the Page API, so
-            staff still join and share by hand. Search links below are extras when the hunt finds
-            few groups.
+            National and US-wide collector groups first (items ship nationwide)
+            {saleName ? ` · ${saleName}` : ""}. Local groups
+            {location ? ` in ${location}` : ""} are a secondary extra, never a filter. Meta cannot
+            search Groups through the Page API, so staff still join and share by hand. Search links
+            below are extras when the hunt finds few groups.
           </p>
         </div>
         {isOwner ? (
@@ -291,16 +291,18 @@ export function FindGroupsPanel({ token, saleId, saleName, isOwner }: Props) {
                   }.`
                 : "No hunted groups yet. Run Find groups, or use the Facebook search links below."}
             </p>
-            {localGroups.length ? (
-              <>
-                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>Local</p>
-                <GroupList rows={localGroups} empty="" />
-              </>
-            ) : null}
             {interestGroups.length ? (
               <>
-                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>Interest / collector</p>
+                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>National / collector</p>
                 <GroupList rows={interestGroups} empty="" />
+              </>
+            ) : null}
+            {localGroups.length ? (
+              <>
+                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>
+                  Local{location ? ` (${location})` : ""} — secondary
+                </p>
+                <GroupList rows={localGroups} empty="" />
               </>
             ) : null}
           </div>
@@ -314,16 +316,18 @@ export function FindGroupsPanel({ token, saleId, saleName, isOwner }: Props) {
                 ? "Fallback searches on facebook.com — not a Graph API scrape. Open a link, then join groups that look active."
                 : "Extra searches if you want more groups than the hunt returned."}
             </p>
-            {localSearches.length ? (
-              <>
-                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>Local</p>
-                <SearchList rows={localSearches} />
-              </>
-            ) : null}
             {interestSearches.length ? (
               <>
-                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>Interest / collector</p>
+                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>National / collector</p>
                 <SearchList rows={interestSearches} />
+              </>
+            ) : null}
+            {localSearches.length ? (
+              <>
+                <p style={{ margin: "0.75rem 0 0", fontWeight: 600 }}>
+                  Local{location ? ` (${location})` : ""} — secondary
+                </p>
+                <SearchList rows={localSearches} />
               </>
             ) : null}
           </div>

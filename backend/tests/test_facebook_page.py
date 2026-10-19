@@ -453,6 +453,7 @@ def test_preview_excludes_tape_and_does_not_post(tmp_path, monkeypatch) -> None:
         assert "ctbids.com" in row["caption"]
         assert row["group_caption"]
         assert "Bid here" in row["group_caption"]
+        assert "Ships nationwide" in row["group_caption"]
         assert "Follow our Page" not in row["group_caption"]
         assert client.get("/facebook/posts").json() == []
     finally:

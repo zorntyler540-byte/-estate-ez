@@ -145,8 +145,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   then a separate structured JSON call (schema + search tools 400 together). That is how real
   Facebook group names/URLs are found — not Meta's Graph API (which cannot search Groups).
   Results are stored on the lot; `GET /sales/{id}/facebook-groups` aggregates them and adds
-  facebook.com/search/groups fallback links. It does not scrape members, harvest emails, or
-  auto-post. **United States groups only.** Everyday household lots skip the model unless
+  facebook.com/search/groups fallback links. Primary target is **national / US-wide collector
+  and hobby groups** (items ship nationwide). Local sale-city groups are a secondary extra,
+  never a filter. It does not scrape members, harvest emails, or auto-post. **United States
+  groups only** (drop UK/Canada/EU/worldwide clubs). Everyday household lots skip the model unless
   `force=true`. `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
   Hunt copies `GOOGLE_API_KEY` from app settings into `os.environ` (same as catalog jobs) because
   `pipeline._get_client` does not read `.env` itself.

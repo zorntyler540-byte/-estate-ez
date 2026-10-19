@@ -16,6 +16,7 @@ from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_lin
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 FOLLOW_HOOK_LINE = "Follow our Page for upcoming sales."
+SHIPS_NATIONWIDE_LINE = "Ships nationwide."
 _LOG = logging.getLogger(__name__)
 
 SLOT_ANGLE_LEADS: dict[str, str] = {
@@ -292,6 +293,9 @@ def group_post_copy(
     parts = [hook_line]
     if bidding:
         parts.append(bidding)
+    already_ships = any("ships nationwide" in part.lower() for part in parts)
+    if not already_ships:
+        parts.append(SHIPS_NATIONWIDE_LINE)
     if lot_url:
         parts.append(lot_url)
     if sale_line:

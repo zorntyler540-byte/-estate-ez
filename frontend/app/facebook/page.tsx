@@ -201,8 +201,9 @@ export default function FacebookPage() {
               Facebook
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Find public groups for this sale (Gemini + Google Search, not the Groups API), copy
-              group-friendly captions from Page posts, and list furniture captured for Marketplace.
+              Find national US collector groups for this sale (Gemini + Google Search, not the
+              Groups API; items ship nationwide), copy group-friendly captions from Page posts, and
+              list furniture captured for Marketplace.
               {selectedSale ? ` Showing ${selectedSale.name}.` : ""}
             </p>
           </div>
