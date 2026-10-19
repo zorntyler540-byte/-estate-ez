@@ -3156,12 +3156,16 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || loading || !processingJobId) return;
 
-    const url = `${API_BASE}/jobs/${processingJobId}/events?access_token=${encodeURIComponent(token)}`;
+    let cancelled = false;
+    let es: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     sseRetryAfterErrorRef.current = 0;
-    const es = new EventSource(url);
-    es.onopen = () => {
-      sseRetryAfterErrorRef.current = 0;
-    };
+
+    const attachStream = (stream: EventSource) => {
+      es = stream;
+      stream.onopen = () => {
+        sseRetryAfterErrorRef.current = 0;
+      };
 
     const refreshJobsAndLots = () => {
       const sid = selectedSaleIdRef.current;
@@ -3187,7 +3191,7 @@ export default function DashboardPage() {
         });
     };
 
-    es.onmessage = (ev) => {
+    stream.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data) as {
           type?: string;
@@ -3381,16 +3385,36 @@ export default function DashboardPage() {
         /* ignore */
       }
     };
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    es.onerror = () => {
-      es.close();
+    stream.onerror = () => {
+      stream.close();
       if (sseRetryAfterErrorRef.current >= 12) return;
       sseRetryAfterErrorRef.current += 1;
       reconnectTimer = setTimeout(() => setJobSseSession((n) => n + 1), 1800);
     };
+    };
+
+    void apiFetch(`/jobs/${processingJobId}/events-ticket`, token, { method: "POST" })
+      .then((data) => {
+        if (cancelled) return;
+        const ticket = (data as { ticket?: string }).ticket;
+        if (!ticket) return;
+        attachStream(
+          new EventSource(
+            `${API_BASE}/jobs/${processingJobId}/events?sse_ticket=${encodeURIComponent(ticket)}`
+          )
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (sseRetryAfterErrorRef.current >= 12) return;
+        sseRetryAfterErrorRef.current += 1;
+        window.setTimeout(() => setJobSseSession((n) => n + 1), 1800);
+      });
+
     return () => {
+      cancelled = true;
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-      es.close();
+      es?.close();
       // Intentionally do not clear photoPendingSlots here: React Strict Mode remounts this effect
       // before the worker finishes, and the server replays recent SSE payloads on reconnect.
     };

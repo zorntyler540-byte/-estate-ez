@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -38,7 +39,6 @@ from app.services.facebook_caption import (
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
 from app.services.facebook_page import (
     MAX_PAGE_PHOTOS,
-    encode_oauth_state,
     listing_photos_for_facebook,
     rotate_listing_photos,
     suggest_schedule_slots,
@@ -384,7 +384,6 @@ def test_oauth_callback_stores_encrypted_page_token(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     monkeypatch.setattr(settings, "public_web_origin", "http://localhost:3000")
     client, db, _account, user, _lot = _client(tmp_path)
-    state = encode_oauth_state(account_id=user.account_id, user_id=user.id)
 
     def fake_exchange_code(**_kwargs):
         return {"access_token": "SHORT", "expires_in": 3600}
@@ -399,6 +398,9 @@ def test_oauth_callback_stores_encrypted_page_token(tmp_path, monkeypatch) -> No
         return [{"id": "page-22", "name": "Aunt Page", "access_token": "PAGE_LIVE", "can_post": True}]
 
     try:
+        start = client.get("/integrations/facebook/oauth/start")
+        assert start.status_code == 200, start.text
+        state = parse_qs(urlparse(start.json()["url"]).query)["state"][0]
         with (
             patch("app.services.facebook_page.exchange_code_for_user_token", fake_exchange_code),
             patch("app.services.facebook_page.exchange_long_lived_user_token", fake_long),
@@ -422,6 +424,35 @@ def test_oauth_callback_stores_encrypted_page_token(tmp_path, monkeypatch) -> No
         assert status["configured"] is True
         assert status["connected"] is True
         assert status["page_name"] == "Aunt Page"
+        replay = client.get(
+            "/integrations/facebook/oauth/callback",
+            params={"code": "abc", "state": state},
+            follow_redirects=False,
+        )
+        assert replay.status_code == 302
+        assert "facebook=error" in replay.headers["location"]
+    finally:
+        _clear_overrides()
+
+
+def test_oauth_callback_without_connect_cookie_does_not_bind_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "public_web_origin", "http://localhost:3000")
+    client, db, _account, user, _lot = _client(tmp_path)
+    try:
+        start = client.get("/integrations/facebook/oauth/start")
+        state = parse_qs(urlparse(start.json()["url"]).query)["state"][0]
+        stolen = TestClient(app)
+        res = stolen.get(
+            "/integrations/facebook/oauth/callback",
+            params={"code": "abc", "state": state},
+            follow_redirects=False,
+        )
+        assert res.status_code == 302
+        assert "facebook=error" in res.headers["location"]
+        account = db.query(Account).filter(Account.id == user.account_id).first()
+        assert not account.facebook_page_token_enc
     finally:
         _clear_overrides()
 
@@ -968,6 +999,44 @@ def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> Non
         assert any((key or "").endswith(":0900") for key in keys)
         assert any((key or "").endswith(":1740") for key in keys)
         assert all(is_dated_slot_key(key or "") for key in keys)
+    finally:
+        _clear_overrides()
+
+
+def test_catalogger_snapshot_does_not_auto_publish(tmp_path, monkeypatch) -> None:
+    from app import facebook_post_tasks
+
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
+    client, db, account, _user, lot = _client(tmp_path, connected=True)
+    account.facebook_calendar_auto_approve = True
+    catalogger = User(
+        id="user-cat",
+        account_id=account.id,
+        email="cat@example.com",
+        password_hash="x",
+        role="catalogger",
+    )
+    db.add_all([account, catalogger])
+    db.commit()
+    app.dependency_overrides[get_current_user] = lambda: catalogger
+    feeds: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        feeds.append("called")
+        return "111_nope"
+
+    try:
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            snap = client.post("/integrations/engagement/snapshots", json=_future_push_body(lot))
+        assert snap.status_code == 200, snap.text
+        assert feeds == []
+        assert db.query(FacebookPagePost).filter(FacebookPagePost.status == "scheduled").count() == 0
     finally:
         _clear_overrides()
 

@@ -13,9 +13,9 @@ Docker images are built from the **repository root** (so paths like `COPY backen
 ### First-time order (avoids CORS chicken-and-egg)
 
 1. Push this repo to GitHub.  
-2. Create **Postgres**, then deploy the **API** (`Dockerfile.api`) with `ENVIRONMENT=development` first so you do not need `CORS_ORIGINS` until the web URL exists.  
+2. Create **Postgres**, then deploy the **API** (`Dockerfile.api`) with **`ENVIRONMENT=production`**, a 32+ character `SECRET_KEY`, Postgres `DATABASE_URL`, and `CORS_ORIGINS` set to the web URL you are about to create (planned hostname is fine). Do not run a public API in `development`.  
 3. Deploy the **Web** service (`Dockerfile.web`) with `NEXT_PUBLIC_API_BASE` = your public API URL; note the **web** `https://…` URL.  
-4. On the **API**, set `CORS_ORIGINS` to that web URL (no trailing slash), redeploy; then set `ENVIRONMENT=production` and redeploy again when ready for strict checks.
+4. If the web URL differs from the `CORS_ORIGINS` you planned, update it on the **API** and redeploy.
 
 ---
 
@@ -44,12 +44,17 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | Variable | Notes |
 |-----------|--------|
 | `DATABASE_URL` | From Postgres (Railway can link the plugin and inject this). |
-| `SECRET_KEY` | Long random string (e.g. `openssl rand -hex 32`). **Required length ≥32** when `ENVIRONMENT=production`. |
-| `ENVIRONMENT` | Set to **`production`** on the public API so unsafe defaults are rejected and responses are hardened. |
+| `SECRET_KEY` | Long random string (e.g. `openssl rand -hex 32`). **Required in every non-test environment** — missing, `change-me`, `change-me-dev-secret`, or under 32 characters refuses to start. |
+| `ENVIRONMENT` | Set to **`production`** on the public API **and** the catalog worker. Never leave a public service on `development`. |
 | `GOOGLE_API_KEY` | Gemini / Google AI key. |
 | `CORS_ORIGINS` | Your **public web URL** only, e.g. `https://your-web-service.up.railway.app` — **no trailing slash**. Comma-separate if you have several. |
 | `TRUSTED_HOSTS` | Optional but recommended: comma-separated **Host** header values for the API (e.g. `your-api.up.railway.app`). Enables `TrustedHostMiddleware`. |
-| `ALLOW_OPEN_REGISTRATION` | Default `true`. After you create the first real account, set **`false`** and redeploy so strangers cannot register. |
+| `ALLOW_OPEN_REGISTRATION` | **Closed by default in production.** Set `true` only to bootstrap the first real account, then set `false` (or unset) and redeploy. |
+| `MASTER_ADMIN_EMAILS` | Optional. Comma-separated emails of **existing** users who may manage every tenant. Register/invite of those addresses is blocked until the user already exists. |
+| `MASTER_ADMIN_USER_IDS` | Optional. Comma-separated user ids that are master admin even if their email is not listed. Prefer this once you know the user id. |
+| `CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT` | Optional (default `25`). Caps receiving+queued catalog jobs per account. |
+| `CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY` | Optional (default `800`). Caps photos cataloged or queued per account per UTC day. |
+| `CATALOG_MAX_PHOTOS_PER_JOB` | Optional (default `250`). Caps stills in one multi-lot batch job. Single-lot jobs stay at 40. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
 | `META_APP_ID` / `META_APP_SECRET` | Optional. Facebook Page posting. Leave unset to hide Connect/Post in the dashboard. See **§9 Facebook Page**. |
 | `META_OAUTH_REDIRECT_URI` | API callback, e.g. `https://<your-api-domain>/integrations/facebook/oauth/callback`. Must match the Meta app exactly. |
@@ -197,9 +202,9 @@ Same as local: edit code → commit → push → the host rebuilds/redeploys. Ru
 
 ## 8. Security checklist (production API)
 
-- **`ENVIRONMENT=production`** — Refuses weak `SECRET_KEY`, SQLite URLs, and missing `CORS_ORIGINS` at startup.
+- **`ENVIRONMENT=production`** — Required on the public API and worker. Refuses weak `SECRET_KEY`, SQLite URLs, and missing `CORS_ORIGINS` at startup. Weak `SECRET_KEY` is also refused in development.
 - **Secrets only in the host dashboard** — Never commit `.env` (see `.gitignore`).
-- **Turn off open signup** — Set `ALLOW_OPEN_REGISTRATION=false` after your pilot accounts exist.
+- **Keep open signup off** — Production registration is closed unless you explicitly set `ALLOW_OPEN_REGISTRATION=true` to bootstrap.
 - **`TRUSTED_HOSTS`** — Set to your API hostname(s) to reduce Host-header attacks.
 - **Repo hygiene** — `Images/`, `*.db`, and `backend/data/` are gitignored so estate photos and databases do not land on GitHub.
 - **JWT lifetime** — Default is 30 days (`43200` minutes). Tune `ACCESS_TOKEN_EXPIRE_MINUTES` on Railway if you want shorter or longer sessions (max 90 days).

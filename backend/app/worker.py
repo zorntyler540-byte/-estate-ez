@@ -88,6 +88,27 @@ def _next_queued_job() -> tuple[str, str] | None:
     return None
 
 
+def run_idle_maintenance() -> None:
+    """Owner-configured Facebook auto-approve plus click-row retention (not a catalogger trigger)."""
+    from app.services.click_tracking import purge_old_tracked_clicks
+    from app.services.facebook_calendar import sweep_calendar_auto_approve
+
+    with SessionLocal() as db:
+        try:
+            sweep_calendar_auto_approve(db)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("facebook auto-approve sweep failed")
+            db.rollback()
+        try:
+            n = purge_old_tracked_clicks(db)
+            db.commit()
+            if n:
+                _LOG.info("Purged %s old tracked-link click row(s)", n)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            _LOG.exception("tracked-click retention sweep failed")
+
+
 def _reconcile_stale_receiving_globally() -> int:
     """Close orphan ``receiving`` jobs and leftover FAILED mid-upload cards across accounts."""
     n = 0
@@ -173,6 +194,10 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
                         _LOG.info("Reconciled stale receiving jobs for %d account(s)", swept)
                 except Exception:  # noqa: BLE001
                     _LOG.exception("stale receiving reconcile failed")
+                try:
+                    run_idle_maintenance()
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("idle maintenance failed")
             time.sleep(interval)
             continue
         idle_sweeps = 0

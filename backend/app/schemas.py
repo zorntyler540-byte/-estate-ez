@@ -35,6 +35,11 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class JobSseTicketOut(BaseModel):
+    ticket: str
+    expires_in: int
+
+
 class UserSummary(BaseModel):
     id: str
     account_id: str

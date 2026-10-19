@@ -82,6 +82,8 @@ class User(Base):
     # Client logins may upload photos only into this sale. Null for owners and cataloggers.
     # Plain column (no FK) so users and sales do not form a circular foreign key.
     assigned_sale_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Incremented on password change and logout-all so previously issued JWTs stop working.
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     account: Mapped["Account"] = relationship(back_populates="users")
@@ -444,6 +446,38 @@ class TrackedLink(Base):
     destination_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="lot", server_default="lot")
     destination_url: Mapped[str] = mapped_column(String(600), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FacebookOAuthState(Base):
+    """One-time Facebook Login state bound to the owner who clicked Connect."""
+
+    __tablename__ = "facebook_oauth_states"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TrackedLinkDailyCount(Base):
+    """Pacific-day click totals per tracked link (report source of truth)."""
+
+    __tablename__ = "tracked_link_daily_counts"
+    __table_args__ = (UniqueConstraint("link_id", "day_pacific", name="uq_tracked_link_daily"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    link_id: Mapped[str] = mapped_column(ForeignKey("tracked_links.id"), index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    sale_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    lot_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    facebook_post_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    calendar_key: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    channel: Mapped[str] = mapped_column(String(20), nullable=False, default="page_post", server_default="page_post")
+    destination_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="lot", server_default="lot")
+    day_pacific: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class TrackedLinkClick(Base):

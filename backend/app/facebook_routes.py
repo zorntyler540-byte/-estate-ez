@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -37,7 +37,9 @@ from app.services.facebook_calendar import (
     cancel_calendar_slots,
     sync_facebook_calendar_after_snapshot,
 )
+from app.config import settings
 from app.services.facebook_page import (
+    OAUTH_COOKIE_NAME,
     complete_oauth,
     connection_status,
     disconnect,
@@ -108,12 +110,30 @@ def facebook_status(
 
 
 @router.get("/integrations/facebook/oauth/start", response_model=FacebookOAuthStartOut)
-def facebook_oauth_start(current: User = Depends(get_current_user)) -> FacebookOAuthStartOut:
-    return FacebookOAuthStartOut(url=oauth_start_url(current))
+def facebook_oauth_start(
+    response: Response,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookOAuthStartOut:
+    url, jti, max_age = oauth_start_url(db, current)
+    # Production web and API are different Railway sites; Lax cookies from a
+    # cross-site fetch are dropped. None+Secure lets the Connect cookie stick
+    # so the Facebook callback still binds to the owner who started it.
+    response.set_cookie(
+        key=OAUTH_COOKIE_NAME,
+        value=jti,
+        max_age=max_age,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+        path="/integrations/facebook/oauth",
+    )
+    return FacebookOAuthStartOut(url=url)
 
 
 @router.get("/integrations/facebook/oauth/callback")
 def facebook_oauth_callback(
+    request: Request,
     db: Session = Depends(get_db),
     code: str | None = None,
     state: str | None = None,
@@ -122,14 +142,25 @@ def facebook_oauth_callback(
 ) -> RedirectResponse:
     if error:
         detail = (error_description or error or "Facebook sign-in was cancelled.").strip()
-        return RedirectResponse(frontend_oauth_redirect(status="error", error=detail), status_code=302)
+        redirect = RedirectResponse(frontend_oauth_redirect(status="error", error=detail), status_code=302)
+        redirect.delete_cookie(OAUTH_COOKIE_NAME, path="/integrations/facebook/oauth")
+        return redirect
     if not code or not state:
-        return RedirectResponse(
+        redirect = RedirectResponse(
             frontend_oauth_redirect(status="error", error="Facebook did not return an authorization code."),
             status_code=302,
         )
-    url = complete_oauth(db, code=code, state=state)
-    return RedirectResponse(url, status_code=302)
+        redirect.delete_cookie(OAUTH_COOKIE_NAME, path="/integrations/facebook/oauth")
+        return redirect
+    url = complete_oauth(
+        db,
+        code=code,
+        state=state,
+        cookie_jti=request.cookies.get(OAUTH_COOKIE_NAME),
+    )
+    redirect = RedirectResponse(url, status_code=302)
+    redirect.delete_cookie(OAUTH_COOKIE_NAME, path="/integrations/facebook/oauth")
+    return redirect
 
 
 @router.get("/integrations/facebook/pages", response_model=list[FacebookPageChoiceOut])
@@ -186,7 +217,9 @@ def facebook_patch_settings(
         }
         for sale_id in sale_ids:
             try:
-                sync_facebook_calendar_after_snapshot(db, account.id, sale_id)
+                sync_facebook_calendar_after_snapshot(
+                    db, account.id, sale_id, publish_new_slots=True
+                )
             except Exception:
                 continue
     return _status_out(account)

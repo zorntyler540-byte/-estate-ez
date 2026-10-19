@@ -256,7 +256,9 @@ export function FacebookPagePostModal({
   async function startConnect() {
     setError("");
     try {
-      const res = (await apiFetch("/integrations/facebook/oauth/start", token)) as { url: string };
+      const res = (await apiFetch("/integrations/facebook/oauth/start", token, {
+        credentials: "include"
+      })) as { url: string };
       if (res.url) window.location.href = res.url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start Facebook sign-in");

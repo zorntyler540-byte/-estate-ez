@@ -12,13 +12,14 @@ from app.auth import get_current_user
 from app.config import settings
 from app.db import Base, get_db
 from app.main import app
-from app.models import Account, Lot, Photo, Sale, TrackedLink, TrackedLinkClick, User
+from app.models import Account, Lot, Photo, Sale, TrackedLink, TrackedLinkClick, TrackedLinkDailyCount, User
 from app.services.click_tracking import (
     CHANNEL_PAGE_POST,
     KIND_LOT,
     get_or_create_tracked_link,
     is_allowed_destination,
     is_preview_bot,
+    purge_old_tracked_clicks,
     reset_rate_limits,
 )
 from app.services.facebook_crypto import seal_facebook_secret
@@ -99,11 +100,20 @@ def _clear() -> None:
 
 
 def test_allowed_destination_rejects_open_redirect_hosts() -> None:
+    from app.services.click_tracking import canonicalize_destination
+
     assert is_allowed_destination("https://ctbids.com/estate-sale/12/item/99")
     assert is_allowed_destination("https://www.ctbids.com/estate-sale/12")
+    assert canonicalize_destination("https://ctbids.com/estate-sale/12/item/99?utm=1#x") == (
+        "https://ctbids.com/estate-sale/12/item/99"
+    )
     assert not is_allowed_destination("https://evil.example/phish")
     assert not is_allowed_destination("javascript:alert(1)")
     assert not is_allowed_destination("https://ctbids.com.evil.example/estate-sale/1")
+    assert not is_allowed_destination("http://ctbids.com/estate-sale/12")
+    assert not is_allowed_destination("https://user:pass@ctbids.com/estate-sale/12")
+    assert not is_allowed_destination("https://ctbids.com/estate-sale/12/item/99/extra")
+    assert not is_allowed_destination("https://ctbids.com/estate-sale/12\n/item/99")
 
 
 def test_preview_bots_are_filtered() -> None:
@@ -266,5 +276,37 @@ def test_clicks_report_counts_by_lot_and_day(tmp_path) -> None:
         assert report["by_lot"][0]["clicks"] == 1
         assert report["by_day"][0]["clicks"] == 1
         assert report["by_post"][0]["clicks"] == 1
+    finally:
+        _clear()
+
+
+def test_click_raw_rows_are_capped_and_report_uses_daily_counts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "click_raw_per_code_per_day", 1)
+    client, db, account, _user, sale, lot = _client(tmp_path)
+    try:
+        link = get_or_create_tracked_link(
+            db,
+            account_id=account.id,
+            sale_id=sale.id,
+            lot_id=lot.id,
+            destination_url="https://ctbids.com/estate-sale/12/item/99?utm=steal",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert link is not None
+        assert link.destination_url == "https://ctbids.com/estate-sale/12/item/99"
+        first = client.get(f"/go/{link.code}", headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False)
+        second = client.get(f"/go/{link.code}", headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False)
+        assert first.status_code == 302
+        assert second.status_code == 302
+        assert first.headers["location"] == "https://ctbids.com/estate-sale/12/item/99"
+        assert db.query(TrackedLinkClick).count() == 1
+        daily = db.query(TrackedLinkDailyCount).one()
+        assert daily.clicks == 2
+        report = client.get(f"/facebook/clicks?sale_id={sale.id}").json()
+        assert report["total"] == 2
+        n = purge_old_tracked_clicks(db, older_than_days=1)
+        assert n == 0
     finally:
         _clear()

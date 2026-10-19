@@ -14,7 +14,7 @@ import re
 import secrets
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
@@ -25,7 +25,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import FacebookPagePost, Lot, TrackedLink, TrackedLinkClick
+from app.models import FacebookPagePost, Lot, TrackedLink, TrackedLinkClick, TrackedLinkDailyCount
 from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_link_line
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -38,6 +38,10 @@ CODE_RE = re.compile(r"^[A-Za-z0-9]{8,16}$")
 _CTBIDS_URL_RE = re.compile(r"https?://(?:www\.)?ctbids\.com/[^\s<>\"']+", re.I)
 _GO_URL_RE = re.compile(r"https?://[^\s<>\"']+/go/[A-Za-z0-9]{8,16}", re.I)
 _ALLOWED_DEST_HOSTS = frozenset({"ctbids.com", "www.ctbids.com"})
+_ALLOWED_DEST_RE = re.compile(
+    r"^https://(?:www\.)?ctbids\.com/estate-sale/\d+(?:/item/\d+)?$",
+    re.I,
+)
 _BOT_UA_RE = re.compile(
     r"("
     r"facebookexternalhit|facebot|facebookcatalog|"
@@ -70,23 +74,35 @@ def tracked_url_for_code(code: str) -> str:
     return f"{public_api_origin()}/go/{code}"
 
 
-def is_allowed_destination(url: str) -> bool:
+def canonicalize_destination(url: str) -> str | None:
+    """https://(www.)ctbids.com/estate-sale/<id> or .../item/<id>. No query, fragment, or userinfo."""
     raw = (url or "").strip()
     if not raw:
-        return False
+        return None
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        return None
     try:
         parsed = urlparse(raw)
     except ValueError:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
+        return None
+    if (parsed.scheme or "").lower() != "https":
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if "@" in (parsed.netloc or ""):
+        return None
     host = (parsed.hostname or "").lower()
     if host not in _ALLOWED_DEST_HOSTS:
-        return False
-    path = parsed.path or ""
-    if "/estate-sale/" not in path:
-        return False
-    return True
+        return None
+    path = (parsed.path or "").rstrip("/")
+    candidate = urlunparse(("https", host, path, "", "", ""))
+    if not _ALLOWED_DEST_RE.match(candidate):
+        return None
+    return candidate
+
+
+def is_allowed_destination(url: str) -> bool:
+    return canonicalize_destination(url) is not None
 
 
 def is_preview_bot(*, user_agent: str = "", purpose: str = "") -> bool:
@@ -151,10 +167,9 @@ def get_or_create_tracked_link(
     calendar_key: str = "",
     facebook_post_id: str | None = None,
 ) -> TrackedLink | None:
-    dest = (destination_url or "").strip()
-    if not is_allowed_destination(dest):
+    dest = canonicalize_destination(destination_url)
+    if not dest:
         return None
-    dest = dest.rstrip("/")
     cal = (calendar_key or "").strip()
     chan = (channel or CHANNEL_PAGE_POST).strip() or CHANNEL_PAGE_POST
     kind = (destination_kind or KIND_LOT).strip() or KIND_LOT
@@ -206,7 +221,7 @@ def lookup_tracked_url(
     channel: str,
     calendar_key: str = "",
 ) -> str:
-    dest = (destination_url or "").strip().rstrip("/")
+    dest = canonicalize_destination(destination_url) or (destination_url or "").strip().rstrip("/")
     if not dest:
         return ""
     q = db.query(TrackedLink).filter(
@@ -391,9 +406,9 @@ def follow_tracked_link(db: Session, *, code: str, request: Request) -> Redirect
     if not CODE_RE.match(token):
         raise HTTPException(status_code=404, detail="Link not found")
     row = db.query(TrackedLink).filter(TrackedLink.code == token).first()
-    if row is None or not is_allowed_destination(row.destination_url):
+    dest = canonicalize_destination(row.destination_url) if row is not None else None
+    if row is None or not dest:
         raise HTTPException(status_code=404, detail="Link not found")
-    dest = row.destination_url
     headers = {"Cache-Control": "private, no-store"}
     response = RedirectResponse(url=dest, status_code=302, headers=headers)
     if request.method.upper() == "HEAD":
@@ -407,6 +422,78 @@ def follow_tracked_link(db: Session, *, code: str, request: Request) -> Redirect
         return response
     if not _rate_allow(f"l:{token}", _RATE_PER_CODE):
         return response
+    try:
+        _record_click(db, row, dest, referrer=_safe_referrer(request.headers.get("referer") or ""))
+        db.commit()
+    except Exception:
+        db.rollback()
+        _LOG.exception("Failed to record tracked-link click code=%s", token)
+    return response
+
+
+def _pacific_day(when: datetime | None = None) -> str:
+    now = when or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(PACIFIC).date().isoformat()
+
+
+def _pacific_day_start_utc(when: datetime | None = None) -> datetime:
+    now = when or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local = now.astimezone(PACIFIC)
+    start_local = datetime(local.year, local.month, local.day, tzinfo=PACIFIC)
+    return start_local.astimezone(timezone.utc)
+
+
+def _bump_daily_count(db: Session, row: TrackedLink) -> TrackedLinkDailyCount:
+    day = _pacific_day()
+    stat = (
+        db.query(TrackedLinkDailyCount)
+        .filter(
+            TrackedLinkDailyCount.link_id == row.id,
+            TrackedLinkDailyCount.day_pacific == day,
+        )
+        .first()
+    )
+    if stat is None:
+        stat = TrackedLinkDailyCount(
+            link_id=row.id,
+            account_id=row.account_id,
+            sale_id=row.sale_id,
+            lot_id=row.lot_id,
+            facebook_post_id=row.facebook_post_id,
+            calendar_key=row.calendar_key or "",
+            channel=row.channel,
+            destination_kind=row.destination_kind,
+            day_pacific=day,
+            clicks=0,
+        )
+        db.add(stat)
+        db.flush()
+    stat.clicks = int(stat.clicks or 0) + 1
+    if row.facebook_post_id and not stat.facebook_post_id:
+        stat.facebook_post_id = row.facebook_post_id
+    db.add(stat)
+    return stat
+
+
+def _record_click(db: Session, row: TrackedLink, dest: str, *, referrer: str) -> None:
+    _bump_daily_count(db, row)
+    cap = int(settings.click_raw_per_code_per_day)
+    raw_n = int(
+        db.query(func.count())
+        .select_from(TrackedLinkClick)
+        .where(
+            TrackedLinkClick.code == row.code,
+            TrackedLinkClick.clicked_at >= _pacific_day_start_utc(),
+        )
+        .scalar()
+        or 0
+    )
+    if raw_n >= cap:
+        return
     db.add(
         TrackedLinkClick(
             link_id=row.id,
@@ -418,16 +505,21 @@ def follow_tracked_link(db: Session, *, code: str, request: Request) -> Redirect
             calendar_key=row.calendar_key or "",
             channel=row.channel,
             destination_kind=row.destination_kind,
-            destination_url=row.destination_url,
-            referrer=_safe_referrer(request.headers.get("referer") or ""),
+            destination_url=dest,
+            referrer=referrer,
         )
     )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        _LOG.exception("Failed to record tracked-link click code=%s", token)
-    return response
+
+
+def purge_old_tracked_clicks(db: Session, *, older_than_days: int | None = None) -> int:
+    days = int(older_than_days if older_than_days is not None else settings.click_raw_retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+    return int(
+        db.query(TrackedLinkClick)
+        .filter(TrackedLinkClick.clicked_at < cutoff)
+        .delete(synchronize_session=False)
+        or 0
+    )
 
 
 def click_counts_by_lot(db: Session, account_id: str, lot_ids: list[str]) -> dict[str, int]:
@@ -435,31 +527,82 @@ def click_counts_by_lot(db: Session, account_id: str, lot_ids: list[str]) -> dic
     if not ids:
         return {}
     rows = (
-        db.query(TrackedLinkClick.lot_id, func.count())
+        db.query(TrackedLinkDailyCount.lot_id, func.coalesce(func.sum(TrackedLinkDailyCount.clicks), 0))
         .filter(
-            TrackedLinkClick.account_id == account_id,
-            TrackedLinkClick.lot_id.in_(ids),
+            TrackedLinkDailyCount.account_id == account_id,
+            TrackedLinkDailyCount.lot_id.in_(ids),
         )
-        .group_by(TrackedLinkClick.lot_id)
+        .group_by(TrackedLinkDailyCount.lot_id)
         .all()
     )
     return {str(lid): int(n) for lid, n in rows if lid}
 
 
 def sale_click_report(db: Session, *, account_id: str, sale_id: str) -> dict[str, Any]:
-    clicks = (
-        db.query(TrackedLinkClick)
-        .filter(
-            TrackedLinkClick.account_id == account_id,
-            TrackedLinkClick.sale_id == sale_id,
-        )
-        .all()
-    )
     lots = {
         lot.id: lot
         for lot in db.query(Lot).filter(Lot.account_id == account_id, Lot.sale_id == sale_id).all()
     }
-    post_ids = {c.facebook_post_id for c in clicks if c.facebook_post_id}
+    total = int(
+        db.query(func.coalesce(func.sum(TrackedLinkDailyCount.clicks), 0))
+        .filter(
+            TrackedLinkDailyCount.account_id == account_id,
+            TrackedLinkDailyCount.sale_id == sale_id,
+        )
+        .scalar()
+        or 0
+    )
+    day_rows = [
+        {"day": day, "clicks": int(n)}
+        for day, n in (
+            db.query(TrackedLinkDailyCount.day_pacific, func.sum(TrackedLinkDailyCount.clicks))
+            .filter(
+                TrackedLinkDailyCount.account_id == account_id,
+                TrackedLinkDailyCount.sale_id == sale_id,
+            )
+            .group_by(TrackedLinkDailyCount.day_pacific)
+            .order_by(TrackedLinkDailyCount.day_pacific)
+            .all()
+        )
+    ]
+    by_lot: dict[str, dict[str, Any]] = {}
+    for lot_id, n in (
+        db.query(TrackedLinkDailyCount.lot_id, func.sum(TrackedLinkDailyCount.clicks))
+        .filter(
+            TrackedLinkDailyCount.account_id == account_id,
+            TrackedLinkDailyCount.sale_id == sale_id,
+        )
+        .group_by(TrackedLinkDailyCount.lot_id)
+        .all()
+    ):
+        lot = lots.get(lot_id or "")
+        by_lot[lot_id or "unknown"] = {
+            "lot_id": lot_id,
+            "sku": (lot.sku if lot else "") or "",
+            "title": (lot.auction_title if lot else "") or "",
+            "clicks": int(n or 0),
+        }
+    post_rows_raw = (
+        db.query(
+            TrackedLinkDailyCount.facebook_post_id,
+            TrackedLinkDailyCount.calendar_key,
+            TrackedLinkDailyCount.channel,
+            TrackedLinkDailyCount.lot_id,
+            func.sum(TrackedLinkDailyCount.clicks),
+        )
+        .filter(
+            TrackedLinkDailyCount.account_id == account_id,
+            TrackedLinkDailyCount.sale_id == sale_id,
+        )
+        .group_by(
+            TrackedLinkDailyCount.facebook_post_id,
+            TrackedLinkDailyCount.calendar_key,
+            TrackedLinkDailyCount.channel,
+            TrackedLinkDailyCount.lot_id,
+        )
+        .all()
+    )
+    post_ids = {pid for pid, *_rest in post_rows_raw if pid}
     posts = {}
     if post_ids:
         posts = {
@@ -468,53 +611,34 @@ def sale_click_report(db: Session, *, account_id: str, sale_id: str) -> dict[str
             .filter(FacebookPagePost.account_id == account_id, FacebookPagePost.id.in_(post_ids))
             .all()
         }
-    by_day: dict[str, int] = defaultdict(int)
-    by_lot: dict[str, dict[str, Any]] = {}
     by_post: dict[str, dict[str, Any]] = {}
-    for click in clicks:
-        when = click.clicked_at or datetime.now(timezone.utc)
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        day = when.astimezone(PACIFIC).date().isoformat()
-        by_day[day] += 1
-        lot = lots.get(click.lot_id or "")
-        lot_key = click.lot_id or "unknown"
-        if lot_key not in by_lot:
-            by_lot[lot_key] = {
-                "lot_id": click.lot_id,
-                "sku": (lot.sku if lot else "") or "",
-                "title": (lot.auction_title if lot else "") or "",
-                "clicks": 0,
-            }
-        by_lot[lot_key]["clicks"] += 1
-        post = posts.get(click.facebook_post_id or "")
-        if click.facebook_post_id:
-            post_key = click.facebook_post_id
+    for facebook_post_id, calendar_key, channel, lot_id, n in post_rows_raw:
+        lot = lots.get(lot_id or "")
+        if facebook_post_id:
+            post_key = facebook_post_id
+            post = posts.get(facebook_post_id)
             caption = (post.caption if post else "") or ""
             label = caption.splitlines()[0][:80] if caption else "Page post"
-            channel = click.channel
         else:
-            post_key = f"{click.channel}:{click.lot_id or ''}:{click.calendar_key or ''}"
-            label = "Group share" if click.channel == CHANNEL_GROUP_SHARE else "Page post"
-            channel = click.channel
+            post_key = f"{channel}:{lot_id or ''}:{calendar_key or ''}"
+            label = "Group share" if channel == CHANNEL_GROUP_SHARE else "Page post"
         if post_key not in by_post:
             by_post[post_key] = {
-                "facebook_post_id": click.facebook_post_id,
-                "calendar_key": click.calendar_key or "",
+                "facebook_post_id": facebook_post_id,
+                "calendar_key": calendar_key or "",
                 "channel": channel,
-                "lot_id": click.lot_id,
+                "lot_id": lot_id,
                 "sku": (lot.sku if lot else "") or "",
                 "title": (lot.auction_title if lot else "") or "",
                 "label": label,
                 "clicks": 0,
             }
-        by_post[post_key]["clicks"] += 1
-    day_rows = [{"day": day, "clicks": by_day[day]} for day in sorted(by_day)]
+        by_post[post_key]["clicks"] += int(n or 0)
     lot_rows = sorted(by_lot.values(), key=lambda row: (-int(row["clicks"]), str(row.get("sku") or "")))
     post_rows = sorted(by_post.values(), key=lambda row: (-int(row["clicks"]), str(row.get("label") or "")))
     return {
         "sale_id": sale_id,
-        "total": len(clicks),
+        "total": total,
         "by_day": day_rows,
         "by_lot": lot_rows,
         "by_post": post_rows,

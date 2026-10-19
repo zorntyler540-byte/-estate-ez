@@ -690,8 +690,13 @@ def sync_facebook_calendar_after_snapshot(
     ctseller_sale_id: int,
     *,
     now: datetime | None = None,
+    publish_new_slots: bool = False,
 ) -> None:
-    """Update/delete already-approved Graph posts; auto-approve new slots if enabled."""
+    """Update/delete already-approved Graph posts; auto-approve new slots only when asked.
+
+    Snapshot ingest must pass ``publish_new_slots=False`` so a catalogger watcher upload
+    cannot publish. Owner settings and the auto-approve scheduler pass True.
+    """
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         return
@@ -752,6 +757,8 @@ def sync_facebook_calendar_after_snapshot(
         if not same_time:
             _reschedule_row(db, account, row, slot["when"])
 
+    if not publish_new_slots:
+        return
     if not bool(getattr(account, "facebook_calendar_auto_approve", False)):
         return
     if not _connected_page(account):
@@ -816,6 +823,38 @@ def sync_facebook_calendar_after_snapshot(
             account_id,
             ctseller_sale_id,
         )
+
+
+def sweep_calendar_auto_approve(db: Session, *, now: datetime | None = None) -> int:
+    """Owner-configured auto-approve: publish pending Push slots without a catalogger trigger."""
+    accounts = (
+        db.query(Account)
+        .filter(Account.facebook_calendar_auto_approve.is_(True))
+        .all()
+    )
+    n = 0
+    for account in accounts:
+        sale_ids = {
+            int(row[0])
+            for row in db.query(EngagementSnapshot.ctseller_sale_id)
+            .filter(EngagementSnapshot.account_id == account.id)
+            .distinct()
+            .all()
+            if row[0] is not None
+        }
+        for sale_id in sale_ids:
+            try:
+                sync_facebook_calendar_after_snapshot(
+                    db, account.id, int(sale_id), now=now, publish_new_slots=True
+                )
+                n += 1
+            except Exception:
+                _LOG.exception(
+                    "Auto-approve sweep failed account=%s sale=%s",
+                    account.id,
+                    sale_id,
+                )
+    return n
 
 
 def calendar_publish_items(
