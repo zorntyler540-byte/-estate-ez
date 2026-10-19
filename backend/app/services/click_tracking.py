@@ -320,15 +320,31 @@ def tracked_pair(
     return dest_item, dest_sale, short_item, short_sale
 
 
-def restore_ctbids_urls(db: Session, text: str) -> str:
-    """Turn leftover /go/<code> URLs back into the stored CT Bids destination."""
+def restore_ctbids_urls(
+    db: Session,
+    text: str,
+    *,
+    account_id: str,
+    fallback_item_url: str = "",
+    fallback_sale_url: str = "",
+) -> str:
+    """Turn leftover /go/<code> URLs back into this account's stored CT Bids destination.
+
+    Codes that are missing or belong to another account are never resolved to that
+    destination. They become this lot's own CT Bids URL, or are stripped.
+    """
+    fallback = (fallback_item_url or fallback_sale_url or "").strip()
 
     def _swap(match: re.Match[str]) -> str:
         code = match.group(1)
-        row = db.query(TrackedLink).filter(TrackedLink.code == code).first()
+        row = (
+            db.query(TrackedLink)
+            .filter(TrackedLink.code == code, TrackedLink.account_id == account_id)
+            .first()
+        )
         if row is not None and is_allowed_destination(row.destination_url):
             return row.destination_url
-        return match.group(0)
+        return fallback
 
     return re.sub(r"https?://[^\s<>\"']+/go/([A-Za-z0-9]{8,16})", _swap, text or "", flags=re.I)
 
@@ -384,7 +400,17 @@ def rewrite_copy_with_tracked_links(
     append_if_missing: bool = False,
 ) -> str:
     if not click_tracking_in_captions():
-        return restore_ctbids_urls(db, text)
+        dest_item = (item_url or "").strip().rstrip("/")
+        dest_sale = (sale_url or "").strip().rstrip("/")
+        if not dest_item and not dest_sale:
+            dest_item, dest_sale = destinations_for_lot(db, lot)
+        return restore_ctbids_urls(
+            db,
+            text,
+            account_id=account_id,
+            fallback_item_url=dest_item,
+            fallback_sale_url=dest_sale,
+        )
     dest_item, dest_sale, short_item, short_sale = tracked_pair(
         db,
         account_id=account_id,

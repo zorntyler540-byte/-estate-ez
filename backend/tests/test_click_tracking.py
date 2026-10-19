@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -237,10 +238,69 @@ def test_restore_go_urls_back_to_ctbids(tmp_path) -> None:
             f"Bid here\nhttps://caringtransitions-ai-production.up.railway.app/go/{link.code}\n"
             "See the whole sale: https://ctbids.com/estate-sale/12"
         )
-        restored = restore_ctbids_urls(db, leftover)
+        restored = restore_ctbids_urls(db, leftover, account_id=account.id)
         assert "/go/" not in restored
         assert "https://ctbids.com/estate-sale/12/item/99" in restored
         assert "railway.app" not in restored
+    finally:
+        _clear()
+
+
+def test_restore_does_not_resolve_other_account_code(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    client, db, account_a, _user, _sale, lot_a = _client(tmp_path)
+    published: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        published.append(message)
+        return "111_foreign"
+
+    try:
+        account_b = Account(id="acct-other", name="Other Franchise")
+        db.add(account_b)
+        db.flush()
+        link_b = get_or_create_tracked_link(
+            db,
+            account_id=account_b.id,
+            sale_id=None,
+            lot_id=None,
+            destination_url="https://ctbids.com/estate-sale/99/item/88",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert link_b is not None
+        leftover = (
+            f"Bid here\nhttps://caringtransitions-ai-production.up.railway.app/go/{link_b.code}"
+        )
+        restored = restore_ctbids_urls(
+            db,
+            leftover,
+            account_id=account_a.id,
+            fallback_item_url="https://ctbids.com/estate-sale/12/item/99",
+        )
+        assert "estate-sale/99/item/88" not in restored
+        assert "/go/" not in restored
+        assert "https://ctbids.com/estate-sale/12/item/99" in restored
+
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"\xff\xd8\xffjpeg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="media-1"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            posted = client.post(
+                "/facebook/posts",
+                json={"confirm": True, "items": [{"lot_id": lot_a.id, "caption": leftover}]},
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json()["results"][0]["ok"] is True
+        assert published
+        assert "estate-sale/99/item/88" not in published[0]
+        assert "/go/" not in published[0]
+        assert "https://ctbids.com/estate-sale/12/item/99" in published[0]
     finally:
         _clear()
 
@@ -452,5 +512,71 @@ def test_click_raw_rows_are_capped_and_report_uses_daily_counts(tmp_path, monkey
         assert report["total"] == 2
         n = purge_old_tracked_clicks(db, older_than_days=1)
         assert n == 0
+    finally:
+        _clear()
+
+
+def test_lot_payload_share_caption_restores_owned_go_and_ignores_foreign(
+    tmp_path, monkeypatch
+) -> None:
+    """Find-groups share caption comes from GET /lots/{id} → audience.blurb_ctbids."""
+    monkeypatch.setattr(settings, "public_api_origin", "")
+    client, db, account_a, _user, _sale, lot_a = _client(tmp_path)
+    try:
+        empty = client.get(f"/lots/{lot_a.id}")
+        assert empty.status_code == 200, empty.text
+        assert (empty.json().get("audience") or {}).get("blurb_ctbids") == ""
+
+        own = get_or_create_tracked_link(
+            db,
+            account_id=account_a.id,
+            sale_id=lot_a.sale_id,
+            lot_id=lot_a.id,
+            destination_url="https://ctbids.com/estate-sale/12/item/99",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        account_b = Account(id="acct-other-blurb", name="Other Franchise")
+        db.add(account_b)
+        db.flush()
+        foreign = get_or_create_tracked_link(
+            db,
+            account_id=account_b.id,
+            sale_id=None,
+            lot_id=None,
+            destination_url="https://ctbids.com/estate-sale/99/item/88",
+            destination_kind=KIND_LOT,
+            channel=CHANNEL_PAGE_POST,
+        )
+        db.commit()
+        assert own is not None and foreign is not None
+
+        lot_a.audience_json = json.dumps(
+            {
+                "worthy": True,
+                "groups": [
+                    {
+                        "name": "Fenton Glass Collectors USA",
+                        "url": "https://www.facebook.com/groups/fentonusa",
+                        "why": "glass",
+                    }
+                ],
+                "blurb_ctbids": (
+                    f"Come bid.\n"
+                    f"https://caringtransitions-ai-production.up.railway.app/go/{own.code}\n"
+                    f"https://caringtransitions-ai-production.up.railway.app/go/{foreign.code}"
+                ),
+            }
+        )
+        db.add(lot_a)
+        db.commit()
+
+        res = client.get(f"/lots/{lot_a.id}")
+        assert res.status_code == 200, res.text
+        blurb = (res.json().get("audience") or {}).get("blurb_ctbids") or ""
+        assert "Come bid." in blurb
+        assert "https://ctbids.com/estate-sale/12/item/99" in blurb
+        assert "estate-sale/99/item/88" not in blurb
+        assert "/go/" not in blurb
     finally:
         _clear()

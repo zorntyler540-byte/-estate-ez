@@ -42,10 +42,16 @@ def _audience_payload_with_share_links(row: Lot) -> dict:
     sess = object_session(row)
     if sess is None:
         return payload
-    if not click_tracking_in_captions():
-        payload["blurb_ctbids"] = restore_ctbids_urls(sess, blurb)
-        return payload
     dest_item, dest_sale = destinations_for_lot(sess, row)
+    if not click_tracking_in_captions():
+        payload["blurb_ctbids"] = restore_ctbids_urls(
+            sess,
+            blurb,
+            account_id=row.account_id,
+            fallback_item_url=dest_item,
+            fallback_sale_url=dest_sale,
+        )
+        return payload
     short_item = lookup_tracked_url(
         sess,
         account_id=row.account_id,
