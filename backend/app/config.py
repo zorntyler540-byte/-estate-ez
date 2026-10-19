@@ -201,8 +201,9 @@ class Settings(BaseSettings):
     meta_token_encryption_key: str = Field(default="", alias="META_TOKEN_ENCRYPTION_KEY")
     # Where the OAuth callback sends the browser after connecting a Page (Account settings).
     public_web_origin: str = Field(default="", alias="PUBLIC_WEB_ORIGIN")
-    # Absolute origin for public ``/go/<code>`` Facebook click-tracking redirects.
-    # Production default is the Railway API when this is left empty.
+    # Optional dedicated origin for public ``/go/<code>`` Facebook click-tracking.
+    # Leave empty so Facebook captions keep normal CT Bids lot/sale URLs.
+    # Do not set this to the Railway API or localhost — those are never printed in posts.
     public_api_origin: str = Field(default="", alias="PUBLIC_API_ORIGIN")
 
     @field_validator("allow_open_registration", mode="before")

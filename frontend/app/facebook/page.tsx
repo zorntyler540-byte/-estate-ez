@@ -291,8 +291,9 @@ export default function FacebookPage() {
             Facebook post clicks
           </h2>
           <p className="ct-muted" style={{ margin: "0 0 0.85rem" }}>
-            People who tapped an Estate-EZ short link in a Page post or a group-share caption.
-            Facebook’s own preview fetch is not counted. CT Bids does not share this.
+            Clicks through an Estate-EZ short link, if you turn that on later. Page posts and
+            group captions currently use the normal CT Bids lot and sale URLs so the website
+            stays private. Facebook’s own preview fetch is not counted.
           </p>
           {clicksLoading && !clicks ? (
             <p className="ct-muted" style={{ margin: 0 }}>
@@ -300,8 +301,7 @@ export default function FacebookPage() {
             </p>
           ) : !clicks || clicks.total < 1 ? (
             <p className="ct-muted" style={{ margin: 0 }}>
-              No counted clicks for this sale yet. New Page posts and group captions use a short
-              Estate-EZ link that logs here, then sends the shopper to CT Bids.
+              No counted clicks for this sale yet. Posts still send shoppers straight to CT Bids.
             </p>
           ) : (
             <>
