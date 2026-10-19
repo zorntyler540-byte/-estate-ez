@@ -459,7 +459,8 @@ def test_preview_excludes_tape_and_does_not_post(tmp_path, monkeypatch) -> None:
         row = body["lots"][0]
         assert row["photo_ids"] == ["photo-hero"]
         assert "tape" not in row["photo_ids"]
-        assert "ctbids.com" in row["caption"]
+        assert "/go/" in row["caption"]
+        assert "ctbids.com" not in row["caption"]
         assert row["group_caption"]
         assert "Bid here" in row["group_caption"]
         assert "Ships nationwide" in row["group_caption"]
@@ -1264,11 +1265,10 @@ def test_owner_can_unapprove_scheduled_calendar_slot(tmp_path, monkeypatch) -> N
     deletes: list[str] = []
 
     def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
-        assert "https://ctbids.com/estate-sale/12/item/99" in message
-        assert "See the whole sale: https://ctbids.com/estate-sale/12" in message
-        assert message.index("https://ctbids.com/estate-sale/12/item/99") < message.index(
-            "See the whole sale:"
-        )
+        assert "/go/" in message
+        assert "ctbids.com" not in message
+        assert "See the whole sale:" in message
+        assert message.index("/go/") < message.index("See the whole sale:")
         return "111_unapprove"
 
     def fake_delete(*, post_id, page_token):

@@ -181,6 +181,9 @@ class Settings(BaseSettings):
     meta_token_encryption_key: str = Field(default="", alias="META_TOKEN_ENCRYPTION_KEY")
     # Where the OAuth callback sends the browser after connecting a Page (Account settings).
     public_web_origin: str = Field(default="", alias="PUBLIC_WEB_ORIGIN")
+    # Absolute origin for public ``/go/<code>`` Facebook click-tracking redirects.
+    # Production default is the Railway API when this is left empty.
+    public_api_origin: str = Field(default="", alias="PUBLIC_API_ORIGIN")
 
     @property
     def is_production(self) -> bool:

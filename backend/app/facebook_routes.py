@@ -15,6 +15,7 @@ from app.schemas import (
     FacebookCalendarApproveIn,
     FacebookCalendarCancelIn,
     FacebookCalendarPreviewIn,
+    FacebookClickReportOut,
     FacebookGroupsOut,
     FacebookOAuthStartOut,
     FacebookPageChoiceOut,
@@ -456,6 +457,26 @@ def sale_facebook_groups(
     hunt = audience_tasks.sale_hunt_status(sale_id=sale.id, account_id=current.account_id)
     return FacebookGroupsOut.model_validate(
         sale_facebook_groups_payload(sale=sale, account=account, lots=lots, hunt_status=hunt)
+    )
+
+
+@router.get("/facebook/clicks", response_model=FacebookClickReportOut)
+def facebook_sale_clicks(
+    sale_id: str = Query(..., min_length=1),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookClickReportOut:
+    sale = (
+        db.query(Sale)
+        .filter(Sale.id == sale_id, Sale.account_id == current.account_id)
+        .first()
+    )
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    from app.services.click_tracking import sale_click_report
+
+    return FacebookClickReportOut.model_validate(
+        sale_click_report(db, account_id=current.account_id, sale_id=sale.id)
     )
 
 

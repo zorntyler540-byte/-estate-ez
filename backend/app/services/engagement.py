@@ -104,6 +104,12 @@ def display_bucket(bucket: str, *, watchers: int = 0, bids: int = 0) -> str:
 
 
 def operational_bucket(watchers: int, bids: int, price: float, reserve: float) -> str:
+    """Assign Push / Rescue / Protect / Let Ride.
+
+    Facebook ``/go/`` click counts are stored on ``EngagementOut.facebook_clicks``
+    for a later scoring pass. This function does not read them — thresholds stay
+    the same.
+    """
     price = float(price or 0)
     reserve = float(reserve or 0)
     near_reserve = reserve > 0 and price >= reserve * 0.85

@@ -423,3 +423,45 @@ class FacebookPagePost(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+
+class TrackedLink(Base):
+    """Short Estate-EZ redirect for a CT Bids URL used in a Facebook caption.
+
+    Destination is stored at create time. ``/go/<code>`` only redirects to this
+    URL — never to a caller-supplied location.
+    """
+
+    __tablename__ = "tracked_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    sale_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    lot_id: Mapped[str | None] = mapped_column(ForeignKey("lots.id"), index=True, nullable=True)
+    facebook_post_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    calendar_key: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    channel: Mapped[str] = mapped_column(String(20), nullable=False, default="page_post", server_default="page_post")
+    destination_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="lot", server_default="lot")
+    destination_url: Mapped[str] = mapped_column(String(600), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TrackedLinkClick(Base):
+    """One counted redirect through a tracked Facebook link. No raw IPs."""
+
+    __tablename__ = "tracked_link_clicks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    link_id: Mapped[str] = mapped_column(ForeignKey("tracked_links.id"), index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    sale_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    lot_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    facebook_post_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    calendar_key: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    channel: Mapped[str] = mapped_column(String(20), nullable=False, default="page_post", server_default="page_post")
+    destination_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="lot", server_default="lot")
+    destination_url: Mapped[str] = mapped_column(String(600), nullable=False)
+    referrer: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")
+    clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+

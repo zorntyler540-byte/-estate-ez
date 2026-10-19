@@ -17,6 +17,26 @@ type Sale = {
   closed_at: string | null;
 };
 
+type ClickDay = { day: string; clicks: number };
+type ClickLot = { lot_id?: string | null; sku?: string; title?: string; clicks: number };
+type ClickPost = {
+  facebook_post_id?: string | null;
+  calendar_key?: string;
+  channel?: string;
+  lot_id?: string | null;
+  sku?: string;
+  title?: string;
+  label?: string;
+  clicks: number;
+};
+type ClickReport = {
+  sale_id: string;
+  total: number;
+  by_day: ClickDay[];
+  by_lot: ClickLot[];
+  by_post: ClickPost[];
+};
+
 type Lot = {
   id: string;
   sale_id: string;
@@ -71,6 +91,8 @@ export default function FacebookPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
+  const [clicks, setClicks] = useState<ClickReport | null>(null);
+  const [clicksLoading, setClicksLoading] = useState(false);
 
   useEffect(() => {
     const t = localStorage.getItem("token") || "";
@@ -126,6 +148,29 @@ export default function FacebookPage() {
   useEffect(() => {
     void loadLots();
   }, [loadLots]);
+
+  const loadClicks = useCallback(async () => {
+    if (!token || !selectedSaleId) {
+      setClicks(null);
+      return;
+    }
+    setClicksLoading(true);
+    try {
+      const row = (await apiFetch(
+        `/facebook/clicks?sale_id=${encodeURIComponent(selectedSaleId)}`,
+        token
+      )) as ClickReport;
+      setClicks(row);
+    } catch {
+      setClicks(null);
+    } finally {
+      setClicksLoading(false);
+    }
+  }, [token, selectedSaleId]);
+
+  useEffect(() => {
+    void loadClicks();
+  }, [loadClicks]);
 
   const selectedSale = useMemo(
     () => sales.find((s) => s.id === selectedSaleId) ?? null,
@@ -207,7 +252,15 @@ export default function FacebookPage() {
               {selectedSale ? ` Showing ${selectedSale.name}.` : ""}
             </p>
           </div>
-          <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadLots()} disabled={loading}>
+          <button
+            type="button"
+            className="ct-btn ct-btn--ghost"
+            onClick={() => {
+              void loadLots();
+              void loadClicks();
+            }}
+            disabled={loading || clicksLoading}
+          >
             Refresh
           </button>
         </header>
@@ -232,6 +285,104 @@ export default function FacebookPage() {
             </p>
           </section>
         )}
+
+        <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
+          <h2 className="ct-dash-panel__title" style={{ marginTop: 0 }}>
+            Facebook post clicks
+          </h2>
+          <p className="ct-muted" style={{ margin: "0 0 0.85rem" }}>
+            People who tapped an Estate-EZ short link in a Page post or a group-share caption.
+            Facebook’s own preview fetch is not counted. CT Bids does not share this.
+          </p>
+          {clicksLoading && !clicks ? (
+            <p className="ct-muted" style={{ margin: 0 }}>
+              Loading clicks…
+            </p>
+          ) : !clicks || clicks.total < 1 ? (
+            <p className="ct-muted" style={{ margin: 0 }}>
+              No counted clicks for this sale yet. New Page posts and group captions use a short
+              Estate-EZ link that logs here, then sends the shopper to CT Bids.
+            </p>
+          ) : (
+            <>
+              <p style={{ margin: "0 0 0.85rem", fontWeight: 600 }}>
+                {clicks.total} click{clicks.total === 1 ? "" : "s"}
+              </p>
+              {clicks.by_day.length ? (
+                <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>
+                  <table className="ct-table">
+                    <thead>
+                      <tr>
+                        <th>Day (PT)</th>
+                        <th>Clicks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clicks.by_day.map((row) => (
+                        <tr key={row.day}>
+                          <td>{row.day}</td>
+                          <td>{row.clicks}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {clicks.by_post.length ? (
+                <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>
+                  <table className="ct-table">
+                    <thead>
+                      <tr>
+                        <th>Post</th>
+                        <th>Channel</th>
+                        <th>SKU</th>
+                        <th>Clicks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clicks.by_post.map((row) => (
+                        <tr key={`${row.facebook_post_id || row.channel}-${row.lot_id || ""}-${row.label}`}>
+                          <td>{row.label || row.title || "Post"}</td>
+                          <td>{row.channel === "group_share" ? "Group share" : "Page post"}</td>
+                          <td>{row.sku || "—"}</td>
+                          <td>{row.clicks}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {clicks.by_lot.length ? (
+                <div className="ct-table-wrap">
+                  <table className="ct-table">
+                    <thead>
+                      <tr>
+                        <th>Lot</th>
+                        <th>SKU</th>
+                        <th>Clicks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clicks.by_lot.map((row) => (
+                        <tr key={row.lot_id || row.sku || row.title}>
+                          <td>
+                            {row.lot_id ? (
+                              <Link href={`/lots/${row.lot_id}`}>{row.title || "Untitled"}</Link>
+                            ) : (
+                              row.title || "Untitled"
+                            )}
+                          </td>
+                          <td>{row.sku || "—"}</td>
+                          <td>{row.clicks}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </>
+          )}
+        </section>
 
         <section className="ct-card ct-card--padded">
           <h2 className="ct-dash-panel__title" style={{ marginTop: 0 }}>

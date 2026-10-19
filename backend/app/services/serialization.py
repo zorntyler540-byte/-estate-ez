@@ -20,6 +20,61 @@ from app.services.audience_hunt import audience_payload_for_lot
 from app.services.engagement_store import engagement_out_for_lot
 
 
+def _audience_payload_with_share_links(row: Lot) -> dict:
+    payload = audience_payload_for_lot(row)
+    blurb = str(payload.get("blurb_ctbids") or "").strip()
+    if not blurb:
+        return payload
+    from sqlalchemy.orm import object_session
+
+    from app.services.click_tracking import (
+        CHANNEL_GROUP_SHARE,
+        KIND_LOT,
+        KIND_SALE,
+        apply_tracked_urls,
+        destinations_for_lot,
+        lookup_tracked_url,
+    )
+    from app.services.ctbids_urls import SALE_LINK_PREFIX, sale_link_line
+
+    sess = object_session(row)
+    if sess is None:
+        return payload
+    dest_item, dest_sale = destinations_for_lot(sess, row)
+    short_item = lookup_tracked_url(
+        sess,
+        account_id=row.account_id,
+        lot_id=row.id,
+        destination_url=dest_item,
+        destination_kind=KIND_LOT,
+        channel=CHANNEL_GROUP_SHARE,
+    )
+    short_sale = lookup_tracked_url(
+        sess,
+        account_id=row.account_id,
+        lot_id=row.id,
+        destination_url=dest_sale,
+        destination_kind=KIND_SALE,
+        channel=CHANNEL_GROUP_SHARE,
+    )
+    if not short_item and not short_sale:
+        return payload
+    text = apply_tracked_urls(
+        blurb,
+        dest_item=dest_item,
+        dest_sale=dest_sale,
+        short_item=short_item,
+        short_sale=short_sale,
+    )
+    if short_item and short_item not in text:
+        text = f"{text.rstrip()}\n\n{short_item}"
+    sale_line = sale_link_line(short_sale) if short_sale else ""
+    if sale_line and sale_line not in text and SALE_LINK_PREFIX not in text:
+        text = f"{text.rstrip()}\n\n{sale_line}"
+    payload["blurb_ctbids"] = text
+    return payload
+
+
 def _json_str_list(raw: str | None) -> list[str]:
     try:
         data = json.loads(raw or "[]")
@@ -261,7 +316,7 @@ def lot_to_schema(
         ctseller_sold_price=getattr(row, "ctseller_sold_price", None),
         listing_channel=(getattr(row, "listing_channel", None) or "ctseller"),
         audience_hold=bool(getattr(row, "audience_hold", False)),
-        audience=audience_payload_for_lot(row),
+        audience=_audience_payload_with_share_links(row),
         engagement=engagement_out_for_lot(row),
     )
 
