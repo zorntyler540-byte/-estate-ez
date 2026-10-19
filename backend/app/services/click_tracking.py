@@ -58,16 +58,32 @@ _RATE_WINDOW_S = 60.0
 
 
 def public_api_origin() -> str:
-    raw = (settings.public_api_origin or "").strip().rstrip("/")
-    if raw:
-        return raw
-    if settings.is_production:
-        return PRODUCTION_API_ORIGIN
-    return "http://localhost:8000"
+    """Host printed into captions. Empty / local / Railway API means do not wrap."""
+    origin = (settings.public_api_origin or "").strip().rstrip("/")
+    if not origin:
+        return ""
+    try:
+        host = (urlparse(origin).hostname or "").lower()
+    except ValueError:
+        return ""
+    if not host or host in {"localhost", "127.0.0.1"}:
+        return ""
+    if host.endswith(".up.railway.app") or host.endswith(".railway.app"):
+        return ""
+    return origin
+
+
+def click_tracking_in_captions() -> bool:
+    """Short links in Facebook copy only with a dedicated public tracking host.
+
+    Empty, localhost, and the Railway API keep CT Bids lot/sale URLs in posts.
+    """
+    return bool(public_api_origin())
 
 
 def tracked_url_for_code(code: str) -> str:
-    return f"{public_api_origin()}/go/{code}"
+    origin = public_api_origin() or "http://localhost:8000"
+    return f"{origin}/go/{code}"
 
 
 def is_allowed_destination(url: str) -> bool:
@@ -237,6 +253,19 @@ def destinations_for_lot(db: Session, lot: Lot) -> tuple[str, str]:
     return (item_url or "").strip().rstrip("/"), (sale_url or "").strip().rstrip("/")
 
 
+def restore_ctbids_urls(db: Session, text: str) -> str:
+    """Turn leftover /go/<code> URLs back into the stored CT Bids destination."""
+
+    def _swap(match: re.Match[str]) -> str:
+        code = match.group(1)
+        row = db.query(TrackedLink).filter(TrackedLink.code == code).first()
+        if row is not None and is_allowed_destination(row.destination_url):
+            return row.destination_url
+        return match.group(0)
+
+    return re.sub(r"https?://[^\s<>\"']+/go/([A-Za-z0-9]{8,16})", _swap, text or "", flags=re.I)
+
+
 def tracked_pair(
     db: Session,
     *,
@@ -253,6 +282,8 @@ def tracked_pair(
     dest_sale = (sale_url or "").strip().rstrip("/")
     if not dest_item and not dest_sale:
         dest_item, dest_sale = destinations_for_lot(db, lot)
+    if not click_tracking_in_captions():
+        return dest_item, dest_sale, dest_item, dest_sale
     short_item = dest_item
     short_sale = dest_sale
     sale_id = getattr(lot, "sale_id", None)
@@ -337,6 +368,8 @@ def rewrite_copy_with_tracked_links(
     sale_url: str = "",
     append_if_missing: bool = False,
 ) -> str:
+    if not click_tracking_in_captions():
+        return restore_ctbids_urls(db, text)
     dest_item, dest_sale, short_item, short_sale = tracked_pair(
         db,
         account_id=account_id,

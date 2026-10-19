@@ -32,13 +32,18 @@ def _audience_payload_with_share_links(row: Lot) -> dict:
         KIND_LOT,
         KIND_SALE,
         apply_tracked_urls,
+        click_tracking_in_captions,
         destinations_for_lot,
         lookup_tracked_url,
+        restore_ctbids_urls,
     )
     from app.services.ctbids_urls import SALE_LINK_PREFIX, sale_link_line
 
     sess = object_session(row)
     if sess is None:
+        return payload
+    if not click_tracking_in_captions():
+        payload["blurb_ctbids"] = restore_ctbids_urls(sess, blurb)
         return payload
     dest_item, dest_sale = destinations_for_lot(sess, row)
     short_item = lookup_tracked_url(
