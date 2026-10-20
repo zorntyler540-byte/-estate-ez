@@ -178,7 +178,7 @@ class Settings(BaseSettings):
     db_pool_timeout: int = Field(default=30, ge=5, le=120, alias="DB_POOL_TIMEOUT")
 
     # Suggestions / feedback email (requires SMTP_* for outbound delivery)
-    feedback_to_email: str = Field(default="zorntyler540@gmail.com", alias="FEEDBACK_TO_EMAIL")
+    feedback_to_email: str = Field(default="", alias="FEEDBACK_TO_EMAIL")
     smtp_host: str = Field(default="", alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")
     smtp_user: str = Field(default="", alias="SMTP_USER")
