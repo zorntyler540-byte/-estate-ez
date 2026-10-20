@@ -499,3 +499,122 @@ class TrackedLinkClick(Base):
     referrer: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")
     clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
+
+class OpsSettings(Base):
+    """Per-account rates for franchise operations quotes (not catalog Account fields)."""
+
+    __tablename__ = "ops_settings"
+
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    location_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    owner_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    bill_rate: Mapped[float] = mapped_column(Float, nullable=False, default=75)
+    labor_target: Mapped[float] = mapped_column(Float, nullable=False, default=0.33)
+    burden_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.3)
+    royalty_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.06)
+    deposit_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.2)
+    card_fee_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.04)
+    commission_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.35)
+    minimum_fee: Mapped[float] = mapped_column(Float, nullable=False, default=2500)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class OpsFactor(Base):
+    """Square-feet-per-hour pace factor for one service × density cell."""
+
+    __tablename__ = "ops_factors"
+
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    service: Mapped[str] = mapped_column(String(32), primary_key=True)
+    density: Mapped[str] = mapped_column(String(16), primary_key=True)
+    factor: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class OpsEmployee(Base):
+    """Crew pay rates used for settlement labor cost (not shown on the client proposal)."""
+
+    __tablename__ = "ops_employees"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    pay_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OpsJob(Base):
+    """A franchise operations job (consult / quote / settlement), not a catalog processing job."""
+
+    __tablename__ = "ops_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    client_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    address: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    zip: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    sqft: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    density: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    liquidation: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    include_sorting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    include_cleanout: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    include_packing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    include_resettling: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    space_plan_hours: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    projected_proceeds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    sale_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sales.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="quoted", server_default="quoted")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quote_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    settlement: Mapped["OpsSettlement | None"] = relationship(
+        back_populates="job", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class OpsSettlement(Base):
+    """Actual hours and proceeds for a settled operations job."""
+
+    __tablename__ = "ops_settlements"
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("ops_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    actual_hours: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    in_person_proceeds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    online_proceeds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    buyer_premium: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    shipping: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    misc_revenue: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    direct_expenses: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    deposit_received: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    balance_received: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    hourly_labor_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    commission_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.35)
+    minimum_fee: Mapped[float] = mapped_column(Float, nullable=False, default=2500)
+    royalty_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.06)
+    settled_on: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    job: Mapped["OpsJob"] = relationship(back_populates="settlement")
+
+
+class OpsMonthFigures(Base):
+    """Consultations and marketing spend for one calendar month."""
+
+    __tablename__ = "ops_month_figures"
+
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    consultations: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    marketing_spend: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+

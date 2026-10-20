@@ -32,6 +32,7 @@ from sse_starlette import EventSourceResponse
 from app.engagement_routes import router as engagement_router
 from app.click_routes import router as click_router
 from app.facebook_routes import router as facebook_router
+from app.ops_routes import router as ops_router
 from app.auth import (
     bump_token_version,
     create_access_token,
@@ -60,6 +61,7 @@ from app.models import (
     JobStatus,
     Lot,
     LotVideo,
+    OpsJob,
     Photo,
     ProcessingJob,
     Sale,
@@ -297,6 +299,7 @@ app = FastAPI(title=settings.app_name)
 app.include_router(engagement_router)
 app.include_router(facebook_router)
 app.include_router(click_router)
+app.include_router(ops_router)
 _LOG = logging.getLogger("app.main")
 
 
@@ -2777,6 +2780,9 @@ def remove_sale(
     name = have
     sid = row.id
     db.query(User).filter(User.assigned_sale_id == sid).update({User.assigned_sale_id: None})
+    db.query(OpsJob).filter(OpsJob.sale_id == sid, OpsJob.account_id == current.account_id).update(
+        {OpsJob.sale_id: None}, synchronize_session=False
+    )
     _purge_catalog_data(db, account_id=current.account_id, sale_id=sid)
     leftover = db.query(Sale).filter(Sale.id == sid, Sale.account_id == current.account_id).first()
     if leftover:
