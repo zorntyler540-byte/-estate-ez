@@ -15,6 +15,7 @@ from app.models import (
     AudienceHuntEvent,
     JobStatus,
     Lot,
+    OpsJob,
     ProcessingJob,
     Sale,
     SalePhotoZipExport,
@@ -134,6 +135,9 @@ def merge_catalog_sales(
         AudienceHuntEvent.sale_id == source.id,
         AudienceHuntEvent.account_id == account_id,
     ).update({AudienceHuntEvent.sale_id: target.id}, synchronize_session=False)
+    db.query(OpsJob).filter(OpsJob.sale_id == source.id, OpsJob.account_id == account_id).update(
+        {OpsJob.sale_id: target.id}, synchronize_session=False
+    )
 
     target_covers = parse_cover_photo_ids(getattr(target, "ctseller_cover_photo_ids", None))
     source_covers = parse_cover_photo_ids(getattr(source, "ctseller_cover_photo_ids", None))

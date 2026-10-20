@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Activity, ClipboardList, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
+import { Activity, Briefcase, ClipboardList, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
 
@@ -38,6 +38,17 @@ const NAV_GROUPS = [
         label: "Push queue",
         icon: Megaphone,
         match: (p: string) => p.startsWith("/engagement")
+      }
+    ]
+  },
+  {
+    label: "Business",
+    items: [
+      {
+        href: "/operations",
+        label: "Operations",
+        icon: Briefcase,
+        match: (p: string) => p.startsWith("/operations")
       }
     ]
   },

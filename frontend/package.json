@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test:quote": "node --experimental-strip-types --test lib/quote.test.ts"
   },
   "dependencies": {
     "heic2any": "^0.0.4",
