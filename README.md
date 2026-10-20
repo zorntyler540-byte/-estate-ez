@@ -211,4 +211,10 @@ DEPLOY.md         Railway / R2 / Facebook production notes
 
 ## License
 
-Private application code for a Caring Transitions franchise. Ask the owner before reusing listing copy, client photos, or CT Seller credentials.
+Copyright (c) 2026 Tyler Zorn. All Rights Reserved.
+
+This software, source code, and documentation are proprietary and confidential.
+Viewing the public repository grants no license. See [`LICENSE`](LICENSE) for the
+full terms. This is not MIT or any other open-source license.
+
+Licensing inquiries: GitHub [@zorntyler540-byte](https://github.com/zorntyler540-byte).

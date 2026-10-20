@@ -1,6 +1,7 @@
 {
   "name": "caringtransitions-frontend",
   "private": true,
+  "license": "UNLICENSED",
   "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
