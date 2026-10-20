@@ -5,14 +5,8 @@ Put the built zip here so /desktop and the Tools page can serve it:
 
   CTBids-Sale-Suite.zip
 
-Build it from the "coins ale" project:
-
-  build_suite.bat
-
-Then copy:
-
-  coins ale\dist\CTBids-Sale-Suite.zip
-  →  CaringTransitions_AI\frontend\public\downloads\CTBids-Sale-Suite.zip
+Build it from the sibling Windows Sale Suite project (`build_suite.bat`),
+then copy `dist\CTBids-Sale-Suite.zip` into this folder.
 
 For production (Railway / Vercel), prefer hosting the zip on OneDrive,
 Cloudflare R2, or S3 and set:

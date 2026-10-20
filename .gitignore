@@ -1,15 +1,23 @@
 # Secrets and local env (never commit real secrets)
 .env
+.env.*
+!.env.example
+!**/.env.example
 .env.local
 .env.production
 .env.development.local
 .env.test.local
 .env.production.local
+frontend/.env
 frontend/.env.local
 frontend/.env.development.local
 frontend/.env.production.local
 mobile/.env
 mobile/.env.local
+backend/.env
+
+# Suggestion-email fallback (can contain user emails / messages)
+backend/runtime/
 
 # Python
 __pycache__/
@@ -33,6 +41,14 @@ app.db
 # Runtime uploads and working data
 backend/data/
 data/
+
+# Legacy CLI scanner output (main.py writes these locally)
+listings/
+Inventory_Report.md
+inventory.db
+
+# One-off audit scratch (never commit host findings)
+security-audit/
 
 # Estate / catalog images (sensitive + large — do not commit)
 # Use an anchored path so Expo app icons under mobile/assets/images are not ignored.

@@ -3,7 +3,7 @@
 ## Cursor Cloud specific instructions
 
 This repo is the **CaringTransitions / Estate-EZ** monorepo (AI-assisted estate-sale
-cataloging SaaS). See `README_SAAS.md` for the canonical local-dev commands and
+cataloging SaaS). See `README.md` for the canonical local-dev commands and
 `DEPLOY.md` for production/Railway details. Notes below cover only non-obvious,
 cloud-specific gotchas; do not duplicate standard docs.
 
