@@ -38,7 +38,7 @@ eas build --platform ios --profile preview
 **TestFlight** (team updates — preferred once smoke test works):
 
 ```powershell
-cd C:\Users\User\Documents\CaringTransitions_AI\mobile
+cd mobile
 eas build --platform ios --profile production
 ```
 
@@ -67,7 +67,7 @@ The phone publish command is `eas update`. It authenticates with env var **`EXPO
 5. Do not paste the token into chat or commit it. Tell the agent “token is updated” and it can run `eas whoami` then `eas update --channel production`.
 
 ```powershell
-cd C:\Users\User\Documents\CaringTransitions_AI\mobile
+cd mobile
 npm install -g eas-cli
 eas login
 git pull
