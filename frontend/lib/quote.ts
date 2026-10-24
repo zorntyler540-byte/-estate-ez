@@ -51,6 +51,21 @@ export const LIQUIDATION_LABELS: Record<Liquidation, string> = {
   flash: "Flash sale",
 };
 
+/** CT Bids / Accelerator lot throughput. Photograph 4/hr, edit 10/hr, pickup prep 30% of lots at 10/hr. */
+export const AUCTION_RATES = {
+  photoLotsPerHour: 4,
+  editLotsPerHour: 10,
+  pickupPrepFraction: 0.3,
+  pickupPrepLotsPerHour: 10,
+  questionsPerHour: 10,
+} as const;
+
+export const SPACE_PLAN_RATES = {
+  minutesPerArea: 8,
+  minutesPerItem: 10,
+  minimumHours: 4,
+} as const;
+
 export type QuoteBucket = "setup" | "cleanout" | "relocation" | "liquidation";
 
 export type QuoteLine = {
@@ -71,7 +86,17 @@ export type QuoteInput = {
   includePacking: boolean;
   includeResettling: boolean;
   spacePlanHours: number;
+  spacePlanAreas?: number;
+  spacePlanItems?: number;
   projectedProceeds: number;
+  projectedLots?: number;
+  auctionQuestions?: number;
+  pickupDays?: number;
+  pickupStaff?: number;
+  pickupHoursPerDay?: number;
+  saleDays?: number;
+  saleStaff?: number;
+  saleHoursPerDay?: number;
   billRate: number;
   laborTarget: number;
   royaltyRate: number;
@@ -155,6 +180,31 @@ function hoursFor(cuft: number, factor: number) {
   return cuft / factor;
 }
 
+export function auctionPrepHours(lots: number) {
+  if (!(lots > 0)) return 0;
+  return (
+    lots / AUCTION_RATES.photoLotsPerHour +
+    lots / AUCTION_RATES.editLotsPerHour +
+    (lots * AUCTION_RATES.pickupPrepFraction) / AUCTION_RATES.pickupPrepLotsPerHour
+  );
+}
+
+export function auctionQuestionHours(questions: number) {
+  if (!(questions > 0)) return 0;
+  return questions / AUCTION_RATES.questionsPerHour;
+}
+
+export function staffedHours(days: number, staff: number, hoursPerDay: number) {
+  if (!(days > 0) || !(staff > 0) || !(hoursPerDay > 0)) return 0;
+  return days * staff * hoursPerDay;
+}
+
+export function spacePlanHoursFrom(areas: number, items: number, fallbackHours: number) {
+  if (!(areas > 0) && !(items > 0)) return Math.max(0, fallbackHours);
+  const minutes = Math.max(0, areas) * SPACE_PLAN_RATES.minutesPerArea + Math.max(0, items) * SPACE_PLAN_RATES.minutesPerItem;
+  return Math.max(SPACE_PLAN_RATES.minimumHours, minutes / 60);
+}
+
 function sumBucket(lines: QuoteLine[], bucket: QuoteBucket, billableOnly = false) {
   return lines
     .filter((line) => line.bucket === bucket && (!billableOnly || line.billable))
@@ -212,8 +262,9 @@ export function buildQuote(input: QuoteInput): Quote {
       true,
     );
   }
-  if (input.spacePlanHours > 0) {
-    add("space_plan", "Space planning", input.spacePlanHours, "relocation", true);
+  const spaceHours = spacePlanHoursFrom(input.spacePlanAreas ?? 0, input.spacePlanItems ?? 0, input.spacePlanHours);
+  if (spaceHours > 0) {
+    add("space_plan", "Space planning", spaceHours, "relocation", true);
   }
   if (input.includePacking) {
     add(
@@ -242,11 +293,32 @@ export function buildQuote(input: QuoteInput): Quote {
       true,
     );
   }
-  if (input.liquidation !== "none") {
+  if (input.liquidation === "auction") {
+    const lots = Math.max(0, input.projectedLots ?? 0);
+    const prepHours =
+      lots > 0
+        ? auctionPrepHours(lots) + auctionQuestionHours(input.auctionQuestions ?? 0)
+        : hoursFor(input.cuft, input.factors.auction[input.density]);
+    add("auction", SERVICE_LABELS.auction, prepHours, "liquidation", false);
+    add(
+      "auction_pickup",
+      "Auction pickup day",
+      staffedHours(input.pickupDays ?? 0, input.pickupStaff ?? 0, input.pickupHoursPerDay ?? 0),
+      "liquidation",
+      false,
+    );
+  } else if (input.liquidation !== "none") {
     add(
       input.liquidation,
       SERVICE_LABELS[input.liquidation],
       hoursFor(input.cuft, input.factors[input.liquidation][input.density]),
+      "liquidation",
+      false,
+    );
+    add(
+      `${input.liquidation}_day`,
+      input.liquidation === "flash" ? "Flash sale day" : "Estate sale day",
+      staffedHours(input.saleDays ?? 0, input.saleStaff ?? 0, input.saleHoursPerDay ?? 0),
       "liquidation",
       false,
     );

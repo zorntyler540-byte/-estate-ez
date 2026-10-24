@@ -565,7 +565,17 @@ class OpsJob(Base):
     include_packing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     include_resettling: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     space_plan_hours: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    space_plan_areas: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    space_plan_items: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     projected_proceeds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    projected_lots: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    auction_questions: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    pickup_days: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    pickup_staff: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    pickup_hours_per_day: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    sale_days: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    sale_staff: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    sale_hours_per_day: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     sale_id: Mapped[str | None] = mapped_column(
         ForeignKey("sales.id", ondelete="SET NULL"), index=True, nullable=True
     )

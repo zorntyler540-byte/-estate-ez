@@ -180,7 +180,14 @@ export default function OperationsJobPage() {
                     This job is settled. Contact details still save. Reopen the settlement to change the quote.
                   </p>
                 ) : null}
-                <JobFields value={form} onChange={setForm} sales={sales} locked={locked} showStatus />
+                <JobFields
+                  value={form}
+                  onChange={setForm}
+                  sales={sales}
+                  locked={locked}
+                  showStatus
+                  saleLotCount={job.sale_lot_count}
+                />
                 <div className="ct-form-actions">
                   <button className="ct-btn ct-btn--primary" type="submit" disabled={pending}>
                     {pending ? "Saving…" : "Save job"}

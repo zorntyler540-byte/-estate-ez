@@ -218,8 +218,10 @@ export default function OperationsSettingsPage() {
             <section>
               <h2 className="ct-section-title">Pace factors</h2>
               <p className="ct-muted">
-                Hours = cubic footage ÷ factor. A factor of 30 is 30 cubic feet per labor hour. Online auction starts
-                from the estate-sale factors until this crew has its own pace.
+                Hours = cubic footage ÷ factor. A factor of 30 is 30 cubic feet per labor hour. Online auction uses lot
+                throughput (photograph 4/hr, edit 10/hr, pickup prep on 30% of lots at 10/hr) when a lot count is
+                entered; these cubic-foot factors are the fallback. Estate and flash sale-day staffing is extra prep,
+                not a second hourly invoice.
               </p>
               <form className="ct-card ct-card--padded" onSubmit={saveFactors}>
                 <div className="ct-table-wrap" style={{ marginBottom: "1rem" }}>

@@ -46,9 +46,20 @@ export type OpsJob = {
   include_packing: boolean;
   include_resettling: boolean;
   space_plan_hours: number;
+  space_plan_areas: number;
+  space_plan_items: number;
   projected_proceeds: number;
+  projected_lots: number;
+  auction_questions: number;
+  pickup_days: number;
+  pickup_staff: number;
+  pickup_hours_per_day: number;
+  sale_days: number;
+  sale_staff: number;
+  sale_hours_per_day: number;
   sale_id: string | null;
   sale_name: string | null;
+  sale_lot_count: number | null;
   status: OpsJobStatus;
   notes: string;
   quote: Quote | null;
@@ -75,7 +86,17 @@ export type OpsJobWrite = {
   include_packing: boolean;
   include_resettling: boolean;
   space_plan_hours: number;
+  space_plan_areas: number;
+  space_plan_items: number;
   projected_proceeds: number;
+  projected_lots: number;
+  auction_questions: number;
+  pickup_days: number;
+  pickup_staff: number;
+  pickup_hours_per_day: number;
+  sale_days: number;
+  sale_staff: number;
+  sale_hours_per_day: number;
   sale_id: string | null;
   status: OpsJobStatus;
   notes: string;
@@ -135,7 +156,17 @@ export function emptyJobWrite(): OpsJobWrite {
     include_packing: false,
     include_resettling: false,
     space_plan_hours: 0,
+    space_plan_areas: 0,
+    space_plan_items: 0,
     projected_proceeds: 0,
+    projected_lots: 0,
+    auction_questions: 0,
+    pickup_days: 0,
+    pickup_staff: 0,
+    pickup_hours_per_day: 0,
+    sale_days: 0,
+    sale_staff: 0,
+    sale_hours_per_day: 0,
     sale_id: null,
     status: "quoted",
     notes: ""
@@ -156,8 +187,18 @@ export function jobToWrite(job: OpsJob): OpsJobWrite {
     include_cleanout: job.include_cleanout,
     include_packing: job.include_packing,
     include_resettling: job.include_resettling,
-    space_plan_hours: job.space_plan_hours,
+    space_plan_hours: job.space_plan_hours || 0,
+    space_plan_areas: job.space_plan_areas || 0,
+    space_plan_items: job.space_plan_items || 0,
     projected_proceeds: job.projected_proceeds,
+    projected_lots: job.projected_lots || 0,
+    auction_questions: job.auction_questions || 0,
+    pickup_days: job.pickup_days || 0,
+    pickup_staff: job.pickup_staff || 0,
+    pickup_hours_per_day: job.pickup_hours_per_day || 0,
+    sale_days: job.sale_days || 0,
+    sale_staff: job.sale_staff || 0,
+    sale_hours_per_day: job.sale_hours_per_day || 0,
     sale_id: job.sale_id,
     status: job.status,
     notes: job.notes

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildQuote, DEFAULT_FACTORS, royaltyBaseFor, settle, type QuoteInput } from "./quote.ts";
+import {
+  auctionPrepHours,
+  buildQuote,
+  DEFAULT_FACTORS,
+  royaltyBaseFor,
+  settle,
+  spacePlanHoursFrom,
+  type QuoteInput,
+} from "./quote.ts";
 
 const base: QuoteInput = {
   cuft: 1500,
@@ -96,6 +104,64 @@ test("zero cubic footage does not divide by zero", () => {
   const quote = buildQuote({ ...base, cuft: 0, liquidation: "none" });
   assert.equal(quote.hours, 0);
   assert.equal(quote.clientTotal, 0);
+});
+
+test("auction lot hours replace cubic footage and pickup adds prep", () => {
+  const quote = buildQuote({
+    ...base,
+    liquidation: "auction",
+    includeSorting: false,
+    projectedLots: 150,
+    auctionQuestions: 25,
+    pickupDays: 1,
+    pickupStaff: 3,
+    pickupHoursPerDay: 3,
+  });
+  const prep = quote.lines.find((line) => line.key === "auction");
+  const pickup = quote.lines.find((line) => line.key === "auction_pickup");
+  assert.equal(prep?.hours, auctionPrepHours(150) + 2.5);
+  assert.equal(prep?.hours, 59.5);
+  assert.equal(pickup?.hours, 9);
+  assert.equal(quote.hours, 68.5);
+  assert.equal(quote.prepPrice, 68.5 * 75);
+  assert.equal(quote.hourlyInvoiced, 0);
+  assert.equal(quote.feeWinner, "prep");
+});
+
+test("auction without lots uses the cubic footage factor", () => {
+  const quote = buildQuote({ ...base, liquidation: "auction", includeSorting: false });
+  const prep = quote.lines.find((line) => line.key === "auction");
+  assert.equal(prep?.hours, 1500 / 30);
+  assert.equal(quote.lines.some((line) => line.key === "auction_pickup"), false);
+});
+
+test("estate sale day staffing raises the prep floor", () => {
+  const quote = buildQuote({
+    ...base,
+    includeSorting: false,
+    saleDays: 2,
+    saleStaff: 3,
+    saleHoursPerDay: 4,
+  });
+  const day = quote.lines.find((line) => line.key === "estate_day");
+  assert.equal(day?.hours, 24);
+  assert.equal(day?.billable, false);
+  assert.equal(quote.prepPrice, (50 + 24) * 75);
+  assert.equal(quote.commission, quote.prepPrice);
+});
+
+test("space plan takeoff uses areas and items with a four hour minimum", () => {
+  assert.equal(spacePlanHoursFrom(3, 6, 0), 4);
+  const quote = buildQuote({
+    ...base,
+    liquidation: "none",
+    includeSorting: false,
+    spacePlanAreas: 10,
+    spacePlanItems: 20,
+  });
+  const plan = quote.lines.find((line) => line.key === "space_plan");
+  assert.equal(plan?.hours, (10 * 8 + 20 * 10) / 60);
+  assert.equal(quote.relocation, (plan?.hours ?? 0) * 75);
 });
 
 test("settlement reprices the fee from actual proceeds and keeps service prices", () => {

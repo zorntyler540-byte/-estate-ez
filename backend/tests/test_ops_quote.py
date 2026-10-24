@@ -1,6 +1,13 @@
 """Mirror Enterprise System ``src/lib/quote.test.ts`` so Python math stays identical."""
 
-from app.services.ops_quote import DEFAULT_FACTORS, build_quote, royalty_base_for, settle
+from app.services.ops_quote import (
+    DEFAULT_FACTORS,
+    auction_prep_hours,
+    build_quote,
+    royalty_base_for,
+    settle,
+    space_plan_hours_from,
+)
 
 BASE = dict(
     cuft=1500,
@@ -92,6 +99,70 @@ def test_zero_cubic_footage_does_not_divide_by_zero() -> None:
     quote = build_quote(**{**BASE, "cuft": 0, "liquidation": "none"})
     assert quote["hours"] == 0
     assert quote["clientTotal"] == 0
+
+
+def test_auction_lot_hours_replace_cubic_footage_and_pickup_adds_prep() -> None:
+    quote = build_quote(
+        **{
+            **BASE,
+            "liquidation": "auction",
+            "include_sorting": False,
+            "projected_lots": 150,
+            "auction_questions": 25,
+            "pickup_days": 1,
+            "pickup_staff": 3,
+            "pickup_hours_per_day": 3,
+        }
+    )
+    prep = next(line for line in quote["lines"] if line["key"] == "auction")
+    pickup = next(line for line in quote["lines"] if line["key"] == "auction_pickup")
+    assert prep["hours"] == auction_prep_hours(150) + 2.5
+    assert prep["hours"] == 59.5
+    assert pickup["hours"] == 9
+    assert quote["hours"] == 68.5
+    assert quote["prepPrice"] == 68.5 * 75
+    assert quote["hourlyInvoiced"] == 0
+    assert quote["feeWinner"] == "prep"
+
+
+def test_auction_without_lots_uses_the_cubic_footage_factor() -> None:
+    quote = build_quote(**{**BASE, "liquidation": "auction", "include_sorting": False})
+    prep = next(line for line in quote["lines"] if line["key"] == "auction")
+    assert prep["hours"] == 1500 / 30
+    assert not any(line["key"] == "auction_pickup" for line in quote["lines"])
+
+
+def test_estate_sale_day_staffing_raises_the_prep_floor() -> None:
+    quote = build_quote(
+        **{
+            **BASE,
+            "include_sorting": False,
+            "sale_days": 2,
+            "sale_staff": 3,
+            "sale_hours_per_day": 4,
+        }
+    )
+    day = next(line for line in quote["lines"] if line["key"] == "estate_day")
+    assert day["hours"] == 24
+    assert day["billable"] is False
+    assert quote["prepPrice"] == (50 + 24) * 75
+    assert quote["commission"] == quote["prepPrice"]
+
+
+def test_space_plan_takeoff_uses_areas_and_items_with_a_four_hour_minimum() -> None:
+    assert space_plan_hours_from(3, 6, 0) == 4
+    quote = build_quote(
+        **{
+            **BASE,
+            "liquidation": "none",
+            "include_sorting": False,
+            "space_plan_areas": 10,
+            "space_plan_items": 20,
+        }
+    )
+    plan = next(line for line in quote["lines"] if line["key"] == "space_plan")
+    assert plan["hours"] == (10 * 8 + 20 * 10) / 60
+    assert quote["relocation"] == plan["hours"] * 75
 
 
 def test_settlement_reprices_the_fee_from_actual_proceeds_and_keeps_service_prices() -> None:
