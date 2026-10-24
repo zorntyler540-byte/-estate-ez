@@ -1611,28 +1611,35 @@ def _dimension_spec_line_count(specification_lines: list[str]) -> int:
     )
 
 
-def _spec_lines_indicate_multi_textile_piece(specification_lines: list[str]) -> bool:
-    """Several measuring-tape spans on lace/linen/textile lots usually mean **distinct fabric pieces** in one SKU."""
+_TEXTILE_SIGNAL_KEYWORDS: tuple[str, ...] = (
+    "lace",
+    "textile",
+    "textiles",
+    "runner",
+    "linen",
+    "embroider",
+    "crochet",
+    "needlework",
+    "openwork",
+    "doily",
+    "valance",
+    "dresser scarf",
+    "table runner",
+    "tapestry",
+)
+
+
+def _textile_signal_present(text: str) -> bool:
+    low = (text or "").lower()
+    return any(k in low for k in _TEXTILE_SIGNAL_KEYWORDS)
+
+
+def _spec_lines_indicate_multi_textile_piece(
+    specification_lines: list[str], evidence_text: str = ""
+) -> bool:
+    """Several measuring-tape spans on textile lots usually mean **distinct fabric pieces** in one SKU."""
     blob = " ".join(specification_lines).lower()
-    if not any(
-        k in blob
-        for k in (
-            "lace",
-            "textile",
-            "textiles",
-            "runner",
-            "linen",
-            "embroider",
-            "crochet",
-            "needlework",
-            "openwork",
-            "doily",
-            "valance",
-            "dresser scarf",
-            "table runner",
-            "tapestry",
-        )
-    ):
+    if not (_textile_signal_present(blob) or _textile_signal_present(evidence_text)):
         return False
     if _dimension_spec_line_count(specification_lines) >= 2:
         return True
@@ -1983,7 +1990,10 @@ def _synthesize_numismatic_multi_cent_prose(
 
 
 def _synthesize_textile_measurement_lot_prose(
-    description: str, specification_lines: list[str], photo_count: int
+    description: str,
+    specification_lines: list[str],
+    photo_count: int,
+    evidence_text: str = "",
 ) -> str:
     """
     After ``merge_detail``, when several photos show **different** lace/textile spans on the tape but prose still
@@ -1991,7 +2001,9 @@ def _synthesize_textile_measurement_lot_prose(
     """
     if photo_count < 2:
         return description
-    if not _spec_lines_indicate_multi_textile_piece(specification_lines):
+    if not _spec_lines_indicate_multi_textile_piece(
+        specification_lines, evidence_text=evidence_text
+    ):
         return description
     if len(_inventory_coin_years(specification_lines)) >= 2:
         return description
@@ -3756,6 +3768,7 @@ class LotOutput:
         self.specification_lines, _ = merge_unique_case_insensitive(
             self.specification_lines, detail_specs
         )
+        pre_dedupe_spec_lines = list(self.specification_lines)
         self.specification_lines = dedupe_specification_lines_preserve_order(self.specification_lines)
 
         new_prof = sanitize_description_unknowns(
@@ -3798,12 +3811,26 @@ class LotOutput:
 
             self.condition = canonicalize_ct_condition(detail_condition)
 
+        textile_evidence = " ".join(
+            part
+            for part in (
+                self.auction_title,
+                self.professional_description,
+                new_title_raw,
+                " ".join(pre_dedupe_spec_lines),
+            )
+            if part
+        )
+
         self.photo_count += 1
         self.professional_description = _synthesize_numismatic_multi_cent_prose(
             self.professional_description, self.specification_lines, self.photo_count
         )
         self.professional_description = _synthesize_textile_measurement_lot_prose(
-            self.professional_description, self.specification_lines, self.photo_count
+            self.professional_description,
+            self.specification_lines,
+            self.photo_count,
+            evidence_text=textile_evidence,
         )
         self._finalize_listing_quality()
         if payload_suggests_sku_review(detail_payload):

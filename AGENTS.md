@@ -160,10 +160,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 
 ### Testing / lint / build
 
-- Backend tests: `cd backend && ../backend/.venv/bin/python -m pytest`. As of setup, 3
-  pre-existing failures in `tests/test_lotting_textile.py` and
-  `tests/test_lotting_no_components.py` (lotting-prose assertions, unrelated to environment);
-  the other ~116 pass.
+- Backend tests: `cd backend && ../backend/.venv/bin/python -m pytest`.
+  Current baseline (Oct 2026): full suite passes in this environment
+  (`383 passed, 5 warnings`).
 - **No linter is configured** anywhere (no ruff/flake8/eslint/pre-commit config, no lint
   script in any `package.json`). There is nothing to run for "lint" unless one is added.
 - Frontend has only `dev` / `build` / `start` scripts (no tests/lint). Use `npm run dev`
