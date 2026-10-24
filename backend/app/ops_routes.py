@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import Account, OpsEmployee, OpsFactor, OpsJob, OpsMonthFigures, OpsSettlement, OpsSettings, Sale, User
+from app.models import Account, Lot, OpsEmployee, OpsFactor, OpsJob, OpsMonthFigures, OpsSettlement, OpsSettings, Sale, User
 from app.ops_schemas import (
     OpsEmployeeIn,
     OpsEmployeeOut,
@@ -127,7 +127,17 @@ def _quote_for(job: OpsJob, settings: OpsSettings, factors: dict[str, dict[str, 
         include_packing=bool(job.include_packing),
         include_resettling=bool(job.include_resettling),
         space_plan_hours=float(job.space_plan_hours or 0),
+        space_plan_areas=float(job.space_plan_areas or 0),
+        space_plan_items=float(job.space_plan_items or 0),
         projected_proceeds=float(job.projected_proceeds or 0),
+        projected_lots=float(job.projected_lots or 0),
+        auction_questions=float(job.auction_questions or 0),
+        pickup_days=float(job.pickup_days or 0),
+        pickup_staff=float(job.pickup_staff or 0),
+        pickup_hours_per_day=float(job.pickup_hours_per_day or 0),
+        sale_days=float(job.sale_days or 0),
+        sale_staff=float(job.sale_staff or 0),
+        sale_hours_per_day=float(job.sale_hours_per_day or 0),
         bill_rate=float(settings.bill_rate),
         labor_target=float(settings.labor_target),
         royalty_rate=float(settings.royalty_rate),
@@ -189,6 +199,18 @@ def _sale_name(db: Session, account_id: str, sale_id: str | None) -> str | None:
     return str(name) if name else None
 
 
+def _sale_lot_count(db: Session, account_id: str, sale_id: str | None) -> int | None:
+    if not sale_id:
+        return None
+    count = (
+        db.query(func.count())
+        .select_from(Lot)
+        .filter(Lot.sale_id == sale_id, Lot.account_id == account_id)
+        .scalar()
+    )
+    return int(count or 0)
+
+
 def _suggested(job: OpsJob, settlement: OpsSettlement | None) -> tuple[int | None, str | None]:
     if not settlement or not (job.cuft and job.cuft > 0) or settlement.actual_hours < 0.5:
         return None, None
@@ -234,9 +256,20 @@ def _job_out(
         include_packing=bool(job.include_packing),
         include_resettling=bool(job.include_resettling),
         space_plan_hours=float(job.space_plan_hours or 0),
+        space_plan_areas=float(job.space_plan_areas or 0),
+        space_plan_items=float(job.space_plan_items or 0),
         projected_proceeds=float(job.projected_proceeds or 0),
+        projected_lots=float(job.projected_lots or 0),
+        auction_questions=float(job.auction_questions or 0),
+        pickup_days=float(job.pickup_days or 0),
+        pickup_staff=float(job.pickup_staff or 0),
+        pickup_hours_per_day=float(job.pickup_hours_per_day or 0),
+        sale_days=float(job.sale_days or 0),
+        sale_staff=float(job.sale_staff or 0),
+        sale_hours_per_day=float(job.sale_hours_per_day or 0),
         sale_id=job.sale_id,
         sale_name=_sale_name(db, job.account_id, job.sale_id),
+        sale_lot_count=_sale_lot_count(db, job.account_id, job.sale_id),
         status=job.status,
         notes=job.notes or "",
         quote=quote,
@@ -294,7 +327,17 @@ def _apply_write(job: OpsJob, body: OpsJobWrite, sale_id: str | None, *, lock_qu
     job.include_packing = bool(body.include_packing)
     job.include_resettling = bool(body.include_resettling)
     job.space_plan_hours = max(0.0, float(body.space_plan_hours or 0))
+    job.space_plan_areas = max(0.0, float(body.space_plan_areas or 0))
+    job.space_plan_items = max(0.0, float(body.space_plan_items or 0))
     job.projected_proceeds = max(0.0, float(body.projected_proceeds or 0))
+    job.projected_lots = max(0.0, float(body.projected_lots or 0))
+    job.auction_questions = max(0.0, float(body.auction_questions or 0))
+    job.pickup_days = max(0.0, float(body.pickup_days or 0))
+    job.pickup_staff = max(0.0, float(body.pickup_staff or 0))
+    job.pickup_hours_per_day = max(0.0, float(body.pickup_hours_per_day or 0))
+    job.sale_days = max(0.0, float(body.sale_days or 0))
+    job.sale_staff = max(0.0, float(body.sale_staff or 0))
+    job.sale_hours_per_day = max(0.0, float(body.sale_hours_per_day or 0))
 
 
 def _average_pay(db: Session, account_id: str) -> float | None:

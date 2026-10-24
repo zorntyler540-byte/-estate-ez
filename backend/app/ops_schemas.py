@@ -65,7 +65,17 @@ class OpsJobWrite(BaseModel):
     include_packing: bool = False
     include_resettling: bool = False
     space_plan_hours: float = Field(default=0, ge=0)
+    space_plan_areas: float = Field(default=0, ge=0)
+    space_plan_items: float = Field(default=0, ge=0)
     projected_proceeds: float = Field(default=0, ge=0)
+    projected_lots: float = Field(default=0, ge=0)
+    auction_questions: float = Field(default=0, ge=0)
+    pickup_days: float = Field(default=0, ge=0)
+    pickup_staff: float = Field(default=0, ge=0)
+    pickup_hours_per_day: float = Field(default=0, ge=0)
+    sale_days: float = Field(default=0, ge=0)
+    sale_staff: float = Field(default=0, ge=0)
+    sale_hours_per_day: float = Field(default=0, ge=0)
     sale_id: str | None = None
     status: OpsJobStatus = "quoted"
     notes: str = ""
@@ -115,9 +125,20 @@ class OpsJobOut(BaseModel):
     include_packing: bool
     include_resettling: bool
     space_plan_hours: float
+    space_plan_areas: float = 0
+    space_plan_items: float = 0
     projected_proceeds: float
+    projected_lots: float = 0
+    auction_questions: float = 0
+    pickup_days: float = 0
+    pickup_staff: float = 0
+    pickup_hours_per_day: float = 0
+    sale_days: float = 0
+    sale_staff: float = 0
+    sale_hours_per_day: float = 0
     sale_id: str | None = None
     sale_name: str | None = None
+    sale_lot_count: int | None = None
     status: str
     notes: str
     quote: dict[str, Any] | None = None

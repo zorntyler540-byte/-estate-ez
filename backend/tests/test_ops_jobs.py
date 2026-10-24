@@ -193,6 +193,35 @@ def test_settled_job_locks_quote_inputs(tmp_path, monkeypatch) -> None:
         _clear()
 
 
+def test_auction_job_persists_lot_hours_and_pickup_day(tmp_path, monkeypatch) -> None:
+    client, _Session = _client(tmp_path, monkeypatch)
+    try:
+        token, _ = _register(client, "auction-ops@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        created = client.post(
+            "/ops/jobs",
+            headers=headers,
+            json=_job_body(
+                liquidation="auction",
+                include_sorting=False,
+                projected_lots=150,
+                auction_questions=25,
+                pickup_days=1,
+                pickup_staff=3,
+                pickup_hours_per_day=3,
+            ),
+        )
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["projected_lots"] == 150
+        assert body["quote"]["hours"] == 68.5
+        assert body["quote"]["prepPrice"] == 68.5 * 75
+        keys = {line["key"] for line in body["quote"]["lines"]}
+        assert keys == {"auction", "auction_pickup"}
+    finally:
+        _clear()
+
+
 def test_job_write_still_accepts_legacy_sqft(tmp_path, monkeypatch) -> None:
     client, _Session = _client(tmp_path, monkeypatch)
     try:

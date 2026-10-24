@@ -592,6 +592,7 @@ def startup() -> None:
     _ensure_facebook_account_columns()
     _ensure_engagement_bucket_names()
     _ensure_ops_job_cuft_column()
+    _ensure_ops_job_auction_columns()
     _start_in_process_maintenance()
 
 
@@ -607,6 +608,34 @@ def _ensure_ops_job_cuft_column() -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE ops_jobs RENAME COLUMN sqft TO cuft"))
+
+
+def _ensure_ops_job_auction_columns() -> None:
+    """Existing ops_jobs tables need auction lot and sale-day staffing columns."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "ops_jobs" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("ops_jobs")}
+    needed = (
+        "space_plan_areas",
+        "space_plan_items",
+        "projected_lots",
+        "auction_questions",
+        "pickup_days",
+        "pickup_staff",
+        "pickup_hours_per_day",
+        "sale_days",
+        "sale_staff",
+        "sale_hours_per_day",
+    )
+    missing = [name for name in needed if name not in cols]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for name in missing:
+            conn.execute(text(f"ALTER TABLE ops_jobs ADD COLUMN {name} FLOAT DEFAULT 0 NOT NULL"))
 
 
 def _start_in_process_maintenance() -> None:

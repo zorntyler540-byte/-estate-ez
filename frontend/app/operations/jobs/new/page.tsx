@@ -68,7 +68,8 @@ export default function NewOperationsJobPage() {
               New job
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Cubic footage and density drive the hours. The sale fee is figured after you enter expected proceeds.
+              Cubic footage and density drive most hours. Online auction can use a lot count instead. Sale-day staffing
+              raises the prep floor. The sale fee is figured after you enter expected proceeds.
             </p>
           </div>
         </header>

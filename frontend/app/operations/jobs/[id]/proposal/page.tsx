@@ -14,9 +14,12 @@ const BLURBS: Record<string, string> = {
   packing: "Pack the items that are moving.",
   resettling: "Unpack and place items in the new home.",
   space_plan: "Measure and plan the items that move.",
-  estate: "Prepare the house and run the in-person estate sale.",
-  auction: "Prepare lots for the online auction.",
-  flash: "Prepare and run a short in-person sale."
+  estate: "Prepare the house for the in-person estate sale.",
+  estate_day: "Staff the estate sale day.",
+  auction: "Photograph, edit, and list lots for the online auction.",
+  auction_pickup: "Staff auction pickup.",
+  flash: "Prepare a short in-person sale.",
+  flash_day: "Staff the flash sale day."
 };
 
 export default function OperationsProposalPage() {
@@ -79,8 +82,12 @@ export default function OperationsProposalPage() {
           {job.phone || job.email ? <p className="ct-muted">{[job.phone, job.email].filter(Boolean).join(" · ")}</p> : null}
           <p>
             {job.cuft > 0 ? `${job.cuft.toLocaleString("en-US")} cubic feet` : "Cubic footage to be confirmed"}
-            {job.cuft > 0 ? `, ${job.density} density` : ""}. Hours are estimated from this location&apos;s pace. The
-            final invoice follows actual hours and actual sale proceeds.
+            {job.cuft > 0 ? `, ${job.density} density` : ""}
+            {job.liquidation === "auction" && job.projected_lots > 0
+              ? `, ${job.projected_lots.toLocaleString("en-US")} lots`
+              : ""}
+            . Hours are estimated from this location&apos;s pace. The final invoice follows actual hours and actual sale
+            proceeds.
           </p>
           {quote ? (
             <>

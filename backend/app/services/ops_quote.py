@@ -1,8 +1,10 @@
 """Quote / settlement math for franchise operations jobs.
 
-Port of Enterprise System ``src/lib/quote.ts``. Keep behavior identical: hours are
-cubic footage ÷ density factor, sale fee is max(prep, percent of proceeds, minimum),
-and royalty base includes proceeds without stacking commission on top of them.
+Port of ``frontend/lib/quote.ts``. Hours are cubic footage ÷ density factor, except
+online auction uses lot throughput when a lot count is entered. Estate / flash
+sale-day staffing and auction pickup days add extra non-billable prep hours.
+Sale fee is max(prep, percent of proceeds, minimum). Royalty base includes
+proceeds without stacking commission on top of them.
 """
 
 from __future__ import annotations
@@ -66,6 +68,16 @@ LIQUIDATION_LABELS: dict[str, str] = {
     "flash": "Flash sale",
 }
 
+# CT Bids / Accelerator lot throughput. Photograph 4/hr, edit 10/hr, pickup prep 30% of lots at 10/hr.
+AUCTION_PHOTO_LOTS_PER_HOUR = 4.0
+AUCTION_EDIT_LOTS_PER_HOUR = 10.0
+AUCTION_PICKUP_PREP_FRACTION = 0.3
+AUCTION_PICKUP_PREP_LOTS_PER_HOUR = 10.0
+AUCTION_QUESTIONS_PER_HOUR = 10.0
+SPACE_PLAN_MINUTES_PER_AREA = 8.0
+SPACE_PLAN_MINUTES_PER_ITEM = 10.0
+SPACE_PLAN_MINIMUM_HOURS = 4.0
+
 
 def clone_factors(source: Factors | None = None) -> Factors:
     base = source or DEFAULT_FACTORS
@@ -96,6 +108,35 @@ def hours_for(cuft: float, factor: float) -> float:
     if not (cuft > 0) or not (factor > 0):
         return 0.0
     return cuft / factor
+
+
+def auction_prep_hours(lots: float) -> float:
+    if not (lots > 0):
+        return 0.0
+    return (
+        lots / AUCTION_PHOTO_LOTS_PER_HOUR
+        + lots / AUCTION_EDIT_LOTS_PER_HOUR
+        + (lots * AUCTION_PICKUP_PREP_FRACTION) / AUCTION_PICKUP_PREP_LOTS_PER_HOUR
+    )
+
+
+def auction_question_hours(questions: float) -> float:
+    if not (questions > 0):
+        return 0.0
+    return questions / AUCTION_QUESTIONS_PER_HOUR
+
+
+def staffed_hours(days: float, staff: float, hours_per_day: float) -> float:
+    if not (days > 0) or not (staff > 0) or not (hours_per_day > 0):
+        return 0.0
+    return days * staff * hours_per_day
+
+
+def space_plan_hours_from(areas: float, items: float, fallback_hours: float) -> float:
+    if not (areas > 0) and not (items > 0):
+        return max(0.0, fallback_hours)
+    minutes = max(0.0, areas) * SPACE_PLAN_MINUTES_PER_AREA + max(0.0, items) * SPACE_PLAN_MINUTES_PER_ITEM
+    return max(SPACE_PLAN_MINIMUM_HOURS, minutes / 60.0)
 
 
 def _sum_bucket(lines: list[dict], bucket: str, billable_only: bool = False) -> float:
@@ -155,6 +196,16 @@ def build_quote(
     commission_rate: float,
     minimum_fee: float,
     factors: Factors,
+    space_plan_areas: float = 0.0,
+    space_plan_items: float = 0.0,
+    projected_lots: float = 0.0,
+    auction_questions: float = 0.0,
+    pickup_days: float = 0.0,
+    pickup_staff: float = 0.0,
+    pickup_hours_per_day: float = 0.0,
+    sale_days: float = 0.0,
+    sale_staff: float = 0.0,
+    sale_hours_per_day: float = 0.0,
 ) -> dict:
     bill = max(0.0, bill_rate)
     lines: list[dict] = []
@@ -181,8 +232,9 @@ def build_quote(
             "setup",
             True,
         )
-    if space_plan_hours > 0:
-        add("space_plan", "Space planning", space_plan_hours, "relocation", True)
+    space_hours = space_plan_hours_from(space_plan_areas, space_plan_items, space_plan_hours)
+    if space_hours > 0:
+        add("space_plan", "Space planning", space_hours, "relocation", True)
     if include_packing:
         add(
             "packing",
@@ -207,11 +259,33 @@ def build_quote(
             "cleanout",
             True,
         )
-    if liquidation != "none":
+    if liquidation == "auction":
+        lots = max(0.0, projected_lots)
+        prep_hours = (
+            auction_prep_hours(lots) + auction_question_hours(auction_questions)
+            if lots > 0
+            else hours_for(cuft, factors["auction"][density])
+        )
+        add("auction", SERVICE_LABELS["auction"], prep_hours, "liquidation", False)
+        add(
+            "auction_pickup",
+            "Auction pickup day",
+            staffed_hours(pickup_days, pickup_staff, pickup_hours_per_day),
+            "liquidation",
+            False,
+        )
+    elif liquidation != "none":
         add(
             liquidation,
             SERVICE_LABELS[liquidation],
             hours_for(cuft, factors[liquidation][density]),
+            "liquidation",
+            False,
+        )
+        add(
+            f"{liquidation}_day",
+            "Flash sale day" if liquidation == "flash" else "Estate sale day",
+            staffed_hours(sale_days, sale_staff, sale_hours_per_day),
             "liquidation",
             False,
         )
