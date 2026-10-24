@@ -63,7 +63,7 @@ export type QuoteLine = {
 };
 
 export type QuoteInput = {
-  sqft: number;
+  cuft: number;
   density: Density;
   liquidation: Liquidation;
   includeSorting: boolean;
@@ -150,9 +150,9 @@ export function primaryService(input: {
   return null;
 }
 
-function hoursFor(sqft: number, factor: number) {
-  if (!(sqft > 0) || !(factor > 0)) return 0;
-  return sqft / factor;
+function hoursFor(cuft: number, factor: number) {
+  if (!(cuft > 0) || !(factor > 0)) return 0;
+  return cuft / factor;
 }
 
 function sumBucket(lines: QuoteLine[], bucket: QuoteBucket, billableOnly = false) {
@@ -207,7 +207,7 @@ export function buildQuote(input: QuoteInput): Quote {
     add(
       "sorting",
       SERVICE_LABELS.sorting,
-      hoursFor(input.sqft, input.factors.sorting[input.density]),
+      hoursFor(input.cuft, input.factors.sorting[input.density]),
       "setup",
       true,
     );
@@ -219,7 +219,7 @@ export function buildQuote(input: QuoteInput): Quote {
     add(
       "packing",
       SERVICE_LABELS.packing,
-      hoursFor(input.sqft, input.factors.packing[input.density]),
+      hoursFor(input.cuft, input.factors.packing[input.density]),
       "relocation",
       true,
     );
@@ -228,7 +228,7 @@ export function buildQuote(input: QuoteInput): Quote {
     add(
       "resettling",
       SERVICE_LABELS.resettling,
-      hoursFor(input.sqft, input.factors.resettling[input.density]),
+      hoursFor(input.cuft, input.factors.resettling[input.density]),
       "relocation",
       true,
     );
@@ -237,7 +237,7 @@ export function buildQuote(input: QuoteInput): Quote {
     add(
       "cleanout",
       SERVICE_LABELS.cleanout,
-      hoursFor(input.sqft, input.factors.cleanout[input.density]),
+      hoursFor(input.cuft, input.factors.cleanout[input.density]),
       "cleanout",
       true,
     );
@@ -246,7 +246,7 @@ export function buildQuote(input: QuoteInput): Quote {
     add(
       input.liquidation,
       SERVICE_LABELS[input.liquidation],
-      hoursFor(input.sqft, input.factors[input.liquidation][input.density]),
+      hoursFor(input.cuft, input.factors[input.liquidation][input.density]),
       "liquidation",
       false,
     );

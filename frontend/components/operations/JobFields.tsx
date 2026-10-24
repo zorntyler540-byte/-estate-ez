@@ -80,16 +80,17 @@ export function JobFields({
         </select>
       </label>
       <label className="ct-label">
-        Square footage
+        Cubic footage
         <input
           className="ct-input"
           type="number"
           min={0}
           step={1}
-          value={value.sqft}
+          value={value.cuft}
           disabled={locked}
-          onChange={(e) => set("sqft", Number(e.target.value) || 0)}
+          onChange={(e) => set("cuft", Number(e.target.value) || 0)}
         />
+        <span className="ct-field-hint">Volume of the job — rooms, piles, and packed goods, not floor area.</span>
       </label>
       <label className="ct-label">
         Density

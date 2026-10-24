@@ -119,7 +119,7 @@ def _parse_quote(raw: str | None) -> dict | None:
 
 def _quote_for(job: OpsJob, settings: OpsSettings, factors: dict[str, dict[str, float]]) -> dict:
     return build_quote(
-        sqft=float(job.sqft or 0),
+        cuft=float(job.cuft or 0),
         density=job.density or "medium",
         liquidation=job.liquidation or "none",
         include_sorting=bool(job.include_sorting),
@@ -190,7 +190,7 @@ def _sale_name(db: Session, account_id: str, sale_id: str | None) -> str | None:
 
 
 def _suggested(job: OpsJob, settlement: OpsSettlement | None) -> tuple[int | None, str | None]:
-    if not settlement or not (job.sqft and job.sqft > 0) or settlement.actual_hours < 0.5:
+    if not settlement or not (job.cuft and job.cuft > 0) or settlement.actual_hours < 0.5:
         return None, None
     service = primary_service(
         job.liquidation,
@@ -201,7 +201,7 @@ def _suggested(job: OpsJob, settlement: OpsSettlement | None) -> tuple[int | Non
     )
     if not service:
         return None, None
-    return round(job.sqft / settlement.actual_hours), service
+    return round(job.cuft / settlement.actual_hours), service
 
 
 def _job_out(
@@ -226,7 +226,7 @@ def _job_out(
         email=job.email or "",
         address=job.address or "",
         zip=job.zip or "",
-        sqft=float(job.sqft or 0),
+        cuft=float(job.cuft or 0),
         density=job.density,
         liquidation=job.liquidation,
         include_sorting=bool(job.include_sorting),
@@ -286,7 +286,7 @@ def _apply_write(job: OpsJob, body: OpsJobWrite, sale_id: str | None, *, lock_qu
         raise HTTPException(status_code=400, detail="Enter the settlement before marking the job settled.")
     status = body.status if body.status in OPS_STATUSES else job.status
     job.status = "quoted" if status == "lead" else status
-    job.sqft = max(0.0, float(body.sqft or 0))
+    job.cuft = max(0.0, float(body.cuft or 0))
     job.density = body.density
     job.liquidation = body.liquidation
     job.include_sorting = bool(body.include_sorting)

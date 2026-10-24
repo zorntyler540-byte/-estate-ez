@@ -522,7 +522,7 @@ class OpsSettings(Base):
 
 
 class OpsFactor(Base):
-    """Square-feet-per-hour pace factor for one service × density cell."""
+    """Cubic-feet-per-hour pace factor for one service × density cell."""
 
     __tablename__ = "ops_factors"
 
@@ -557,7 +557,7 @@ class OpsJob(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     address: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     zip: Mapped[str] = mapped_column(String(20), nullable=False, default="")
-    sqft: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    cuft: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     density: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
     liquidation: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
     include_sorting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")

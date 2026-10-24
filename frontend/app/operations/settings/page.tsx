@@ -218,7 +218,7 @@ export default function OperationsSettingsPage() {
             <section>
               <h2 className="ct-section-title">Pace factors</h2>
               <p className="ct-muted">
-                Hours = square footage ÷ factor. A factor of 30 is 30 square feet per labor hour. Online auction starts
+                Hours = cubic footage ÷ factor. A factor of 30 is 30 cubic feet per labor hour. Online auction starts
                 from the estate-sale factors until this crew has its own pace.
               </p>
               <form className="ct-card ct-card--padded" onSubmit={saveFactors}>

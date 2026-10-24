@@ -3,7 +3,7 @@
 from app.services.ops_quote import DEFAULT_FACTORS, build_quote, royalty_base_for, settle
 
 BASE = dict(
-    sqft=1500,
+    cuft=1500,
     density="medium",
     liquidation="estate",
     include_sorting=True,
@@ -22,7 +22,7 @@ BASE = dict(
 )
 
 
-def test_sorting_hours_are_square_footage_divided_by_the_density_factor() -> None:
+def test_sorting_hours_are_cubic_footage_divided_by_the_density_factor() -> None:
     quote = build_quote(**BASE)
     sorting = next(line for line in quote["lines"] if line["key"] == "sorting")
     assert sorting["hours"] == 1500 / 30
@@ -51,7 +51,7 @@ def test_a_large_sale_uses_the_percent_when_it_beats_prep_and_the_minimum() -> N
 
 
 def test_a_thin_sale_uses_the_minimum() -> None:
-    quote = build_quote(**{**BASE, "sqft": 300, "projected_proceeds": 1000, "include_sorting": False})
+    quote = build_quote(**{**BASE, "cuft": 300, "projected_proceeds": 1000, "include_sorting": False})
     assert quote["feeWinner"] == "minimum"
     assert quote["commission"] == 2500
 
@@ -88,8 +88,8 @@ def test_packing_and_cleanout_add_their_own_hours() -> None:
     assert any(line["key"] == "space_plan" for line in quote["lines"])
 
 
-def test_zero_square_footage_does_not_divide_by_zero() -> None:
-    quote = build_quote(**{**BASE, "sqft": 0, "liquidation": "none"})
+def test_zero_cubic_footage_does_not_divide_by_zero() -> None:
+    quote = build_quote(**{**BASE, "cuft": 0, "liquidation": "none"})
     assert quote["hours"] == 0
     assert quote["clientTotal"] == 0
 
