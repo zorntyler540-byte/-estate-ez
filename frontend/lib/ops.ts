@@ -38,7 +38,7 @@ export type OpsJob = {
   email: string;
   address: string;
   zip: string;
-  sqft: number;
+  cuft: number;
   density: "low" | "medium" | "high" | "hoarder";
   liquidation: "none" | "estate" | "auction" | "flash";
   include_sorting: boolean;
@@ -67,7 +67,7 @@ export type OpsJobWrite = {
   email: string;
   address: string;
   zip: string;
-  sqft: number;
+  cuft: number;
   density: OpsJob["density"];
   liquidation: OpsJob["liquidation"];
   include_sorting: boolean;
@@ -127,7 +127,7 @@ export function emptyJobWrite(): OpsJobWrite {
     email: "",
     address: "",
     zip: "",
-    sqft: 0,
+    cuft: 0,
     density: "medium",
     liquidation: "none",
     include_sorting: true,
@@ -149,7 +149,7 @@ export function jobToWrite(job: OpsJob): OpsJobWrite {
     email: job.email,
     address: job.address,
     zip: job.zip,
-    sqft: job.sqft,
+    cuft: job.cuft,
     density: job.density,
     liquidation: job.liquidation,
     include_sorting: job.include_sorting,

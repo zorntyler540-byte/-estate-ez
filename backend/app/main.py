@@ -591,7 +591,22 @@ def startup() -> None:
     _ensure_lot_engagement_column()
     _ensure_facebook_account_columns()
     _ensure_engagement_bucket_names()
+    _ensure_ops_job_cuft_column()
     _start_in_process_maintenance()
+
+
+def _ensure_ops_job_cuft_column() -> None:
+    """Existing ops_jobs tables keep ``sqft`` after create_all; rename to ``cuft``."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "ops_jobs" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("ops_jobs")}
+    if "cuft" in cols or "sqft" not in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE ops_jobs RENAME COLUMN sqft TO cuft"))
 
 
 def _start_in_process_maintenance() -> None:

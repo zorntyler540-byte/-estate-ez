@@ -3,7 +3,7 @@ import test from "node:test";
 import { buildQuote, DEFAULT_FACTORS, royaltyBaseFor, settle, type QuoteInput } from "./quote.ts";
 
 const base: QuoteInput = {
-  sqft: 1500,
+  cuft: 1500,
   density: "medium",
   liquidation: "estate",
   includeSorting: true,
@@ -21,7 +21,7 @@ const base: QuoteInput = {
   factors: DEFAULT_FACTORS,
 };
 
-test("sorting hours are square footage divided by the density factor", () => {
+test("sorting hours are cubic footage divided by the density factor", () => {
   const quote = buildQuote(base);
   const sorting = quote.lines.find((line) => line.key === "sorting");
   assert.ok(sorting);
@@ -54,7 +54,7 @@ test("a large sale uses the percent when it beats prep and the minimum", () => {
 test("a thin sale uses the minimum", () => {
   const quote = buildQuote({
     ...base,
-    sqft: 300,
+    cuft: 300,
     projectedProceeds: 1000,
     includeSorting: false,
   });
@@ -92,8 +92,8 @@ test("packing and cleanout add their own hours", () => {
   assert.ok(quote.lines.some((line) => line.key === "space_plan"));
 });
 
-test("zero square footage does not divide by zero", () => {
-  const quote = buildQuote({ ...base, sqft: 0, liquidation: "none" });
+test("zero cubic footage does not divide by zero", () => {
+  const quote = buildQuote({ ...base, cuft: 0, liquidation: "none" });
   assert.equal(quote.hours, 0);
   assert.equal(quote.clientTotal, 0);
 });

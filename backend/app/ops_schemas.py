@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Density = Literal["low", "medium", "high", "hoarder"]
 Liquidation = Literal["none", "estate", "auction", "flash"]
@@ -57,7 +57,7 @@ class OpsJobWrite(BaseModel):
     email: str = ""
     address: str = ""
     zip: str = ""
-    sqft: float = Field(default=0, ge=0)
+    cuft: float = Field(default=0, ge=0)
     density: Density = "medium"
     liquidation: Liquidation = "none"
     include_sorting: bool = True
@@ -69,6 +69,13 @@ class OpsJobWrite(BaseModel):
     sale_id: str | None = None
     status: OpsJobStatus = "quoted"
     notes: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_sqft(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("cuft") is None and data.get("sqft") is not None:
+            data = {**data, "cuft": data["sqft"]}
+        return data
 
 
 class OpsSettlementIn(BaseModel):
@@ -100,7 +107,7 @@ class OpsJobOut(BaseModel):
     email: str
     address: str
     zip: str
-    sqft: float
+    cuft: float
     density: str
     liquidation: str
     include_sorting: bool

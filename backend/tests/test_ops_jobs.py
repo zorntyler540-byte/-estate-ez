@@ -52,7 +52,7 @@ def _job_body(**overrides):
         "email": "jane@example.com",
         "address": "12 Oak St",
         "zip": "89101",
-        "sqft": 1500,
+        "cuft": 1500,
         "density": "medium",
         "liquidation": "estate",
         "include_sorting": True,
@@ -189,5 +189,23 @@ def test_settled_job_locks_quote_inputs(tmp_path, monkeypatch) -> None:
         assert body["projected_proceeds"] == 10000
         assert body["quote"]["commission"] == 3750
         assert body["status"] == "settled"
+    finally:
+        _clear()
+
+
+def test_job_write_still_accepts_legacy_sqft(tmp_path, monkeypatch) -> None:
+    client, _Session = _client(tmp_path, monkeypatch)
+    try:
+        token, _ = _register(client, "cuft-alias@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        payload = _job_body()
+        del payload["cuft"]
+        payload["sqft"] = 1500
+        created = client.post("/ops/jobs", headers=headers, json=payload)
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["cuft"] == 1500
+        assert body["quote"]["hours"] == 100
+        assert "sqft" not in body
     finally:
         _clear()

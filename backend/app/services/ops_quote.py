@@ -1,7 +1,7 @@
 """Quote / settlement math for franchise operations jobs.
 
 Port of Enterprise System ``src/lib/quote.ts``. Keep behavior identical: hours are
-square footage ÷ density factor, sale fee is max(prep, percent of proceeds, minimum),
+cubic footage ÷ density factor, sale fee is max(prep, percent of proceeds, minimum),
 and royalty base includes proceeds without stacking commission on top of them.
 """
 
@@ -92,10 +92,10 @@ def primary_service(
     return None
 
 
-def hours_for(sqft: float, factor: float) -> float:
-    if not (sqft > 0) or not (factor > 0):
+def hours_for(cuft: float, factor: float) -> float:
+    if not (cuft > 0) or not (factor > 0):
         return 0.0
-    return sqft / factor
+    return cuft / factor
 
 
 def _sum_bucket(lines: list[dict], bucket: str, billable_only: bool = False) -> float:
@@ -139,7 +139,7 @@ def royalty_base_for(hourly_invoiced: float, proceeds: float, extras: float, com
 
 def build_quote(
     *,
-    sqft: float,
+    cuft: float,
     density: str,
     liquidation: str,
     include_sorting: bool,
@@ -177,7 +177,7 @@ def build_quote(
         add(
             "sorting",
             SERVICE_LABELS["sorting"],
-            hours_for(sqft, factors["sorting"][density]),
+            hours_for(cuft, factors["sorting"][density]),
             "setup",
             True,
         )
@@ -187,7 +187,7 @@ def build_quote(
         add(
             "packing",
             SERVICE_LABELS["packing"],
-            hours_for(sqft, factors["packing"][density]),
+            hours_for(cuft, factors["packing"][density]),
             "relocation",
             True,
         )
@@ -195,7 +195,7 @@ def build_quote(
         add(
             "resettling",
             SERVICE_LABELS["resettling"],
-            hours_for(sqft, factors["resettling"][density]),
+            hours_for(cuft, factors["resettling"][density]),
             "relocation",
             True,
         )
@@ -203,7 +203,7 @@ def build_quote(
         add(
             "cleanout",
             SERVICE_LABELS["cleanout"],
-            hours_for(sqft, factors["cleanout"][density]),
+            hours_for(cuft, factors["cleanout"][density]),
             "cleanout",
             True,
         )
@@ -211,7 +211,7 @@ def build_quote(
         add(
             liquidation,
             SERVICE_LABELS[liquidation],
-            hours_for(sqft, factors[liquidation][density]),
+            hours_for(cuft, factors[liquidation][density]),
             "liquidation",
             False,
         )

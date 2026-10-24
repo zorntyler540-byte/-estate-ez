@@ -68,7 +68,7 @@ export default function NewOperationsJobPage() {
               New job
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Square footage and density drive the hours. The sale fee is figured after you enter expected proceeds.
+              Cubic footage and density drive the hours. The sale fee is figured after you enter expected proceeds.
             </p>
           </div>
         </header>

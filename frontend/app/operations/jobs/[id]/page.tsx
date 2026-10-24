@@ -237,7 +237,7 @@ export default function OperationsJobPage() {
             {job.suggested_factor && primaryLabel ? (
               <section className="ct-card ct-card--padded">
                 <p>
-                  This job worked at about {job.suggested_factor} square feet per hour. Applying it updates {primaryLabel} /{" "}
+                  This job worked at about {job.suggested_factor} cubic feet per hour. Applying it updates {primaryLabel} /{" "}
                   {DENSITY_LABELS[job.density]} for the next quote. Hours are for the whole job, so this is a blended pace.
                 </p>
                 <button type="button" className="ct-btn ct-btn--ghost" onClick={applySuggestedFactor}>

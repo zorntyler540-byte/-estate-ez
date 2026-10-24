@@ -78,8 +78,8 @@ export default function OperationsProposalPage() {
           <p className="ct-muted">{[job.address, job.zip].filter(Boolean).join(", ") || "Address to be confirmed"}</p>
           {job.phone || job.email ? <p className="ct-muted">{[job.phone, job.email].filter(Boolean).join(" · ")}</p> : null}
           <p>
-            {job.sqft > 0 ? `${job.sqft.toLocaleString("en-US")} square feet` : "Square footage to be confirmed"}
-            {job.sqft > 0 ? `, ${job.density} density` : ""}. Hours are estimated from this location&apos;s pace. The
+            {job.cuft > 0 ? `${job.cuft.toLocaleString("en-US")} cubic feet` : "Cubic footage to be confirmed"}
+            {job.cuft > 0 ? `, ${job.density} density` : ""}. Hours are estimated from this location&apos;s pace. The
             final invoice follows actual hours and actual sale proceeds.
           </p>
           {quote ? (

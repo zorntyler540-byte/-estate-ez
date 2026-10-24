@@ -78,7 +78,7 @@ export default function OperationsHomePage() {
         </div>
         <h2 className="ct-section-title">Open jobs</h2>
         {open.length === 0 && !loading ? (
-          <p className="ct-muted">No open jobs. Start with the house, the services, and a square footage.</p>
+          <p className="ct-muted">No open jobs. Start with the house, the services, and a cubic footage.</p>
         ) : (
           <ul className="ct-ops-list">
             {open.map((job) => (
