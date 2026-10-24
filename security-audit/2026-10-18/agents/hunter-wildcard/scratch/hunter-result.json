@@ -1,0 +1,113 @@
+{
+  "units": [
+    {
+      "coverage_id": "main.py%23legacy%20CLI%20scanner::main.py%23API_KEY%20env::main.py::ATTACK-CLASSES.md%23Wildcard",
+      "disposition": "covered",
+      "reviewed_paths": [
+        ".gitignore",
+        "DEPLOY.md",
+        "Inventory_Report.md",
+        "Procfile",
+        "README_SAAS.md",
+        "infra/docker/Dockerfile.api",
+        "listings/IMG_5472.json",
+        "listings/IMG_8512.json",
+        "listings/IMG_8517.json",
+        "listings/IMG_8525(1).json",
+        "listings/SKU_002.json",
+        "listings/SKU_006.json",
+        "listings/SKU_1..json",
+        "listings/SKU_1.json",
+        "listings/SKU_1003.json",
+        "listings/SKU_102..json",
+        "listings/SKU_123.json",
+        "listings/SKU_2002.json",
+        "listings/SKU_3..json",
+        "listings/SKU_4..json",
+        "listings/SKU_4002.json",
+        "listings/SKU_500..json",
+        "listings/SKU_None.json",
+        "listings/SKU_There is no piece of purple tape with a number on this item..json",
+        "main.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-wildcard",
+          "reviewed_paths": ["main.py"],
+          "invariant": "A git clone or local operator without GOOGLE_API_KEY/GEMINI_API_KEY cannot obtain a Gemini key from the legacy scanner source, and the scanner is not an HTTP identity surface.",
+          "method": "source",
+          "result": "API_KEY is assigned only from os.environ GOOGLE_API_KEY or GEMINI_API_KEY (main.py:32). No hardcoded key, query-string key, or committed credential. generate_content_url and list_models_for_key send the key as x-goog-api-key. Optional python-dotenv loads repo-root .env without override, then Images/.env with override=True (main.py:23-30); Images/ is gitignored. SKIP_TAPE_VERIFY (main.py:33-34, 816-822) only skips the second vision SKU check. There is no HTTP server, JWT, or commented-out auth in this file; argparse --folder/--recursive/--list-models is a local operator CLI. LISTINGS_DIR is mkdir-only (main.py:59, 773) and is never written; save_lot_outputs writes Inventory_Report.md and inventory.db with parameterized SQLite.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wildcard",
+          "reviewed_paths": [
+            "listings/IMG_5472.json",
+            "listings/IMG_8512.json",
+            "listings/IMG_8517.json",
+            "listings/IMG_8525(1).json",
+            "listings/SKU_002.json",
+            "listings/SKU_006.json",
+            "listings/SKU_1..json",
+            "listings/SKU_1.json",
+            "listings/SKU_1003.json",
+            "listings/SKU_102..json",
+            "listings/SKU_123.json",
+            "listings/SKU_2002.json",
+            "listings/SKU_3..json",
+            "listings/SKU_4..json",
+            "listings/SKU_4002.json",
+            "listings/SKU_500..json",
+            "listings/SKU_None.json",
+            "listings/SKU_There is no piece of purple tape with a number on this item..json"
+          ],
+          "invariant": "Tracked sample listing JSON must not contain estate-client PII, credentials, or a live path that interpolates model SKU text into filesystem paths.",
+          "method": "source",
+          "result": "All 18 listings/*.json files are Gemini catalog leftovers (Auction Title, Professional Description, Condition, Suggested Starting Price, SKU). Content is clothing, figurines, and barware; no emails, phones, street addresses, person names of clients, or secrets. SKU_There is no piece of purple tape with a number on this item..json shows a historical unsanitized SKU-as-filename leftover; current main.py does not write listings JSON. SKU_2002.json is SKU-only. This is fixture/catalog copy, not a live write sink.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wildcard",
+          "reviewed_paths": [".gitignore", "Inventory_Report.md"],
+          "invariant": "Gitignore must exclude operator secrets and local DBs; committed leftover catalog markdown must not hold client PII or keys.",
+          "method": "source",
+          "result": ".gitignore excludes .env variants, *.db, /Images/, backend/data/, and data/, so inventory.db and Images/.env are not trackable. listings/ and Inventory_Report.md are not ignored. Inventory_Report.md is a two-lot markdown table (SKU 002/003, garment brands/sizes/prices) with no client identity or secrets. Missing ignore of catalog outputs is a leftover-operator hygiene gap without a lower-trust principal obtaining protected PII from current tracked files.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wildcard",
+          "reviewed_paths": ["DEPLOY.md", "Procfile", "README_SAAS.md", "infra/docker/Dockerfile.api"],
+          "invariant": "The repo-root scanner must not be the production API entrypoint and must not ship listing JSON inside the API image.",
+          "method": "source",
+          "result": "DEPLOY.md and README_SAAS.md document root main.py as a legacy CLI, not FastAPI. Procfile runs uvicorn app.main:app from backend/. Dockerfile.api copies requirements.txt, alembic.ini, and backend/ only, so listings/ and Inventory_Report.md are not in that image. A mis-set Nixpacks uvicorn main:app is documented as a crash (no app attribute), not a networked scanner. No backend tests import root main.py.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [],
+  "hardening": [
+    "Add listings/ and Inventory_Report.md to .gitignore (or move samples under a clearly marked fixtures path) so a local python main.py run cannot be git-added as a live estate catalog.",
+    "Remove the unused LISTINGS_DIR.mkdir leftover, or stop shipping the 18 SKU_*.json samples that current main.py no longer writes.",
+    "Load Images/.env with override=False so a leftover local key file cannot clobber an already-set GOOGLE_API_KEY.",
+    "Retire or isolate root main.py from the SaaS repo if operators no longer need the tkinter scanner; there are no tests for it."
+  ],
+  "uncovered": [
+    {
+      "surface": "POST /integrations/r2/migrate-catalog and GET /integrations/r2/ping|/cors",
+      "boundary": "Catalogger JWT versus owner-documented R2 ops on the shared bucket",
+      "subsystem": "Object storage",
+      "attack_class": "ATTACK-CLASSES.md#Access control",
+      "starting_paths": [
+        "backend/app/main.py",
+        "backend/app/schemas.py",
+        "backend/app/object_storage.py",
+        "DEPLOY.md",
+        "backend/app/services/roles.py"
+      ],
+      "reason": "UI-less leftover R2 ops: dashboard never calls these routes. DEPLOY.md says migrate-catalog is owner-only, but migrate_catalog_to_r2, r2_ping, and r2_cors_get only use get_current_user. Clients are blocked by enforce_client_http; cataloggers are not. Sibling POST /integrations/r2/cors does require is_owner. ping() writes and deletes _health/r2-ping.txt on the shared bucket. Distinct from the assigned legacy CLI unit and from hunter-cloud Railway/env reachability."
+    }
+  ]
+}

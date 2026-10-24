@@ -1,0 +1,66 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "Multipart handlers treat UploadFile.read() as the size gate: photos never have a byte budget, and videos check MAX_VIDEO_BYTES only after the full buffer exists. There is no source-visible Starlette/FastAPI max body, per-request file-count cap for batch jobs, or streaming discard.",
+  "title": "Catalog multipart ingest buffers entire parts in the shared API process with no photo byte cap",
+  "description": "Restricted clients and staff upload photos through POST /jobs/upload and POST /jobs/{id}/upload-files into save_uploaded_files, which await-reads each UploadFile fully, optionally runs Pillow, writes the bytes, and mirrors to R2. JWT, enforce_client_http, account_id, and assigned-sale checks gate who may call those routes, but they do not bound part size. catalog_limits defines MAX_VIDEO_BYTES and a 40-photo CTBids cap, but no photo-byte ceiling; the 40-file check runs only in single_lot_mode (and only after multipart parse). Lot video upload does have an 80 MiB cap, but only after the entire part is already in memory. FastAPI is constructed with default options (no request-size limit in source; only security-headers, CORS, and optional TrustedHost middleware). Concurrent saves use a semaphore of 12, so several large parts occupy RAM together on the single API process that also serves other tenants' dashboard and pool checkouts.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/main.py",
+      "line": 5362,
+      "scope": "create_job_from_upload",
+      "description": "Authenticated client or catalogger posts files: list[UploadFile] with no length or byte Form constraint; CTBIDS_MAX_PHOTOS_PER_LOT applies only when single_lot_mode is true."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/upload_storage.py",
+      "line": 50,
+      "scope": "save_uploaded_files._save_one",
+      "description": "body = await uf.read() materializes the entire part. concurrency=12 gather runs many such reads. Pillow compress runs after this allocation; non-image names skip compress and keep raw bytes."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/upload_storage.py",
+      "line": 90,
+      "scope": "save_uploaded_files._save_one",
+      "description": "target.write_bytes(body) plus mirror_local_file_to_r2 retain the object on local disk and operator-owned R2. The same process hosts other tenants' HTTP and QueuePool."
+    }
+  ],
+  "validation_plan": {
+    "local": "With Gemini and R2 mocked and strict process memory/time limits, post one oversize JPEG and one oversize non-image part to save_uploaded_files / create_job_from_upload, and one oversize video to upload_lot_videos. Observe that photo parts are fully buffered with no 413, and that video rejection happens only after len(raw) is known. Repeat with a large files list while single_lot_mode is false. Do not stress a shared host beyond the fixture limit.",
+    "deployment": "Owner-observed: record whether Railway/ingress enforces a request body ceiling in front of the API service, and whether that ceiling applies to multipart parts before uvicorn allocates them. Do not flood the production API."
+  },
+  "blockers": [
+    "No OS-enforced sandbox is available (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion), so peak RSS and disk growth were not measured with a small oversized fixture.",
+    "Railway/proxy/client_max_body_size and platform multipart limits are not declared in this repository; an upstream cap would change shared impact and must be owner-observed.",
+    "Paid R2 put and Gemini spend from a huge accepted batch were not exercised (mocked-only local check required)."
+  ],
+  "fingerprint": "backend.app.upload_storage.save_uploaded_files.unbounded-multipart-buffer",
+  "evidence": [
+    {
+      "file": "backend/app/catalog_limits.py",
+      "line": 13,
+      "description": "MAX_VIDEO_BYTES is the only ingest byte constant; there is no MAX_PHOTO_BYTES. CTBIDS_MAX_PHOTOS_PER_LOT is a listing count, not a transfer-size cap."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 3825,
+      "description": "upload_lot_videos does raw = await file.read() then lot_video_size_error(len(raw)), so the advertised 80 MiB bound is after unbounded buffering."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 284,
+      "description": "app = FastAPI(title=settings.app_name) installs no max request size, body limit, or upload middleware."
+    },
+    {
+      "file": "backend/app/services/roles.py",
+      "line": 95,
+      "description": "client_http_allowed includes POST /jobs/upload, so the unbounded buffer is reachable by the client role, not only owners."
+    },
+    {
+      "file": "frontend/app/dashboard/page.tsx",
+      "line": 129,
+      "description": "UPLOAD_FILE_CHUNK = 48 is a browser timeout workaround, not an API cardinality or byte limit; additional chunks append to the same job."
+    }
+  ]
+}

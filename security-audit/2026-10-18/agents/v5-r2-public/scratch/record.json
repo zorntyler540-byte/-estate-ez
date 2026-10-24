@@ -1,0 +1,79 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "Object privacy is a Cloudflare bucket setting that source neither encodes nor enforces: puts omit ACL, reads assume presign-only access, and the documented private / no-public-development-URL control lives only in DEPLOY.md.",
+  "title": "Catalog privacy depends on an unencoded private-bucket and r2.dev-off policy",
+  "description": "The app stores catalog/{account_id}/\u2026, job-batches/{account_id}/{batch_id}/\u2026, thumbs, and a _health/r2-ping.txt probe (put then best-effort delete) with no object ACL and serves staff browsers via JWT-gated media-url GetObject presigns (ExpiresIn clamped 60..86400; handlers pass 3600; lot/photo queries bind Lot.account_id == current.account_id). DEPLOY.md tells operators to keep the bucket private and not enable Cloudflare's public development URL. No bucket policy, public-access block, or r2.dev toggle exists in source. Source never constructs an r2.dev URL. If that dashboard switch (or a public custom domain / public-read ACL) is on, an anonymous caller can GET those keys without a JWT or presign. Keys are deterministic from account_id plus photo or batch id. R2 CORS AllowedOrigins come from cors_allow_origins (always includes localhost; stars dropped) and are not caller-chosen; CORS does not publish object bytes. Live ACL and public-URL state were not observed and must not be probed.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/catalog_storage.py",
+      "line": 52,
+      "scope": "persist_catalog_photo",
+      "description": "Authenticated catalog persist copies tenant photos to catalog/{account_id}/{photo_id}.ext and put_file's that key to the shared bucket with no ACL."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/object_storage.py",
+      "line": 76,
+      "scope": "put_bytes",
+      "description": "put_object is called with Bucket, Key, Body, and ContentType only; put_file at line 83 is the same kwargs. No ACL, Grant, or private-enforcement argument is set on catalog, thumb, job-batch, or ping writes."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/job_batch_storage.py",
+      "line": 40,
+      "scope": "r2_key_for_file",
+      "description": "Job upload mirrors use job-batches/{account_id}/{batch_id}/\u2026 on the same bucket, so a public origin would also expose staged upload batches."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/object_storage.py",
+      "line": 86,
+      "scope": "presigned_get_url",
+      "description": "The only in-repo browser read path is a time-capped GetObject presign. Source never constructs an r2.dev URL; a public bucket origin would serve the same keys without that presign."
+    }
+  ],
+  "validation_plan": {
+    "local": "In a network-disabled review, confirm put_bytes/put_file kwargs still omit ACL and that no code path concatenates r2.dev. That only reconfirms source; it does not settle live exposure.",
+    "deployment": "Owner, in the Cloudflare R2 bucket Settings only, confirms Public development URL is disabled, no public custom domain is attached, and access remains private/presign. Do not request catalog/ or job-batches/ objects from the internet."
+  },
+  "blockers": [
+    "Live Cloudflare R2 Public development URL, custom domain, and object/bucket ACL are dashboard facts and are not in this repository.",
+    "No IaC or bucket-policy render exists to evaluate locally.",
+    "This run must not fetch pub-*.r2.dev, a custom R2 domain, or any catalog/job-batch key.",
+    "No OS-enforced sandbox was available to inspect put_object kwargs at runtime beyond source."
+  ],
+  "fingerprint": "r2.bucket.public-development-url-policy",
+  "evidence": [
+    {
+      "file": "DEPLOY.md",
+      "line": 120,
+      "description": "Operators are told to keep the bucket private and not enable the public development URL so browsers use short-lived media-url presigns."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 170,
+      "description": "R2 settings are account id, access key, secret, bucket, and endpoint only; there is no public-URL or ACL field."
+    },
+    {
+      "file": "backend/app/object_storage.py",
+      "line": 190,
+      "description": "put_bucket_cors applies GET/HEAD for cors_allow_origins and drops any origin containing *; it does not set bucket ACL or disable a public development URL."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 235,
+      "description": "cors_allow_origins always includes http://127.0.0.1:3000 and http://localhost:3000, so an owner POST /integrations/r2/cors writes those localhost origins onto the bucket CORS rule even in production."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 3519,
+      "description": "GET /lots/{lot_id}/media-url requires get_current_user and loads the lot with Lot.account_id == current.account_id before minting a presign; that gate does not bind a public r2.dev GET of the same key."
+    },
+    {
+      "file": "DEPLOY.md",
+      "line": 106,
+      "description": "Deploy docs recommend an R2 Account API token on the API (and later the worker) for the shared estate-catalog bucket; least-privilege prefix keys are not encoded."
+    }
+  ]
+}

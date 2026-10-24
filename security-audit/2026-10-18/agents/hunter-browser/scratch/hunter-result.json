@@ -1,0 +1,203 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Fauth.py%23oauth2_scheme::frontend%2Flib%2Fapi.ts%23Authorization%20header::backend%2Fapp::WEB-PROTOCOL-AND-AUTH.md%23Ordinary%20CSRF",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/config.py",
+        "backend/app/main.py",
+        "backend/app/schemas.py",
+        "frontend/lib/api.ts"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/main.py",
+            "backend/app/schemas.py"
+          ],
+          "invariant": "State-changing API routes authenticate only via non-ambient Bearer JWT; no cookie or other ambient credential is minted or read.",
+          "method": "source",
+          "result": "oauth2_scheme is OAuth2PasswordBearer and get_current_user passes only that header token into user_from_access_token. Login and register return TokenResponse JSON (access_token, token_type=bearer) with no Set-Cookie. Repository-wide backend search finds no set_cookie or Cookie auth. Query access_token exists only on get_current_user_sse for EventSource, which is peer-owned and is a read stream, not a mutation credential.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "frontend/lib/api.ts"
+          ],
+          "invariant": "Browser callers attach Authorization Bearer from caller-supplied token and do not enable credentialed cookie attachment.",
+          "method": "source",
+          "result": "apiFetch and apiUploadFiles set Authorization Bearer when a token is provided and never set credentials include. Cross-origin fetch therefore cannot send a cookie even if one existed. A foreign page cannot forge the header from the victim session.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "backend/app/config.py",
+            "backend/app/main.py"
+          ],
+          "invariant": "CORS allow_credentials=True does not convert Bearer-only mutations into ordinary CSRF.",
+          "method": "source",
+          "result": "CORSMiddleware uses a static cors_allow_origins() list and allow_credentials=True, but WEB CSRF requires an ambient cookie credential plus a cross-site state change. No such cookie exists, so a cross-site form or fetch without a stolen Bearer is rejected by oauth2_scheme.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23CORSMiddleware::backend%2Fapp%2Fconfig.py%23cors_allow_origins::frontend::CLIENT-SIDE.md%23Credentialed%20CORS%20trust",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/config.py",
+        "backend/app/main.py",
+        "backend/app/object_storage.py",
+        "backend/app/security_middleware.py",
+        "backend/app/services/audience_hunt.py",
+        "frontend/app/dashboard/page.tsx",
+        "frontend/app/page.tsx",
+        "frontend/components/FindGroupsPanel.tsx",
+        "frontend/lib/api.ts",
+        "frontend/lib/roles.ts",
+        "frontend/next.config.mjs"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "backend/app/config.py",
+            "backend/app/main.py",
+            "backend/app/object_storage.py"
+          ],
+          "invariant": "Credentialed CORS must not reflect or weakly match an attacker Origin onto a sensitive response.",
+          "method": "source",
+          "result": "cors_allow_origins() concatenates exact http://127.0.0.1:3000 and http://localhost:3000 with comma-separated CORS_ORIGINS and drops any entry containing *. CORSMiddleware uses that static list, not Origin reflection or regex. put_bucket_cors copies the same cleaned list for R2 GET/HEAD only. A remote attacker origin is not echoed. localhost remains allowed in production, but without a cookie or stolen Bearer that origin cannot read a victim staff session.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "frontend/app/dashboard/page.tsx",
+            "frontend/app/page.tsx",
+            "frontend/lib/api.ts",
+            "frontend/lib/roles.ts"
+          ],
+          "invariant": "Browser storage of the staff JWT must not be readable by another origin or reused by a less-trusted same-origin principal after logout or account switch.",
+          "method": "source",
+          "result": "The JWT is stored under localStorage token on the dashboard origin and sent only as Authorization. Logout removes token. No storage or BroadcastChannel handler lets a second tab rewrite auth from an attacker origin. storedAccountRole (ct_account_role) is not cleared on logout and can mis-route the next paint to /client, but /auth/me and API role checks remain authoritative, so this is not continued authorized use after revocation.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "backend/app/security_middleware.py",
+            "backend/app/services/audience_hunt.py",
+            "frontend/app/dashboard/page.tsx",
+            "frontend/components/FindGroupsPanel.tsx",
+            "frontend/next.config.mjs"
+          ],
+          "invariant": "A controllable browser source must not reach an executing HTML or javascript: sink in the victim dashboard session.",
+          "method": "source",
+          "result": "Frontend has no innerHTML, outerHTML, document.write, eval, or dangerouslySetInnerHTML. Dashboard listing links are same-origin lot paths. FindGroupsPanel hrefs come from hunt JSON; parse_audience_payload/_safe_public_url keep only http(s) and drop javascript: and data:. EventSource is constructed with encodeURIComponent(token) and is peer-owned. next.config.mjs sets no CSP; API SecurityHeadersMiddleware sets X-Frame-Options DENY on API responses only.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "mobile%2Flib%2Fqueue%2Fsync.ts%23upload::mobile%2Flib%2FsecureStorage.ts%23SecureStore::mobile::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Custom-scheme%20and%20deep-link%20ambiguity",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "mobile/app.json",
+        "mobile/app/_layout.tsx",
+        "mobile/app/capture-session.tsx",
+        "mobile/context/AuthContext.tsx",
+        "mobile/lib/api.ts",
+        "mobile/lib/config.ts",
+        "mobile/lib/playVideo.ts",
+        "mobile/lib/playVideoMode.ts",
+        "mobile/lib/queue/sync.ts",
+        "mobile/lib/secureStorage.ts"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "mobile/app.json",
+            "mobile/app/_layout.tsx",
+            "mobile/app/capture-session.tsx"
+          ],
+          "invariant": "A custom-scheme or deep-link invocation must not mutate catalog state, import data, or complete auth without the current session and user intent.",
+          "method": "source",
+          "result": "app.json registers scheme caringtransitions and expo-router; there are no Android intentFilters, associatedDomains, or incoming file/share handlers. RootNav sends unsigned users to login and does not accept a token from the URL. capture-session can be opened with appendLotId/draftId/appendSku/appendTitle, but hydrate does not upload; finishAppend/finishLot require captured media plus an Upload/Send confirm. Uploads use the SecureStore session and server account_id checks. Same-account label confusion is self-harm under the same write authority, not a cross-principal bypass.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "mobile/lib/api.ts",
+            "mobile/lib/playVideo.ts",
+            "mobile/lib/playVideoMode.ts"
+          ],
+          "invariant": "File-open and Linking.openURL must not treat an untrusted URI as a privileged intent or execute a non-http(s) remote target.",
+          "method": "source",
+          "result": "getLotVideoPlayUrl reads a server-signed media-url. videoPlayMode sends only http(s) to WebBrowser.openBrowserAsync. Any other URI is treated as local, existence-checked, then shared on iOS or opened via a content URI on Android. Sync and upload paths send Bearer to API_BASE and do not open caller-supplied URLs.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-browser",
+          "reviewed_paths": [
+            "mobile/context/AuthContext.tsx",
+            "mobile/lib/config.ts",
+            "mobile/lib/queue/sync.ts",
+            "mobile/lib/secureStorage.ts"
+          ],
+          "invariant": "The field-app session stays inside the app SecureStore boundary and production builds cannot be pointed at localhost.",
+          "method": "source",
+          "result": "Tokens and remembered email/password are written with expo-secure-store AFTER_FIRST_UNLOCK and deleted on signOut. syncPendingLots uses that Bearer and never a custom-scheme argument. resolveApiBase replaces empty or localhost EXPO_PUBLIC_API_BASE when __DEV__ is false. A less-trusted other app is not granted SecureStore read in source; backup/profile restore is outside this selected class.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [],
+  "hardening": [
+    "cors_allow_origins() always includes http://localhost:3000 and http://127.0.0.1:3000, including production, and CORSMiddleware sets allow_credentials=True. That is unused today because no cookie exists and browser fetch omits credentials, but it should be dropped in production so a later cookie or credentials include change cannot open those origins.",
+    "Dashboard logout removes only localStorage token and leaves ct_account_role, so a later login can briefly route through the stale client gate before /auth/me.",
+    "POST /integrations/r2/cors applies the same localhost defaults to the bucket AllowedOrigins list used for signed-URL fetch.",
+    "Audience hunt URLs are scheme-filtered server-side; engagement item_url and some dashboard hrefs are not. Same-tenant writers make this self-injection, not a foreign-origin XSS.",
+    "Mobile sign-in persists the raw password in SecureStore for silent JWT refresh. That is same-app keychain access, not a deep-link bug; prefer a refresh token and requireAuthentication if device-sharing is in scope."
+  ],
+  "uncovered": [
+    {
+      "surface": "Client logout and password change without JWT revocation",
+      "boundary": "Stolen or leftover Bearer versus server session end",
+      "subsystem": "FastAPI core API",
+      "attack_class": "Session fixation and invalidation",
+      "starting_paths": [
+        "backend/app/auth.py",
+        "frontend/app/dashboard/page.tsx",
+        "mobile/context/AuthContext.tsx"
+      ],
+      "reason": "create_access_token is stateless HS256 with default 43200 minute TTL and no jti denylist. Dashboard logout only removes localStorage token; mobile signOut only deletes SecureStore keys. PATCH /auth/password does not appear to rotate outstanding access tokens. This is session invalidation, not ordinary CSRF or credentialed CORS."
+    },
+    {
+      "surface": "Remembered mobile password in SecureStore",
+      "boundary": "Device backup or other OS profile versus staff password",
+      "subsystem": "Expo field app",
+      "attack_class": "Credential-store and local-secret boundary mismatch",
+      "starting_paths": [
+        "mobile/context/AuthContext.tsx",
+        "mobile/lib/secureStorage.ts",
+        "mobile/app.json"
+      ],
+      "reason": "AuthContext writes email and password under ct_mobile_login_credentials with AFTER_FIRST_UNLOCK and no requireAuthentication. Selected companions were custom-scheme and file-open only; backup, work-profile, and Android allowBackup behavior need a dedicated credential-store unit."
+    }
+  ]
+}

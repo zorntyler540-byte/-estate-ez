@@ -1,0 +1,63 @@
+{
+  "decision": "rejected",
+  "record": {
+    "verdict": "rejected",
+    "fingerprint": "gemini.pro-search.missing-owner-gate",
+    "title": "Pro plus Google Search is owner-gated only on audience hunt, not appraiser or grounded catalog valuation",
+    "description": "roles.can_run_audience_hunt documents that Pro tokens are owner-only, and hunt routes enforce that. Two other Pro+Search sinks do not. When ENABLE_APPRAISER is true, a catalogger (not client; path is outside the client allowlist) can POST /appraiser/checks with photos and an unlabeled scene_note; run_appraisal_research enables Google Search on Gemini Pro. When ENABLE_GROUNDED_VALUATION is true, the catalog Pro author call used by client-runnable /jobs/{id}/run also attaches Google Search. Attacker is a catalogger (appraiser) or client (valuation-on catalog). Affected principal is the operator Gemini Pro+Search bill. Execution identity is pipeline._get_client using the operator GOOGLE_API_KEY. This is an unauthorized-tool / quota-scope failure, not prompt injection.",
+    "claimed_root_cause": "The owner-only Pro+Search control is implemented only on audience-hunt routes; appraiser and ENABLE_GROUNDED_VALUATION reuse the same client and tool without that role check.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 6222,
+        "scope": "create_appraisal_check",
+        "description": "Any authenticated member of the sale can start an appraisal when ENABLE_APPRAISER is true; can_run_audience_hunt is not consulted."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/pipeline/appraiser.py",
+        "line": 64,
+        "scope": "run_appraisal_research",
+        "description": "Caller scene_note is concatenated as Scene note from appraiser and Search is enabled on Pro."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/pipeline_integration.py",
+        "line": 75,
+        "scope": "_sync_pipeline_env_from_settings",
+        "description": "ENABLE_GROUNDED_VALUATION is copied into the pipeline process environment for catalog jobs."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/pipeline/pipeline.py",
+        "line": 1211,
+        "scope": "Pro author generate_content",
+        "description": "When that flag is set, the catalog Pro call adds tools=[GoogleSearch()], reachable from client /jobs/{id}/run."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 74,
+        "description": "Comment and implementation: audience hunt burns Pro tokens — owners only."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5123,
+        "description": "Hunt routes call _require_can_run_audience_hunt; appraiser routes do not."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 110,
+        "description": "enable_grounded_valuation and enable_appraiser default false; both are env-enabled operator flags."
+      },
+      {
+        "file": "backend/app/services/appraisal.py",
+        "line": 45,
+        "description": "run_field_appraisal is invoked with stored scene_note and photos; usage is billed Pro tokens."
+      }
+    ],
+    "reason": "Cited lines are real at c661a8fd, but they do not show an unauthorized Pro+Search bypass. can_run_audience_hunt (backend/app/services/roles.py:74-76) and _require_can_run_audience_hunt (backend/app/main.py:443-448, used at 5123 and 5180) are hunt-only; the docstring names audience hunt, not every GoogleSearch call. create_appraisal_check (6222-6230) uses get_current_user, which runs enforce_client_http (backend/app/auth.py:89). POST /appraiser/checks is not in client_http_allowed (roles.py:84-115), so clients 403. Callers are owner or catalogger on the same account_id, then _sale_for_user (393-402) and _require_appraiser_enabled (6158-6163). run_appraisal_research (backend/pipeline/appraiser.py:57-81) always attaches GoogleSearch() on Pro via _get_client (backend/pipeline/pipeline.py:141-148). That is the designed field-appraisal staff surface: ENABLE_APPRAISER defaults false (config.py:111); dashboard /appraiser nav and POST (frontend/components/AppShell.tsx:48-51, frontend/app/appraiser/page.tsx:514) are not owner-gated, unlike Find groups (frontend/components/FindGroupsPanel.tsx:224 plus the hunt routes). Cataloggers already burn the same operator Pro key on intended POST /jobs/{id}/run (main.py:5546-5569; roles.py:111). ENABLE_GROUNDED_VALUATION (config.py:110, default false) is a second operator opt-in on that same catalog path, not a new principal. _sync_pipeline_env_from_settings (pipeline_integration.py:75) writes os.environ after pipeline.py:40 has already bound the module constant, and run_brand_audit_pro (1210-1212) still pairs Search with response_schema, which that comment and audience_hunt's two-step split document as a 400. The listed entrypoint (appraiser POST) does not reach the listed sink (catalog Pro generate_content). Clients cannot appraise; catalog Search is same-principal catalog authority behind an off-by-default flag. Hunt vs appraiser owner-check inconsistency is missing best-practice consistency, not a quota-scope failure."
+  }
+}

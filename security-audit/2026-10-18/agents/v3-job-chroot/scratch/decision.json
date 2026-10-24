@@ -1,0 +1,81 @@
+{
+  "decision": "needs_validation",
+  "record": {
+    "verdict": "needs_validation",
+    "fingerprint": "backend.app.main.create_job.input_folder.missing-upload-root-chroot",
+    "title": "POST /jobs stores an un-chrooted input_folder that process_job rglobs into Gemini and the caller's catalog",
+    "description": "An authenticated catalogger or owner can POST /jobs with an arbitrary input_folder. Unlike POST /jobs/{id}/upload-files, create_job does not require that path to sit under UPLOAD_ROOT/{account_id}. The row is inserted as queued, so the catalog worker can claim it without a separate unsafe /run trick. process_job then Path.rglob-s image suffixes, may rewrite files in that tree, copies them into catalog/{job.account_id}, and sends them to Gemini. The job row's account_id filter only authorizes who may own the job; it does not isolate the filesystem or R2 batch key. A path equal to the shared upload root or catalog/ subtree therefore selects other tenants' on-disk images. A path shaped as upload_root/{victim_account}/{victim_batch} makes parse_batch_folder restore that tenant's job-batches/ objects using worker R2 credentials.",
+    "claimed_root_cause": "CreateJobRequest.input_folder is persisted and later used as a filesystem and R2-namespace selector without the account upload-root chroot that _queued_job_upload_folder already implements, and parse_batch_folder derives tenant from that path rather than from ProcessingJob.account_id.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5506,
+        "scope": "create_job",
+        "description": "After blocking clients and binding sale_id via _sale_for_user, the handler writes payload.input_folder onto ProcessingJob with status=queued and no UPLOAD_ROOT/account_id relative_to check."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 5585,
+        "scope": "run_job",
+        "description": "POST /jobs/{id}/run resolves the job by id and account_id, then uses Path(job.input_folder) for R2 staging with no second chroot. create_job already queued the row, so app.worker can also claim it."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/job_batch_storage.py",
+        "line": 32,
+        "scope": "parse_batch_folder",
+        "description": "account_id and batch_id are taken from the first two path components under upload_root(), not from the job row, then used as the R2 prefix job-batches/{account}/{batch}/."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/processing.py",
+        "line": 882,
+        "scope": "_process_job_body",
+        "description": "folder.rglob('*') collects IMAGE_EXTS under the attacker-chosen directory; _add_catalog_photo persists copies under job.account_id and the pipeline sends frames to Gemini."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 5428,
+        "description": "_queued_job_upload_folder is the sibling control: resolve job.input_folder and relative_to(UPLOAD_ROOT/account_id), used only by upload-files, not by create_job."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5750,
+        "description": "delete_job only rmtree when the resolved folder is under UPLOAD_ROOT, so destructive cleanup is chrooted while catalog read is not."
+      },
+      {
+        "file": "backend/app/services/processing.py",
+        "line": 173,
+        "description": "_add_catalog_photo calls persist_catalog_photo(job.account_id, photo_path), copying whatever rglob selected into the caller's catalog namespace."
+      },
+      {
+        "file": "backend/app/services/image_preprocess.py",
+        "line": 203,
+        "description": "normalize_job_folder_image writes re-encoded bytes back under job_folder, so a path into another tenant's batch or catalog directory is a write as well as a read."
+      },
+      {
+        "file": "frontend/app/dashboard/page.tsx",
+        "line": 4819,
+        "description": "Dashboard enqueueJob JSON-posts the Staff server-path text field as input_folder, documenting that the API is expected to accept a raw host path."
+      },
+      {
+        "file": "infra/docker/Dockerfile.api",
+        "line": 16,
+        "description": "Image layout is /app/backend/data/uploads (WORKDIR /app, uvicorn from backend), so the upload-root and catalog/ trees are a source-visible absolute layout on API and worker images."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced empty-allowlist sandbox; hunters must not execute target code, so rglob, R2 restore, persist_catalog_photo, and Gemini were not observed on dummy tenants.",
+      "No trusted parent-side scratch promotion procedure, so no local fixture artifact can be retained.",
+      "Whether a given Railway worker disk currently holds catalog/{other_account} files, and whether R2 list/get on job-batches/* succeeds for a path-derived other account, is a deployment fact outside this source review."
+    ],
+    "validation_plan": {
+      "local": "In an isolated dummy two-account fixture with Gemini and R2 mocked, create catalog JPEGs under upload_root/catalog/{B} and a job-batch under upload_root/{B}/{batch}. As catalogger A, insert a ProcessingJob via the create_job request body with input_folder pointing at B's catalog directory and at B's batch directory. Invoke process_job. Confirm A's Photo rows receive B's pixels, B's files may be re-encoded, and restore_job_folder_from_r2 is invoked with job-batches/{B}/{batch}/ rather than A's id. Do not use production data or network.",
+      "deployment": "Owner-observed: inspect one worker replica's backend/data/uploads/catalog layout after mixed-tenant jobs, and confirm application-side R2 list is not additionally scoped by ProcessingJob.account_id. Do not probe a live customer tenant."
+    }
+  }
+}

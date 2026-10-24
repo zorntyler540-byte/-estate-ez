@@ -1,0 +1,68 @@
+{
+  "decision": "needs_validation",
+  "record": {
+    "verdict": "needs_validation",
+    "fingerprint": "unauth.auth.jwt-no-revocation",
+    "title": "Password change and team reset do not invalidate access JWTs",
+    "description": "Access tokens are stateless HS256 JWTs with no jti or server denylist. PATCH /auth/password and owner team-member reset update password_hash only. There is no logout. A stolen token remains valid until exp (default 30 days, max 90) after the password is changed. Account disable is checked at verification; password change is not.",
+    "claimed_root_cause": "User has no token_version; password-change and reset paths never rotate or revoke outstanding JWTs, and user_from_access_token only checks signature, exp, user row, and Account.is_active.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 929,
+        "scope": "PATCH /auth/password",
+        "description": "Authenticated password change rewrites password_hash and commits with no token revocation."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/models.py",
+        "line": 75,
+        "scope": "User session state",
+        "description": "User columns have no token_version, jti list, or password_changed_at used at verify time."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/auth.py",
+        "line": 56,
+        "scope": "user_from_access_token",
+        "description": "Pre-change JWTs still decode and load the same User until exp as long as the account is active."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 943,
+        "description": "change_own_password sets password_hash and db.commit only."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1035,
+        "description": "reset_team_member_password also only hashes the new password."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 46,
+        "description": "create_access_token payload is sub, account_id, role, iat, exp; no jti or token_version."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 70,
+        "description": "Verification loads User by id+account_id; no password-epoch or denylist check."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 150,
+        "description": "Default ACCESS_TOKEN_EXPIRE_MINUTES is 43200 (30 days), max 129600."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion); password-change-then-reuse of JWT A was not executed.",
+      "Whether a deployment adds an extra API-gateway JWT denylist is host-only and not source-visible."
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox on an isolated SQLite API, register a dummy owner and a dummy catalogger. Save JWT A from login. PATCH /auth/password as the owner, then GET /auth/me with JWT A (source predicts 200; intended revocation is 401). Repeat with the catalogger JWT after POST /team/members/{id}/reset-password. Confirm GET /auth/me still 403s when Account.is_active is false. Do not use production users.",
+      "deployment": "Owner confirms production has no extra API gateway JWT denylist; do not test with live staff tokens."
+    }
+  }
+}

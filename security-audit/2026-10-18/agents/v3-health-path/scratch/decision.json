@@ -1,0 +1,66 @@
+{
+  "decision": "rejected",
+  "record": {
+    "verdict": "rejected",
+    "fingerprint": "unauth.health.upload-root-disclosure",
+    "title": "Unauthenticated /health discloses catalog upload root and disk inventory",
+    "description": "GET /health has no Depends authentication and returns HealthResponse with catalog_upload_root=str(upload_root()), catalog_image_files_on_disk from a bounded rglob, catalog_r2_configured, Gemini model names, and appraiser flags.",
+    "claimed_root_cause": "health() is unauthenticated and serializes upload_root() and _count_catalog_image_files() into HealthResponse, unlike production path redaction used for job input_folder.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 851,
+        "scope": "GET /health",
+        "description": "Anonymous health route with no Depends authentication."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/catalog_storage.py",
+        "line": 20,
+        "scope": "upload_root",
+        "description": "upload_root() resolves backend/data/uploads to an absolute Path."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 860,
+        "scope": "HealthResponse.catalog_upload_root",
+        "description": "Handler returns catalog_upload_root=str(root), image file count, r2 flag, and model names to the anonymous client."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 851,
+        "description": "@app.get(\"/health\") has no current-user dependency."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 860,
+        "description": "catalog_upload_root is the raw absolute path string, not public_job_input_folder."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 861,
+        "description": "catalog_image_files_on_disk calls _count_catalog_image_files() on every anonymous request."
+      },
+      {
+        "file": "backend/app/schemas.py",
+        "line": 17,
+        "description": "HealthResponse includes catalog_upload_root, catalog_image_files_on_disk, and catalog_r2_configured."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 247,
+        "description": "public_job_input_folder redacts absolute paths in production for JobOut.input_folder only; health does not call it."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 118,
+        "description": "Operators are told that public GET /health reports catalog_r2_configured when R2 vars are set."
+      }
+    ],
+    "reason": "Source confirms the unauthenticated serializer: backend/app/main.py:851 health() has no identity Depends; :854-862 returns catalog_upload_root=str(upload_root()), catalog_image_files_on_disk from _count_catalog_image_files() (:836 rglob, cap 200000), catalog_r2_configured, and settings model names. HealthResponse at backend/app/schemas.py:11-19 includes those fields. SecurityHeadersMiddleware, CORS, and optional TrustedHost do not authenticate the route. That is not a meaningful cross-boundary result. upload_root() at backend/app/catalog_storage.py:20-22 is the fixed resolve of backend/data/uploads beside this file. infra/docker/Dockerfile.api:14-16 copies backend under /app and creates backend/data/uploads, so the absolute string is the documented layout. DEPLOY.md:112 already names that cache path; :64 publishes GET /health on the API domain as the liveness probe; :118 documents that the same probe reports catalog_r2_configured. Gemini model defaults are in backend/app/config.py:105-106. The integer file count names no account, file, or tenant object, and the route does not read or serve catalog bytes. public_job_input_folder (backend/app/config.py:247, used only from _job_out at backend/app/main.py:536) redacts per-job input_folder strings for authenticated clients in production; it is not a control on this fixed application directory. Chatty public health JSON is missing probe hygiene, not disclosure of a protected resource. A TestClient GET is not a decisive missing fact: FastAPI serializes the HealthResponse the handler constructs."
+  }
+}

@@ -1,0 +1,1597 @@
+[
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "master-admin-email-claim-via-register-or-invite",
+    "title": "Master-admin email can be claimed by open registration or team invite",
+    "description": "All-tenant admin is not a stored role. Any authenticated user whose users.email is in MASTER_ADMIN_EMAILS may list, archive, restore, and delete every Account. POST /auth/register and POST /team/members will create a user with that email if it is globally unused, and neither path proves the caller is the env-list operator. An unused listed address therefore becomes a first-claimer privilege to cross-tenant admin.",
+    "claimed_root_cause": "Master-admin authorization is a case-folded email membership test on the current User row, while self-service register and owner team-invite can mint that email without an enrollment or possession check.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 866,
+        "scope": "register",
+        "description": "Unauthenticated POST /auth/register creates a new Account and owner User. It blocks only when ENVIRONMENT is production and ALLOW_OPEN_REGISTRATION is false; it never consults MASTER_ADMIN_EMAILS."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 885,
+        "scope": "User.email assignment",
+        "description": "The new owner's email is stored as payload.email.lower(). The only collision control is a global unique email lookup, which uses the raw payload.email (not lowercased) and does not reserve listed admin addresses."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 978,
+        "scope": "create_team_member",
+        "description": "Alternate mint: any owner may POST /team/members with role owner or catalogger and a globally unused email, including an address from MASTER_ADMIN_EMAILS."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 114,
+        "scope": "is_master_admin_email",
+        "description": "After login, every request loads User from JWT sub+account_id. Admin is decided only by stripping/lowercasing that DB email and testing membership in settings.master_admin_email_list()."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 1242,
+        "scope": "admin_list_accounts",
+        "description": "_require_master_admin(current) is the sole gate on GET /admin/accounts (and the sibling archive/restore/delete/analytics routes). A claimed listed email yields cross-tenant account names, owner emails, and destructive admin actions."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/config.py",
+        "line": 145,
+        "description": "allow_open_registration defaults true; production register is denied only when this flag is explicitly false."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 147,
+        "description": "master_admin_emails is a comma-separated env string, not a user-id enrollment table."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 451,
+        "description": "_require_master_admin checks only is_master_admin_email(current.email); role and account_id are ignored."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1420,
+        "description": "DELETE /admin/accounts/{account_id} deletes another tenant's users, sales, lots, photos, jobs, and account row after the same email check (blocked only when account_id equals the caller's own account)."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 83,
+        "description": "get_current_user does not add an admin claim or second factor; a normal HS256 staff JWT is enough once the email matches."
+      }
+    ],
+    "blockers": [
+      "This run forbids executing target code and has no OS-enforced sandbox, so the register-then-GET /admin/accounts result was not observed on dummy tenants.",
+      "Whether a deployment's MASTER_ADMIN_EMAILS addresses are already enrolled User rows, and whether ALLOW_OPEN_REGISTRATION is false in production, is env-only and not source-visible."
+    ],
+    "validation_plan": {
+      "local": "On an isolated SQLite API with dummy tenants already seeded, set MASTER_ADMIN_EMAILS to an unused mailbox and ALLOW_OPEN_REGISTRATION=true. POST /auth/register with that email, then GET /admin/accounts with the returned JWT and confirm 200 listing the seed tenants. Repeat from a second dummy owner via POST /team/members creating a catalogger with another unused listed email, and confirm that catalogger JWT also passes GET /admin/accounts while a third owner whose email is not listed receives 403.",
+      "deployment": "Owner-observed only: inspect production MASTER_ADMIN_EMAILS and ALLOW_OPEN_REGISTRATION, and whether each listed address already exists as a users.email. Do not register or invite those addresses on a live system."
+    },
+    "_hunter": "hunter-authz"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "cloud.config.default-secret-key.skips-production-validator",
+    "title": "Default JWT SECRET_KEY stays accepted whenever ENVIRONMENT is not production",
+    "description": "The production validator refuses weak SECRET_KEY values, SQLite, and empty CORS_ORIGINS, but only after ENVIRONMENT is production or prod. Settings still default SECRET_KEY to a public placeholder, and DEPLOY.md tells operators to bring the API up in development first and to generate a public API domain. If that bootstrap (or a forgotten ENVIRONMENT flip) is what is live, an internet caller can mint HS256 JWTs for any sub and account_id using the documented default. Live Railway env values were not observed.",
+    "claimed_root_cause": "production_must_be_safe is skipped for any non-production ENVIRONMENT, while the in-image default SECRET_KEY and backend/.env.example placeholder remain valid in that mode, and deploy docs start the public API in that mode.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "DEPLOY.md",
+        "line": 16,
+        "scope": "First-time Railway order",
+        "description": "Documented first deploy sets ENVIRONMENT=development on the API so CORS_ORIGINS is not required, then later generates a public API domain."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 30,
+        "scope": "Settings.secret_key",
+        "description": "SECRET_KEY defaults to the well-known placeholder change-me-dev-secret when unset."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 211,
+        "scope": "Settings.production_must_be_safe",
+        "description": "If environment is not production or prod, the function returns without rejecting weak keys, SQLite, or missing CORS_ORIGINS."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/auth.py",
+        "line": 53,
+        "scope": "create_access_token",
+        "description": "Access tokens are HS256-signed with settings.secret_key; verification uses the same key and does not bind an audience."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/.env.example",
+        "line": 1,
+        "description": "Env template sets SECRET_KEY=change-me, which production_must_be_safe would reject only after ENVIRONMENT=production."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 214,
+        "description": "Weak-key set includes empty, change-me, and change-me-dev-secret, plus any secret shorter than 32 characters."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 58,
+        "description": "user_from_access_token decodes HS256 with settings.secret_key and trusts sub plus account_id from the payload."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 47,
+        "description": "The later variables table asks for a long SECRET_KEY, but that check is not enforced until ENVIRONMENT is switched to production."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox was available, so a local dummy JWT forge against the default key was not executed.",
+      "Live Railway API ENVIRONMENT and SECRET_KEY were not observed; this run must not probe Railway.",
+      "Whether the operator already set a long random SECRET_KEY during the development bootstrap is a host-dashboard fact."
+    ],
+    "validation_plan": {
+      "local": "In an isolated empty-env sandbox, start the FastAPI app with ENVIRONMENT=development and unset SECRET_KEY, mint a dummy HS256 token with the documented default key for a dummy user_id and account_id, and confirm user_from_access_token accepts it. Repeat with ENVIRONMENT=production and confirm startup raises.",
+      "deployment": "Owner inspects the Railway API service variables only: if ENVIRONMENT is not production/prod, or SECRET_KEY equals a documented placeholder, treat the issue as live. Do not send traffic to the public hostname."
+    },
+    "_hunter": "hunter-cloud"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "cloud.ingress.fastapi-openapi-docs",
+    "title": "FastAPI docs and OpenAPI remain enabled on the 0.0.0.0 API bind",
+    "description": "The API app is constructed with FastAPI defaults, so /docs, /redoc, and /openapi.json are registered in development and production. Docker and Procfile bind uvicorn on 0.0.0.0, and DEPLOY.md publishes an API domain for /health. Those routes disclose the full management surface (auth, R2 migrate, admin delete, CT Seller, Facebook). Whether a Railway edge or other proxy currently blocks them is not in source and was not probed.",
+    "claimed_root_cause": "FastAPI() is created without docs_url, redoc_url, or openapi_url disabled, and no production overlay or ingress manifest in repo strips those paths before the public bind.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 284,
+        "scope": "FastAPI constructor",
+        "description": "app = FastAPI(title=settings.app_name) keeps default documentation and OpenAPI URLs for every environment."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 209,
+        "scope": "production_must_be_safe",
+        "description": "Production startup checks SECRET_KEY, SQLite, and CORS_ORIGINS but does not disable docs or require TRUSTED_HOSTS."
+      },
+      {
+        "kind": "sink",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 22,
+        "scope": "uvicorn CMD",
+        "description": "Container starts uvicorn app.main:app --host 0.0.0.0, so any attached public domain forwards to the default docs routes unless a proxy blocks them."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 284,
+        "description": "No docs_url=None, redoc_url=None, or openapi_url=None on the FastAPI constructor."
+      },
+      {
+        "file": "Procfile",
+        "line": 3,
+        "description": "Nixpacks/Procfile path also runs uvicorn on 0.0.0.0 bound to $PORT."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 60,
+        "description": "Operators are told to generate a public API domain and to hit /health on that hostname."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 559,
+        "description": "TrustedHostMiddleware is added only when TRUSTED_HOSTS is non-empty; empty is the documented default."
+      }
+    ],
+    "blockers": [
+      "Live Railway ingress, private-networking flags, and any path filter in front of the API are not in this repo.",
+      "This run must not fetch the public API /docs or /openapi.json.",
+      "No sandbox was available to boot uvicorn locally and observe the default routes."
+    ],
+    "validation_plan": {
+      "local": "In an isolated loopback sandbox, start app.main:app and confirm unauthenticated GET /docs, /redoc, and /openapi.json return 200 with the operation list. That only proves the application route, not live exposure.",
+      "deployment": "Owner, from the Railway dashboard or an already-authorized admin path, notes whether the API service has a public domain and whether an edge rule denies /docs, /redoc, and /openapi.json. Do not probe the hostname from this agent."
+    },
+    "_hunter": "hunter-cloud"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "supply.docker.unpinned-pip-floating-base-rembg",
+    "title": "API and worker images consume floating base tags, unpinned PyPI specs, and an unsigned rembg model",
+    "description": "Each Docker rebuild of Dockerfile.api and Dockerfile.worker runs pip install against requirements.txt lower bounds and pulls python:3.12-slim-bookworm by tag. The API image additionally downloads the rembg u2netp model during build with no checksum. A PyPI or registry publisher who can change a matching version, retag the base image, or replace the rembg model bytes can land code or weights in the next Railway image. Web JS is lockfiled via npm ci; the Node base tag is still floating. Live resolved digests were not observed.",
+    "claimed_root_cause": "Maintained Dockerfiles treat mutable tags and unbounded pip specs as the release input, and bake a remotely fetched rembg model into the API image without an integrity pin.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 2,
+        "scope": "FROM python:3.12-slim-bookworm",
+        "description": "API image starts from an unpinned rolling distro tag."
+      },
+      {
+        "kind": "propagation",
+        "file": "requirements.txt",
+        "line": 1,
+        "scope": "pip lower bounds",
+        "description": "Runtime Python dependencies are specified only as >= versions, with no lockfile consumed by Docker."
+      },
+      {
+        "kind": "sink",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 10,
+        "scope": "pip install and rembg new_session",
+        "description": "Build runs pip install --no-cache-dir -r requirements.txt then rembg new_session('u2netp'), baking whatever those resolvers return into the image that later runs uvicorn."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "infra/docker/Dockerfile.worker",
+        "line": 4,
+        "description": "Worker uses the same floating python:3.12-slim-bookworm tag and pip install -r requirements.txt without a rembg digest pin."
+      },
+      {
+        "file": "infra/docker/Dockerfile.web",
+        "line": 2,
+        "description": "Web build and runtime use node:22-bookworm-slim by tag; npm ci plus package-lock.json pins JS packages only."
+      },
+      {
+        "file": "infra/docker/Dockerfile.web",
+        "line": 5,
+        "description": "npm ci is the contrasting control: frontend lockfile is copied and used, unlike Python."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 11,
+        "description": "Production images are built from repository root using these Dockerfiles, or optionally Procfile/Nixpacks, on each git push."
+      }
+    ],
+    "blockers": [
+      "Resolved image digests and pip freeze output on Railway are not in source.",
+      "No sandbox was available to perform an offline lock comparison or to hash the rembg model.",
+      "This run must not pull Docker Hub, PyPI, or rembg model URLs."
+    ],
+    "validation_plan": {
+      "local": "In a network-disabled sandbox with vendored wheels, fail the Docker build if unpinned specs cannot resolve, or compare a committed pip freeze to the Dockerfile install. Record base-image and rembg file digests from a once-fetched local cache.",
+      "deployment": "Owner exports the deployed image digest and a pip freeze from the running API and worker, and confirms whether Railway is on Dockerfile.api versus Procfile. Do not retag or republish."
+    },
+    "_hunter": "hunter-cloud"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "supply.eas.production-ota-unbound-from-git",
+    "title": "Production EAS Update channel can replace phone JS without an in-repo git digest gate",
+    "description": "TestFlight/production binaries load JS from the Expo updates URL for project dfb4d2a5-1b94-449c-bc28-43466a46803d on channel production, with checkAutomatically ON_LOAD and runtimeVersion 1.1.0. The repo has no GitHub Actions to build, attest, or promote that payload from a git SHA. Anyone who can run eas update --channel production against that project can change field-app behavior independently of git. Expo collaborator lists and token holders were not observed and must not be probed.",
+    "claimed_root_cause": "The phone updater is bound to a mutable EAS channel name and Expo project URL, not to an in-repo immutable digest or CI promotion workflow.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "mobile/eas.json",
+        "line": 27,
+        "scope": "build.production.channel",
+        "description": "EAS production profile publishes to channel production."
+      },
+      {
+        "kind": "propagation",
+        "file": "mobile/app.json",
+        "line": 11,
+        "scope": "expo.updates",
+        "description": "Enabled updates.url points at u.expo.dev for this project, checkAutomatically ON_LOAD, fallbackToCacheTimeout 0."
+      },
+      {
+        "kind": "sink",
+        "file": "mobile/app.json",
+        "line": 10,
+        "scope": "runtimeVersion 1.1.0",
+        "description": "Installed 1.1.0 binaries accept any update Expo serves for that runtime and production channel, with no in-repo workflow binding the bundle to a git commit."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "mobile/app.json",
+        "line": 16,
+        "description": "updates.checkAutomatically is ON_LOAD so a published channel payload is applied at app start."
+      },
+      {
+        "file": "mobile/eas.json",
+        "line": 29,
+        "description": "Production EAS build.env pins EXPO_PUBLIC_API_BASE to the Railway API; eas update is a separate publish path that does not require this repo's CI."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 193,
+        "description": "Server updates are git-push rebuilds; mobile OTA is not described as a digest-pinned promotion in that deploy path, and no .github workflows exist in scope."
+      }
+    ],
+    "blockers": [
+      "Expo project membership, token scope, and last production-channel publish SHA are account facts, not source.",
+      "This run must not call Expo or eas whoami, and must not publish an update.",
+      "Whether runtime 1.1.0 binaries are what field phones run is an owner-observed install fact."
+    ],
+    "validation_plan": {
+      "deployment": "Owner, in the Expo dashboard, lists production-channel publishes against git SHAs, reviews who can run eas update, and confirms runtimeVersion 1.1.0 is the only live binary. Do not publish or roll back from this agent."
+    },
+    "_hunter": "hunter-cloud"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "facebook.oauth.callback.state-only-binding",
+    "title": "Unauthenticated Facebook OAuth callback writes Page tokens from HS256 state alone",
+    "description": "GET /integrations/facebook/oauth/callback is unauthenticated. A 15-minute HS256 JWT signed with SECRET_KEY (purpose=meta_oauth, account_id, user_id, exp; no aud, iss, or jti) is enough to exchange a Facebook code and persist user and Page access tokens on the account named in state. There is no PKCE verifier, no one-time state store, and no check that the browser is the owner who called /oauth/start. A signed start URL is therefore a transferable capability: a Facebook admin who completes an attacker-started dialog binds their Page tokens to the attacker tenant, and a stolen owner start URL lets another Facebook user overwrite that tenant's stored Page connection. Staff JWTs are not accepted as state because they lack purpose=meta_oauth. Meta redirect_uri is taken from settings, not Host.",
+    "claimed_root_cause": "The callback trusts only decode_oauth_state on a SECRET_KEY HS256 JWT and then complete_oauth writes sealed Facebook tokens without session binding, PKCE, audience, or single-use state.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/facebook_routes.py",
+        "line": 114,
+        "scope": "facebook_oauth_callback",
+        "description": "Unauthenticated GET receives Facebook code and state and calls complete_oauth."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 85,
+        "scope": "decode_oauth_state",
+        "description": "jwt.decode verifies HS256 and exp with verify_aud False; only purpose, account_id, and user_id are checked."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 176,
+        "scope": "complete_oauth",
+        "description": "State account/user are loaded; is_owner is required, but no current Bearer or cookie is required."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 211,
+        "scope": "complete_oauth",
+        "description": "Facebook user and Page tokens are sealed onto the state-selected account and committed."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/facebook_routes.py",
+        "line": 114,
+        "description": "Callback route declares no Depends(get_current_user)."
+      },
+      {
+        "file": "backend/app/services/facebook_page.py",
+        "line": 73,
+        "description": "State claims are purpose, account_id, user_id, iat, exp; no aud, iss, jti, or nonce."
+      },
+      {
+        "file": "backend/app/services/facebook_page.py",
+        "line": 91,
+        "description": "decode options require exp and disable audience verification."
+      },
+      {
+        "file": "backend/app/services/meta_graph.py",
+        "line": 49,
+        "description": "oauth_dialog_url sends code flow without code_challenge."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 46,
+        "description": "Staff access tokens use the same SECRET_KEY and also set verify_aud False, but omit purpose."
+      },
+      {
+        "file": "backend/tests/test_facebook_page.py",
+        "line": 408,
+        "description": "Unit test completes OAuth and stores a Page token using only code and state."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox and no parent scratch-promotion procedure, so target code was not executed.",
+      "Facebook authorization-code single-use, consent-screen behavior, and the deployed Meta Valid OAuth Redirect URIs list are not observable from source."
+    ],
+    "validation_plan": {
+      "local": "With Graph helpers mocked as in test_oauth_callback_stores_encrypted_page_token, GET the callback without Authorization using encode_oauth_state for account A and a dummy code; assert A receives the sealed tokens. Repeat with a staff JWT as state and expect 400. Repeat with account A state while the TestClient is authenticated as a different user and assert tokens still land on A.",
+      "deployment": "Owner compares META_OAUTH_REDIRECT_URI to the Meta app allowlist and confirms Facebook will not send a code to any other URI. Confirm production sets PUBLIC_WEB_ORIGIN so the post-callback 302 is not the first CORS origin by accident."
+    },
+    "_hunter": "hunter-facebook"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "facebook.calendar.auto-approve.non-owner-trigger",
+    "title": "Catalogger snapshot ingest publishes to the Page when calendar_auto_approve is on",
+    "description": "HTTP preview, publish, Approve, and Post now call require_facebook_poster and publish_posts refuses confirm=false. force does not drop those gates. A parallel path does: if the owner has set facebook_calendar_auto_approve, sync_facebook_calendar_after_snapshot selects the first owner user and calls publish_posts or the in-memory poster thread with confirm=True. POST /integrations/engagement/snapshots is available to any authenticated account member and always runs that sync, so a catalogger can choose Push items in a snapshot and cause Page schedule/publish without the owner confirm click. PATCH /integrations/facebook/settings is owner-only but also syncs every engagement sale as soon as the flag is enabled.",
+    "claimed_root_cause": "calendar_auto_approve hard-codes confirm=True as a synthetic owner and is triggered by catalogger-reachable snapshot ingest, bypassing require_facebook_poster on the publish routes.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/engagement_routes.py",
+        "line": 28,
+        "scope": "ingest_engagement_snapshot",
+        "description": "Any authenticated account member can POST a watcher snapshot; there is no owner gate."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/engagement_store.py",
+        "line": 242,
+        "scope": "apply_engagement_snapshot",
+        "description": "After commit, every snapshot calls sync_facebook_calendar_after_snapshot."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_calendar.py",
+        "line": 698,
+        "scope": "sync_facebook_calendar_after_snapshot",
+        "description": "When facebook_calendar_auto_approve is true, the first owner is loaded and pending slots are published with confirm=True."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 747,
+        "scope": "publish_posts",
+        "description": "create_page_feed_post runs under the synthetic owner without a new HTTP confirm from that owner."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 58,
+        "description": "can_manage_integrations is owner-only; that is the HTTP Facebook poster gate."
+      },
+      {
+        "file": "backend/app/services/facebook_page.py",
+        "line": 589,
+        "description": "publish_posts returns 400 unless confirm is true."
+      },
+      {
+        "file": "backend/app/services/facebook_calendar.py",
+        "line": 740,
+        "description": "Auto-approve passes confirm=True into the background poster."
+      },
+      {
+        "file": "backend/app/facebook_routes.py",
+        "line": 178,
+        "description": "Enabling the setting immediately syncs every engagement sale."
+      },
+      {
+        "file": "backend/app/facebook_post_tasks.py",
+        "line": 146,
+        "description": "The background runner does not call require_facebook_poster before publish_posts."
+      },
+      {
+        "file": "backend/tests/test_facebook_page.py",
+        "line": 626,
+        "description": "Catalogger preview and POST /facebook/posts return 403."
+      },
+      {
+        "file": "backend/tests/test_facebook_page.py",
+        "line": 932,
+        "description": "Turning calendar_auto_approve on causes Graph feed calls without a per-slot confirm body."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox, so the catalogger-snapshot plus auto-approve path was not executed.",
+      "Whether the deployed watcher/extension uses a catalogger token for POST /integrations/engagement/snapshots is not source-provable."
+    ],
+    "validation_plan": {
+      "local": "Using the existing TestClient fixtures, connect a Page, set calendar_auto_approve as owner, then authenticate as a catalogger and POST /integrations/engagement/snapshots for a future Push lot with Graph feed mocked. Expect create_page_feed_post to run and a scheduled FacebookPagePost row to appear. Repeat with the flag false and expect no feed call.",
+      "deployment": "Owner confirms which staff role the live watcher ingest uses and whether auto-approve is enabled on production accounts."
+    },
+    "_hunter": "hunter-facebook"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "facebook.crypto.xor-import-fallback",
+    "title": "Facebook and CT Seller sealing fall open to SECRET_KEY XOR when Fernet import fails",
+    "description": "seal_facebook_secret intends Fernet with a key derived from META_TOKEN_ENCRYPTION_KEY or SECRET_KEY. If cryptography cannot be imported, it writes xor: plus a repeating XOR of sha256(meta-page:SECRET_KEY), ignoring META_TOKEN_ENCRYPTION_KEY. unseal_facebook_secret always decrypts xor: blobs with that SECRET_KEY material even when Fernet is available. ctseller.seal_secret has the same ImportError fallback; its XOR key is sha256(SECRET_KEY) without the ctseller: prefix used by Fernet. Dockerfiles install cryptography>=42.0.0, so the branch is a fail-open for a missing or broken import rather than the default image path. API schemas do not return unsealed tokens.",
+    "claimed_root_cause": "Token seal functions catch ImportError and persist unauthenticated XOR under a xor: prefix keyed from SECRET_KEY, and unseal accepts that prefix unconditionally.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 211,
+        "scope": "complete_oauth",
+        "description": "Fresh Facebook user and Page tokens are passed to seal_facebook_secret before commit."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_crypto.py",
+        "line": 20,
+        "scope": "seal_facebook_secret",
+        "description": "Fernet is attempted with sha256(meta-page: dedicated-or-SECRET_KEY)."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/facebook_crypto.py",
+        "line": 28,
+        "scope": "seal_facebook_secret",
+        "description": "ImportError stores xor: ciphertext derived only from SECRET_KEY."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/facebook_crypto.py",
+        "line": 14,
+        "description": "Fernet key uses META_TOKEN_ENCRYPTION_KEY when set; XOR does not."
+      },
+      {
+        "file": "backend/app/services/facebook_crypto.py",
+        "line": 38,
+        "description": "unseal always handles xor: with SECRET_KEY material."
+      },
+      {
+        "file": "backend/app/services/ctseller.py",
+        "line": 91,
+        "description": "CT Seller secrets use the same ImportError XOR fallback."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 177,
+        "description": "Comments document optional META_TOKEN_ENCRYPTION_KEY with SECRET_KEY derivation."
+      },
+      {
+        "file": "requirements.txt",
+        "line": 20,
+        "description": "cryptography is a declared dependency."
+      },
+      {
+        "file": "infra/docker/Dockerfile.api",
+        "line": 10,
+        "description": "API image pip-installs requirements.txt, including cryptography."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox, so ImportError was not forced at runtime.",
+      "Whether every deployed process (Railway API, worker, and any non-Docker host) can import cryptography is not source-provable."
+    ],
+    "validation_plan": {
+      "local": "Monkeypatch cryptography.fernet import to raise ImportError, call seal_facebook_secret and ctseller.seal_secret with dummy strings, assert xor: prefixes, then unseal and compare. Set META_TOKEN_ENCRYPTION_KEY to a distinct dummy and assert Facebook XOR still follows SECRET_KEY. Restore the import and assert Fernet output has no xor: prefix.",
+      "deployment": "Owner runs a one-shot import cryptography check in the production API and worker images and confirms no xor: rows exist on accounts.facebook_*_enc or CT Seller secret columns."
+    },
+    "_hunter": "hunter-facebook"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "gemini.engagement.untrusted-item-url-caption-sink",
+    "title": "Watcher item_url is stored unsanitized and deterministically copied into Gemini Facebook captions",
+    "description": "A catalogger (Watcher JWT on the same account) can POST /integrations/engagement/snapshots with an arbitrary item_url and auction_url. Those strings are stored, preferred over constructed CT Bids URLs, concatenated unlabeled into the Gemini Flash caption prompt, and then appended to the caption by arrange_facebook_caption / template_caption even if the model ignores them. normalize_ctbids_sale_url will also turn https://attacker.example/estate-sale/1/item/2 into a See the whole sale line on that host. Attacker is the catalogger. Affected principal is the account owner (Gemini caption spend and the Page caption the owner later posts). Execution identity is the API process holding GOOGLE_API_KEY and, if facebook_calendar_auto_approve is on, the Page token as a synthetic owner. This is not a claim that cataloggers bypass the Facebook owner publish gate (peer hunter-facebook); the code-level failure is the missing URL allowlist plus the deterministic caption sink.",
+    "claimed_root_cause": "Engagement ingest accepts unconstrained http(s) item_url/auction_url and later caption builders treat snapshot.item_url as the lot link without a CT Bids host check.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/engagement_routes.py",
+        "line": 28,
+        "scope": "ingest_engagement_snapshot",
+        "description": "Any authenticated non-client account member can POST a snapshot; there is no owner or Facebook-poster check."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/engagement_store.py",
+        "line": 214,
+        "scope": "apply_engagement_snapshot",
+        "description": "item_url is stored as (item.item_url or '')[:600] with no scheme or host validation."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_page.py",
+        "line": 317,
+        "scope": "ctbids_lot_url",
+        "description": "A non-empty snapshot.item_url replaces the constructed ctbids.com sale/item URL."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/facebook_caption.py",
+        "line": 412,
+        "scope": "_draft_with_gemini",
+        "description": "Lot link and sale link are interpolated into the Flash user prompt without an untrusted label."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/facebook_caption.py",
+        "line": 214,
+        "scope": "arrange_facebook_caption",
+        "description": "The stored lot_url is appended to the caption after any model or template body, so the Watcher URL reaches the text that preview, publish, and auto-approve consume."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/schemas.py",
+        "line": 1036,
+        "description": "EngagementItemIn.item_url is str with extra=forbid only; not HttpUrl and not host-limited."
+      },
+      {
+        "file": "backend/app/services/ctbids_urls.py",
+        "line": 16,
+        "description": "normalize_ctbids_sale_url strips /item/ but never requires ctbids.com."
+      },
+      {
+        "file": "backend/app/services/facebook_calendar.py",
+        "line": 579,
+        "description": "_draft_item calls draft_facebook_caption with ctbids_lot_url(lot, snapshot=snapshot)."
+      },
+      {
+        "file": "backend/app/services/facebook_calendar.py",
+        "line": 698,
+        "description": "If facebook_calendar_auto_approve is set, snapshot ingest drafts and publishes as the first owner user; publish auth is peer-owned."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox and no parent scratch-promotion procedure; this run forbids target execution, so template_caption/arrange_facebook_caption were not executed against a dummy URL.",
+      "Whether a production owner enabled facebook_calendar_auto_approve is a deployment fact; the URL-to-caption sink does not depend on it."
+    ],
+    "validation_plan": {
+      "local": "In an isolated fixture with GOOGLE_API_KEY unset (template path) or a mocked generate_content, call apply_engagement_snapshot with item_url=https://evil.example/estate-sale/9/item/8, then ctbids_lot_url and arrange_facebook_caption/template_caption. Observe the caption containing that host and a See the whole sale line derived from it. Do not call Meta or live Gemini.",
+      "deployment": "Owner confirms whether calendar auto-approve is enabled; if it is, treat snapshot ingest as also a Facebook publish confused-deputy under the Facebook owner-gate unit."
+    },
+    "_hunter": "hunter-gemini"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "gemini.jobs.uncapped-batch-queue-spend",
+    "title": "Client and catalogger can stack uncapped batch catalog jobs on the shared operator Gemini key",
+    "description": "Catalog /jobs/{id}/run is intentionally allowed for catalogger and client on their jobs. The missing bound is cardinality, not the run permission. POST /jobs/upload defaults to single_lot_mode=false, and the 40-photo CT Bids cap is skipped for batch mode and for facebook listing_channel. upload-files repeats that single-lot-only cap. One /run then Flash-triages every file (plus tape-verify and a Pro author pass per tape segment) using the process-wide GOOGLE_API_KEY. Callers can also enqueue an unbounded number of jobs; only catalog_job_max_concurrent (default 1) and gemini_global_concurrency (default 3, shared across tenants) limit in-flight work. Attacker is a client or catalogger. Affected principal is the operator Gemini bill and other tenants waiting on the global Gemini semaphore. Execution identity is the API/worker with the operator key.",
+    "claimed_root_cause": "Photo-count enforcement is tied to single_lot_mode plus non-facebook channel, and there is no per-account job-count or Gemini token/$ quota on the shared key.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5362,
+        "scope": "create_job_from_upload",
+        "description": "Authenticated client or staff uploads files; single_lot_mode defaults false; the 40-photo reject runs only for single-lot non-facebook jobs."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 5467,
+        "scope": "upload-files",
+        "description": "Appending files applies CTBIDS_MAX_PHOTOS_PER_LOT only when the job is already single_lot_mode."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 5546,
+        "scope": "run_job",
+        "description": "Client or catalogger may start their job; no spend quota is checked before queueing Gemini work."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/processing.py",
+        "line": 567,
+        "scope": "_process_job_batch_pipeline",
+        "description": "Every uploaded image is sent through triage_ordered_photo_batch (one Flash call per file) before per-segment Pro inventory, billed to the operator key."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 111,
+        "description": "Clients may POST /jobs/{id}/run and /jobs/upload."
+      },
+      {
+        "file": "backend/app/catalog_limits.py",
+        "line": 9,
+        "description": "The only catalog photo cap is CTBIDS_MAX_PHOTOS_PER_LOT=40, used solely for single-lot CT Seller uploads."
+      },
+      {
+        "file": "backend/app/upload_storage.py",
+        "line": 30,
+        "description": "save_uploaded_files has no maximum file count."
+      },
+      {
+        "file": "backend/app/job_tasks.py",
+        "line": 108,
+        "description": "can_start_job_for_account only caps concurrent running jobs, not queued jobs or tokens."
+      },
+      {
+        "file": "backend/app/core/gemini_slots.py",
+        "line": 25,
+        "description": "gemini_slot is a process-wide semaphore (default 3) shared by all accounts."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox; executing /jobs/upload and /run would spend the real operator Gemini key or require a mocked pipeline that was not run.",
+      "Deployed Google Cloud/Gemini project quotas, Railway body-size limits, and reverse-proxy request limits are not source-visible."
+    ],
+    "validation_plan": {
+      "local": "With Gemini and R2 mocked, POST /jobs/upload single_lot_mode=false with 41 tiny JPEGs, then POST /jobs/{id}/run. Assert HTTP 200 and that process_job/triage receives 41 paths. Repeat upload+run to show a second queued job is stored. Do not call live Gemini.",
+      "deployment": "Owner checks whether an upstream proxy already rejects large multipart batches and whether the billed Gemini project has a hard daily cap that would contain a stacked client."
+    },
+    "_hunter": "hunter-gemini"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "gemini.pro-search.missing-owner-gate",
+    "title": "Pro plus Google Search is owner-gated only on audience hunt, not appraiser or grounded catalog valuation",
+    "description": "roles.can_run_audience_hunt documents that Pro tokens are owner-only, and hunt routes enforce that. Two other Pro+Search sinks do not. When ENABLE_APPRAISER is true, a catalogger (not client; path is outside the client allowlist) can POST /appraiser/checks with photos and an unlabeled scene_note; run_appraisal_research enables Google Search on Gemini Pro. When ENABLE_GROUNDED_VALUATION is true, the catalog Pro author call used by client-runnable /jobs/{id}/run also attaches Google Search. Attacker is a catalogger (appraiser) or client (valuation-on catalog). Affected principal is the operator Gemini Pro+Search bill. Execution identity is pipeline._get_client using the operator GOOGLE_API_KEY. This is an unauthorized-tool / quota-scope failure, not prompt injection.",
+    "claimed_root_cause": "The owner-only Pro+Search control is implemented only on audience-hunt routes; appraiser and ENABLE_GROUNDED_VALUATION reuse the same client and tool without that role check.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 6222,
+        "scope": "create_appraisal_check",
+        "description": "Any authenticated member of the sale can start an appraisal when ENABLE_APPRAISER is true; can_run_audience_hunt is not consulted."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/pipeline/appraiser.py",
+        "line": 64,
+        "scope": "run_appraisal_research",
+        "description": "Caller scene_note is concatenated as Scene note from appraiser and Search is enabled on Pro."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/pipeline_integration.py",
+        "line": 75,
+        "scope": "_sync_pipeline_env_from_settings",
+        "description": "ENABLE_GROUNDED_VALUATION is copied into the pipeline process environment for catalog jobs."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/pipeline/pipeline.py",
+        "line": 1211,
+        "scope": "Pro author generate_content",
+        "description": "When that flag is set, the catalog Pro call adds tools=[GoogleSearch()], reachable from client /jobs/{id}/run."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 74,
+        "description": "Comment and implementation: audience hunt burns Pro tokens \u2014 owners only."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5123,
+        "description": "Hunt routes call _require_can_run_audience_hunt; appraiser routes do not."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 110,
+        "description": "enable_grounded_valuation and enable_appraiser default false; both are env-enabled operator flags."
+      },
+      {
+        "file": "backend/app/services/appraisal.py",
+        "line": 45,
+        "description": "run_field_appraisal is invoked with stored scene_note and photos; usage is billed Pro tokens."
+      }
+    ],
+    "blockers": [
+      "Both features default off; whether production sets ENABLE_APPRAISER or ENABLE_GROUNDED_VALUATION is a deployment fact required for reachability.",
+      "No sandbox; Pro+Search must not be invoked against the live key to measure spend."
+    ],
+    "validation_plan": {
+      "local": "With flags forced true in a dummy settings object and genai.Client mocked, assert create_appraisal_check as role=catalogger reaches run_appraisal_research with GoogleSearch, and that a client /jobs/{id}/run path builds GenerateContentConfig with tools when ENABLE_GROUNDED_VALUATION=1. Assert the same catalogger cannot POST /lots/{id}/audience-hunt.",
+      "deployment": "Owner inspects Railway/API env for ENABLE_APPRAISER and ENABLE_GROUNDED_VALUATION."
+    },
+    "_hunter": "hunter-gemini"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "gemini.hunt.unlabeled-listing-search-args",
+    "title": "Audience-hunt listing text is unlabeled and can steer unconstrained Google Search arguments",
+    "description": "Owners alone may start hunts. The hunt still concatenates catalogger- or model-written Title, SKU, Description, Specs, and pickup city into the Pro+Search user prompt with no untrusted delimiter. The Search tool has no handler-side query or URL allowlist. _safe_public_url persists any http(s) group URL, including internal hosts, onto the lot; recommend_hold can set audience_hold and skip CT Seller posts. Attacker is a catalogger (or client photos that became listing text) who does not run the hunt. Affected principal is the owner who requested find groups (Search spend and stored URLs/hold) under the operator Gemini identity. Code does not implement a server-side fetch of those URLs. Whether Google Search grounding will fetch a listing-supplied internal URL is not source-visible.",
+    "claimed_root_cause": "Lot fields are interpolated as trusted labeled lines into a Google Search tool call with no query/URL allowlist, and hunt JSON URLs are stored after only a javascript:/data: filter.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5115,
+        "scope": "hunt_lot_audience",
+        "description": "Owner starts a hunt on a lot whose title/description/SKU may have been written by a catalogger or prior Gemini catalog."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 451,
+        "scope": "_lot_research_text",
+        "description": "Listing fields are formatted as Title/SKU/Description/Specs with no untrusted wrapper."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 575,
+        "scope": "run_audience_research_and_structure",
+        "description": "Research GenerateContentConfig attaches tools=[GoogleSearch()] with no argument validation."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 205,
+        "scope": "_safe_public_url",
+        "description": "Model-chosen group URLs are stored if they start with http:// or https://; internal hosts are not excluded. recommend_hold may set audience_hold."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 511,
+        "description": "audience_research_prompt embeds _lot_research_text after operational instructions."
+      },
+      {
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 662,
+        "description": "payload recommend_hold true sets lot.audience_hold without a separate owner confirm object."
+      },
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 76,
+        "description": "Hunt start remains owner-only; the gap is tool-argument binding, not the route gate."
+      }
+    ],
+    "blockers": [
+      "Gemini Google Search tool argument schema and whether grounding fetches listing-supplied URLs (including RFC1918 or metadata hosts) is a provider behavior not present in this repository.",
+      "No sandbox; live Search must not be invoked."
+    ],
+    "validation_plan": {
+      "local": "Unit-test _safe_public_url and parse_audience_payload with http://127.0.0.1/, http://169.254.169.254/, and https://facebook.com/groups/x. Assert internal hosts are currently kept. With a mocked generate_content, set lot.auction_title to a string containing an internal URL and assert the research prompt contains that string next to the Search tool config.",
+      "deployment": "Owner reviews Gemini Search grounding logs for one hunt on a dummy lot whose description contains a non-public URL, without targeting real internal services."
+    },
+    "_hunter": "hunter-gemini"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "backend.app.main.create_job.input_folder.missing-upload-root-chroot",
+    "title": "POST /jobs stores an un-chrooted input_folder that process_job rglobs into Gemini and the caller's catalog",
+    "description": "An authenticated catalogger or owner can POST /jobs with an arbitrary input_folder. Unlike POST /jobs/{id}/upload-files, create_job does not require that path to sit under UPLOAD_ROOT/{account_id}. The row is inserted as queued, so the catalog worker can claim it without a separate unsafe /run trick. process_job then Path.rglob-s image suffixes, may rewrite files in that tree, copies them into catalog/{job.account_id}, and sends them to Gemini. The job row's account_id filter only authorizes who may own the job; it does not isolate the filesystem or R2 batch key. A path equal to the shared upload root or catalog/ subtree therefore selects other tenants' on-disk images. A path shaped as upload_root/{victim_account}/{victim_batch} makes parse_batch_folder restore that tenant's job-batches/ objects using worker R2 credentials.",
+    "claimed_root_cause": "CreateJobRequest.input_folder is persisted and later used as a filesystem and R2-namespace selector without the account upload-root chroot that _queued_job_upload_folder already implements, and parse_batch_folder derives tenant from that path rather than from ProcessingJob.account_id.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5506,
+        "scope": "create_job",
+        "description": "After blocking clients and binding sale_id via _sale_for_user, the handler writes payload.input_folder onto ProcessingJob with status=queued and no UPLOAD_ROOT/account_id relative_to check."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/main.py",
+        "line": 5585,
+        "scope": "run_job",
+        "description": "POST /jobs/{id}/run resolves the job by id and account_id, then uses Path(job.input_folder) for R2 staging with no second chroot. create_job already queued the row, so app.worker can also claim it."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/job_batch_storage.py",
+        "line": 32,
+        "scope": "parse_batch_folder",
+        "description": "account_id and batch_id are taken from the first two path components under upload_root(), not from the job row, then used as the R2 prefix job-batches/{account}/{batch}/."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/processing.py",
+        "line": 882,
+        "scope": "_process_job_body",
+        "description": "folder.rglob('*') collects IMAGE_EXTS under the attacker-chosen directory; _add_catalog_photo persists copies under job.account_id and the pipeline sends frames to Gemini."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 5428,
+        "description": "_queued_job_upload_folder is the sibling control: resolve job.input_folder and relative_to(UPLOAD_ROOT/account_id), used only by upload-files, not by create_job."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5747,
+        "description": "delete_job only rmtree when the resolved folder is under UPLOAD_ROOT, so destructive cleanup is chrooted while catalog read is not."
+      },
+      {
+        "file": "backend/app/services/processing.py",
+        "line": 173,
+        "description": "_add_catalog_photo calls persist_catalog_photo(job.account_id, photo_path), copying whatever rglob selected into the caller's catalog namespace."
+      },
+      {
+        "file": "backend/app/services/image_preprocess.py",
+        "line": 203,
+        "description": "normalize_job_folder_image writes re-encoded bytes back under job_folder, so a path into another tenant's batch or catalog directory is a write as well as a read."
+      },
+      {
+        "file": "frontend/app/dashboard/page.tsx",
+        "line": 4819,
+        "description": "Dashboard enqueueJob JSON-posts the Staff server-path text field as input_folder, documenting that the API is expected to accept a raw host path."
+      },
+      {
+        "file": "infra/docker/Dockerfile.api",
+        "line": 16,
+        "description": "Image layout is /app/backend/data/uploads (WORKDIR /app, uvicorn from backend), so the upload-root and catalog/ trees are a source-visible absolute layout on API and worker images."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced empty-allowlist sandbox; hunters must not execute target code, so rglob, R2 restore, persist_catalog_photo, and Gemini were not observed on dummy tenants.",
+      "No trusted parent-side scratch promotion procedure, so no local fixture artifact can be retained.",
+      "Whether a given Railway worker disk currently holds catalog/{other_account} files, and whether R2 list/get on job-batches/* succeeds for a path-derived other account, is a deployment fact outside this source review."
+    ],
+    "validation_plan": {
+      "local": "In an isolated dummy two-account fixture with Gemini and R2 mocked, create catalog JPEGs under upload_root/catalog/{B} and a job-batch under upload_root/{B}/{batch}. As catalogger A, insert a ProcessingJob via the create_job request body with input_folder pointing at B's catalog directory and at B's batch directory. Invoke process_job. Confirm A's Photo rows receive B's pixels, B's files may be re-encoded, and restore_job_folder_from_r2 is invoked with job-batches/{B}/{batch}/ rather than A's id. Do not use production data or network.",
+      "deployment": "Owner-observed: inspect one worker replica's backend/data/uploads/catalog layout after mixed-tenant jobs, and confirm application-side R2 list is not additionally scoped by ProcessingJob.account_id. Do not probe a live customer tenant."
+    },
+    "_hunter": "hunter-jobs"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "backend.app.upload_storage.save_uploaded_files.unbounded-multipart-buffer",
+    "title": "Catalog multipart ingest buffers entire parts in the shared API process with no photo byte cap",
+    "description": "Restricted clients and staff upload photos through POST /jobs/upload and POST /jobs/{id}/upload-files into save_uploaded_files, which await-reads each UploadFile fully, optionally runs Pillow, writes the bytes, and mirrors to R2. catalog_limits defines MAX_VIDEO_BYTES and a 40-photo CTBids cap, but no photo-byte ceiling, and the 40-file cap applies only in single_lot_mode. Lot video upload does have an 80 MiB cap, but only after the entire part is already in memory. FastAPI is constructed with default options (no request-size limit in source). Concurrent saves use a semaphore of 12, so several large parts occupy RAM together on the single API process that also serves other tenants' dashboard and pool checkouts.",
+    "claimed_root_cause": "Multipart handlers treat UploadFile.read() as the size gate: photos never have a byte budget, and videos check MAX_VIDEO_BYTES only after the full buffer exists. There is no source-visible Starlette/FastAPI max body, per-request file-count cap for batch jobs, or streaming discard.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5400,
+        "scope": "create_job_from_upload",
+        "description": "Authenticated client or catalogger posts files: list[UploadFile] with no length or byte Form constraint; CTBIDS_MAX_PHOTOS_PER_LOT applies only when single_lot_mode is true."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/upload_storage.py",
+        "line": 50,
+        "scope": "save_uploaded_files._save_one",
+        "description": "body = await uf.read() materializes the entire part. concurrency=12 gather runs many such reads. Pillow compress runs after this allocation; non-image names skip compress and keep raw bytes."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/upload_storage.py",
+        "line": 90,
+        "scope": "save_uploaded_files._save_one",
+        "description": "target.write_bytes(body) plus mirror_local_file_to_r2 retain the object on local disk and operator-owned R2. The same process hosts other tenants' HTTP and QueuePool."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/catalog_limits.py",
+        "line": 13,
+        "description": "MAX_VIDEO_BYTES is the only ingest byte constant; there is no MAX_PHOTO_BYTES. CTBIDS_MAX_PHOTOS_PER_LOT is a listing count, not a transfer-size cap."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 3825,
+        "description": "upload_lot_videos does raw = await file.read() then lot_video_size_error(len(raw)), so the advertised 80 MiB bound is after unbounded buffering."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 284,
+        "description": "app = FastAPI(title=settings.app_name) installs no max request size, body limit, or upload middleware."
+      },
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 95,
+        "description": "client_http_allowed includes POST /jobs/upload, so the unbounded buffer is reachable by the client role, not only owners."
+      },
+      {
+        "file": "frontend/app/dashboard/page.tsx",
+        "line": 129,
+        "description": "UPLOAD_FILE_CHUNK = 48 is a browser timeout workaround, not an API cardinality or byte limit; additional chunks append to the same job."
+      }
+    ],
+    "blockers": [
+      "No sandbox or target execution, so peak RSS and disk growth were not measured with a small oversized fixture.",
+      "Railway/proxy/client_max_body_size and platform multipart limits are not declared in this repository; an upstream cap would change shared impact and must be owner-observed.",
+      "Paid R2 put and Gemini spend from a huge accepted batch were not exercised (mocked-only local check required)."
+    ],
+    "validation_plan": {
+      "local": "With Gemini and R2 mocked and strict process memory/time limits, post one oversize JPEG and one oversize non-image part to save_uploaded_files / create_job_from_upload, and one oversize video to upload_lot_videos. Observe that photo parts are fully buffered with no 413, and that video rejection happens only after len(raw) is known. Repeat with a large files list while single_lot_mode is false. Do not stress a shared host beyond the fixture limit.",
+      "deployment": "Owner-observed: record whether Railway/ingress enforces a request body ceiling in front of the API service, and whether that ceiling applies to multipart parts before uvicorn allocates them. Do not flood the production API."
+    },
+    "_hunter": "hunter-jobs"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.sse.access-token-query",
+    "title": "Staff JWT placed in EventSource and upload query strings",
+    "description": "A lower-trust observer of API/proxy access logs or the HTTP request target can recover a staff JWT. The dashboard EventSource URL includes access_token= the live token. The same Query parameter authenticates SSE and catalog upload routes. Tokens last up to 30 days by default and are not revoked on password change.",
+    "claimed_root_cause": "get_current_user_sse accepts Query access_token as equivalent to Authorization Bearer, and the dashboard EventSource puts that JWT in the URL. Default uvicorn process logging records the request query.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "frontend/app/dashboard/page.tsx",
+        "line": 3159,
+        "scope": "dashboard EventSource URL",
+        "description": "Browser builds /jobs/{id}/events?access_token= plus the staff JWT and opens EventSource on it."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 96,
+        "scope": "get_current_user_sse Query parameter",
+        "description": "FastAPI Query access_token is documented as the EventSource JWT and is optional beside HTTP Bearer."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/auth.py",
+        "line": 105,
+        "scope": "query token consumed as session",
+        "description": "Query value is OR'd with Bearer credentials and passed to user_from_access_token, minting a full User principal for SSE and for POST /jobs/upload and /jobs/{id}/upload-files."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "frontend/app/dashboard/page.tsx",
+        "line": 3159,
+        "description": "EventSource URL concatenates encodeURIComponent(token) into query access_token."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 105,
+        "description": "token = Bearer credentials or stripped access_token query; empty raises 401."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5784,
+        "description": "job_events_sse Depends(get_current_user_sse) and documents query access_token."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 5364,
+        "description": "create_job_from_upload Depends(get_current_user_sse), so query JWT also authorizes multipart catalog upload."
+      },
+      {
+        "file": "Procfile",
+        "line": 3,
+        "description": "Production API is uvicorn app.main:app without --no-access-log."
+      },
+      {
+        "file": "infra/docker/Dockerfile.api",
+        "line": 22,
+        "description": "Container CMD also launches uvicorn without disabling access logs."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the required OS sandbox with dummy tenants, mint a JWT via TestClient, GET /jobs/{id}/events?access_token=dummy and POST /jobs/upload?access_token=dummy, confirm the query door authenticates, and capture the uvicorn access-log request target containing the access_token query name (redact token values).",
+      "deployment": "Owner inspects existing Railway/API access-log settings and any retained /jobs/*/events?access_token= lines; do not replay live tokens or probe production."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.health.upload-root-disclosure",
+    "title": "Unauthenticated /health discloses catalog upload root and disk inventory",
+    "description": "An anonymous caller of GET /health receives the absolute catalog upload filesystem path, a count of catalog images on disk, whether R2 is configured, and Gemini model names. That is more than a liveness probe and maps internal layout used by catalog storage. The handler also walks the upload tree (capped at 200000 files) with no auth.",
+    "claimed_root_cause": "health() is unauthenticated and serializes upload_root() and _count_catalog_image_files() into HealthResponse, unlike production path redaction used for job input_folder.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 851,
+        "scope": "GET /health",
+        "description": "Anonymous health route with no Depends authentication."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/catalog_storage.py",
+        "line": 20,
+        "scope": "upload_root",
+        "description": "upload_root() resolves backend/data/uploads to an absolute Path."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 860,
+        "scope": "HealthResponse.catalog_upload_root",
+        "description": "Handler returns catalog_upload_root=str(root), image file count, r2 flag, and model names to the anonymous client."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 851,
+        "description": "@app.get(\"/health\") has no current-user dependency."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 860,
+        "description": "catalog_upload_root is the raw absolute path string, not public_job_input_folder."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 861,
+        "description": "catalog_image_files_on_disk calls _count_catalog_image_files() on every anonymous request."
+      },
+      {
+        "file": "backend/app/schemas.py",
+        "line": 17,
+        "description": "HealthResponse includes catalog_upload_root, catalog_image_files_on_disk, and catalog_r2_configured."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 247,
+        "description": "public_job_input_folder redacts absolute paths in production for jobs only; health does not call it."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox, TestClient GET /health without Authorization and record that catalog_upload_root is an absolute path and catalog_image_files_on_disk is present.",
+      "deployment": "Owner compares a liveness probe they already use with the JSON fields returned by their API /health; do not scan production disks beyond that observation."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.fastapi.default-docs",
+    "title": "Default FastAPI /docs /redoc /openapi.json left enabled",
+    "description": "Anonymous callers can load Swagger and the OpenAPI document for the full authenticated API, including admin, CT Seller, Facebook, catalog upload, and the access_token query parameter. No production gate disables docs.",
+    "claimed_root_cause": "FastAPI() is constructed with defaults only; docs_url/redoc_url/openapi_url are never set to None.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 284,
+        "scope": "FastAPI constructor",
+        "description": "app = FastAPI(title=settings.app_name) with no docs_url override."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 284,
+        "scope": "framework default OpenAPI routes",
+        "description": "Unset docs_url/redoc_url/openapi_url means FastAPI serves /docs, /redoc, and /openapi.json to unauthenticated clients."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 284,
+        "description": "FastAPI app created without disabling OpenAPI UI or schema."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 96,
+        "description": "OpenAPI will advertise Query access_token on SSE/upload auth because it is a documented Query parameter."
+      },
+      {
+        "file": "requirements.txt",
+        "line": 4,
+        "description": "fastapi>=0.115.0 still enables /docs by default when docs_url is omitted."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox, TestClient GET /openapi.json, /docs, and /redoc without auth and expect 200 plus paths for /admin/accounts and /jobs/{job_id}/events.",
+      "deployment": "Owner notes whether their deployed API still serves /docs and /openapi.json; do not enumerate live customer data."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.auth.open-registration-fail-open",
+    "title": "Open registration defaults on and mints owner JWTs",
+    "description": "POST /auth/register is public. The production close-gate requires both ENVIRONMENT=production and ALLOW_OPEN_REGISTRATION=false. The setting defaults true, .env.example leaves it true, and DEPLOY.md treats closing signup as a post-bootstrap step. A successful call creates an owner tenant and returns an access JWT. The web UI always exposes Register.",
+    "claimed_root_cause": "allow_open_registration defaults True and register only 403s when is_production and that flag is false, so a production deploy that omits the flag keeps anonymous owner-JWT minting.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 866,
+        "scope": "POST /auth/register",
+        "description": "Unauthenticated register endpoint."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 145,
+        "scope": "ALLOW_OPEN_REGISTRATION default",
+        "description": "allow_open_registration Field default True; production_must_be_safe does not require it false."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 893,
+        "scope": "owner JWT issuance",
+        "description": "After creating Account, owner User, and General sale, register returns create_access_token for that owner."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 868,
+        "description": "403 only if is_production and not allow_open_registration."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 145,
+        "description": "ALLOW_OPEN_REGISTRATION defaults True with comment to set true only to bootstrap."
+      },
+      {
+        "file": "backend/.env.example",
+        "line": 15,
+        "description": "Example env sets ALLOW_OPEN_REGISTRATION=true."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 52,
+        "description": "Deploy table says default true and to set false after the first real account."
+      },
+      {
+        "file": "frontend/app/page.tsx",
+        "line": 33,
+        "description": "Public login page posts /auth/register when mode is register."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 43,
+        "description": "create_access_token signs sub/account_id/role with HS256 and long default TTL."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox with dummy data, POST /auth/register in default development settings and expect 200+access_token; then monkeypatch is_production True and allow_open_registration False and expect 403.",
+      "deployment": "Owner reads the deployed ALLOW_OPEN_REGISTRATION and ENVIRONMENT values (Railway variables) without creating extra live accounts."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.auth.register-master-admin-email",
+    "title": "Register can claim MASTER_ADMIN_EMAILS before the operator user exists",
+    "description": "Master admin is not a DB role. Any authenticated User whose email is in MASTER_ADMIN_EMAILS passes _require_master_admin and can list/update all accounts. register does not reserve those emails, so during open registration an anonymous caller who knows an allowlisted address and registers it first becomes master admin.",
+    "claimed_root_cause": "is_master_admin_email is only an env email allowlist on the current user; register never rejects or pre-binds MASTER_ADMIN_EMAILS.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 883,
+        "scope": "register User insert",
+        "description": "New User is stored with payload.email and role owner with no master-admin reservation."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 114,
+        "scope": "is_master_admin_email",
+        "description": "Admin check is membership of stripped lowercased email in settings.master_admin_email_list()."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/main.py",
+        "line": 451,
+        "scope": "_require_master_admin",
+        "description": "Admin routes such as GET /admin/accounts authorize solely by that email match on the JWT-backed User."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 883,
+        "description": "register creates User(email=payload.email.lower(), role=owner) with no MASTER_ADMIN_EMAILS check."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 114,
+        "description": "is_master_admin_email compares email to the env allowlist only."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1237,
+        "description": "GET /admin/accounts is get_current_user plus _require_master_admin with no extra secret."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 147,
+        "description": "master_admin_emails defaults empty; when set, source does not create or lock those users."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox, set MASTER_ADMIN_EMAILS to a dummy unused address, POST /auth/register with that email, then GET /admin/accounts with the returned JWT and expect 200 listing other dummy accounts.",
+      "deployment": "Owner checks whether production MASTER_ADMIN_EMAILS addresses already exist as User rows and whether open registration is still enabled; do not register against production."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "unauth.auth.jwt-no-revocation",
+    "title": "Password change and team reset do not invalidate access JWTs",
+    "description": "Access tokens are stateless HS256 JWTs with no jti or server denylist. PATCH /auth/password and owner team-member reset update password_hash only. There is no logout. A stolen token remains valid until exp (default 30 days, max 90) after the password is changed. Account disable is checked at verification; password change is not.",
+    "claimed_root_cause": "User has no token_version; password-change and reset paths never rotate or revoke outstanding JWTs, and user_from_access_token only checks signature, exp, user row, and Account.is_active.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 929,
+        "scope": "PATCH /auth/password",
+        "description": "Authenticated password change rewrites password_hash and commits with no token revocation."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/models.py",
+        "line": 75,
+        "scope": "User session state",
+        "description": "User columns have no token_version, jti list, or password_changed_at used at verify time."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/auth.py",
+        "line": 56,
+        "scope": "user_from_access_token",
+        "description": "Pre-change JWTs still decode and load the same User until exp as long as the account is active."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 943,
+        "description": "change_own_password sets password_hash and db.commit only."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1035,
+        "description": "reset_team_member_password also only hashes the new password."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 70,
+        "description": "Verification loads User by id+account_id; no password-epoch or denylist check."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 150,
+        "description": "Default ACCESS_TOKEN_EXPIRE_MINUTES is 43200 (30 days), max 129600."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable"
+    ],
+    "validation_plan": {
+      "local": "In the OS sandbox, register a dummy user, save JWT A, PATCH /auth/password, then call GET /auth/me with JWT A and expect the intended 401 if revocation were implemented (source predicts 200).",
+      "deployment": "Owner confirms production has no extra API gateway JWT denylist; do not test with live staff tokens."
+    },
+    "_hunter": "hunter-unauth"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "r2.mgmt.catalogger-jwt-owner-documented-ops",
+    "title": "Catalogger JWT can invoke leftover owner-documented R2 migrate, ping, and CORS-read ops",
+    "description": "UI-less R2 management routes are authenticated but not owner-authorized. DEPLOY.md says POST /integrations/r2/migrate-catalog is account-owner ops. Sibling POST /integrations/r2/cors and can_manage_integrations require owner (cors also allows master-admin email). migrate_catalog_to_r2, r2_ping, and r2_cors_get stop at get_current_user. Clients are 403 via the HTTP allowlist. A same-account catalogger JWT can therefore (1) write and delete the shared-bucket key _health/r2-ping.txt through the API Account token, outside catalog/{account_id}/, (2) read the bucket-wide CORS rules and AllowedOrigins, and (3) start a local-to-R2 migrate of that account. Cross-tenant migrate still requires master-admin email. No handler was executed in this run.",
+    "claimed_root_cause": "Leftover R2 management handlers gate on get_current_user only, while the documented and sibling owner control (_require_owner / can_manage_integrations / POST cors is_owner check) is omitted, so a catalogger JWT exercises the shared-bucket credential for ping write, CORS read, and own-account migrate.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 1491,
+        "scope": "GET /integrations/r2/ping",
+        "description": "r2_ping depends on get_current_user only and then calls object_storage.ping when R2 vars are set."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 83,
+        "scope": "get_current_user",
+        "description": "JWT is bound to User via sub plus account_id; enforce_client_http runs, then the User is returned with no owner or can_manage_integrations check."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/roles.py",
+        "line": 84,
+        "scope": "client_http_allowed",
+        "description": "No /integrations/r2 path is allowlisted, so clients are 403; catalogger and owner are not clients and continue."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/object_storage.py",
+        "line": 167,
+        "scope": "ping",
+        "description": "ping put_bytes then delete_object on _health/r2-ping.txt using the API R2 identity; that key is not under catalog/{account_id}/."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "DEPLOY.md",
+        "line": 116,
+        "description": "Migrate is documented as POST /integrations/r2/migrate-catalog with auth as account owner and as an ops endpoint not shown in the Account UI."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1447,
+        "description": "migrate_catalog_to_r2 also Depends(get_current_user) only; is_owner is not called before migrate_local_photos_to_r2."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1506,
+        "description": "r2_cors_get is get_current_user only and returns CatalogR2CorsOut origins plus the raw bucket CORSRules."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1532,
+        "description": "Sibling POST /integrations/r2/cors requires is_owner(current) or is_master_admin_email before put_bucket_cors."
+      },
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 58,
+        "description": "can_manage_integrations is owner-only; leftover R2 GET/migrate handlers do not call it."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 430,
+        "description": "_require_owner exists and is used on other account-admin routes but is not invoked by migrate, ping, or GET cors."
+      },
+      {
+        "file": "backend/app/schemas.py",
+        "line": 657,
+        "description": "CatalogR2MigrateIn.account_id is commented as master admin only; owners always migrate their own account \u2014 the schema comment does not mention cataloggers, and the handler does not reject them."
+      },
+      {
+        "file": "backend/app/object_storage.py",
+        "line": 169,
+        "description": "The ping probe key is the literal _health/r2-ping.txt on the shared bucket."
+      }
+    ],
+    "blockers": [
+      "This run has no OS-enforced sandbox and forbids executing target code, so catalogger versus owner versus client status codes were not observed.",
+      "Whether a live tenant has catalogger users and R2 configured is an environment fact; this run must not call the public API or write the shared bucket.",
+      "No parent scratch-promotion procedure is available, so a local dummy-JWT check could not be recorded as an artifact."
+    ],
+    "validation_plan": {
+      "local": "In an isolated dummy two-role fixture with R2 mocked (put_bytes/delete_object/get_bucket_cors/migrate_local_photos_to_r2), mint catalogger, owner, and client JWTs. GET /integrations/r2/ping, GET /integrations/r2/cors, and POST /integrations/r2/migrate-catalog as each role. Confirm client is 403; record whether catalogger is 200 while POST /integrations/r2/cors is 403. Assert the mocked ping key is _health/r2-ping.txt. Do not use live R2 credentials.",
+      "deployment": "Owner-observed only: confirm leftover /integrations/r2/migrate-catalog, /ping, and GET /cors are still mounted and whether any catalogger is expected to call them. Do not invoke ping against the production bucket (it writes a shared key)."
+    },
+    "_hunter": "hunter-wave2-r2"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "r2.bucket.public-development-url-policy",
+    "title": "Catalog privacy depends on an unencoded private-bucket and r2.dev-off policy",
+    "description": "The app stores catalog/{account_id}/\u2026, job-batches/{account_id}/{batch_id}/\u2026, thumbs, and a leftover _health/r2-ping.txt object with no object ACL and serves staff browsers via GetObject presigns. DEPLOY.md tells operators to keep the bucket private and not enable Cloudflare's public development URL. No bucket policy, public-access block, or r2.dev toggle exists in source. If that dashboard switch (or a public custom domain / public-read ACL) is on, an anonymous caller can GET those keys without a JWT or presign. Keys are deterministic from account_id plus photo or batch id. R2 CORS AllowedOrigins come from cors_allow_origins (always includes localhost; stars dropped) and are not caller-chosen. Live ACL and public-URL state were not observed and must not be probed.",
+    "claimed_root_cause": "Object privacy is a Cloudflare bucket setting that source neither encodes nor enforces: puts omit ACL, reads assume presign-only access, and the documented private / no-public-development-URL control lives only in DEPLOY.md.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "DEPLOY.md",
+        "line": 120,
+        "scope": "R2 private-bucket policy",
+        "description": "Operators are told to keep the bucket private and not enable the public development URL so browsers use short-lived media-url presigns."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/object_storage.py",
+        "line": 74,
+        "scope": "put_bytes",
+        "description": "put_object is called with Bucket, Key, Body, and ContentType only; no ACL, Grant, or private-enforcement argument is set on catalog, thumb, job-batch, or ping writes."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/catalog_storage.py",
+        "line": 50,
+        "scope": "persist_catalog_photo",
+        "description": "New photos are uploaded under catalog/{account_id}/{photo_id}.ext; the same helper family writes thumbs and videos on that shared bucket."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/object_storage.py",
+        "line": 86,
+        "scope": "presigned_get_url",
+        "description": "The only in-repo browser read path is a time-capped GetObject presign. Source never constructs an r2.dev URL; a public bucket origin would serve the same keys without that presign."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/config.py",
+        "line": 170,
+        "description": "R2 settings are account id, access key, secret, bucket, and endpoint only; there is no public-URL or ACL field."
+      },
+      {
+        "file": "backend/app/job_batch_storage.py",
+        "line": 38,
+        "description": "Job upload mirrors use job-batches/{account_id}/{batch_id}/\u2026 on the same bucket, so a public origin would also expose staged upload batches."
+      },
+      {
+        "file": "backend/app/object_storage.py",
+        "line": 190,
+        "description": "put_bucket_cors applies GET/HEAD for cors_allow_origins and drops any origin containing *; it does not set bucket ACL or disable a public development URL."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 235,
+        "description": "cors_allow_origins always includes http://127.0.0.1:3000 and http://localhost:3000, so an owner POST /integrations/r2/cors writes those localhost origins onto the bucket CORS rule even in production."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 106,
+        "description": "Deploy docs recommend an R2 Account API token on the API (and later the worker) for the shared estate-catalog bucket; least-privilege prefix keys are not encoded."
+      }
+    ],
+    "blockers": [
+      "Live Cloudflare R2 Public development URL, custom domain, and object/bucket ACL are dashboard facts and are not in this repository.",
+      "No IaC or bucket-policy render exists to evaluate locally.",
+      "This run must not fetch pub-*.r2.dev, a custom R2 domain, or any catalog/job-batch key.",
+      "No OS-enforced sandbox was available to inspect put_object kwargs at runtime beyond source."
+    ],
+    "validation_plan": {
+      "local": "In a network-disabled review, confirm put_bytes/put_file kwargs still omit ACL and that no code path concatenates r2.dev. That only reconfirms source; it does not settle live exposure.",
+      "deployment": "Owner, in the Cloudflare R2 bucket Settings only, confirms Public development URL is disabled, no public custom domain is attached, and access remains private/presign. Do not request catalog/ or job-batches/ objects from the internet."
+    },
+    "_hunter": "hunter-wave2-r2"
+  },
+  {
+    "proposed_verdict": "needs_validation",
+    "fingerprint": "mobile.securestore.remembered-password-backup",
+    "title": "Remembered staff password stored in backup-eligible SecureStore",
+    "description": "A backup or other-OS-profile restorer\u2014not another app on the live profile\u2014may recover the reusable Estate-EZ password. Each mobile sign-in writes email+password under ct_mobile_login_credentials with iOS AFTER_FIRST_UNLOCK and without requireAuthentication. That item can mint a new staff JWT via silent re-login. Same-app use on the signed-in OS user is out of scope.",
+    "claimed_root_cause": "loginWithPassword persists the raw password in expo-secure-store using AFTER_FIRST_UNLOCK rather than a ThisDeviceOnly accessibility class or a refresh token, and app.json neither disables Android allowBackup nor pins SecureStore backup rules.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "mobile/context/AuthContext.tsx",
+        "line": 110,
+        "scope": "loginWithPassword credential persist",
+        "description": "After POST /auth/login, the app writes JSON {email, password} to SecureStore key ct_mobile_login_credentials with no remember-me flag."
+      },
+      {
+        "kind": "propagation",
+        "file": "mobile/lib/secureStorage.ts",
+        "line": 5,
+        "scope": "STORE_OPTS keychainAccessible",
+        "description": "All secureSet calls, including the password, use AFTER_FIRST_UNLOCK and do not set requireAuthentication or a ThisDeviceOnly constant."
+      },
+      {
+        "kind": "sink",
+        "file": "mobile/lib/secureStorage.ts",
+        "line": 13,
+        "scope": "SecureStore.setItemAsync",
+        "description": "The password string is stored in the OS keychain/keystore-backed store. Boot and silentRefresh later read it with getItemAsync(key) and call login again."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "mobile/context/AuthContext.tsx",
+        "line": 21,
+        "description": "CREDENTIALS_KEY is ct_mobile_login_credentials, documented as email+password for silent re-login when the JWT expires."
+      },
+      {
+        "file": "mobile/context/AuthContext.tsx",
+        "line": 112,
+        "description": "Stored value is JSON.stringify({ email, password }) of the staff password, not a refresh token."
+      },
+      {
+        "file": "mobile/lib/secureStorage.ts",
+        "line": 5,
+        "description": "keychainAccessible is AFTER_FIRST_UNLOCK, which is backup-eligible on iOS; AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY is not used."
+      },
+      {
+        "file": "mobile/lib/secureStorage.ts",
+        "line": 9,
+        "description": "secureGet calls getItemAsync(key) with no requireAuthentication options."
+      },
+      {
+        "file": "mobile/app.json",
+        "line": 28,
+        "description": "android package com.caringtransitions.capture sets no allowBackup false and no backup/dataExtraction rules."
+      },
+      {
+        "file": "mobile/app.json",
+        "line": 49,
+        "description": "plugins includes expo-secure-store as a string with no configureAndroidBackup object."
+      }
+    ],
+    "blockers": [
+      "OS-enforced sandbox and parent artifact promotion unavailable",
+      "No android/ or ios/ trees; EAS merged AndroidManifest allowBackup plus SecureStore backup XML, and the shipped IPA keychain accessibility, are packaging facts",
+      "Encrypted iCloud/Finder/Google/MDM backup restore of dummy ct_mobile_login_credentials onto a second dummy device or OS profile was not observed"
+    ],
+    "validation_plan": {
+      "local": "On an isolated simulator/emulator with a dummy tenant, sign in, then read the written item's iOS accessibility class and Android backup XML/EncryptedSharedPreferences binding. Restore an encrypted backup onto a second dummy device or profile and see whether the dummy password silently logs in. Do not use live staff accounts.",
+      "deployment": "Owner inspects the EAS production APK/IPA AndroidManifest allowBackup and expo-secure-store backup rules, and the iOS keychain accessibility for com.caringtransitions.capture. Do not export or replay live staff passwords."
+    },
+    "_hunter": "hunter-wave2-mobile"
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "decision": "needs_validation",
+  "record": {
+    "verdict": "needs_validation",
+    "fingerprint": "cloud.config.default-secret-key.skips-production-validator",
+    "title": "Default JWT SECRET_KEY stays accepted whenever ENVIRONMENT is not production",
+    "description": "The production validator refuses weak SECRET_KEY values, SQLite, and empty CORS_ORIGINS, but only after ENVIRONMENT is production or prod. Settings still default SECRET_KEY to the public placeholder change-me-dev-secret, Dockerfile.api/Procfile do not set SECRET_KEY or ENVIRONMENT, and DEPLOY.md first-time order deploys the API with ENVIRONMENT=development then publishes a domain. If that bootstrap (or a forgotten ENVIRONMENT flip) is live and SECRET_KEY was left unset or set to a documented placeholder, an internet caller can HS256-sign staff JWTs with that key. user_from_access_token still requires a matching active User row (UUID sub plus account_id); the break is issuer impersonation for those existing rows, including re-signing a leaked or expired payload. Live Railway env values were not observed.",
+    "claimed_root_cause": "production_must_be_safe is skipped for any non-production ENVIRONMENT, while the in-image default SECRET_KEY and backend/.env.example placeholder remain valid in that mode, and deploy docs start the public API in that mode.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "DEPLOY.md",
+        "line": 16,
+        "scope": "First-time Railway order",
+        "description": "Documented first deploy sets ENVIRONMENT=development on the API so CORS_ORIGINS is not required; the same order then uses a public API URL and later flips to production."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 30,
+        "scope": "Settings.secret_key",
+        "description": "SECRET_KEY defaults to the well-known placeholder change-me-dev-secret when unset. .env.example is not loaded; the image has no .env."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 211,
+        "scope": "Settings.production_must_be_safe",
+        "description": "If environment is not production or prod, the function returns without rejecting weak keys, SQLite, or missing CORS_ORIGINS."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 53,
+        "scope": "create_access_token",
+        "description": "Access tokens are HS256-signed with settings.secret_key and carry sub, account_id, and role with no audience or issuer."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/auth.py",
+        "line": 58,
+        "scope": "user_from_access_token",
+        "description": "jwt.decode accepts HS256 with settings.secret_key, require_sub, and verify_aud False, then loads User by payload sub plus account_id."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/.env.example",
+        "line": 1,
+        "description": "Env template sets SECRET_KEY=change-me, which production_must_be_safe would reject only after ENVIRONMENT=production."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 139,
+        "description": "ENVIRONMENT defaults to development, so is_production is false unless the host overrides it."
+      },
+      {
+        "file": "backend/app/config.py",
+        "line": 214,
+        "description": "Weak-key set includes empty, change-me, and change-me-dev-secret, plus any secret shorter than 32 characters."
+      },
+      {
+        "file": "backend/app/auth.py",
+        "line": 70,
+        "description": "After a valid signature, authentication still requires User.id==sub and User.account_id==account_id and an active Account."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 47,
+        "description": "The later variables table asks for a long SECRET_KEY, but that check is not enforced until ENVIRONMENT is switched to production."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 60,
+        "description": "After the variables table, the API service is told to Generate domain, making the development-mode bind public."
+      }
+    ],
+    "blockers": [
+      "No OS-enforced sandbox is available (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion), so a local dummy JWT forge against the default key was not executed.",
+      "Live Railway API ENVIRONMENT and SECRET_KEY were not observed; this run must not probe Railway.",
+      "Whether the operator already set a long random SECRET_KEY during the development bootstrap is a host-dashboard fact."
+    ],
+    "validation_plan": {
+      "local": "In an isolated empty-env sandbox with no backend/.env, start the FastAPI app with ENVIRONMENT=development and SECRET_KEY unset. Seed one dummy Account and User. Mint an HS256 token with key change-me-dev-secret for that user's id and account_id (and a second token for a non-existent pair). Confirm user_from_access_token returns the seeded user for the first token and raises 401 for the second. Repeat startup with ENVIRONMENT=production and unset SECRET_KEY and confirm Settings() raises ValueError before the server binds.",
+      "deployment": "Owner inspects the Railway API service variables only: if ENVIRONMENT is not production/prod, or SECRET_KEY equals a documented placeholder or is shorter than 32 characters, treat the issue as live. Do not send traffic to the public hostname."
+    }
+  }
+}

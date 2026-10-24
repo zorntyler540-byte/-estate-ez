@@ -1,0 +1,407 @@
+{
+  "units": [
+    {
+      "coverage_id": "DEPLOY.md%23Railway%20services::backend%2Fapp%2Fconfig.py%23production_must_be_safe::infra::CLOUD-AND-DEPLOYMENT.md%23Unexpected%20service%20or%20management-plane%20reachability",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "DEPLOY.md",
+        "Procfile",
+        "backend/.env.example",
+        "backend/app/auth.py",
+        "backend/app/config.py",
+        "backend/app/main.py",
+        "backend/app/worker.py",
+        "infra/docker/Dockerfile.api",
+        "infra/docker/Dockerfile.worker"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            "backend/app/config.py",
+            "backend/app/auth.py",
+            "backend/.env.example"
+          ],
+          "invariant": "A publicly reachable API must not sign or verify staff JWTs with a well-known default SECRET_KEY; production_must_be_safe must actually be the active path.",
+          "method": "source",
+          "result": "Settings.secret_key defaults to change-me-dev-secret. production_must_be_safe rejects that value, strings shorter than 32 characters, SQLite URLs, and empty CORS_ORIGINS only when environment is production or prod. backend/.env.example ships SECRET_KEY=change-me and ENVIRONMENT=development. create_access_token / user_from_access_token HS256-bind to settings.secret_key with no other audience or key-id check. TRUSTED_HOSTS empty disables TrustedHostMiddleware. No source test covers the production validator.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            "DEPLOY.md",
+            "Procfile",
+            "infra/docker/Dockerfile.api",
+            "infra/docker/Dockerfile.worker",
+            "backend/app/worker.py"
+          ],
+          "invariant": "Documented production topology must not skip the production validator, must not publish an extra management listener, and must not attach unused third-party secrets to the worker identity.",
+          "method": "source",
+          "result": "DEPLOY.md first-time order deploys the API with ENVIRONMENT=development so CORS_ORIGINS can be empty, then tells the operator to Generate domain on the API. Dockerfile.api and Procfile bind uvicorn to 0.0.0.0. Worker image has no HTTP server; DEPLOY.md says copy API variables including DATABASE_URL, GOOGLE_API_KEY, R2_*, and SECRET_KEY, and not to attach a public domain. Which Railway service uses which Dockerfile, whether the worker has a public domain, and live env values are not in source. R2 is documented as a private bucket using an Account API token on both API and worker.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "infra/docker/Dockerfile.api",
+            "Procfile"
+          ],
+          "invariant": "Anonymous internet callers must not reach FastAPI docs, ReDoc, or openapi.json on the production API unless an attached ingress control strips those paths.",
+          "method": "source",
+          "result": "FastAPI(title=settings.app_name) leaves default docs_url, redoc_url, and openapi_url enabled in every environment, including production. Nothing in config.py or main.py disables them. The API container/Procfile listen on 0.0.0.0. Whether Railway or another proxy currently exposes those paths is not source-visible.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "cloud.config.default-secret-key.skips-production-validator",
+        "cloud.ingress.fastapi-openapi-docs"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "infra%2Fdocker%2FDockerfile.api%23pip%20install::mobile%2Feas.json%23production%20channel::infra::SUPPLY-CHAIN-AND-RELEASE.md%23Mutable%20and%20unbound%20build%20inputs",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        ".dockerignore",
+        ".gitignore",
+        "DEPLOY.md",
+        "frontend/package.json",
+        "infra/docker/Dockerfile.api",
+        "infra/docker/Dockerfile.web",
+        "infra/docker/Dockerfile.worker",
+        "mobile/app.json",
+        "mobile/eas.json",
+        "requirements.txt"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            "infra/docker/Dockerfile.api",
+            "infra/docker/Dockerfile.worker",
+            "infra/docker/Dockerfile.web",
+            "requirements.txt",
+            "frontend/package.json"
+          ],
+          "invariant": "Released API/worker/web images must resolve only review-pinned base layers, lockfiles, and model bytes.",
+          "method": "source",
+          "result": "API and worker FROM python:3.12-slim-bookworm (floating tag) and pip install -r requirements.txt where every package is a lower bound only (no pip lock). Dockerfile.api then runs rembg new_session('u2netp'), which downloads model bytes at build with no digest pin. Worker installs rembg the same way but does not prefetch the model. Web uses npm ci plus package-lock.json (JS deps pinned) but FROM node:22-bookworm-slim is also a floating tag. Host may use Dockerfile or Procfile/Nixpacks; that choice is not in source.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            "mobile/eas.json",
+            "mobile/app.json",
+            "DEPLOY.md"
+          ],
+          "invariant": "Field phones on the production EAS channel must load JS that is bound to a reviewed git digest and a repo-controlled promotion gate.",
+          "method": "source",
+          "result": "eas.json production.channel is production with EXPO_PUBLIC_API_BASE baked at EAS build time. app.json runtimeVersion 1.1.0, updates.url https://u.expo.dev/dfb4d2a5-1b94-449c-bc28-43466a46803d, checkAutomatically ON_LOAD. No .github workflows exist in the repo, so eas update --channel production is a human/token path not gated by in-repo CI or a git SHA. Who can publish on that Expo project is not source-visible.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-cloud",
+          "reviewed_paths": [
+            ".dockerignore",
+            ".gitignore",
+            "infra/docker/Dockerfile.api",
+            "infra/docker/Dockerfile.web"
+          ],
+          "invariant": "Docker build context must not copy live env files or estate data into the released image.",
+          "method": "source",
+          "result": "Railway/Docker builds from repo root. .dockerignore excludes .env, backend/.env, *.db, backend/data, and Images. gitignore additionally lists .env.local, .env.production, frontend/.env.local, and mobile/.env, which .dockerignore does not name. Dockerfiles copy requirements/alembic/backend or frontend/ only. No committed live secret file was in those trees; emails in env templates are not secrets. A GitHub-based Railway build would not include gitignored files unless they were committed.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "supply.docker.unpinned-pip-floating-base-rembg",
+        "supply.eas.production-ota-unbound-from-git"
+      ],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "cloud.config.default-secret-key.skips-production-validator",
+      "title": "Default JWT SECRET_KEY stays accepted whenever ENVIRONMENT is not production",
+      "description": "The production validator refuses weak SECRET_KEY values, SQLite, and empty CORS_ORIGINS, but only after ENVIRONMENT is production or prod. Settings still default SECRET_KEY to a public placeholder, and DEPLOY.md tells operators to bring the API up in development first and to generate a public API domain. If that bootstrap (or a forgotten ENVIRONMENT flip) is what is live, an internet caller can mint HS256 JWTs for any sub and account_id using the documented default. Live Railway env values were not observed.",
+      "claimed_root_cause": "production_must_be_safe is skipped for any non-production ENVIRONMENT, while the in-image default SECRET_KEY and backend/.env.example placeholder remain valid in that mode, and deploy docs start the public API in that mode.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "DEPLOY.md",
+          "line": 16,
+          "scope": "First-time Railway order",
+          "description": "Documented first deploy sets ENVIRONMENT=development on the API so CORS_ORIGINS is not required, then later generates a public API domain."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/config.py",
+          "line": 30,
+          "scope": "Settings.secret_key",
+          "description": "SECRET_KEY defaults to the well-known placeholder change-me-dev-secret when unset."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/config.py",
+          "line": 211,
+          "scope": "Settings.production_must_be_safe",
+          "description": "If environment is not production or prod, the function returns without rejecting weak keys, SQLite, or missing CORS_ORIGINS."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/auth.py",
+          "line": 53,
+          "scope": "create_access_token",
+          "description": "Access tokens are HS256-signed with settings.secret_key; verification uses the same key and does not bind an audience."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/.env.example",
+          "line": 1,
+          "description": "Env template sets SECRET_KEY=change-me, which production_must_be_safe would reject only after ENVIRONMENT=production."
+        },
+        {
+          "file": "backend/app/config.py",
+          "line": 214,
+          "description": "Weak-key set includes empty, change-me, and change-me-dev-secret, plus any secret shorter than 32 characters."
+        },
+        {
+          "file": "backend/app/auth.py",
+          "line": 58,
+          "description": "user_from_access_token decodes HS256 with settings.secret_key and trusts sub plus account_id from the payload."
+        },
+        {
+          "file": "DEPLOY.md",
+          "line": 47,
+          "description": "The later variables table asks for a long SECRET_KEY, but that check is not enforced until ENVIRONMENT is switched to production."
+        }
+      ],
+      "blockers": [
+        "No OS-enforced sandbox was available, so a local dummy JWT forge against the default key was not executed.",
+        "Live Railway API ENVIRONMENT and SECRET_KEY were not observed; this run must not probe Railway.",
+        "Whether the operator already set a long random SECRET_KEY during the development bootstrap is a host-dashboard fact."
+      ],
+      "validation_plan": {
+        "local": "In an isolated empty-env sandbox, start the FastAPI app with ENVIRONMENT=development and unset SECRET_KEY, mint a dummy HS256 token with the documented default key for a dummy user_id and account_id, and confirm user_from_access_token accepts it. Repeat with ENVIRONMENT=production and confirm startup raises.",
+        "deployment": "Owner inspects the Railway API service variables only: if ENVIRONMENT is not production/prod, or SECRET_KEY equals a documented placeholder, treat the issue as live. Do not send traffic to the public hostname."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "cloud.ingress.fastapi-openapi-docs",
+      "title": "FastAPI docs and OpenAPI remain enabled on the 0.0.0.0 API bind",
+      "description": "The API app is constructed with FastAPI defaults, so /docs, /redoc, and /openapi.json are registered in development and production. Docker and Procfile bind uvicorn on 0.0.0.0, and DEPLOY.md publishes an API domain for /health. Those routes disclose the full management surface (auth, R2 migrate, admin delete, CT Seller, Facebook). Whether a Railway edge or other proxy currently blocks them is not in source and was not probed.",
+      "claimed_root_cause": "FastAPI() is created without docs_url, redoc_url, or openapi_url disabled, and no production overlay or ingress manifest in repo strips those paths before the public bind.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 284,
+          "scope": "FastAPI constructor",
+          "description": "app = FastAPI(title=settings.app_name) keeps default documentation and OpenAPI URLs for every environment."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/config.py",
+          "line": 209,
+          "scope": "production_must_be_safe",
+          "description": "Production startup checks SECRET_KEY, SQLite, and CORS_ORIGINS but does not disable docs or require TRUSTED_HOSTS."
+        },
+        {
+          "kind": "sink",
+          "file": "infra/docker/Dockerfile.api",
+          "line": 22,
+          "scope": "uvicorn CMD",
+          "description": "Container starts uvicorn app.main:app --host 0.0.0.0, so any attached public domain forwards to the default docs routes unless a proxy blocks them."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/main.py",
+          "line": 284,
+          "description": "No docs_url=None, redoc_url=None, or openapi_url=None on the FastAPI constructor."
+        },
+        {
+          "file": "Procfile",
+          "line": 3,
+          "description": "Nixpacks/Procfile path also runs uvicorn on 0.0.0.0 bound to $PORT."
+        },
+        {
+          "file": "DEPLOY.md",
+          "line": 60,
+          "description": "Operators are told to generate a public API domain and to hit /health on that hostname."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 559,
+          "description": "TrustedHostMiddleware is added only when TRUSTED_HOSTS is non-empty; empty is the documented default."
+        }
+      ],
+      "blockers": [
+        "Live Railway ingress, private-networking flags, and any path filter in front of the API are not in this repo.",
+        "This run must not fetch the public API /docs or /openapi.json.",
+        "No sandbox was available to boot uvicorn locally and observe the default routes."
+      ],
+      "validation_plan": {
+        "local": "In an isolated loopback sandbox, start app.main:app and confirm unauthenticated GET /docs, /redoc, and /openapi.json return 200 with the operation list. That only proves the application route, not live exposure.",
+        "deployment": "Owner, from the Railway dashboard or an already-authorized admin path, notes whether the API service has a public domain and whether an edge rule denies /docs, /redoc, and /openapi.json. Do not probe the hostname from this agent."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "supply.docker.unpinned-pip-floating-base-rembg",
+      "title": "API and worker images consume floating base tags, unpinned PyPI specs, and an unsigned rembg model",
+      "description": "Each Docker rebuild of Dockerfile.api and Dockerfile.worker runs pip install against requirements.txt lower bounds and pulls python:3.12-slim-bookworm by tag. The API image additionally downloads the rembg u2netp model during build with no checksum. A PyPI or registry publisher who can change a matching version, retag the base image, or replace the rembg model bytes can land code or weights in the next Railway image. Web JS is lockfiled via npm ci; the Node base tag is still floating. Live resolved digests were not observed.",
+      "claimed_root_cause": "Maintained Dockerfiles treat mutable tags and unbounded pip specs as the release input, and bake a remotely fetched rembg model into the API image without an integrity pin.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "infra/docker/Dockerfile.api",
+          "line": 2,
+          "scope": "FROM python:3.12-slim-bookworm",
+          "description": "API image starts from an unpinned rolling distro tag."
+        },
+        {
+          "kind": "propagation",
+          "file": "requirements.txt",
+          "line": 1,
+          "scope": "pip lower bounds",
+          "description": "Runtime Python dependencies are specified only as >= versions, with no lockfile consumed by Docker."
+        },
+        {
+          "kind": "sink",
+          "file": "infra/docker/Dockerfile.api",
+          "line": 10,
+          "scope": "pip install and rembg new_session",
+          "description": "Build runs pip install --no-cache-dir -r requirements.txt then rembg new_session('u2netp'), baking whatever those resolvers return into the image that later runs uvicorn."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "infra/docker/Dockerfile.worker",
+          "line": 4,
+          "description": "Worker uses the same floating python:3.12-slim-bookworm tag and pip install -r requirements.txt without a rembg digest pin."
+        },
+        {
+          "file": "infra/docker/Dockerfile.web",
+          "line": 2,
+          "description": "Web build and runtime use node:22-bookworm-slim by tag; npm ci plus package-lock.json pins JS packages only."
+        },
+        {
+          "file": "infra/docker/Dockerfile.web",
+          "line": 5,
+          "description": "npm ci is the contrasting control: frontend lockfile is copied and used, unlike Python."
+        },
+        {
+          "file": "DEPLOY.md",
+          "line": 11,
+          "description": "Production images are built from repository root using these Dockerfiles, or optionally Procfile/Nixpacks, on each git push."
+        }
+      ],
+      "blockers": [
+        "Resolved image digests and pip freeze output on Railway are not in source.",
+        "No sandbox was available to perform an offline lock comparison or to hash the rembg model.",
+        "This run must not pull Docker Hub, PyPI, or rembg model URLs."
+      ],
+      "validation_plan": {
+        "local": "In a network-disabled sandbox with vendored wheels, fail the Docker build if unpinned specs cannot resolve, or compare a committed pip freeze to the Dockerfile install. Record base-image and rembg file digests from a once-fetched local cache.",
+        "deployment": "Owner exports the deployed image digest and a pip freeze from the running API and worker, and confirms whether Railway is on Dockerfile.api versus Procfile. Do not retag or republish."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "supply.eas.production-ota-unbound-from-git",
+      "title": "Production EAS Update channel can replace phone JS without an in-repo git digest gate",
+      "description": "TestFlight/production binaries load JS from the Expo updates URL for project dfb4d2a5-1b94-449c-bc28-43466a46803d on channel production, with checkAutomatically ON_LOAD and runtimeVersion 1.1.0. The repo has no GitHub Actions to build, attest, or promote that payload from a git SHA. Anyone who can run eas update --channel production against that project can change field-app behavior independently of git. Expo collaborator lists and token holders were not observed and must not be probed.",
+      "claimed_root_cause": "The phone updater is bound to a mutable EAS channel name and Expo project URL, not to an in-repo immutable digest or CI promotion workflow.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "mobile/eas.json",
+          "line": 27,
+          "scope": "build.production.channel",
+          "description": "EAS production profile publishes to channel production."
+        },
+        {
+          "kind": "propagation",
+          "file": "mobile/app.json",
+          "line": 11,
+          "scope": "expo.updates",
+          "description": "Enabled updates.url points at u.expo.dev for this project, checkAutomatically ON_LOAD, fallbackToCacheTimeout 0."
+        },
+        {
+          "kind": "sink",
+          "file": "mobile/app.json",
+          "line": 10,
+          "scope": "runtimeVersion 1.1.0",
+          "description": "Installed 1.1.0 binaries accept any update Expo serves for that runtime and production channel, with no in-repo workflow binding the bundle to a git commit."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "mobile/app.json",
+          "line": 16,
+          "description": "updates.checkAutomatically is ON_LOAD so a published channel payload is applied at app start."
+        },
+        {
+          "file": "mobile/eas.json",
+          "line": 29,
+          "description": "Production EAS build.env pins EXPO_PUBLIC_API_BASE to the Railway API; eas update is a separate publish path that does not require this repo's CI."
+        },
+        {
+          "file": "DEPLOY.md",
+          "line": 193,
+          "description": "Server updates are git-push rebuilds; mobile OTA is not described as a digest-pinned promotion in that deploy path, and no .github workflows exist in scope."
+        }
+      ],
+      "blockers": [
+        "Expo project membership, token scope, and last production-channel publish SHA are account facts, not source.",
+        "This run must not call Expo or eas whoami, and must not publish an update.",
+        "Whether runtime 1.1.0 binaries are what field phones run is an owner-observed install fact."
+      ],
+      "validation_plan": {
+        "deployment": "Owner, in the Expo dashboard, lists production-channel publishes against git SHAs, reviews who can run eas update, and confirms runtimeVersion 1.1.0 is the only live binary. Do not publish or roll back from this agent."
+      }
+    }
+  ],
+  "hardening": [
+    "production_must_be_safe does not require TRUSTED_HOSTS, ALLOW_OPEN_REGISTRATION=false, docs disabled, or RUN_CATALOG_JOBS_IN_PROCESS=false.",
+    "cors_allow_origins always injects http://localhost:3000 and http://127.0.0.1:3000 even when ENVIRONMENT=production; leftover as a note because credentialed CORS is peer-owned.",
+    "DEPLOY.md recommends a Cloudflare R2 Account API token on both API and worker; least-privilege object-prefix keys are not encoded.",
+    "Worker is documented to copy SMTP and Meta secrets it does not need for catalog claims; extra env is blast-radius hardening, not a reachable worker HTTP surface in Dockerfile.worker.",
+    ".dockerignore omits .env.local and .env.production names that .gitignore already drops; GitHub-context Railway builds still follow gitignore unless those files are committed.",
+    "backend/.env.example placeholder SECRET_KEY=change-me is not copied as a live Railway secret, but it matches the weak set and can be pasted into the host UI during the development bootstrap."
+  ],
+  "uncovered": [
+    {
+      "surface": "GitHub push to Railway rebuild with no in-repo workflow",
+      "boundary": "Untrusted branch or fork commit versus production Dockerfile/Procfile deploy identity",
+      "subsystem": "Supply chain and release",
+      "attack_class": "SUPPLY-CHAIN-AND-RELEASE.md#Untrusted code in a privileged workflow",
+      "starting_paths": [
+        "DEPLOY.md",
+        "Procfile",
+        "infra/docker/Dockerfile.api"
+      ],
+      "reason": "Selected supply blocks were mutable inputs and build-context only. Railway auto-deploy from GitHub, branch protection, and who can push to the connected branch are a separate privileged-workflow unit. No .github workflows exist to compare."
+    },
+    {
+      "surface": "R2 bucket public development URL and CORS AllowedOrigins",
+      "boundary": "Anonymous CDN or signed-URL caller versus catalog object bytes",
+      "subsystem": "Cloud deployment",
+      "attack_class": "CLOUD-AND-DEPLOYMENT.md#Object and signed-URL policy confusion",
+      "starting_paths": [
+        "DEPLOY.md",
+        "backend/app/object_storage.py",
+        "backend/app/main.py"
+      ],
+      "reason": "Selected cloud blocks were reachability and workload identity. Bucket ACL, public development URL, and presign expiry/key binding need their own unit; live R2 policy is not in source."
+    }
+  ]
+}

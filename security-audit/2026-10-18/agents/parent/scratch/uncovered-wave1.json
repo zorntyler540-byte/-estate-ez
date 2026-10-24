@@ -1,0 +1,75 @@
+[
+  {
+    "surface": "Client logout and password change without JWT revocation",
+    "boundary": "Stolen or leftover Bearer versus server session end",
+    "subsystem": "FastAPI core API",
+    "attack_class": "Session fixation and invalidation",
+    "starting_paths": [
+      "backend/app/auth.py",
+      "frontend/app/dashboard/page.tsx",
+      "mobile/context/AuthContext.tsx"
+    ],
+    "reason": "create_access_token is stateless HS256 with default 43200 minute TTL and no jti denylist. Dashboard logout only removes localStorage token; mobile signOut only deletes SecureStore keys. PATCH /auth/password does not appear to rotate outstanding access tokens. This is session invalidation, not ordinary CSRF or credentialed CORS."
+  },
+  {
+    "surface": "Remembered mobile password in SecureStore",
+    "boundary": "Device backup or other OS profile versus staff password",
+    "subsystem": "Expo field app",
+    "attack_class": "Credential-store and local-secret boundary mismatch",
+    "starting_paths": [
+      "mobile/context/AuthContext.tsx",
+      "mobile/lib/secureStorage.ts",
+      "mobile/app.json"
+    ],
+    "reason": "AuthContext writes email and password under ct_mobile_login_credentials with AFTER_FIRST_UNLOCK and no requireAuthentication. Selected companions were custom-scheme and file-open only; backup, work-profile, and Android allowBackup behavior need a dedicated credential-store unit."
+  },
+  {
+    "surface": "GitHub push to Railway rebuild with no in-repo workflow",
+    "boundary": "Untrusted branch or fork commit versus production Dockerfile/Procfile deploy identity",
+    "subsystem": "Supply chain and release",
+    "attack_class": "SUPPLY-CHAIN-AND-RELEASE.md#Untrusted code in a privileged workflow",
+    "starting_paths": [
+      "DEPLOY.md",
+      "Procfile",
+      "infra/docker/Dockerfile.api"
+    ],
+    "reason": "Selected supply blocks were mutable inputs and build-context only. Railway auto-deploy from GitHub, branch protection, and who can push to the connected branch are a separate privileged-workflow unit. No .github workflows exist to compare."
+  },
+  {
+    "surface": "R2 bucket public development URL and CORS AllowedOrigins",
+    "boundary": "Anonymous CDN or signed-URL caller versus catalog object bytes",
+    "subsystem": "Cloud deployment",
+    "attack_class": "CLOUD-AND-DEPLOYMENT.md#Object and signed-URL policy confusion",
+    "starting_paths": [
+      "DEPLOY.md",
+      "backend/app/object_storage.py",
+      "backend/app/main.py"
+    ],
+    "reason": "Selected cloud blocks were reachability and workload identity. Bucket ACL, public development URL, and presign expiry/key binding need their own unit; live R2 policy is not in source."
+  },
+  {
+    "surface": "GET /facebook/posts and GET /integrations/facebook/status",
+    "boundary": "Catalogger versus Page connection metadata and post history",
+    "subsystem": "Facebook Page posting",
+    "attack_class": "Feature abuse and data leakage",
+    "starting_paths": [
+      "backend/app/facebook_routes.py",
+      "backend/app/services/facebook_page.py"
+    ],
+    "reason": "Those GETs are authenticated and account-scoped but skip require_facebook_poster. They do not return tokens; they need a separate read-leak unit if catalogger visibility of page name and captions is in scope."
+  },
+  {
+    "surface": "POST /integrations/r2/migrate-catalog and GET /integrations/r2/ping|/cors",
+    "boundary": "Catalogger JWT versus owner-documented R2 ops on the shared bucket",
+    "subsystem": "Object storage",
+    "attack_class": "ATTACK-CLASSES.md#Access control",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/schemas.py",
+      "backend/app/object_storage.py",
+      "DEPLOY.md",
+      "backend/app/services/roles.py"
+    ],
+    "reason": "UI-less leftover R2 ops: dashboard never calls these routes. DEPLOY.md says migrate-catalog is owner-only, but migrate_catalog_to_r2, r2_ping, and r2_cors_get only use get_current_user. Clients are blocked by enforce_client_http; cataloggers are not. Sibling POST /integrations/r2/cors does require is_owner. ping() writes and deletes _health/r2-ping.txt on the shared bucket. Distinct from the assigned legacy CLI unit and from hunter-cloud Railway/env reachability."
+  }
+]
