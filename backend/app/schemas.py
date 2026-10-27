@@ -839,13 +839,18 @@ class RotateLotPhotosOut(BaseModel):
 
 
 class PlainBackgroundIn(BaseModel):
-    """Cut the piece out and place it on a flat color. Janet JL furniture lots only."""
+    """Place the piece on a flat color.
+
+    ``hero_only`` uses AI on any lot and changes the listing hero alone.
+    Without it, the call stays a local cutout limited to Janet JL furniture lots.
+    """
 
     color: Literal["studio", "white", "gray"] = "studio"
+    hero_only: bool = False
     photo_ids: list[str] | None = Field(
         default=None,
         max_length=PLAIN_BG_MAX_PHOTOS,
-        description="When omitted, only the first listing photo (not SKU tape) is changed. SKU tape ids are skipped.",
+        description="When omitted, only the first listing photo (not SKU tape) is changed. Ignored when hero_only is set.",
     )
 
 
@@ -859,6 +864,24 @@ class PlainBackgroundOut(BaseModel):
 
 class RestorePlainBackgroundIn(BaseModel):
     photo_ids: list[str] | None = Field(default=None, max_length=40)
+
+
+class SaleHeroBackgroundIn(BaseModel):
+    """AI background for the first website photo of every lot in a sale."""
+
+    color: Literal["studio", "white", "gray"] = "studio"
+
+
+class SaleHeroBackgroundStatusOut(BaseModel):
+    running: bool = False
+    color: Literal["studio", "white", "gray"] = "studio"
+    total: int = 0
+    done: int = 0
+    updated: int = 0
+    failed: int = 0
+    skipped: int = 0
+    current_sku: str | None = None
+    last_error: str | None = None
 
 
 class TransferPhotosIn(BaseModel):

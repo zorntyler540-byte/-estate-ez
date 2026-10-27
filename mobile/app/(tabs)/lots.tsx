@@ -1,7 +1,8 @@
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -13,7 +14,7 @@ import {
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { useAuth } from "@/context/AuthContext";
-import { listLots, listSaleLotCoverUrls } from "@/lib/api";
+import { getSaleHeroBackground, listLots, listSaleLotCoverUrls, startSaleHeroBackground } from "@/lib/api";
 import {
   lotIdsWithChangedPhotoCount,
   lotListSignature,
@@ -43,6 +44,11 @@ export default function LotsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [heroColor, setHeroColor] = useState<"studio" | "white" | "gray">("studio");
+  const [heroBusy, setHeroBusy] = useState(false);
+  const [heroLive, setHeroLive] = useState(false);
+  const [heroNote, setHeroNote] = useState("");
+  const heroStartRef = useRef(false);
   const lastLoadAtRef = useRef(0);
   const lastSignatureRef = useRef("");
   const lotsLenRef = useRef(0);
@@ -51,7 +57,7 @@ export default function LotsScreen() {
   coverCountRef.current = Object.keys(coverUrls).length;
 
   const load = useCallback(
-    async (mode: "full" | "pull" = "full") => {
+    async (mode: "full" | "pull" = "full", opts?: { forceCovers?: boolean }) => {
       if (!token || !selectedSaleId) {
         setLots([]);
         setCoverUrls({});
@@ -74,8 +80,11 @@ export default function LotsScreen() {
         });
         const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
-        const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
-        const replaceCoverIds = lotIdsWithChangedPhotoCount(prevSig, nextSig);
+        const refreshCovers =
+          Boolean(opts?.forceCovers) || shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
+        const replaceCoverIds = opts?.forceCovers
+          ? new Set(rows.map((row) => row.id))
+          : lotIdsWithChangedPhotoCount(prevSig, nextSig);
         lastSignatureRef.current = nextSig;
         lastLoadAtRef.current = Date.now();
         setLots((prev) => (lotRowsUnchanged(prev, rows) ? prev : rows));
@@ -98,6 +107,111 @@ export default function LotsScreen() {
     },
     [token, selectedSaleId]
   );
+
+  useEffect(() => {
+    if (!token || !selectedSaleId) {
+      setHeroBusy(false);
+      setHeroLive(false);
+      setHeroNote("");
+      return;
+    }
+    let cancelled = false;
+    const saleId = selectedSaleId;
+    const auth = token;
+    void getSaleHeroBackground(auth, saleId)
+      .then((st) => {
+        if (cancelled || heroStartRef.current) return;
+        if (!st.running) return;
+        setHeroBusy(true);
+        setHeroLive(true);
+        const sku = st.current_sku ? ` · ${st.current_sku}` : "";
+        setHeroNote(`AI backgrounds ${st.done} of ${st.total}${sku}`);
+      })
+      .catch(() => {
+        /* leave the button usable if status cannot be read */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedSaleId]);
+
+  useEffect(() => {
+    if (!heroLive || !token || !selectedSaleId) return;
+    let stop = false;
+    const saleId = selectedSaleId;
+    const auth = token;
+    const tick = async () => {
+      try {
+        const st = await getSaleHeroBackground(auth, saleId);
+        if (stop) return;
+        if (st.running) {
+          const sku = st.current_sku ? ` · ${st.current_sku}` : "";
+          setHeroNote(`AI backgrounds ${st.done} of ${st.total}${sku}`);
+          return;
+        }
+        const updated = st.updated || 0;
+        const skipped = st.skipped || 0;
+        const failed = st.failed || 0;
+        const parts = [`AI background on ${updated} first photo${updated === 1 ? "" : "s"}.`];
+        if (skipped) parts.push(`${skipped} lot${skipped === 1 ? "" : "s"} had no listing photo.`);
+        if (failed) parts.push(`${failed} could not be changed.`);
+        setHeroNote(parts.join(" "));
+        setHeroBusy(false);
+        setHeroLive(false);
+        void load("pull", { forceCovers: true });
+      } catch (e) {
+        if (stop) return;
+        setHeroBusy(false);
+        setHeroLive(false);
+        setHeroNote(e instanceof Error ? e.message : "AI background stopped");
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [heroLive, token, selectedSaleId, load]);
+
+  function askHeroBackground() {
+    if (!token || !selectedSaleId || heroBusy) return;
+    const label = heroColor === "white" ? "white" : heroColor === "gray" ? "gray" : "warm";
+    Alert.alert(
+      "AI background",
+      `Put a ${label} background on the first photo of every lot in this sale? SKU tape and measurement photos stay as shot. About 10 seconds per lot.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Apply",
+          onPress: () => {
+            void (async () => {
+              heroStartRef.current = true;
+              setHeroBusy(true);
+              setHeroNote("Starting AI backgrounds…");
+              setError("");
+              try {
+                const st = await startSaleHeroBackground(token, selectedSaleId, heroColor);
+                if (st.running) {
+                  setHeroLive(true);
+                } else {
+                  setHeroBusy(false);
+                  setHeroNote(st.total ? "AI backgrounds finished." : "This sale has no lots.");
+                }
+              } catch (e) {
+                setHeroBusy(false);
+                setHeroLive(false);
+                setHeroNote("");
+                setError(e instanceof Error ? e.message : "Could not start AI backgrounds");
+              } finally {
+                heroStartRef.current = false;
+              }
+            })();
+          }
+        }
+      ]
+    );
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -139,6 +253,28 @@ export default function LotsScreen() {
           ? `${lots.length} listing${lots.length === 1 ? "" : "s"} on the server. Add photos if you forgot a shot.`
           : "Listings appear here after capture uploads finish processing."}
       </Text>
+      <View style={styles.heroRow}>
+        {(
+          [
+            ["studio", "Warm"],
+            ["white", "White"],
+            ["gray", "Gray"]
+          ] as const
+        ).map(([id, label]) => (
+          <Pressable
+            key={id}
+            style={[styles.heroChip, heroColor === id && styles.heroChipOn]}
+            disabled={heroBusy}
+            onPress={() => setHeroColor(id)}
+          >
+            <Text style={[styles.heroChipText, heroColor === id && styles.heroChipTextOn]}>{label}</Text>
+          </Pressable>
+        ))}
+        <Pressable style={[styles.heroGo, heroBusy && styles.heroGoBusy]} disabled={heroBusy || lots.length === 0} onPress={askHeroBackground}>
+          <Text style={styles.heroGoText}>{heroBusy ? "Working…" : "AI on first photos"}</Text>
+        </Pressable>
+      </View>
+      {heroNote ? <Text style={styles.heroNote}>{heroNote}</Text> : null}
 
       <TextInput
         style={styles.search}
@@ -239,6 +375,21 @@ const styles = StyleSheet.create({
   root: { flex: 1, padding: 16, backgroundColor: "#070708" },
   saleName: { color: "#f5f5f4", fontSize: 18, fontWeight: "700", marginBottom: 4 },
   lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
+  heroRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" },
+  heroChip: {
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  heroChipOn: { backgroundColor: "#ff4d1a", borderColor: "#ff4d1a" },
+  heroChipText: { color: "#e7e5e4", fontSize: 13 },
+  heroChipTextOn: { color: "#fff", fontWeight: "700" },
+  heroGo: { backgroundColor: "#ff4d1a", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  heroGoBusy: { opacity: 0.7 },
+  heroGoText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  heroNote: { color: "#a8a29e", fontSize: 13, marginBottom: 8 },
   search: {
     borderWidth: 1,
     borderColor: "#3f3f46",

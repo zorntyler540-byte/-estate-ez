@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
     gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
     gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")
+    # One listing cover at a time. Image model (API key), not the local cutout.
+    hero_bg_gemini_model: str = Field(
+        default="gemini-3.1-flash-image", alias="HERO_BG_GEMINI_MODEL"
+    )
     listing_flash_max_frames: int = Field(default=5, ge=1, le=12, alias="LISTING_FLASH_MAX_FRAMES")
     brand_pro_max_label_frames: int = Field(default=4, ge=1, le=8, alias="BRAND_PRO_MAX_LABEL_FRAMES")
     brand_skip_pro_if_agreement: bool = Field(default=True, alias="BRAND_SKIP_PRO_IF_AGREEMENT")

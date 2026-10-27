@@ -65,6 +65,79 @@ def sku_prefix(sku: str | None) -> str:
     return tail.group(1).upper() if tail else ""
 
 
+def listing_hero_photo(photos: list) -> object | None:
+    """The cover frame: a ``hero`` role if one exists, otherwise the first listing photo.
+
+    SKU-tape, unusable, and measuring-tape frames are never the hero.
+    """
+    from app.catalog_limits import is_catalog_video_filename
+    from app.services.photo_roles import is_hero_eligible_photo_role, is_sku_tape_photo_role
+
+    eligible: list = []
+    for photo in photos:
+        if is_catalog_video_filename(getattr(photo, "original_name", None)):
+            continue
+        role = getattr(photo, "photo_role", None)
+        if is_sku_tape_photo_role(role) or not is_hero_eligible_photo_role(role):
+            continue
+        if bool(getattr(photo, "shows_measuring_scale", False)):
+            continue
+        eligible.append(photo)
+    for photo in eligible:
+        if str(getattr(photo, "photo_role", "") or "").strip().lower() == "hero":
+            return photo
+    return eligible[0] if eligible else None
+
+
+def first_website_photo(photos: list) -> object | None:
+    """The first frame in website order.
+
+    Callers pass photos in gallery order. SKU-tape, unusable, video, and
+    measuring-tape frames are skipped, even when they sit in front.
+    """
+    from app.catalog_limits import is_catalog_video_filename
+    from app.services.photo_roles import is_hero_eligible_photo_role, is_sku_tape_photo_role
+
+    for photo in photos:
+        if is_catalog_video_filename(getattr(photo, "original_name", None)):
+            continue
+        role = getattr(photo, "photo_role", None)
+        if is_sku_tape_photo_role(role) or not is_hero_eligible_photo_role(role):
+            continue
+        if bool(getattr(photo, "shows_measuring_scale", False)):
+            continue
+        return photo
+    return None
+
+
+def plain_bg_edit_source_bytes(storage_path: str | None, current: Path) -> bytes:
+    """Bytes to edit. A saved original wins so a second color starts from the real photo."""
+    side = plain_bg_sidecar_path(storage_path)
+    if side is not None and side.is_file():
+        return side.read_bytes()
+    return current.read_bytes()
+
+
+def write_replaced_catalog_jpeg(account_id: str, row: object, body: bytes) -> None:
+    """Overwrite one catalog photo with a JPEG. Clears stale thumbs first."""
+    import tempfile
+
+    from app.catalog_storage import persist_catalog_photo, purge_catalog_photo_thumbs
+
+    fd, name = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    tmp_path = Path(name)
+    try:
+        tmp_path.write_bytes(body)
+        purge_catalog_photo_thumbs(getattr(row, "storage_path", None))
+        _, storage_path = persist_catalog_photo(account_id, tmp_path, photo_id=getattr(row, "id", None))
+        row.storage_path = storage_path
+        stem = Path(getattr(row, "original_name", None) or "photo").stem or "photo"
+        row.original_name = f"{stem}.jpg"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def lot_is_janet_furniture(
     sku: str | None,
     category: str | None,

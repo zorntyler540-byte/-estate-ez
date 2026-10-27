@@ -102,6 +102,15 @@ function isJanetFurnitureLot(row: {
   return JANET_FURNITURE_TITLE.test(row.auction_title || "");
 }
 
+function listingHeroPhoto(photos: LotPhoto[]): LotPhoto | null {
+  const eligible = photos.filter((photo) => {
+    const role = (photo.photo_role || "").toLowerCase();
+    if (role === "tape" || role === "unusable" || photo.shows_measuring_scale) return false;
+    return true;
+  });
+  return eligible.find((photo) => (photo.photo_role || "").toLowerCase() === "hero") || eligible[0] || null;
+}
+
 function listingRoleBadge(photo: LotPhoto): string | null {
   if (photo.shows_measuring_scale) return "Measure";
   if (photo.photo_role && LISTING_ROLE_LABEL[photo.photo_role]) {
@@ -291,6 +300,7 @@ export default function LotDetailPage() {
   const [zipDownloading, setZipDownloading] = useState(false);
   const [plainBgBusy, setPlainBgBusy] = useState(false);
   const [plainBgNote, setPlainBgNote] = useState("");
+  const [heroBgNote, setHeroBgNote] = useState("");
   const [plainBgColor, setPlainBgColor] = useState<"studio" | "white" | "gray">("studio");
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
@@ -743,6 +753,52 @@ export default function LotDetailPage() {
     }
   }
 
+  async function applyHeroBackground() {
+    if (!lot || !token) return;
+    const hero = listingHeroPhoto(catalogPhotos);
+    if (!hero) {
+      setHeroBgNote("This lot has no hero photo to place on a color.");
+      setError("This lot has no hero photo to place on a color.");
+      return;
+    }
+    setPlainBgBusy(true);
+    setError("");
+    setHeroBgNote("Asking AI to replace the hero background…");
+    try {
+      const res = (await apiFetch(
+        `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({ color: plainBgColor, hero_only: true })
+        }
+      )) as {
+        updated: number;
+        failed: number;
+        photos?: LotPhoto[];
+        errors?: string[];
+        notes?: string[];
+      };
+      if (Array.isArray(res.photos)) setCatalogPhotos(res.photos);
+      const bustAt = Date.now();
+      setThumbCacheBust((prev) => ({ ...prev, [hero.id]: bustAt }));
+      const problems = [...(res.notes || []), ...(res.errors || [])].filter(Boolean);
+      if (res.updated) {
+        setHeroBgNote(problems[0] || "AI updated the hero. Other photos stay as shot.");
+      } else {
+        const message = problems.join(" · ") || "The hero stayed as shot.";
+        setHeroBgNote(message);
+        setError(message);
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Could not place a color behind the hero";
+      setHeroBgNote(message);
+      setError(message);
+    } finally {
+      setPlainBgBusy(false);
+    }
+  }
+
   async function applyPlainBackground() {
     if (!lot || !token) return;
     const chosen =
@@ -858,11 +914,13 @@ export default function LotDetailPage() {
     }
   }
 
-  async function restorePlainBackground() {
+  async function restorePlainBackground(onlyIds?: string[], forHero = false) {
     if (!lot || !token) return;
+    const setNote = forHero ? setHeroBgNote : setPlainBgNote;
     const saved = catalogPhotos.filter((p) => p.plain_background);
-    const ids =
-      selectedPhotoIds.size > 0
+    const ids = onlyIds
+      ? onlyIds.filter((id) => saved.some((p) => p.id === id))
+      : selectedPhotoIds.size > 0
         ? Array.from(selectedPhotoIds).filter((id) => saved.some((p) => p.id === id))
         : saved.map((p) => p.id);
     if (!ids.length) {
@@ -871,7 +929,7 @@ export default function LotDetailPage() {
     }
     setPlainBgBusy(true);
     setError("");
-    setPlainBgNote("Restoring…");
+    setNote("Restoring…");
     try {
       const res = (await apiFetch(
         `/lots/${encodeURIComponent(lot.id)}/photos/plain-background/restore`,
@@ -889,15 +947,15 @@ export default function LotDetailPage() {
         return next;
       });
       if (res.failed) {
-        setPlainBgNote((res.errors || []).join(" · ") || "Could not restore the original photo.");
+        setNote((res.errors || []).join(" · ") || "Could not restore the original photo.");
         setError((res.errors || []).join(" · ") || "Could not restore the original photo.");
       } else {
         const n = ids.length;
-        setPlainBgNote(`Restored ${n} photo${n === 1 ? "" : "s"}.`);
+        setNote(`Restored ${n} photo${n === 1 ? "" : "s"}.`);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Could not restore the original photo";
-      setPlainBgNote(message);
+      setNote(message);
       setError(message);
     } finally {
       setPlainBgBusy(false);
@@ -2424,6 +2482,75 @@ export default function LotDetailPage() {
                 </div>
               </div>
             ) : null}
+            {catalogPhotos.length > 0 ? (
+              <div className="ct-upload-option">
+                <span className="ct-upload-option__icon" aria-hidden>
+                  <Paintbrush size={20} strokeWidth={1.75} />
+                </span>
+                <div className="ct-upload-option__text">
+                  <span className="ct-upload-option__title">Hero background</span>
+                  <span className="ct-upload-option__desc">
+                    {heroBgNote
+                      ? heroBgNote
+                      : "Optional. AI keeps the piece and replaces only the room behind the listing hero. On the sales page, AI on first photos does that for every lot. Detail, tape, and measurement photos stay as shot."}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+                  {(
+                    [
+                      ["studio", "#f3f0ea", "Warm"],
+                      ["white", "#ffffff", "White"],
+                      ["gray", "#e2e2e5", "Gray"]
+                    ] as const
+                  ).map(([id, swatch, label]) => (
+                    <button
+                      key={`hero-${id}`}
+                      type="button"
+                      className={`ct-btn ct-upload-option__btn${plainBgColor === id ? " ct-btn--primary" : ""}`}
+                      disabled={plainBgBusy}
+                      onClick={() => setPlainBgColor(id)}
+                      title={label}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          display: "inline-block",
+                          width: 12,
+                          height: 12,
+                          borderRadius: 2,
+                          background: swatch,
+                          border: "1px solid rgba(0,0,0,0.25)",
+                          marginRight: 6,
+                          verticalAlign: "-1px"
+                        }}
+                      />
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    disabled={plainBgBusy || batchRotating || addPhotosBusy}
+                    onClick={() => void applyHeroBackground()}
+                  >
+                    {plainBgBusy ? "Working…" : "Apply with AI"}
+                  </button>
+                  {catalogPhotos.some((photo) => photo.plain_background) ? (
+                    <button
+                      type="button"
+                      className="ct-btn ct-upload-option__btn"
+                      disabled={plainBgBusy}
+                      onClick={() => {
+                        const saved = catalogPhotos.filter((photo) => photo.plain_background).map((photo) => photo.id);
+                        if (saved.length) void restorePlainBackground(saved, true);
+                      }}
+                    >
+                      Restore original
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {isJanetFurnitureLot(lot) && catalogPhotos.length > 0 ? (
               <div className="ct-upload-option">
                 <span className="ct-upload-option__icon" aria-hidden>
@@ -2511,6 +2638,12 @@ export default function LotDetailPage() {
                   Use <strong>↺ ↻</strong> on a thumbnail for a quick rotate, or{" "}
                   <strong>Rotate all photos</strong> (or rotate checked ones) to flip many at once.
                   Click the image for crop and other edits in the full viewer.
+                </li>
+                <li>
+                  <strong>Hero background</strong> is optional. AI keeps the piece and replaces the room with Warm,
+                  White, or Gray. On this page that is the listing hero. On the sales page,{" "}
+                  <strong>AI on first photos</strong> does the first photo of every lot. Tape and measurement photos
+                  stay as shot. Restore original puts the saved photo back.
                 </li>
                 <li>
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle

@@ -2069,6 +2069,13 @@ export default function DashboardPage() {
   const [pendingMoveLotIds, setPendingMoveLotIds] = useState<string[] | null>(null);
   const [pullingCtSellerSales, setPullingCtSellerSales] = useState(false);
   const [pullCtSellerSalesMsg, setPullCtSellerSalesMsg] = useState("");
+  const [heroSaleColor, setHeroSaleColor] = useState<"studio" | "white" | "gray">("studio");
+  const [heroSaleBusy, setHeroSaleBusy] = useState(false);
+  const [heroSaleLive, setHeroSaleLive] = useState(false);
+  const [heroSaleNote, setHeroSaleNote] = useState("");
+  const [heroThumbNonce, setHeroThumbNonce] = useState(0);
+  const heroSaleStartRef = useRef(false);
+  const heroSaleLiveIdRef = useRef("");
   const [folderPick, setFolderPick] = useState<FolderPickPreview | null>(null);
   /** Full-screen preview index for staged upload thumbnails, or null. */
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null);
@@ -2868,6 +2875,101 @@ export default function DashboardPage() {
       /* private mode */
     }
   }, [showClosedSales]);
+
+  useEffect(() => {
+    if (!token || !selectedSaleId) {
+      setHeroSaleBusy(false);
+      setHeroSaleNote("");
+      return;
+    }
+    let cancelled = false;
+    const saleId = selectedSaleId;
+    if (!heroSaleStartRef.current) {
+      heroSaleLiveIdRef.current = "";
+      setHeroSaleBusy(false);
+      setHeroSaleLive(false);
+    }
+    setHeroSaleNote("");
+    void apiFetch(`/sales/${encodeURIComponent(saleId)}/hero-background`, token)
+      .then((raw) => {
+        if (cancelled || heroSaleStartRef.current) return;
+        const st = raw as {
+          running?: boolean;
+          done?: number;
+          total?: number;
+          current_sku?: string | null;
+        };
+        if (st.running) {
+          heroSaleLiveIdRef.current = saleId;
+          setHeroSaleBusy(true);
+          setHeroSaleLive(true);
+          const sku = st.current_sku ? ` · ${st.current_sku}` : "";
+          setHeroSaleNote(`AI backgrounds ${st.done || 0} of ${st.total || 0}${sku}`);
+        } else if (!heroSaleStartRef.current) {
+          setHeroSaleBusy(false);
+          setHeroSaleLive(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && !heroSaleStartRef.current) {
+          setHeroSaleBusy(false);
+          setHeroSaleLive(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedSaleId]);
+
+  useEffect(() => {
+    if (!token || !selectedSaleId || !heroSaleLive) return;
+    let stop = false;
+    const saleId = selectedSaleId;
+    const tick = async () => {
+      try {
+        const st = (await apiFetch(`/sales/${encodeURIComponent(saleId)}/hero-background`, token)) as {
+          running?: boolean;
+          done?: number;
+          total?: number;
+          updated?: number;
+          failed?: number;
+          skipped?: number;
+          current_sku?: string | null;
+          last_error?: string | null;
+        };
+        if (stop || heroSaleLiveIdRef.current !== saleId) return;
+        if (st.running) {
+          const sku = st.current_sku ? ` · ${st.current_sku}` : "";
+          setHeroSaleNote(`AI backgrounds ${st.done || 0} of ${st.total || 0}${sku}`);
+          return;
+        }
+        heroSaleLiveIdRef.current = "";
+        const updated = st.updated || 0;
+        const skipped = st.skipped || 0;
+        const failed = st.failed || 0;
+        const parts = [`AI background on ${updated} first photo${updated === 1 ? "" : "s"}.`];
+        if (skipped) parts.push(`${skipped} lot${skipped === 1 ? "" : "s"} had no listing photo.`);
+        if (failed) parts.push(`${failed} could not be changed.`);
+        if (failed && st.last_error) parts.push(st.last_error);
+        setHeroSaleNote(parts.join(" "));
+        setHeroSaleBusy(false);
+        setHeroSaleLive(false);
+        setHeroThumbNonce((n) => n + 1);
+        setDataReloadNonce((n) => n + 1);
+      } catch {
+        if (!stop) {
+          setHeroSaleBusy(false);
+          setHeroSaleLive(false);
+        }
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 2000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [token, selectedSaleId, heroSaleLive]);
 
   useEffect(() => {
     if (showClosedSales || !sales.length) return;
@@ -5354,6 +5456,45 @@ export default function DashboardPage() {
     }
   }
 
+  async function startSaleHeroBackground() {
+    if (!token || !selectedSaleId || heroSaleBusy || selectedSaleClosed) return;
+    const colorLabel = heroSaleColor === "white" ? "White" : heroSaleColor === "gray" ? "Gray" : "Warm";
+    if (
+      !window.confirm(
+        `Put a ${colorLabel.toLowerCase()} AI background on the first photo of every lot in this sale?\n\n` +
+          "SKU tape and measurement photos are skipped. Other photos stay as shot. " +
+          "This takes about 10 seconds per lot. Lots already on CT Seller keep their current pictures until you update them there. " +
+          "Restore is on each lot page."
+      )
+    ) {
+      return;
+    }
+    heroSaleStartRef.current = true;
+    setHeroSaleBusy(true);
+    setHeroSaleNote("Starting AI backgrounds…");
+    setError("");
+    try {
+      const st = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/hero-background`, token, {
+        method: "POST",
+        body: JSON.stringify({ color: heroSaleColor })
+      })) as { running?: boolean; total?: number; updated?: number };
+      if (st.running) {
+        heroSaleLiveIdRef.current = selectedSaleId;
+        setHeroSaleLive(true);
+      } else {
+        setHeroSaleBusy(false);
+        setHeroSaleNote(st.total ? "AI backgrounds finished." : "This sale has no lots.");
+      }
+    } catch (e) {
+      setHeroSaleBusy(false);
+      setHeroSaleLive(false);
+      setHeroSaleNote("");
+      setError(e instanceof Error ? e.message : "Could not start AI backgrounds");
+    } finally {
+      heroSaleStartRef.current = false;
+    }
+  }
+
   async function sortSalePhotosForListing() {
     if (!token || !selectedSaleId) return;
     if (
@@ -6500,6 +6641,34 @@ export default function DashboardPage() {
               >
                 Sort for listing
               </button>
+              {(
+                [
+                  ["studio", "Warm"],
+                  ["white", "White"],
+                  ["gray", "Gray"]
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={`sale-hero-${id}`}
+                  type="button"
+                  className={`ct-btn${heroSaleColor === id ? " ct-btn--primary" : ""}`}
+                  disabled={heroSaleBusy || !token || !selectedSaleId || selectedSaleClosed}
+                  onClick={() => setHeroSaleColor(id)}
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="ct-btn ct-btn--primary"
+                disabled={
+                  heroSaleBusy || pullingCtSellerSales || !token || !selectedSaleId || selectedSaleClosed || lots.length === 0
+                }
+                title="AI keeps the piece and replaces the room on the first photo of every lot. SKU tape and measurements stay as shot."
+                onClick={() => void startSaleHeroBackground()}
+              >
+                {heroSaleBusy ? "AI backgrounds…" : "AI on first photos"}
+              </button>
             </div>
             <div className="ct-toolbar__cluster ct-toolbar__cluster--check">
               <label
@@ -6582,6 +6751,11 @@ export default function DashboardPage() {
           {pullCtSellerSalesMsg ? (
             <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
               {pullCtSellerSalesMsg}
+            </p>
+          ) : null}
+          {heroSaleNote ? (
+            <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
+              {heroSaleNote}
             </p>
           ) : null}
           {!sales.length && !pullCtSellerSalesMsg ? (
@@ -7783,7 +7957,13 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="ct-lot-mobile-card__thumb">
-                <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
+                <LotThumbnail
+                  key={`${lot.id}-hero-${heroThumbNonce}`}
+                  lotId={lot.id}
+                  token={token}
+                  hasThumbnail={lot.has_thumbnail}
+                  size={56}
+                />
               </div>
               <div className="ct-lot-mobile-card__body">
                 <span className={lotSkuBadgeClass(lot)} title={lotSkuCellTitle(lot)}>
@@ -7963,7 +8143,13 @@ export default function DashboardPage() {
                 />
               </td>
               <td className="ct-table__photo">
-                <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={56} />
+                <LotThumbnail
+                  key={`${lot.id}-hero-${heroThumbNonce}`}
+                  lotId={lot.id}
+                  token={token}
+                  hasThumbnail={lot.has_thumbnail}
+                  size={56}
+                />
               </td>
               <td className="ct-sku-cell" title={lotSkuCellTitle(lot)}>
                 <span className={lotSkuBadgeClass(lot)}>{lot.sku || "—"}</span>
