@@ -131,7 +131,7 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
         )
         with gemini_slot():
             response = client.models.generate_content(
-                model=(settings.hero_bg_gemini_model or "gemini-3.1-flash-image").strip(),
+                model=(settings.hero_bg_gemini_model or "gemini-nano-banana-2.1").strip(),
                 contents=[
                     types.Part.from_bytes(data=prepared, mime_type="image/jpeg"),
                     prompt,
