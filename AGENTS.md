@@ -40,8 +40,13 @@ cloud-specific gotchas; do not duplicate standard docs.
   needed — just start the API from a shell that has the env var. The photo pipeline entry
   point is `app.core.gemini.analyze_photo_from_bytes` (image bytes -> structured
   `InventoryTableEntry` row).
-- **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
-  into the environment; they are not part of the update script.
+- **System deps:** `libheif1` (HEIC / `pillow-heif`) is on the base image. The environment
+  install script installs `python3.12-venv` when `python3 -c "import ensurepip"` fails
+  (`python3 -m venv --help` can succeed before the package is actually installed). It then
+  creates `backend/.venv`, installs `requirements.txt` plus `pytest` and `httpx` (the suite
+  imports pytest; FastAPI's TestClient needs httpx), writes `backend/.env` with SQLite when
+  that file is missing, and runs `npm ci` in `frontend/` and `mobile/`. `start` launches the
+  API on port 8000 and Next.js on port 3000. The catalog worker and Expo are not started.
 
 ### Production architecture & catalog-upload reliability (mobile → API → worker)
 
