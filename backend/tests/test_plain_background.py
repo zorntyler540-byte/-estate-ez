@@ -6,9 +6,12 @@ from io import BytesIO
 
 from PIL import Image
 
+from types import SimpleNamespace
+
 from app.services.plain_background import (
     composite_cutout,
     jpeg_bytes_rgb,
+    listing_hero_photo,
     lot_is_janet_furniture,
     plain_bg_sidecar_path,
     sku_prefix,
@@ -24,6 +27,25 @@ def test_sku_prefix_and_janet_furniture_gate() -> None:
     assert lot_is_janet_furniture("JL12", "Household Goods Other", "Oak dresser")
     assert not lot_is_janet_furniture("JL12", "Glassware", "Crystal bowl")
     assert not lot_is_janet_furniture("MS12", "Furniture", "Oak dresser")
+
+
+def test_listing_hero_skips_tape_and_prefers_the_hero_role() -> None:
+    photos = [
+        SimpleNamespace(original_name="tape.jpg", photo_role="tape", shows_measuring_scale=False),
+        SimpleNamespace(original_name="detail.jpg", photo_role="item_front", shows_measuring_scale=False),
+        SimpleNamespace(original_name="measure.jpg", photo_role="angle_only", shows_measuring_scale=True),
+        SimpleNamespace(original_name="cover.jpg", photo_role="hero", shows_measuring_scale=False),
+    ]
+    hero = listing_hero_photo(photos)
+    assert hero is not None and hero.original_name == "cover.jpg"
+    first = listing_hero_photo(
+        [
+            SimpleNamespace(original_name="first.jpg", photo_role=None, shows_measuring_scale=False),
+            SimpleNamespace(original_name="second.jpg", photo_role="item_front", shows_measuring_scale=False),
+        ]
+    )
+    assert first is not None and first.original_name == "first.jpg"
+    assert listing_hero_photo([]) is None
 
 
 def test_composite_paints_color_around_the_piece() -> None:
@@ -133,16 +155,19 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
     src_c = tmp_path / "c.jpg"
     src_d = tmp_path / "d.jpg"
     src_e = tmp_path / "e.jpg"
+    src_f = tmp_path / "f.jpg"
     Image.new("RGB", (40, 24), (200, 20, 20)).save(src_a, format="JPEG")
     Image.new("RGB", (40, 24), (20, 20, 200)).save(src_b, format="JPEG")
     Image.new("RGB", (40, 24), (20, 180, 20)).save(src_c, format="JPEG")
     Image.new("RGB", (40, 24), (10, 200, 10)).save(src_d, format="JPEG")
     Image.new("RGB", (40, 24), (220, 180, 20)).save(src_e, format="JPEG")
+    Image.new("RGB", (40, 24), (30, 30, 180)).save(src_f, format="JPEG")
     _, key_a = persist_catalog_photo(account.id, src_a, photo_id="photo-a")
     _, key_b = persist_catalog_photo(account.id, src_b, photo_id="photo-b")
     _, key_c = persist_catalog_photo(account.id, src_c, photo_id="photo-c")
     _, key_d = persist_catalog_photo(account.id, src_d, photo_id="photo-d")
     _, key_e = persist_catalog_photo(account.id, src_e, photo_id="photo-e")
+    _, key_f = persist_catalog_photo(account.id, src_f, photo_id="photo-f")
     db.add_all(
         [
             account,
@@ -195,6 +220,17 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
                 original_name="c.jpg",
                 storage_path=key_c,
                 sort_order=0,
+                photo_role="item_front",
+            ),
+            Photo(
+                id="photo-f",
+                account_id=account.id,
+                user_id=user.id,
+                lot_id=other.id,
+                original_name="f.jpg",
+                storage_path=key_f,
+                sort_order=1,
+                photo_role="hero",
             ),
         ]
     )
@@ -213,6 +249,28 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
     try:
         denied = client.post("/lots/lot-ms/photos/plain-background", json={"color": "studio"})
         assert denied.status_code == 403, denied.text
+
+        hero_only = client.post(
+            "/lots/lot-ms/photos/plain-background",
+            json={"color": "gray", "hero_only": True, "photo_ids": ["photo-c"]},
+        )
+        assert hero_only.status_code == 200, hero_only.text
+        hero_body = hero_only.json()
+        assert hero_body["updated"] == 1
+        assert any("hero" in note.lower() for note in hero_body["notes"])
+        with Image.open(resolve_catalog_storage_path(key_f)) as im:
+            pixel = im.getpixel((2, 2))
+            assert abs(pixel[0] - pixel[1]) < 20 and pixel[0] > 200
+        with Image.open(resolve_catalog_storage_path(key_c)) as im:
+            assert im.getpixel((2, 2))[1] > 150
+        restored_hero = client.post(
+            "/lots/lot-ms/photos/plain-background/restore",
+            json={"photo_ids": ["photo-f"]},
+        )
+        assert restored_hero.status_code == 200, restored_hero.text
+        assert restored_hero.json()["updated"] == 1
+        with Image.open(resolve_catalog_storage_path(key_f)) as im:
+            assert im.getpixel((2, 2))[2] > 150
 
         tape = client.post(
             "/lots/lot-bg/photos/plain-background",

@@ -4835,6 +4835,7 @@ def plain_background_lot_photos(
         PLAIN_BG_CHUNK,
         discard_plain_bg_original,
         ensure_plain_bg_original,
+        listing_hero_photo,
         lot_is_janet_furniture,
         render_plain_backgrounds,
     )
@@ -4842,7 +4843,8 @@ def plain_background_lot_photos(
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
-    if not lot_is_janet_furniture(lot.sku, lot.ct_category, lot.auction_title):
+    hero_only = bool(body.hero_only)
+    if not hero_only and not lot_is_janet_furniture(lot.sku, lot.ct_category, lot.auction_title):
         raise HTTPException(
             status_code=403,
             detail="Plain backgrounds are only for Janet furniture lots (SKU starting with JL).",
@@ -4851,8 +4853,15 @@ def plain_background_lot_photos(
     existing = _lot_photos_ordered(db, lot_id, current.account_id)
     if not existing:
         raise HTTPException(status_code=400, detail="This lot has no catalog photos.")
-    want = list(dict.fromkeys(body.photo_ids or []))
-    targets, notes = _plain_bg_targets(existing, want or None)
+    if hero_only:
+        hero = listing_hero_photo(existing)
+        if hero is None:
+            raise HTTPException(status_code=400, detail="This lot has no hero photo to place on a color.")
+        targets = [hero]
+        notes = ["Only the listing hero is changed. Other photos stay as shot."]
+    else:
+        want = list(dict.fromkeys(body.photo_ids or []))
+        targets, notes = _plain_bg_targets(existing, want or None)
 
     updated = 0
     failed = 0
@@ -4949,7 +4958,6 @@ def restore_plain_background_lot_photos(
     from app import object_storage
     from app.services.plain_background import (
         discard_plain_bg_original,
-        lot_is_janet_furniture,
         plain_bg_sidecar_key,
         plain_bg_sidecar_path,
     )
@@ -4957,11 +4965,6 @@ def restore_plain_background_lot_photos(
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
-    if not lot_is_janet_furniture(lot.sku, lot.ct_category, lot.auction_title):
-        raise HTTPException(
-            status_code=403,
-            detail="Plain backgrounds are only for Janet furniture lots (SKU starting with JL).",
-        )
     _assert_sale_editable_for_lot_moves(db, lot.sale_id, current)
     existing = _lot_photos_ordered(db, lot_id, current.account_id)
     payload = body or RestorePlainBackgroundIn()

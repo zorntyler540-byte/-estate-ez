@@ -839,13 +839,18 @@ class RotateLotPhotosOut(BaseModel):
 
 
 class PlainBackgroundIn(BaseModel):
-    """Cut the piece out and place it on a flat color. Janet JL furniture lots only."""
+    """Cut the piece out and place it on a flat color.
+
+    ``hero_only`` works on any lot and changes the listing hero alone.
+    Without it, the call stays limited to Janet JL furniture lots.
+    """
 
     color: Literal["studio", "white", "gray"] = "studio"
+    hero_only: bool = False
     photo_ids: list[str] | None = Field(
         default=None,
         max_length=PLAIN_BG_MAX_PHOTOS,
-        description="When omitted, only the first listing photo (not SKU tape) is changed. SKU tape ids are skipped.",
+        description="When omitted, only the first listing photo (not SKU tape) is changed. Ignored when hero_only is set.",
     )
 
 

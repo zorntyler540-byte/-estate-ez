@@ -65,6 +65,30 @@ def sku_prefix(sku: str | None) -> str:
     return tail.group(1).upper() if tail else ""
 
 
+def listing_hero_photo(photos: list) -> object | None:
+    """The cover frame: a ``hero`` role if one exists, otherwise the first listing photo.
+
+    SKU-tape, unusable, and measuring-tape frames are never the hero.
+    """
+    from app.catalog_limits import is_catalog_video_filename
+    from app.services.photo_roles import is_hero_eligible_photo_role, is_sku_tape_photo_role
+
+    eligible: list = []
+    for photo in photos:
+        if is_catalog_video_filename(getattr(photo, "original_name", None)):
+            continue
+        role = getattr(photo, "photo_role", None)
+        if is_sku_tape_photo_role(role) or not is_hero_eligible_photo_role(role):
+            continue
+        if bool(getattr(photo, "shows_measuring_scale", False)):
+            continue
+        eligible.append(photo)
+    for photo in eligible:
+        if str(getattr(photo, "photo_role", "") or "").strip().lower() == "hero":
+            return photo
+    return eligible[0] if eligible else None
+
+
 def lot_is_janet_furniture(
     sku: str | None,
     category: str | None,
