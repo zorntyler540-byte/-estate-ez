@@ -763,7 +763,7 @@ export default function LotDetailPage() {
     }
     setPlainBgBusy(true);
     setError("");
-    setHeroBgNote("Working on the hero…");
+    setHeroBgNote("Asking AI to replace the hero background…");
     try {
       const res = (await apiFetch(
         `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
@@ -784,7 +784,7 @@ export default function LotDetailPage() {
       setThumbCacheBust((prev) => ({ ...prev, [hero.id]: bustAt }));
       const problems = [...(res.notes || []), ...(res.errors || [])].filter(Boolean);
       if (res.updated) {
-        setHeroBgNote(problems[0] || "Updated the hero. Other photos stay as shot.");
+        setHeroBgNote(problems[0] || "AI updated the hero. Other photos stay as shot.");
       } else {
         const message = problems.join(" · ") || "The hero stayed as shot.";
         setHeroBgNote(message);
@@ -2492,7 +2492,7 @@ export default function LotDetailPage() {
                   <span className="ct-upload-option__desc">
                     {heroBgNote
                       ? heroBgNote
-                      : "Optional. Cuts the listing hero out of the room and places it on a flat color. Detail, tape, and measurement photos stay as shot."}
+                      : "Optional. AI keeps the piece and replaces only the room behind the listing hero. Detail, tape, and measurement photos stay as shot."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -2533,7 +2533,7 @@ export default function LotDetailPage() {
                     disabled={plainBgBusy || batchRotating || addPhotosBusy}
                     onClick={() => void applyHeroBackground()}
                   >
-                    {plainBgBusy ? "Working…" : "Apply to hero"}
+                    {plainBgBusy ? "Working…" : "Apply with AI"}
                   </button>
                   {listingHeroPhoto(catalogPhotos)?.plain_background ? (
                     <button
@@ -2640,8 +2640,9 @@ export default function LotDetailPage() {
                   Click the image for crop and other edits in the full viewer.
                 </li>
                 <li>
-                  <strong>Hero background</strong> is optional. It changes only the listing hero. Detail, tape, and
-                  measurement photos stay as shot. Restore hero puts that original back.
+                  <strong>Hero background</strong> is optional. AI changes only the listing hero, keeping the piece and
+                  replacing the room with Warm, White, or Gray. Detail, tape, and measurement photos stay as shot.
+                  Restore hero puts that original back.
                 </li>
                 <li>
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle

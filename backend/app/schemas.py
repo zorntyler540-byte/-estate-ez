@@ -839,10 +839,10 @@ class RotateLotPhotosOut(BaseModel):
 
 
 class PlainBackgroundIn(BaseModel):
-    """Cut the piece out and place it on a flat color.
+    """Place the piece on a flat color.
 
-    ``hero_only`` works on any lot and changes the listing hero alone.
-    Without it, the call stays limited to Janet JL furniture lots.
+    ``hero_only`` uses AI on any lot and changes the listing hero alone.
+    Without it, the call stays a local cutout limited to Janet JL furniture lots.
     """
 
     color: Literal["studio", "white", "gray"] = "studio"

@@ -4828,7 +4828,7 @@ def plain_background_lot_photos(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PlainBackgroundOut:
-    """Cut Janet furniture out of the room and place it on a flat color. Originals can be restored."""
+    """Janet lots: cut photos onto a flat color. hero_only: AI edits the listing cover. Originals can be restored."""
     import subprocess
 
     from app.services.plain_background import (
@@ -4858,7 +4858,7 @@ def plain_background_lot_photos(
         if hero is None:
             raise HTTPException(status_code=400, detail="This lot has no hero photo to place on a color.")
         targets = [hero]
-        notes = ["Only the listing hero is changed. Other photos stay as shot."]
+        notes = ["AI replaced only the listing hero background. Other photos stay as shot."]
     else:
         want = list(dict.fromkeys(body.photo_ids or []))
         targets, notes = _plain_bg_targets(existing, want or None)
@@ -4886,7 +4886,12 @@ def plain_background_lot_photos(
         if not payloads:
             continue
         try:
-            rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
+            if hero_only:
+                from app.services.hero_background import render_hero_backgrounds
+
+                rendered, cut_errors = render_hero_backgrounds(payloads, body.color)
+            else:
+                rendered, cut_errors = render_plain_backgrounds(payloads, body.color)
         except subprocess.TimeoutExpired:
             for row, fresh in created:
                 if fresh:

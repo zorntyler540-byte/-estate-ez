@@ -110,12 +110,23 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
 
     monkeypatch.setattr("app.catalog_storage._BACKEND_DIR", tmp_path)
 
+    calls = {"plain": 0, "hero": 0}
+
     def fake_render(sources: dict[str, bytes], color_name: str):
         color = plain_bg.PLAIN_BG_COLORS[color_name]
         ok = {pid: jpeg_bytes_rgb(Image.new("RGB", (30, 16), color)) for pid in sources}
         return ok, {}
 
-    monkeypatch.setattr(plain_bg, "render_plain_backgrounds", fake_render)
+    def fake_plain(sources: dict[str, bytes], color_name: str):
+        calls["plain"] += 1
+        return fake_render(sources, color_name)
+
+    def fake_hero(sources: dict[str, bytes], color_name: str):
+        calls["hero"] += 1
+        return fake_render(sources, color_name)
+
+    monkeypatch.setattr(plain_bg, "render_plain_backgrounds", fake_plain)
+    monkeypatch.setattr("app.services.hero_background.render_hero_backgrounds", fake_hero)
 
     engine = create_engine(f"sqlite:///{tmp_path / 'plain.db'}")
     Base.metadata.create_all(engine)
@@ -258,6 +269,8 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
         hero_body = hero_only.json()
         assert hero_body["updated"] == 1
         assert any("hero" in note.lower() for note in hero_body["notes"])
+        assert calls["hero"] == 1
+        assert calls["plain"] == 0
         with Image.open(resolve_catalog_storage_path(key_f)) as im:
             pixel = im.getpixel((2, 2))
             assert abs(pixel[0] - pixel[1]) < 20 and pixel[0] > 200
