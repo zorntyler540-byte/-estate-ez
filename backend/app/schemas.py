@@ -866,6 +866,24 @@ class RestorePlainBackgroundIn(BaseModel):
     photo_ids: list[str] | None = Field(default=None, max_length=40)
 
 
+class SaleHeroBackgroundIn(BaseModel):
+    """AI background for the first website photo of every lot in a sale."""
+
+    color: Literal["studio", "white", "gray"] = "studio"
+
+
+class SaleHeroBackgroundStatusOut(BaseModel):
+    running: bool = False
+    color: Literal["studio", "white", "gray"] = "studio"
+    total: int = 0
+    done: int = 0
+    updated: int = 0
+    failed: int = 0
+    skipped: int = 0
+    current_sku: str | None = None
+    last_error: str | None = None
+
+
 class TransferPhotosIn(BaseModel):
     """Move catalog photos into another lot in the same sale (same account)."""
 

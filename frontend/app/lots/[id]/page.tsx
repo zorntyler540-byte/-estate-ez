@@ -2492,7 +2492,7 @@ export default function LotDetailPage() {
                   <span className="ct-upload-option__desc">
                     {heroBgNote
                       ? heroBgNote
-                      : "Optional. AI keeps the piece and replaces only the room behind the listing hero. Detail, tape, and measurement photos stay as shot."}
+                      : "Optional. AI keeps the piece and replaces only the room behind the listing hero. On the sales page, AI on first photos does that for every lot. Detail, tape, and measurement photos stay as shot."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -2535,17 +2535,17 @@ export default function LotDetailPage() {
                   >
                     {plainBgBusy ? "Working…" : "Apply with AI"}
                   </button>
-                  {listingHeroPhoto(catalogPhotos)?.plain_background ? (
+                  {catalogPhotos.some((photo) => photo.plain_background) ? (
                     <button
                       type="button"
                       className="ct-btn ct-upload-option__btn"
                       disabled={plainBgBusy}
                       onClick={() => {
-                        const hero = listingHeroPhoto(catalogPhotos);
-                        if (hero) void restorePlainBackground([hero.id], true);
+                        const saved = catalogPhotos.filter((photo) => photo.plain_background).map((photo) => photo.id);
+                        if (saved.length) void restorePlainBackground(saved, true);
                       }}
                     >
-                      Restore hero
+                      Restore original
                     </button>
                   ) : null}
                 </div>
@@ -2640,9 +2640,10 @@ export default function LotDetailPage() {
                   Click the image for crop and other edits in the full viewer.
                 </li>
                 <li>
-                  <strong>Hero background</strong> is optional. AI changes only the listing hero, keeping the piece and
-                  replacing the room with Warm, White, or Gray. Detail, tape, and measurement photos stay as shot.
-                  Restore hero puts that original back.
+                  <strong>Hero background</strong> is optional. AI keeps the piece and replaces the room with Warm,
+                  White, or Gray. On this page that is the listing hero. On the sales page,{" "}
+                  <strong>AI on first photos</strong> does the first photo of every lot. Tape and measurement photos
+                  stay as shot. Restore original puts the saved photo back.
                 </li>
                 <li>
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle

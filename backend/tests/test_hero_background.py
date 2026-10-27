@@ -9,6 +9,19 @@ from app.services.hero_background import (
     hero_background_prompt,
     image_bytes_from_response,
 )
+from app.services.plain_background import first_website_photo
+
+
+def test_first_website_photo_is_the_first_listing_frame() -> None:
+    photos = [
+        SimpleNamespace(original_name="tape.jpg", photo_role="tape", shows_measuring_scale=False),
+        SimpleNamespace(original_name="first.jpg", photo_role="item_front", shows_measuring_scale=False),
+        SimpleNamespace(original_name="later-hero.jpg", photo_role="hero", shows_measuring_scale=False),
+        SimpleNamespace(original_name="measure.jpg", photo_role="angle_only", shows_measuring_scale=True),
+    ]
+    picked = first_website_photo(photos)
+    assert picked is not None and picked.original_name == "first.jpg"
+    assert first_website_photo([]) is None
 
 
 def test_closest_aspect_keeps_orientation() -> None:

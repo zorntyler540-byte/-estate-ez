@@ -89,6 +89,8 @@ from app.schemas import (
     RotateLotPhotosIn,
     RotateLotPhotosOut,
     PlainBackgroundIn,
+    SaleHeroBackgroundIn,
+    SaleHeroBackgroundStatusOut,
     PlainBackgroundOut,
     RestorePlainBackgroundIn,
     HealthResponse,
@@ -2727,6 +2729,58 @@ def sort_sale_photos_for_listing(
     return {"lots_total": len(lots), "lots_fixed": fixed}
 
 
+@app.post("/sales/{sale_id}/hero-background", response_model=SaleHeroBackgroundStatusOut)
+def start_sale_hero_background(
+    sale_id: str,
+    body: SaleHeroBackgroundIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleHeroBackgroundStatusOut:
+    """AI-replace the room on the first website photo of every lot. Runs in the background."""
+    from app.hero_background_tasks import hero_background_status, start_sale_hero_backgrounds
+
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+    sale = _assert_sale_editable_for_lot_moves(db, sale_id, current)
+    payload = body or SaleHeroBackgroundIn()
+    lot_ids = [
+        row[0]
+        for row in db.query(Lot.id)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .order_by(Lot.sku.asc(), Lot.created_at.asc(), Lot.id.asc())
+        .all()
+    ]
+    try:
+        snap = start_sale_hero_backgrounds(
+            account_id=current.account_id,
+            sale_id=sale.id,
+            lot_ids=lot_ids,
+            color=payload.color,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "hero_background_already_running":
+            raise HTTPException(
+                status_code=409,
+                detail="AI backgrounds are already running for this sale.",
+            ) from exc
+        raise
+    return SaleHeroBackgroundStatusOut.model_validate(snap or hero_background_status(sale_id=sale.id, account_id=current.account_id))
+
+
+@app.get("/sales/{sale_id}/hero-background", response_model=SaleHeroBackgroundStatusOut)
+def sale_hero_background_status(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleHeroBackgroundStatusOut:
+    """Progress for a sale-wide AI background running in this API process."""
+    from app.hero_background_tasks import hero_background_status
+
+    sale = _sale_for_user(sale_id, current, db)
+    snap = hero_background_status(sale_id=sale.id, account_id=current.account_id)
+    return SaleHeroBackgroundStatusOut.model_validate(snap)
+
+
 @app.post("/lots/{lot_id}/photos/sort-for-listing", response_model=list[LotPhotoOut])
 def sort_lot_photos_for_listing(
     lot_id: str,
@@ -4809,16 +4863,9 @@ def _plain_bg_targets(
 
 
 def _write_plain_bg_jpeg(account_id: str, row: Photo, body: bytes) -> None:
-    tmp_path = Path(tempfile.mkstemp(suffix=".jpg")[1])
-    try:
-        tmp_path.write_bytes(body)
-        purge_catalog_photo_thumbs(row.storage_path)
-        _, storage_path = persist_catalog_photo(account_id, tmp_path, photo_id=row.id)
-        row.storage_path = storage_path
-        stem = Path(row.original_name or "photo").stem or "photo"
-        row.original_name = f"{stem}.jpg"
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    from app.services.plain_background import write_replaced_catalog_jpeg
+
+    write_replaced_catalog_jpeg(account_id, row, body)
 
 
 @app.post("/lots/{lot_id}/photos/plain-background", response_model=PlainBackgroundOut)
@@ -4881,7 +4928,9 @@ def plain_background_lot_photos(
             fresh = ensure_plain_bg_original(row.storage_path, src)
             if fresh:
                 row.plain_bg_saved = True
-            payloads[row.id] = src.read_bytes()
+            from app.services.plain_background import plain_bg_edit_source_bytes
+
+            payloads[row.id] = plain_bg_edit_source_bytes(row.storage_path, src)
             created.append((row, fresh))
         if not payloads:
             continue

@@ -217,6 +217,34 @@ export async function listLotVideos(token: string, lotId: string): Promise<LotVi
 }
 
 /** Batch presigned R2 cover URLs for a sale (one request for the whole grid). */
+export type HeroBackgroundStatus = {
+  running: boolean;
+  color: "studio" | "white" | "gray";
+  total: number;
+  done: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+  current_sku?: string | null;
+  last_error?: string | null;
+};
+
+export async function startSaleHeroBackground(
+  token: string,
+  saleId: string,
+  color: "studio" | "white" | "gray"
+): Promise<HeroBackgroundStatus> {
+  return apiFetch<HeroBackgroundStatus>(
+    `/sales/${encodeURIComponent(saleId)}/hero-background`,
+    token,
+    { method: "POST", body: JSON.stringify({ color }) }
+  );
+}
+
+export async function getSaleHeroBackground(token: string, saleId: string): Promise<HeroBackgroundStatus> {
+  return apiFetch<HeroBackgroundStatus>(`/sales/${encodeURIComponent(saleId)}/hero-background`, token);
+}
+
 export async function listSaleLotCoverUrls(
   token: string,
   saleId: string,
