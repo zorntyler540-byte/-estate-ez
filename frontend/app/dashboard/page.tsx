@@ -1023,6 +1023,8 @@ type AdminAccount = {
   owner_email?: string | null;
   plan_code: string;
   is_active: boolean;
+  feature_analytics?: boolean;
+  feature_facebook?: boolean;
   created_at: string;
   user_count: number;
   sale_count: number;
@@ -2018,6 +2020,8 @@ export default function DashboardPage() {
   const [adminSearch, setAdminSearch] = useState("");
   const [adminNameDraftById, setAdminNameDraftById] = useState<Record<string, string>>({});
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
+  const [adminAnalyticsDraftById, setAdminAnalyticsDraftById] = useState<Record<string, boolean>>({});
+  const [adminFacebookDraftById, setAdminFacebookDraftById] = useState<Record<string, boolean>>({});
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
   const [adminUsageDays, setAdminUsageDays] = useState(30);
@@ -3082,6 +3086,8 @@ export default function DashboardPage() {
       setAdminLoadAttempted(false);
       setAdminAccounts([]);
       setAdminPlanDraftById({});
+      setAdminAnalyticsDraftById({});
+      setAdminFacebookDraftById({});
       setAdminError("");
       return;
     }
@@ -3097,12 +3103,18 @@ export default function DashboardPage() {
         setIsMasterAdmin(true);
         const drafts: Record<string, string> = {};
         const nameDrafts: Record<string, string> = {};
+        const analyticsDrafts: Record<string, boolean> = {};
+        const facebookDrafts: Record<string, boolean> = {};
         arr.forEach((a) => {
           drafts[a.id] = a.plan_code || "beta_free";
           nameDrafts[a.id] = a.name || "";
+          analyticsDrafts[a.id] = a.feature_analytics !== false;
+          facebookDrafts[a.id] = a.feature_facebook !== false;
         });
         setAdminNameDraftById(nameDrafts);
         setAdminPlanDraftById(drafts);
+        setAdminAnalyticsDraftById(analyticsDrafts);
+        setAdminFacebookDraftById(facebookDrafts);
         setAdminUsageLoading(true);
         void apiFetch(`/admin/analytics?since_days=${adminUsageDays}`, token)
           .then((u) => {
@@ -5609,12 +5621,18 @@ export default function DashboardPage() {
       setAdminAccounts(rows);
       const drafts: Record<string, string> = {};
       const nameDrafts: Record<string, string> = {};
+      const analyticsDrafts: Record<string, boolean> = {};
+      const facebookDrafts: Record<string, boolean> = {};
       rows.forEach((a) => {
         drafts[a.id] = a.plan_code || "beta_free";
         nameDrafts[a.id] = a.name || "";
+        analyticsDrafts[a.id] = a.feature_analytics !== false;
+        facebookDrafts[a.id] = a.feature_facebook !== false;
       });
       setAdminNameDraftById(nameDrafts);
       setAdminPlanDraftById(drafts);
+      setAdminAnalyticsDraftById(analyticsDrafts);
+      setAdminFacebookDraftById(facebookDrafts);
       setIsMasterAdmin(true);
       setAdminUsageLoading(true);
       try {
@@ -5634,7 +5652,13 @@ export default function DashboardPage() {
 
   async function patchAdminAccount(
     accountId: string,
-    body: { is_active?: boolean; plan_code?: string; name?: string }
+    body: {
+      is_active?: boolean;
+      plan_code?: string;
+      name?: string;
+      feature_analytics?: boolean;
+      feature_facebook?: boolean;
+    }
   ) {
     if (!token) return;
     setAdminSavingAccountId(accountId);
@@ -5648,6 +5672,14 @@ export default function DashboardPage() {
       setAdminPlanDraftById((prev) => ({
         ...prev,
         [accountId]: updated.plan_code || prev[accountId] || "beta_free"
+      }));
+      setAdminAnalyticsDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.feature_analytics !== false
+      }));
+      setAdminFacebookDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.feature_facebook !== false
       }));
       setAdminNameDraftById((prev) => ({
         ...prev,
@@ -6851,7 +6883,7 @@ export default function DashboardPage() {
         <section className="ct-dash-panel ct-dash-admin" aria-label="Master admin">
           <h2 className="ct-dash-panel__title">Master admin</h2>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
-            Manage pilot accounts from one place: toggle access and set a plan label for internal tracking.
+            Full catalog keeps every tool. Auction Watcher can sign up on their own and only use the Push queue and Facebook posting. Turn those two switches off while a piece is still being wired up.
           </p>
           <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.75rem" }}>
             <button
@@ -6982,7 +7014,10 @@ export default function DashboardPage() {
                   {filteredAdminAccounts.map((a) => {
                     const busy = adminSavingAccountId === a.id;
                     const draft = adminPlanDraftById[a.id] ?? a.plan_code ?? "beta_free";
+                    const analyticsOn = adminAnalyticsDraftById[a.id] ?? a.feature_analytics !== false;
+                    const facebookOn = adminFacebookDraftById[a.id] ?? a.feature_facebook !== false;
                     const nameDraft = adminNameDraftById[a.id] ?? a.name ?? "";
+                    const knownPlan = draft === "beta_free" || draft === "watcher";
                     const usage = adminUsage?.by_account.find((u) => u.account_id === a.id) || null;
                     return (
                       <tr key={a.id}>
@@ -7006,15 +7041,42 @@ export default function DashboardPage() {
                           </div>
                         </td>
                         <td>
-                          <input
+                          <select
                             className="ct-input"
-                            style={{ width: 150 }}
+                            style={{ width: 180, marginBottom: "0.45rem" }}
                             value={draft}
+                            aria-label={`Plan for ${a.name}`}
                             onChange={(e) =>
                               setAdminPlanDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
                             }
                             disabled={busy}
-                          />
+                          >
+                            <option value="beta_free">Full catalog</option>
+                            <option value="watcher">Auction Watcher</option>
+                            {!knownPlan ? <option value={draft}>{draft}</option> : null}
+                          </select>
+                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", fontSize: "0.85rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={analyticsOn}
+                              disabled={busy}
+                              onChange={(e) =>
+                                setAdminAnalyticsDraftById((prev) => ({ ...prev, [a.id]: e.target.checked }))
+                              }
+                            />
+                            Push queue
+                          </label>
+                          <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", fontSize: "0.85rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={facebookOn}
+                              disabled={busy}
+                              onChange={(e) =>
+                                setAdminFacebookDraftById((prev) => ({ ...prev, [a.id]: e.target.checked }))
+                              }
+                            />
+                            Facebook posting
+                          </label>
                         </td>
                         <td>{a.is_active ? "Active" : "Inactive"}</td>
                         <td className="ct-muted" style={{ fontSize: "0.85rem" }}>
@@ -7064,10 +7126,16 @@ export default function DashboardPage() {
                             <button
                               type="button"
                               className="ct-btn"
-                              onClick={() => void patchAdminAccount(a.id, { plan_code: draft.trim() || "beta_free" })}
+                              onClick={() =>
+                                void patchAdminAccount(a.id, {
+                                  plan_code: draft.trim() || "beta_free",
+                                  feature_analytics: analyticsOn,
+                                  feature_facebook: facebookOn
+                                })
+                              }
                               disabled={busy || draft.trim().length < 2}
                             >
-                              Save plan
+                              Save access
                             </button>
                             <button
                               type="button"

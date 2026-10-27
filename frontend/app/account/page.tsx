@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { apiFetch } from "../../lib/api";
+import { isWatcherPlan, rememberAccountAccess } from "../../lib/plans";
 import { accountRoleLabel, isClientRole } from "../../lib/roles";
 
 type Me = {
@@ -12,6 +13,9 @@ type Me = {
   account_id: string;
   email: string;
   role: string;
+  plan_code?: string;
+  feature_analytics?: boolean;
+  feature_facebook?: boolean;
 };
 
 type SavedSuggestion = {
@@ -116,14 +120,63 @@ export default function AccountPage() {
       setLoading(false);
       return;
     }
+    const params = new URLSearchParams(window.location.search);
+    const fbFlag = params.get("facebook") || "";
+    const fbError = params.get("facebook_error") || "";
+    if (fbError) setFacebookErr(fbError);
+    else if (fbFlag === "connected") setFacebookMsg("Facebook Page connected.");
     void apiFetch("/auth/me", t)
       .then((data) => {
         const row = data as Me;
+        rememberAccountAccess(row);
         if (isClientRole(row.role)) {
           router.replace("/client");
           return;
         }
         setMe(row);
+        const watcher = isWatcherPlan(row.plan_code);
+        if (!watcher) {
+          void apiFetch("/integrations/ctseller", t)
+            .then((ct) => {
+              const connected = ct as { connected?: boolean; username?: string | null };
+              setCtSellerConnected(Boolean(connected.connected));
+              setCtSellerUsername((connected.username || "").trim());
+              if (connected.username) setCtSellerUserInput(String(connected.username));
+            })
+            .catch(() => {
+              /* optional until backend redeploys */
+            });
+        }
+        if (!watcher || row.feature_facebook !== false) {
+          void apiFetch("/integrations/facebook/status", t)
+            .then((status) => {
+              const fb = status as {
+                configured?: boolean;
+                connected?: boolean;
+                needs_reconnect?: boolean;
+                page_name?: string | null;
+                calendar_auto_approve?: boolean;
+              };
+              setFacebookConfigured(Boolean(fb.configured));
+              setFacebookConnected(Boolean(fb.connected));
+              setFacebookNeedsReconnect(Boolean(fb.needs_reconnect));
+              setFacebookPageName((fb.page_name || "").trim());
+              setFacebookCalendarAuto(Boolean(fb.calendar_auto_approve));
+              if (fb.configured && (fbFlag === "pick" || (fb.connected && !fb.page_name))) {
+                void apiFetch("/integrations/facebook/pages", t)
+                  .then((pages) => setFacebookPages(pages as typeof facebookPages))
+                  .catch(() => undefined);
+              }
+              if (fb.connected) {
+                void apiFetch("/facebook/posts?limit=12", t)
+                  .then((rows) => setFacebookPosts(rows as typeof facebookPosts))
+                  .catch(() => undefined);
+              }
+            })
+            .catch(() => {
+              /* feature hidden until API with META_APP_ID is deployed */
+            });
+        }
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : "Could not load account";
@@ -136,49 +189,6 @@ export default function AccountPage() {
         setError(msg);
       })
       .finally(() => setLoading(false));
-    void apiFetch("/integrations/ctseller", t)
-      .then((data) => {
-        const row = data as { connected?: boolean; username?: string | null };
-        setCtSellerConnected(Boolean(row.connected));
-        setCtSellerUsername((row.username || "").trim());
-        if (row.username) setCtSellerUserInput(String(row.username));
-      })
-      .catch(() => {
-        /* optional until backend redeploys */
-      });
-    const params = new URLSearchParams(window.location.search);
-    const fbFlag = params.get("facebook") || "";
-    const fbError = params.get("facebook_error") || "";
-    if (fbError) setFacebookErr(fbError);
-    else if (fbFlag === "connected") setFacebookMsg("Facebook Page connected.");
-    void apiFetch("/integrations/facebook/status", t)
-      .then((data) => {
-        const row = data as {
-          configured?: boolean;
-          connected?: boolean;
-          needs_reconnect?: boolean;
-          page_name?: string | null;
-          calendar_auto_approve?: boolean;
-        };
-        setFacebookConfigured(Boolean(row.configured));
-        setFacebookConnected(Boolean(row.connected));
-        setFacebookNeedsReconnect(Boolean(row.needs_reconnect));
-        setFacebookPageName((row.page_name || "").trim());
-        setFacebookCalendarAuto(Boolean(row.calendar_auto_approve));
-        if (row.configured && (fbFlag === "pick" || (row.connected && !row.page_name))) {
-          void apiFetch("/integrations/facebook/pages", t)
-            .then((pages) => setFacebookPages(pages as typeof facebookPages))
-            .catch(() => undefined);
-        }
-        if (row.connected) {
-          void apiFetch("/facebook/posts?limit=12", t)
-            .then((rows) => setFacebookPosts(rows as typeof facebookPosts))
-            .catch(() => undefined);
-        }
-      })
-      .catch(() => {
-        /* feature hidden until API with META_APP_ID is deployed */
-      });
   }, [router]);
 
   async function connectCtSeller() {
@@ -344,9 +354,9 @@ export default function AccountPage() {
   }
 
   useEffect(() => {
-    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    if (!token || !me || me.role.toLowerCase() !== "owner" || isWatcherPlan(me.plan_code)) return;
     void refreshSavedSuggestions();
-  }, [token, me?.id]);
+  }, [token, me?.id, me?.plan_code]);
 
   async function refreshTeamMembers() {
     if (!token || !me || me.role.toLowerCase() !== "owner") return;
@@ -477,9 +487,9 @@ export default function AccountPage() {
   }
 
   useEffect(() => {
-    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    if (!token || !me || me.role.toLowerCase() !== "owner" || isWatcherPlan(me.plan_code)) return;
     void refreshTeamMembers();
-  }, [token, me?.id]);
+  }, [token, me?.id, me?.plan_code]);
 
   if (!token) {
     return (
@@ -494,13 +504,25 @@ export default function AccountPage() {
     );
   }
 
+  const watcherAccount = isWatcherPlan(me?.plan_code);
+  const watcherAnalytics = watcherAccount && me?.feature_analytics !== false;
+  const watcherFacebook = watcherAccount && me?.feature_facebook !== false;
+
   return (
     <AppShell
       actions={
         <>
-          <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Dashboard
-          </Link>
+          {watcherAccount ? (
+            watcherAnalytics ? (
+              <Link href="/engagement" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+                Push queue
+              </Link>
+            ) : null
+          ) : (
+            <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
+              Dashboard
+            </Link>
+          )}
           <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
             Log out
           </button>
@@ -514,9 +536,11 @@ export default function AccountPage() {
             Account
           </h1>
           <p className="ct-subtitle" style={{ margin: 0 }}>
-            {me?.role?.toLowerCase() === "owner"
-              ? "Who you are in the app, password, feedback, and teammates. Catalog counts are on the Team tab."
-              : "Who you are in the app, password, and feedback."}
+            {watcherAccount
+              ? "Auction Watcher account. Catalog, AI, and CT Seller stay off."
+              : me?.role?.toLowerCase() === "owner"
+                ? "Who you are in the app, password, feedback, and teammates. Catalog counts are on the Team tab."
+                : "Who you are in the app, password, and feedback."}
           </p>
         </div>
       </header>
@@ -536,7 +560,9 @@ export default function AccountPage() {
             </div>
             <div>
               <span className="ct-label">Role</span>
-              <p style={{ margin: "0.25rem 0 0" }}>{accountRoleLabel(me.role)}</p>
+              <p style={{ margin: "0.25rem 0 0" }}>
+                {watcherAccount ? "Auction Watcher" : accountRoleLabel(me.role)}
+              </p>
             </div>
             <div>
               <span className="ct-label">User ID</span>
@@ -601,6 +627,23 @@ export default function AccountPage() {
         </div>
       </section>
 
+      {watcherAccount ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            What this account can use
+          </h2>
+          <p className="ct-lead" style={{ marginTop: 0, marginBottom: 0, fontSize: "0.95rem" }}>
+            {watcherAnalytics
+              ? "Push queue is on. Snapshots from the Windows Auction Watcher show up there."
+              : "Push queue is turned off until Estate-EZ enables it."}{" "}
+            {watcherFacebook
+              ? "Facebook posting is on. Connect the Page below, then approve posts from the Push queue."
+              : "Facebook posting is turned off until Estate-EZ enables it."}
+          </p>
+        </section>
+      ) : null}
+
+      {!watcherAccount ? (
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           CT Seller
@@ -674,16 +717,28 @@ export default function AccountPage() {
           </p>
         )}
       </section>
+      ) : null}
 
-      {facebookConfigured ? (
+      {watcherAccount && watcherFacebook && !facebookConfigured ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Facebook Page
+          </h2>
+          <p className="ct-lead" style={{ marginTop: 0, marginBottom: 0, fontSize: "0.95rem" }}>
+            Facebook posting is on for this account. The connect button shows up here once the Facebook app is connected on the server.
+          </p>
+        </section>
+      ) : null}
+
+      {facebookConfigured && (!watcherAccount || watcherFacebook) ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <h2 className="ct-section-title" style={{ marginTop: 0 }}>
             Facebook Page
           </h2>
           <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
-            Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption).
-            Push-calendar Instagram, Stories, and TikTok slots currently publish as Page feed posts.
-            Native Instagram, Groups, and Marketplace are not available here. Owners only to connect.
+            {watcherAccount
+              ? "Connect the franchise Facebook Page, then approve posts from the Push queue. Staff still post. Native Instagram, Groups, and Marketplace are not available here."
+              : "Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption). Push-calendar Instagram, Stories, and TikTok slots currently publish as Page feed posts. Native Instagram, Groups, and Marketplace are not available here. Owners only to connect."}
           </p>
           {facebookMsg ? <div className="ct-banner ct-banner--success">{facebookMsg}</div> : null}
           {facebookErr ? <div className="ct-banner ct-banner--error">{facebookErr}</div> : null}
@@ -779,6 +834,7 @@ export default function AccountPage() {
         </section>
       ) : null}
 
+      {!watcherAccount ? (
       <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
         <h2 className="ct-section-title" style={{ marginTop: 0 }}>
           Suggestions and improvements
@@ -833,7 +889,8 @@ export default function AccountPage() {
           {suggestionBusy ? "Sending…" : "Send to team"}
         </button>
       </section>
-      {me?.role?.toLowerCase() === "owner" ? (
+      ) : null}
+      {me?.role?.toLowerCase() === "owner" && !watcherAccount ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <h2 className="ct-section-title" style={{ marginTop: 0 }}>
             Team cataloggers
@@ -928,7 +985,7 @@ export default function AccountPage() {
           )}
         </section>
       ) : null}
-      {me?.role?.toLowerCase() === "owner" ? (
+      {me?.role?.toLowerCase() === "owner" && !watcherAccount ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <h2 className="ct-section-title" style={{ marginTop: 0 }}>
             Client logins
@@ -1048,7 +1105,7 @@ export default function AccountPage() {
           )}
         </section>
       ) : null}
-      {me?.role?.toLowerCase() === "owner" ? (
+      {me?.role?.toLowerCase() === "owner" && !watcherAccount ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
           <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <h2 className="ct-section-title" style={{ margin: 0 }}>

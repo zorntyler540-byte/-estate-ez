@@ -7,6 +7,7 @@ import { AppShell } from "../../components/AppShell";
 import { FindGroupsPanel } from "../../components/FindGroupsPanel";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
+import { isWatcherPlan, rememberAccountAccess, watcherHome } from "../../lib/plans";
 import { isOwnerRole, rememberAccountRole } from "../../lib/roles";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
@@ -104,23 +105,29 @@ export default function FacebookPage() {
     setSelectedSaleId(readStoredSaleId());
     void apiFetch("/auth/me", t)
       .then((me) => {
-        const role = String((me as { role?: string }).role || "");
+        const row = me as { role?: string; plan_code?: string; feature_analytics?: boolean; feature_facebook?: boolean };
+        const role = String(row.role || "");
         rememberAccountRole(role);
+        rememberAccountAccess(row);
         setAccountRole(role);
+        if (isWatcherPlan(row.plan_code)) {
+          router.replace(watcherHome(row));
+          return;
+        }
+        void apiFetch("/sales", t)
+          .then((rows) => {
+            const list = (rows as Sale[]).filter((s) => !s.closed_at);
+            setSales(list);
+            const stored = readStoredSaleId();
+            if (stored && list.some((s) => s.id === stored)) {
+              setSelectedSaleId(stored);
+            } else if (list[0]) {
+              setSelectedSaleId(list[0].id);
+            }
+          })
+          .catch((e) => setError(e instanceof Error ? e.message : "Could not load sales"));
       })
       .catch(() => setAccountRole(""));
-    void apiFetch("/sales", t)
-      .then((rows) => {
-        const list = (rows as Sale[]).filter((s) => !s.closed_at);
-        setSales(list);
-        const stored = readStoredSaleId();
-        if (stored && list.some((s) => s.id === stored)) {
-          setSelectedSaleId(stored);
-        } else if (list[0]) {
-          setSelectedSaleId(list[0].id);
-        }
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load sales"));
   }, [router]);
 
   const loadLots = useCallback(async () => {

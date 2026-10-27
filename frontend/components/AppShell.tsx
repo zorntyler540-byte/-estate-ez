@@ -5,6 +5,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Activity, Briefcase, ClipboardList, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import {
+  isWatcherPlan,
+  rememberAccountAccess,
+  storedAccountAccess,
+  watcherHome,
+  watcherPathBlocked,
+  type AccountAccess
+} from "../lib/plans";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
 
 type AppShellProps = {
@@ -87,9 +95,9 @@ function isNavActive(pathname: string, href: string, match: (p: string) => boole
   return match(pathname) || (href === "/dashboard" && pathname.startsWith("/lots/"));
 }
 
-function BrandMark() {
+function BrandMark({ href }: { href: string }) {
   return (
-    <Link href="/dashboard" className="ct-app-sidebar__brand">
+    <Link href={href} className="ct-app-sidebar__brand">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         className="ct-app-sidebar__logo"
@@ -106,16 +114,47 @@ function BrandMark() {
   );
 }
 
+type NavGroup = {
+  label: string;
+  items: ReadonlyArray<{
+    href: string;
+    label: string;
+    icon: typeof LayoutDashboard;
+    match: (p: string) => boolean;
+  }>;
+};
+
+function navGroupsFor(access: AccountAccess | null): readonly NavGroup[] {
+  if (!access || !isWatcherPlan(access.plan_code)) return NAV_GROUPS;
+  const items: NavGroup["items"][number][] = [];
+  if (access.feature_analytics !== false) {
+    items.push({
+      href: "/engagement",
+      label: "Push queue",
+      icon: Megaphone,
+      match: (p: string) => p.startsWith("/engagement")
+    });
+  }
+  items.push({
+    href: "/account",
+    label: "Settings",
+    icon: Settings,
+    match: (p: string) => p.startsWith("/account")
+  });
+  return [{ label: "Auction Watcher", items }];
+}
+
 type ShellNavLinksProps = {
   pathname: string;
+  groups: readonly NavGroup[];
   onNavigate?: () => void;
   linkClass?: string;
 };
 
-function ShellNavLinks({ pathname, onNavigate, linkClass = "ct-app-sidebar__link" }: ShellNavLinksProps) {
+function ShellNavLinks({ pathname, groups, onNavigate, linkClass = "ct-app-sidebar__link" }: ShellNavLinksProps) {
   return (
     <>
-      {NAV_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.label} className="ct-app-nav-group">
           <p className="ct-app-nav-group__label">{group.label}</p>
           {group.items.map(({ href, label, icon: Icon, match }) => {
@@ -143,6 +182,9 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
   const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  const [access, setAccess] = useState<AccountAccess | null>(null);
+  const groups = navGroupsFor(access);
+  const homeHref = access && isWatcherPlan(access.plan_code) ? watcherHome(access) : "/dashboard";
 
   const closeNav = useCallback(() => setNavOpen(false), []);
 
@@ -159,15 +201,27 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
   }, [pathname, closeNav]);
 
   useEffect(() => {
+    setAccess(storedAccountAccess());
+  }, []);
+
+  useEffect(() => {
     if (pathname.startsWith("/client")) return;
     const token = localStorage.getItem("token") || "";
     if (!token) return;
     let cancelled = false;
     void apiFetch("/auth/me", token)
       .then((data) => {
-        const role = String((data as { role?: string }).role || "");
+        const me = data as AccountAccess;
+        const role = String(me.role || "");
         rememberAccountRole(role);
-        if (!cancelled && isClientRole(role)) router.replace("/client");
+        rememberAccountAccess(me);
+        if (cancelled) return;
+        setAccess(me);
+        if (isClientRole(role)) {
+          router.replace("/client");
+          return;
+        }
+        if (watcherPathBlocked(pathname, me)) router.replace(watcherHome(me));
       })
       .catch(() => {
         /* leave the page; the screen handles auth errors */
@@ -200,9 +254,9 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
       className={`ct-app${navOpen ? " ct-app--nav-open" : ""}${mobileNav ? " ct-app--mobile-nav" : ""}${mobileBottomBar ? " ct-app--has-mobile-bar" : ""}`}
     >
       <aside className="ct-app-sidebar" aria-label="Main navigation">
-        <BrandMark />
+        <BrandMark href={homeHref} />
         <nav className="ct-app-sidebar__nav">
-          <ShellNavLinks pathname={pathname} />
+          <ShellNavLinks pathname={pathname} groups={groups} />
         </nav>
       </aside>
 
@@ -226,7 +280,7 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
           <div className="ct-app-topbar__start">
             {topBar ?? (
               <div className="ct-app-topbar__mobile-brand" aria-hidden>
-                <BrandMark />
+                <BrandMark href={homeHref} />
               </div>
             )}
           </div>
@@ -260,13 +314,18 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
             aria-label="Main navigation"
           >
             <div className="ct-app-nav-drawer__head">
-              <BrandMark />
+              <BrandMark href={homeHref} />
               <button type="button" className="ct-app-nav-drawer__close" onClick={closeNav} aria-label="Close menu">
                 <X size={20} aria-hidden />
               </button>
             </div>
             <nav className="ct-app-nav-drawer__nav">
-              <ShellNavLinks pathname={pathname} onNavigate={closeNav} linkClass="ct-app-nav-drawer__link" />
+              <ShellNavLinks
+                pathname={pathname}
+                groups={groups}
+                onNavigate={closeNav}
+                linkClass="ct-app-nav-drawer__link"
+              />
             </nav>
           </aside>
         </>
