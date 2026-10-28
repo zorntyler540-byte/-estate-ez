@@ -48,9 +48,11 @@ EmitFn = Callable[[dict[str, Any]], None]
 PhotoEntry = tuple[Path, str]
 
 # Per-photo triage is small; one listing + optional Pro dominate estimates.
+# Listing Flash text (system+user+schema) is ~3.5–4k after the prompt trim; plus one
+# listing photo the call is ~5.5k. Used for unmetered-job analytics fallbacks.
 EST_PIPELINE_INPUT_TOKENS_PER_PHOTO = 450
 EST_PIPELINE_OUTPUT_TOKENS_PER_PHOTO = 120
-EST_PIPELINE_LISTING_INPUT = 1800
+EST_PIPELINE_LISTING_INPUT = 5500
 EST_PIPELINE_LISTING_OUTPUT = 280
 EST_PIPELINE_PRO_INPUT = 3200
 EST_PIPELINE_PRO_OUTPUT = 600
