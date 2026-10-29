@@ -102,6 +102,10 @@ assert(
   "do not re-upload a lot already linked on the website"
 );
 assert(
+  shouldSkipReupload({ confirmedOnServer: false, matchingJobLiveOrDone: true }) === true,
+  "skip reupload when a live job already has this client_draft_id"
+);
+assert(
   shouldArchiveCatalogedDraft({
     status: "uploaded",
     confirmedOnServer: false,
@@ -149,4 +153,4 @@ assert(
   "short prefix does not guess when two lots share a stem"
 );
 
-console.log("archiveCataloged selftest ok (26 cases)");
+console.log("archiveCataloged selftest ok (27 cases)");

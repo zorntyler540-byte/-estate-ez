@@ -149,6 +149,17 @@ class Settings(BaseSettings):
     tape_verify_prompt_suffix: str = Field(default="", alias="TAPE_VERIFY_PROMPT_SUFFIX")
     # When true, log each inventory-loop step (file, sku, tape-verify timing) at INFO for stuck-job diagnosis.
     job_debug_inventory: bool = Field(default=False, alias="JOB_DEBUG_INVENTORY")
+    # Dashboard / phone stuck-job banner. Receiving uses last append (updated_at); processing uses
+    # last progress/updated timestamp. Failed orphan-upload cards are stuck regardless of age.
+    job_stuck_receiving_seconds: int = Field(
+        default=30 * 60, ge=60, le=24 * 3600, alias="JOB_STUCK_RECEIVING_SECONDS"
+    )
+    job_stuck_queued_seconds: int = Field(
+        default=10 * 60, ge=30, le=24 * 3600, alias="JOB_STUCK_QUEUED_SECONDS"
+    )
+    job_stuck_processing_seconds: int = Field(
+        default=60 * 60, ge=60, le=24 * 3600, alias="JOB_STUCK_PROCESSING_SECONDS"
+    )
 
     # Comma-separated browser origins allowed to call the API (production Next URL). Dev localhost always included.
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")

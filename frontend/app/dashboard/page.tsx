@@ -1383,11 +1383,43 @@ type Job = {
   inherit_sku_from_subfolder?: boolean;
   single_lot_mode?: boolean;
   single_lot_manual_sku?: string | null;
+  client_draft_id?: string | null;
   progress_phase?: string | null;
   progress_done?: number;
   progress_total?: number;
   progress_file_name?: string | null;
 };
+
+type StuckJob = {
+  id: string;
+  sale_id: string;
+  sale_name?: string | null;
+  sku?: string | null;
+  lot_id?: string | null;
+  status: string;
+  age_seconds: number;
+  progress_phase?: string | null;
+  progress_done?: number;
+  progress_total?: number;
+  error_message?: string | null;
+  client_draft_id?: string | null;
+};
+
+function stuckJobsFromResponse(data: unknown): StuckJob[] {
+  if (!data || typeof data !== "object") return [];
+  const jobs = (data as { jobs?: StuckJob[] }).jobs;
+  return Array.isArray(jobs) ? jobs : [];
+}
+
+function formatJobAge(seconds: number): string {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+}
 
 function jobFromUploadResponse(data: unknown): Job {
   if (!data || typeof data !== "object") {
@@ -2032,6 +2064,8 @@ export default function DashboardPage() {
   const inventorySkuFlagFilterRef = useRef<"" | "duplicate" | "text_mismatch" | "any">("");
   inventorySkuFlagFilterRef.current = inventorySkuFlagFilter;
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [stuckJobs, setStuckJobs] = useState<StuckJob[]>([]);
+  const [stuckJobsExpanded, setStuckJobsExpanded] = useState(true);
   const [completedJobsExpanded, setCompletedJobsExpanded] = useState(false);
   const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
@@ -2839,6 +2873,7 @@ export default function DashboardPage() {
           setSelectedSaleId("");
           setLots([]);
           setJobs([]);
+          setStuckJobs([]);
           setLoading(false);
           return;
         }
@@ -3054,6 +3089,15 @@ export default function DashboardPage() {
           setToken("");
           router.replace("/");
         }
+      });
+    void apiFetch(`/jobs/stuck?sale_id=${encodeURIComponent(selectedSaleId)}`, t)
+      .then((stuckData) => {
+        if (loadId !== inventoryLoadId.current) return;
+        setStuckJobs(stuckJobsFromResponse(stuckData));
+      })
+      .catch(() => {
+        if (loadId !== inventoryLoadId.current) return;
+        setStuckJobs([]);
       });
     void apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/photo-health`, t)
       .then((d) => {
@@ -3280,6 +3324,11 @@ export default function DashboardPage() {
         .then((d) => setJobs(d as Job[]))
         .catch(() => {
           /* ignore */
+        });
+      void apiFetch(`/jobs/stuck?sale_id=${encodeURIComponent(sid)}`, token)
+        .then((d) => setStuckJobs(stuckJobsFromResponse(d)))
+        .catch(() => {
+          setStuckJobs([]);
         });
       void apiFetch(`/lots?sale_id=${encodeURIComponent(sid)}&listing_channel=ctseller${fq}`, token)
         .then((d) => setLots(d as Lot[]))
@@ -3569,6 +3618,11 @@ export default function DashboardPage() {
         const sid = selectedSaleIdRef.current;
         if (!sid) return;
         const jlist = (await apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token)) as Job[];
+        void apiFetch(`/jobs/stuck?sale_id=${encodeURIComponent(sid)}`, token)
+          .then((d) => setStuckJobs(stuckJobsFromResponse(d)))
+          .catch(() => {
+            /* ignore */
+          });
         const processing = jlist.filter((j) => j.status === "processing");
         if (processing.length) {
           const trackedId = liveProgressJobIdRef.current;
@@ -5275,6 +5329,7 @@ export default function DashboardPage() {
     try {
       await apiFetch(`/jobs/${jobId}`, token, { method: "DELETE" });
       setJobs((prev) => prev.filter((j) => j.id !== jobId));
+      setStuckJobs((prev) => prev.filter((j) => j.id !== jobId));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Delete failed";
       if (msg.includes("409")) {
@@ -5591,6 +5646,7 @@ export default function DashboardPage() {
       setSelectedSaleId(pool[0]?.id || "");
       setLots([]);
       setJobs([]);
+      setStuckJobs([]);
       setPhotoHealthMissing({});
       setPullCtSellerSalesMsg(`Removed "${target}" from Change sale.`);
     } catch (e) {
@@ -6088,6 +6144,7 @@ export default function DashboardPage() {
       setLots([]);
       setPhotoHealthMissing({});
       setJobs([]);
+      setStuckJobs([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not clear this sale");
     }
@@ -6106,6 +6163,7 @@ export default function DashboardPage() {
       setLots([]);
       setPhotoHealthMissing({});
       setJobs([]);
+      setStuckJobs([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Account purge failed");
     }
@@ -6328,10 +6386,102 @@ export default function DashboardPage() {
   );
 
   const showJobsCard =
-    dashboardStats.completedJobCount > 0 || activeJobs.length > 0 || photoPendingSlots.length > 0;
+    dashboardStats.completedJobCount > 0 ||
+    activeJobs.length > 0 ||
+    photoPendingSlots.length > 0 ||
+    stuckJobs.length > 0;
 
   const jobsPanelContent = (
     <>
+      {stuckJobs.length > 0 ? (
+        <div className="ct-stuck-jobs-banner" role="alert">
+          <button
+            type="button"
+            className="ct-stuck-jobs-banner__toggle"
+            onClick={() => setStuckJobsExpanded((v) => !v)}
+            aria-expanded={stuckJobsExpanded}
+          >
+            {stuckJobsExpanded ? <ChevronDown size={16} aria-hidden /> : <ChevronRight size={16} aria-hidden />}
+            <span>
+              {stuckJobs.length} stuck {stuckJobs.length === 1 ? "job" : "jobs"}
+            </span>
+          </button>
+          {stuckJobsExpanded ? (
+            <ul className="ct-stuck-jobs-banner__list">
+              {stuckJobs.map((stuck) => {
+                const job = jobs.find((j) => j.id === stuck.id);
+                const lost = job ? jobLostUploadFolder(job) : Boolean(stuck.error_message);
+                return (
+                  <li key={stuck.id}>
+                    <div className="ct-stuck-jobs-banner__row">
+                      <span className="ct-job-status">{stuck.status}</span>
+                      <span className="ct-stuck-jobs-banner__age">{formatJobAge(stuck.age_seconds)}</span>
+                      {stuck.sku ? (
+                        <span className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                          SKU:{stuck.sku}
+                        </span>
+                      ) : null}
+                      {stuck.sale_name && stuck.sale_id !== selectedSaleId ? (
+                        <span className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                          {stuck.sale_name}
+                        </span>
+                      ) : null}
+                      {(stuck.progress_total || 0) > 0 ? (
+                        <span className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                          {stuck.progress_done || 0}/{stuck.progress_total}
+                          {stuck.progress_phase ? ` ${stuck.progress_phase}` : ""}
+                        </span>
+                      ) : stuck.progress_phase ? (
+                        <span className="ct-muted" style={{ fontSize: "0.78rem" }}>
+                          {stuck.progress_phase}
+                        </span>
+                      ) : null}
+                    </div>
+                    {stuck.error_message ? (
+                      <p className="ct-stuck-jobs-banner__error">{stuck.error_message}</p>
+                    ) : null}
+                    <div className="ct-stuck-jobs-banner__actions">
+                      {(stuck.status === "queued" || stuck.status === "failed") && !lost ? (
+                        <button
+                          type="button"
+                          className="ct-btn ct-btn--primary"
+                          onClick={() => void runJob(stuck.id)}
+                          disabled={stuck.status === "queued" && busyProcessing}
+                        >
+                          {stuck.status === "failed" ? "Run again" : "Run now"}
+                        </button>
+                      ) : null}
+                      {stuck.status === "processing" ? (
+                        <button
+                          type="button"
+                          className="ct-btn"
+                          onClick={() => void cancelRun(stuck.id)}
+                          disabled={cancellingJobId === stuck.id}
+                        >
+                          {cancellingJobId === stuck.id ? "Cancelling…" : "Cancel"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={
+                            lost || stuck.status === "receiving"
+                              ? "ct-btn ct-btn--primary"
+                              : "ct-btn ct-btn--ghost"
+                          }
+                          onClick={() => void deleteJobRow(stuck.id)}
+                          disabled={busyProcessing && !lost && stuck.status !== "receiving"}
+                        >
+                          Delete job
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {busyProcessing ? (
         <PhotoProcessingProgressPanel
           slots={photoPendingSlots}

@@ -11,6 +11,24 @@ export type SyncRecoveryAction = "adopt" | "retry";
  * create a second catalog job (that was creating duplicate listings + a second Gemini bill).
  * ``retry`` — upload never finished, job failed, or the server row is gone.
  */
+/** Prefer a job that stored this phone draft UUID; fall back to the local server_job_id. */
+export function findJobForDraft<T extends Pick<Job, "id" | "client_draft_id">>(
+  jobs: T[],
+  draftId: string,
+  serverJobId?: string | null
+): T | null {
+  const key = (draftId || "").trim().toLowerCase();
+  if (key) {
+    const byDraft = jobs.find((j) => (j.client_draft_id || "").trim().toLowerCase() === key);
+    if (byDraft) return byDraft;
+  }
+  if (serverJobId) {
+    const byId = jobs.find((j) => j.id === serverJobId);
+    if (byId) return byId;
+  }
+  return null;
+}
+
 export function decideSyncRecovery(
   draftStatus: DraftSyncStatus,
   job: Pick<Job, "status"> | null

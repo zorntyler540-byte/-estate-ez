@@ -3,6 +3,7 @@ import NetInfo from "@react-native-community/netinfo";
 import {
   appendFilesToQueuedJob,
   deleteJob,
+  getSaleUploadHealth,
   listCatalogedMobileDraftsDetailed,
   listJobsForSale,
   listLots,
@@ -11,6 +12,7 @@ import {
   uploadLotVideos,
   uploadSingleLotJob
 } from "../api";
+import { formatUploadHealthSummary } from "../formatUploadHealth";
 import { mediaKindFromName } from "../mediaKind";
 import { refreshSessionIfPossible } from "../sessionBridge";
 import type { Job } from "../types";
@@ -37,7 +39,12 @@ import {
   shouldSkipReupload,
   uniqueSkuLotMap
 } from "./archiveCataloged";
-import { decideSyncRecovery, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
+import {
+  decideSyncRecovery,
+  findJobForDraft,
+  isTransientSyncError,
+  jobIsLiveOrDone
+} from "./syncRecovery";
 
 /**
  * After ``/run`` is accepted we confirm the server actually catalogs the lot instead of
@@ -274,10 +281,16 @@ export async function sweepArchiveConfirmedDrafts(token: string): Promise<number
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void
-): Promise<{ uploaded: number; failed: number; reconciled: number; archived: number }> {
+): Promise<{
+  uploaded: number;
+  failed: number;
+  reconciled: number;
+  archived: number;
+  healthSummary?: string | null;
+}> {
   const net = await NetInfo.fetch();
   if (!net.isConnected) {
-    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0 };
+    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0, healthSummary: null };
   }
 
   let uploaded = 0;
@@ -288,6 +301,18 @@ export async function syncPendingLots(
   if (refreshed) authToken = refreshed;
 
   const drafts = await listLotDrafts();
+
+  const jobsBySale = new Map<string, Job[]>();
+  async function jobsForSale(saleId: string): Promise<Job[] | null> {
+    if (jobsBySale.has(saleId)) return jobsBySale.get(saleId)!;
+    try {
+      const list = await listJobsForSale(authToken, saleId);
+      jobsBySale.set(saleId, list);
+      return list;
+    } catch {
+      return null;
+    }
+  }
 
   // Phase 0: if the website already has the lot, adopt it. Do not re-upload.
   const { bySale: catalogedBySale, allDraftLots } = await websiteArchiveIndexes(
@@ -321,7 +346,6 @@ export async function syncPendingLots(
       continue;
     }
     if (cataloged && !cataloged.ok) continue;
-    if (!draft.server_job_id) continue;
     if (
       draft.status !== "uploaded" &&
       draft.status !== "failed" &&
@@ -330,11 +354,11 @@ export async function syncPendingLots(
     ) {
       continue;
     }
-    const looked = await fetchServerJobChecked(authToken, draft.sale_id, draft.server_job_id);
-    if (!looked.ok) continue;
-    const job = looked.job;
+    const saleJobs = await jobsForSale(draft.sale_id);
+    if (saleJobs === null) continue;
+    const job = findJobForDraft(saleJobs, draft.id, draft.server_job_id);
     if (!job) {
-      await setDraftServerJobId(draft.id, null);
+      if (draft.server_job_id) await setDraftServerJobId(draft.id, null);
     } else if (job.status === "completed") {
       await setDraftServerJobId(draft.id, null);
       const lotId = cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : undefined;
@@ -349,8 +373,14 @@ export async function syncPendingLots(
       await setDraftStatus(draft.id, "uploaded", null);
       reconciled += 1;
     } else if (job.status === "failed") {
+      if (job.id !== draft.server_job_id) {
+        await setDraftServerJobId(draft.id, job.id);
+      }
       await setDraftStatus(draft.id, "failed", serverFailMessage(job));
     } else if (jobIsLiveOrDone(job.status)) {
+      if (job.id !== draft.server_job_id) {
+        await setDraftServerJobId(draft.id, job.id);
+      }
       await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
     }
   }
@@ -365,11 +395,14 @@ export async function syncPendingLots(
     const cataloged = catalogedBySale.get(draft.sale_id);
     const confirmed = allDraftLots.has(draft.id.toLowerCase());
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    const recoveryJobs = jobsBySale.get(draft.sale_id) || (await jobsForSale(draft.sale_id)) || [];
+    const matchedJob = findJobForDraft(recoveryJobs, draft.id, draft.server_job_id);
     if (
       shouldSkipReupload({
         confirmedOnServer: confirmed,
         catalogLookupFailed: lookupFailed,
-        hasServerLotId: Boolean(draft.server_lot_id)
+        hasServerLotId: Boolean(draft.server_lot_id),
+        matchingJobLiveOrDone: jobIsLiveOrDone(matchedJob?.status)
       })
     ) {
       continue;
@@ -377,8 +410,8 @@ export async function syncPendingLots(
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
       continue;
     }
-    if (draft.server_job_id) {
-      const job = await fetchServerJob(authToken, draft.sale_id, draft.server_job_id);
+    if (draft.server_job_id || matchedJob) {
+      const job = matchedJob || (await fetchServerJob(authToken, draft.sale_id, draft.server_job_id!));
       if (decideSyncRecovery(draft.status, job) === "adopt") {
         if (job?.status === "completed") {
           await setDraftServerJobId(draft.id, null);
@@ -401,7 +434,7 @@ export async function syncPendingLots(
       // queued/processing — that left the first AI run alive and started a second one.
       if (job && (job.status === "receiving" || job.status === "failed")) {
         try {
-          await deleteJob(draft.server_job_id, authToken);
+          await deleteJob(job.id, authToken);
         } catch {
           /* job may already be gone */
         }
@@ -421,10 +454,12 @@ export async function syncPendingLots(
     const cataloged = catalogedBySale.get(d.sale_id);
     const confirmed = allDraftLots.has(d.id.toLowerCase());
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
+    const liveJob = findJobForDraft(jobsBySale.get(d.sale_id) || [], d.id, d.server_job_id);
     return !shouldSkipReupload({
       confirmedOnServer: confirmed,
       catalogLookupFailed: lookupFailed,
-      hasServerLotId: Boolean(d.server_lot_id)
+      hasServerLotId: Boolean(d.server_lot_id),
+      matchingJobLiveOrDone: jobIsLiveOrDone(liveJob?.status)
     });
   });
 
@@ -507,12 +542,13 @@ export async function syncPendingLots(
             token: authToken,
             manualSku: draft.manual_sku ?? undefined,
             listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
-            photoUris: prepared.photos
+            photoUris: prepared.photos,
+            clientDraftId: draft.id
           });
           jobId = job.id;
           await setDraftServerJobId(draft.id, jobId);
         } else {
-          await appendFilesToQueuedJob(authToken, jobId, prepared.photos);
+          await appendFilesToQueuedJob(authToken, jobId, prepared.photos, draft.id);
         }
         uploadedCount += prepared.photos.length;
         await setDraftStatus(
@@ -567,7 +603,7 @@ export async function syncPendingLots(
       } else if (outcome === "completed") {
         await setDraftServerJobId(draft.id, null);
         const idx = await catalogedDraftIndex(authToken, draft.sale_id);
-        const lotId = idx.lotByDraft.get(draft.id.toLowerCase());
+        const lotId = idx.ok ? idx.lotByDraft.get(draft.id.toLowerCase()) : undefined;
         if (lotId) {
           await setDraftServerLotId(draft.id, lotId);
           try {
@@ -629,5 +665,22 @@ export async function syncPendingLots(
 
   await attachPendingLotVideos(authToken);
   const archived = archivedEarly + (await sweepArchiveConfirmedDrafts(authToken));
-  return { uploaded, failed, reconciled, archived };
+
+  const healthSaleIds = [...new Set((await listLotDrafts()).map((d) => d.sale_id).filter(Boolean))];
+  let cataloging = 0;
+  let stuck = 0;
+  for (const saleId of healthSaleIds) {
+    try {
+      const health = await getSaleUploadHealth(authToken, saleId);
+      cataloging += Number(health.cataloging_count) || 0;
+      stuck += Number(health.stuck_count) || 0;
+    } catch {
+      /* health is advisory — do not fail Sync */
+    }
+  }
+  const healthSummary = formatUploadHealthSummary({
+    cataloging_count: cataloging,
+    stuck_count: stuck
+  });
+  return { uploaded, failed, reconciled, archived, healthSummary };
 }

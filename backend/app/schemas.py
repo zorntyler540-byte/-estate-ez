@@ -713,11 +713,49 @@ class JobOut(BaseModel):
     inherit_sku_from_subfolder: bool = False
     single_lot_mode: bool = False
     single_lot_manual_sku: str | None = None
+    client_draft_id: str | None = None
     listing_channel: str = "ctseller"
     progress_phase: str | None = None
     progress_done: int = 0
     progress_total: int = 0
     progress_file_name: str | None = None
+
+
+class StuckJobOut(BaseModel):
+    id: str
+    sale_id: str
+    sale_name: str | None = None
+    sku: str | None = None
+    lot_id: str | None = None
+    status: str
+    age_seconds: int
+    progress_phase: str | None = None
+    progress_done: int = 0
+    progress_total: int = 0
+    error_message: str | None = None
+    client_draft_id: str | None = None
+
+
+class StuckJobsOut(BaseModel):
+    count: int
+    jobs: list[StuckJobOut]
+
+
+class SaleUploadHealthJobOut(BaseModel):
+    id: str
+    client_draft_id: str
+    status: str
+    sku: str | None = None
+    error_message: str | None = None
+    age_seconds: int = 0
+
+
+class SaleUploadHealthOut(BaseModel):
+    sale_id: str
+    counts: dict[str, int]
+    stuck_count: int
+    cataloging_count: int
+    jobs_with_client_draft_id: list[SaleUploadHealthJobOut] = []
 
 
 class LotVideoOut(BaseModel):
@@ -792,7 +830,7 @@ class PhotoAddsOut(BaseModel):
 
 
 class CatalogedMobileDraftLotOut(BaseModel):
-    """One phone draft that already became a catalog lot (filename ``mobile-<draft>-NN.jpg``)."""
+    """One phone draft that already became a catalog lot (``client_draft_id`` or ``mobile-<draft>-NN.jpg``)."""
 
     draft_id: str
     lot_id: str
@@ -802,7 +840,7 @@ class CatalogedMobileDraftLotOut(BaseModel):
 
 
 class CatalogedMobileDraftsOut(BaseModel):
-    """Phone draft ids that already have catalog photos on this sale (``mobile-<draft>-NN.jpg``)."""
+    """Phone draft ids already on this sale (job ``client_draft_id``, else ``mobile-<draft>-NN.jpg``)."""
 
     draft_ids: list[str]
     lots: list[CatalogedMobileDraftLotOut] = []
