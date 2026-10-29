@@ -168,6 +168,7 @@ from app.schemas import (
     SalePhotoHealthOut,
     SaleUploadHealthOut,
     SaleUploadHealthJobOut,
+    RetryFailedJobsOut,
     StuckJobOut,
     StuckJobsOut,
     SaleZipExportOut,
@@ -5895,6 +5896,77 @@ def list_stuck_jobs(
     stuck.sort(key=lambda row: job_tasks.job_age_seconds(row), reverse=True)
     payload = _stuck_jobs_out(db, stuck)
     return StuckJobsOut(count=len(payload), jobs=payload)
+
+
+@app.post("/jobs/retry-failed", response_model=RetryFailedJobsOut)
+def retry_failed_jobs(
+    sale_id: str | None = Query(None, description="When set, only retry failed jobs for this sale."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    force_in_process: bool = Query(
+        True,
+        description=(
+            "When true (dashboard Retry failed), start the first re-queued job on this API "
+            "process even if a dedicated worker normally owns jobs. Phone Sync should leave this false."
+        ),
+    ),
+) -> RetryFailedJobsOut:
+    """Re-queue failed catalog jobs that still have photos (Gemini / Cancelled).
+
+    Leftover mid-upload / lost-disk failures are skipped — those need a phone Sync,
+    not another Gemini run.
+    """
+    q = _scoped_jobs_query(db, current, sale_id)
+    if q is None:
+        return RetryFailedJobsOut(retried=0, skipped=0, started=False, jobs=[])
+    rows = (
+        q.filter(ProcessingJob.status == JobStatus.failed)
+        .order_by(ProcessingJob.created_at.asc())
+        .all()
+    )
+    retryable: list[ProcessingJob] = []
+    skipped = 0
+    for row in rows:
+        if job_tasks.failed_job_can_retry(row):
+            retryable.append(row)
+        else:
+            skipped += 1
+    if not retryable:
+        return RetryFailedJobsOut(retried=0, skipped=skipped, started=False, jobs=[])
+
+    for row in retryable:
+        job_tasks.requeue_job_for_retry(row)
+    db.commit()
+    for row in retryable:
+        db.refresh(row)
+    payload = [_job_out(row) for row in retryable]
+    account_id = current.account_id
+    first_id = retryable[0].id
+    db.close()
+
+    started = False
+    job_tasks.kick_queue_if_idle(account_id)
+    if force_in_process:
+        try:
+            started = bool(
+                job_tasks.start_job_in_background(
+                    first_id, account_id, force_in_process=True
+                )
+            )
+        except RuntimeError as exc:
+            if str(exc) != "job_already_running":
+                raise
+            started = True
+    else:
+        job_tasks.schedule_worker_claim_fallback(account_id, first_id)
+    if started:
+        payload[0] = payload[0].model_copy(update={"status": JobStatus.processing.value})
+    return RetryFailedJobsOut(
+        retried=len(payload),
+        skipped=skipped,
+        started=started,
+        jobs=payload,
+    )
 
 
 @app.post("/jobs/{job_id}/run", response_model=JobOut)

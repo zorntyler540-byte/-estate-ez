@@ -67,6 +67,7 @@ def test_client_http_allowlist_is_upload_only() -> None:
     assert client_http_allowed("GET", "/sales")
     assert client_http_allowed("GET", "/jobs")
     assert client_http_allowed("GET", "/jobs/stuck")
+    assert client_http_allowed("POST", "/jobs/retry-failed")
     assert client_http_allowed("POST", "/jobs/upload")
     assert client_http_allowed("POST", "/jobs/job-1/upload-files")
     assert client_http_allowed("POST", "/jobs/job-1/run")

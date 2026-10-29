@@ -1445,15 +1445,24 @@ function jobInputLabel(folder: string): string {
 }
 
 /** True when catalog cannot run because ephemeral upload disk (and R2 restore) had no files. */
-function jobLostUploadFolder(job: Job): boolean {
-  const msg = (job.error_message || "").toLowerCase();
+function jobLostUploadFolderFromMessage(msg: string | null | undefined): boolean {
+  const text = (msg || "").toLowerCase();
   return (
-    msg.includes("input folder not found") ||
-    msg.includes("upload disk was lost") ||
-    msg.includes("re-sync from the phone") ||
-    msg.includes("upload never finished") ||
-    msg.includes("sync stopped mid-lot")
+    text.includes("input folder not found") ||
+    text.includes("upload disk was lost") ||
+    text.includes("re-sync from the phone") ||
+    text.includes("upload never finished") ||
+    text.includes("sync stopped mid-lot")
   );
+}
+
+function jobLostUploadFolder(job: { error_message?: string | null }): boolean {
+  return jobLostUploadFolderFromMessage(job.error_message);
+}
+
+/** Failed Gemini / Cancelled jobs still have photos — dashboard Retry failed / Run again. */
+function jobCanRetryCatalog(job: { status: string; error_message?: string | null }): boolean {
+  return job.status === "failed" && !jobLostUploadFolder(job);
 }
 
 function jobSkuMatchKey(raw: string | null | undefined): string {
@@ -2066,6 +2075,7 @@ export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [stuckJobs, setStuckJobs] = useState<StuckJob[]>([]);
   const [stuckJobsExpanded, setStuckJobsExpanded] = useState(true);
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const [completedJobsExpanded, setCompletedJobsExpanded] = useState(false);
   const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
@@ -2232,6 +2242,10 @@ export default function DashboardPage() {
     }
     return { activeJobs: active, completedJobs: completed, queuedJobCount: queuedCount };
   }, [jobs, lots]);
+  const retryableFailedJobs = useMemo(
+    () => activeJobs.filter((job) => jobCanRetryCatalog(job)),
+    [activeJobs]
+  );
   const selectedSale = useMemo(() => sales.find((s) => s.id === selectedSaleId) ?? null, [sales, selectedSaleId]);
   const selectedSaleClosed = Boolean(selectedSale?.closed_at);
   const salesForPicker = useMemo(
@@ -5222,6 +5236,75 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshJobsAndStuck() {
+    const sid = selectedSaleIdRef.current;
+    if (!sid || !token) return;
+    try {
+      const refreshed = await apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token);
+      setJobs(refreshed as Job[]);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const stuckData = await apiFetch(`/jobs/stuck?sale_id=${encodeURIComponent(sid)}`, token);
+      setStuckJobs(stuckJobsFromResponse(stuckData));
+    } catch {
+      setStuckJobs([]);
+    }
+  }
+
+  async function retryFailedJobs() {
+    const sid = selectedSaleIdRef.current;
+    if (!sid || !token || retryableFailedJobs.length === 0 || retryingFailed) return;
+    setError("");
+    setRetryingFailed(true);
+    try {
+      const result = (await apiFetch(
+        `/jobs/retry-failed?sale_id=${encodeURIComponent(sid)}&force_in_process=true`,
+        token,
+        { method: "POST" }
+      )) as { retried?: number; skipped?: number; started?: boolean; jobs?: Job[] };
+      const retried = Number(result.retried || 0);
+      const skipped = Number(result.skipped || 0);
+      const returned = Array.isArray(result.jobs) ? result.jobs : [];
+      if (returned.length) {
+        setJobs((prev) => {
+          const byId = new Map(prev.map((j) => [j.id, j]));
+          for (const row of returned) byId.set(row.id, row);
+          return Array.from(byId.values());
+        });
+        const first = returned[0];
+        if (first?.status === "processing") {
+          liveProgressJobIdRef.current = first.id;
+          setLiveProgressJobId(first.id);
+        }
+      }
+      if (retried > 0) {
+        setStagingSuccess(
+          skipped > 0
+            ? `Retrying ${retried} failed job${retried === 1 ? "" : "s"} — catalog runs one lot at a time. ${skipped} leftover still needs a phone Sync (photos missing).`
+            : `Retrying ${retried} failed job${retried === 1 ? "" : "s"} — catalog runs one lot at a time.`
+        );
+      } else if (skipped > 0) {
+        setError(
+          "Those failed jobs are missing photos on the server. Delete them, then Sync / Resend from the phone."
+        );
+      }
+      await refreshJobsAndStuck();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Retry failed";
+      if (isAuthFailureMessage(msg)) {
+        localStorage.removeItem("token");
+        router.replace("/");
+        return;
+      }
+      setError(parseApiErrorMessage(msg, "Could not retry failed jobs"));
+      await refreshJobsAndStuck();
+    } finally {
+      setRetryingFailed(false);
+    }
+  }
+
   async function runJob(jobId: string) {
     setError("");
     const pick = folderPickRef.current;
@@ -6410,7 +6493,9 @@ export default function DashboardPage() {
             <ul className="ct-stuck-jobs-banner__list">
               {stuckJobs.map((stuck) => {
                 const job = jobs.find((j) => j.id === stuck.id);
-                const lost = job ? jobLostUploadFolder(job) : Boolean(stuck.error_message);
+                const lost = jobLostUploadFolderFromMessage(
+                  stuck.error_message ?? job?.error_message
+                );
                 return (
                   <li key={stuck.id}>
                     <div className="ct-stuck-jobs-banner__row">
@@ -6446,7 +6531,9 @@ export default function DashboardPage() {
                           type="button"
                           className="ct-btn ct-btn--primary"
                           onClick={() => void runJob(stuck.id)}
-                          disabled={stuck.status === "queued" && busyProcessing}
+                          disabled={
+                            retryingFailed || (stuck.status === "queued" && busyProcessing)
+                          }
                         >
                           {stuck.status === "failed" ? "Run again" : "Run now"}
                         </button>
@@ -6537,7 +6624,9 @@ export default function DashboardPage() {
                   type="button"
                   className="ct-btn ct-btn--primary"
                   onClick={() => void runJob(job.id)}
-                  disabled={job.status === "queued" && busyProcessing}
+                  disabled={
+                    retryingFailed || (job.status === "queued" && busyProcessing)
+                  }
                 >
                   {job.status === "failed" ? "Run again" : "Run now"}
                 </button>
@@ -6720,6 +6809,18 @@ export default function DashboardPage() {
                   </span>
                 )}
               </div>
+              {retryableFailedJobs.length > 0 ? (
+                <button
+                  type="button"
+                  className="ct-btn ct-btn--primary ct-dash-jobs-card__clear"
+                  onClick={() => void retryFailedJobs()}
+                  disabled={retryingFailed || selectedSaleClosed}
+                >
+                  {retryingFailed
+                    ? "Retrying…"
+                    : `Retry ${retryableFailedJobs.length} failed`}
+                </button>
+              ) : null}
               {completedJobs.length > 0 && activeJobs.length === 0 ? (
                 <button
                   type="button"

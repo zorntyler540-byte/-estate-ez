@@ -93,6 +93,7 @@ def client_http_allowed(method: str, path: str) -> bool:
         ("GET", "/sales"),
         ("GET", "/jobs"),
         ("GET", "/jobs/stuck"),
+        ("POST", "/jobs/retry-failed"),
         ("POST", "/jobs/upload"),
     }
     if (verb, raw) in exact:

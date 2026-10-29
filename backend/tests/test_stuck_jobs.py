@@ -85,6 +85,41 @@ def test_processing_uses_updated_at(tmp_path: Path, monkeypatch) -> None:
     assert job_tasks.is_stuck_job(heartbeat) is False
 
 
+def test_failed_job_can_retry_skips_lost_upload(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    gemini = _add_job(
+        db,
+        job_id="fail-ai",
+        status=JobStatus.failed,
+        age=timedelta(minutes=5),
+        error="Gemini 500: overloaded",
+    )
+    cancelled = _add_job(
+        db,
+        job_id="fail-cancel",
+        status=JobStatus.failed,
+        age=timedelta(minutes=5),
+        error="Cancelled",
+    )
+    orphan = _add_job(
+        db,
+        job_id="fail-orphan",
+        status=JobStatus.failed,
+        age=timedelta(minutes=5),
+        error="Upload never finished (phone Sync stopped mid-lot).",
+    )
+    queued = _add_job(db, job_id="q", status=JobStatus.queued, age=timedelta(minutes=1))
+    assert job_tasks.failed_job_can_retry(gemini) is True
+    assert job_tasks.failed_job_can_retry(cancelled) is True
+    assert job_tasks.failed_job_can_retry(orphan) is False
+    assert job_tasks.failed_job_can_retry(queued) is False
+    job_tasks.requeue_job_for_retry(gemini)
+    db.commit()
+    db.refresh(gemini)
+    assert gemini.status == JobStatus.queued
+    assert gemini.error_message is None
+
+
 def test_failed_orphan_wording_is_stuck_gemini_is_not(tmp_path: Path) -> None:
     db = _session(tmp_path)
     orphan = _add_job(

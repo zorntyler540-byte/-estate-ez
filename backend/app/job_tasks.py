@@ -277,6 +277,25 @@ def is_orphan_upload_error(msg: str | None) -> bool:
     return any(marker in text for marker in _ORPHAN_UPLOAD_ERROR_MARKERS)
 
 
+def failed_job_can_retry(job: ProcessingJob) -> bool:
+    """True when a failed catalog job still has photos and should be re-run.
+
+    Gemini / Cancelled failures keep the staged batch, so dashboard **Run again**
+    (or bulk **Retry failed**) can re-queue them. Leftover mid-upload / lost-disk
+    wording cannot — the phone must Sync again.
+    """
+    if job.status != JobStatus.failed:
+        return False
+    return not is_orphan_upload_error(job.error_message)
+
+
+def requeue_job_for_retry(job: ProcessingJob) -> None:
+    """Clear a failed catalog job so a worker / Run now can claim it again."""
+    job.status = JobStatus.queued
+    job.error_message = None
+    job.cancel_requested = False
+
+
 def normalize_client_draft_id(raw: str | None) -> str | None:
     """Stable phone draft UUID (lowercase). Empty / whitespace is omitted."""
     s = (raw or "").strip().lower()

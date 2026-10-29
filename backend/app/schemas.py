@@ -741,6 +741,13 @@ class StuckJobsOut(BaseModel):
     jobs: list[StuckJobOut]
 
 
+class RetryFailedJobsOut(BaseModel):
+    retried: int
+    skipped: int
+    started: bool = False
+    jobs: list[JobOut] = []
+
+
 class SaleUploadHealthJobOut(BaseModel):
     id: str
     client_draft_id: str
