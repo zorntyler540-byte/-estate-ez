@@ -6,8 +6,14 @@ export function formatUploadHealthSummary(health: {
   if (!health) return null;
   const cataloging = Number(health.cataloging_count) || 0;
   const stuck = Number(health.stuck_count) || 0;
-  const parts: string[] = [];
-  if (cataloging > 0) parts.push(`${cataloging} cataloging`);
-  if (stuck > 0) parts.push(`${stuck} stuck`);
-  return parts.length ? parts.join(", ") : null;
+  if (stuck > 0 && cataloging > 0) {
+    return `${cataloging} cataloging, ${stuck} stuck — open Jobs on the website`;
+  }
+  if (stuck > 0) {
+    return `${stuck} stuck — open Jobs on the website`;
+  }
+  if (cataloging > 0) {
+    return `${cataloging} still cataloging`;
+  }
+  return null;
 }
