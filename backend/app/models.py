@@ -211,6 +211,8 @@ class ProcessingJob(Base):
     inherit_sku_from_subfolder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     single_lot_manual_sku: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Phone lot-draft UUID from Expo Queue/Sync (``POST /jobs/upload``). Optional for older app builds.
+    client_draft_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     listing_channel: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ctseller", server_default="ctseller"
     )

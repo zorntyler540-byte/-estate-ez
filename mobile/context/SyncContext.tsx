@@ -12,7 +12,8 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { countLotsNeedingPhotoUpload } from "@/lib/queue/db";
+import { countLotsNeedingPhotoUpload, countLotsNeedingWebsiteCheck } from "@/lib/queue/db";
+import { formatSyncOutcome } from "@/lib/queue/queueStatus";
 import { attachPendingLotVideos, sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
 
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
@@ -22,6 +23,7 @@ export type SyncResult = {
   failed: number;
   reconciled: number;
   archived?: number;
+  healthSummary?: string | null;
 };
 
 type SyncStatusValue = {
@@ -47,19 +49,7 @@ const SyncRefreshContext = createContext<SyncRefreshValue | null>(null);
 const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
 function formatSyncMessage(result: SyncResult): string {
-  if (result.uploaded === 0 && result.failed === 0) {
-    if (result.archived) {
-      return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
-    }
-    if (result.reconciled > 0) {
-      return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
-    }
-    return "Nothing queued to upload.";
-  }
-  if (result.failed === 0) {
-    return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}.`;
-  }
-  return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, ${result.failed} need a check.`;
+  return formatSyncOutcome(result);
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
@@ -108,19 +98,26 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (archivedFirst) {
         setRefreshKey((k) => k + 1);
         setLastMessage(
-          `Moved ${archivedFirst} cataloged lot${archivedFirst === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
+          `Moved ${archivedFirst} cataloged lot${archivedFirst === 1 ? "" : "s"} to Phone archive — photos were removed from this phone. Website listings stay.`
         );
       }
 
       const needingUpload = await countLotsNeedingPhotoUpload();
-      if (needingUpload === 0) {
+      const needingCheck = await countLotsNeedingWebsiteCheck();
+      if (needingCheck === 0) {
         if (!archivedFirst && !videosAttached) {
-          setLastMessage("Nothing queued to upload — lots already on the website stay in Archive.");
+          setLastMessage("Nothing queued to upload. Cataloged lots stay in Phone archive.");
         }
         return { uploaded: videosAttached, failed: 0, reconciled: 0, archived: archivedFirst };
       }
 
-      setLastMessage(`Uploading ${needingUpload} lot${needingUpload === 1 ? "" : "s"} not on the website yet…`);
+      if (needingUpload > 0) {
+        setLastMessage(
+          `Uploading ${needingUpload} lot${needingUpload === 1 ? "" : "s"} not on the website yet…`
+        );
+      } else {
+        setLastMessage("Checking leftover lots on the website…");
+      }
       const result = await syncPendingLots(token, () => {
         setRefreshKey((k) => k + 1);
       });

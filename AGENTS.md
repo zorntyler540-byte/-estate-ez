@@ -74,15 +74,19 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **Queue leftover “failed / didn’t finish” notices are often false.** A full DB pool can time out
   the phone after `/run` while the worker still catalogs. Sync Phase 0 calls
   `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
-  notice). Do not tell the user to Resend all when lots are already on the website. This needs
+  notice). Sync still runs that check when nothing is queued if leftover **Sent** rows remain
+  (do not early-exit those). Queue **Resend** is hidden once the lot is cataloging, linked, or
+  archived. Do not tell the user to Resend all when lots are already on the website. This needs
   an API deploy **and** an EAS Update (`production` channel) before phones stop showing the old copy.
 - **Dashboard leftover FAILED receiving cards are often superseded retries.** If phone Sync dies
   mid-lot, the abandoned `receiving` row is marked failed after 30 minutes (“Upload never
   finished”) even when a later Sync already cataloged the same SKU. `GET /jobs` (and the worker
   sweep) completes those orphan-upload rows when the sale already has that SKU, a completed job
   with the same SKU, or matching `mobile-<draft>-NN.jpg` names. Gemini / Cancelled failures stay
-  failed. The dashboard also treats matching FAILED cards as completed so they leave the “active”
-  list. Do not tell staff to Resend all — the lots are already on the website.
+  failed. Dashboard **Retry failed** / per-row **Run again** re-queues those (photos still staged);
+  leftover mid-upload / lost-disk failures cannot be retried from the website — delete the job and
+  Sync from the phone. The dashboard also treats matching FAILED cards as completed so they leave
+  the “active” list. Do not tell staff to Resend all — the lots are already on the website.
   **`GET /jobs` reconcile is debounced (~20s per account).** Dashboard and phone Sync poll this
   endpoint constantly during uploads; running leftover-job healing on every poll exhausted the
   Postgres QueuePool and froze the website on “Loading dashboard…”. The worker sweep still heals

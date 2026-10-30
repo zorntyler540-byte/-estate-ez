@@ -7,7 +7,7 @@ import { ZoomablePreview } from "@/components/ZoomablePreview";
 import { isVideoUri } from "@/lib/mediaKind";
 import { playVideoUri } from "@/lib/playVideo";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
-import { isTransientSyncError } from "@/lib/queue/syncRecovery";
+import { queueRowView } from "@/lib/queue/queueStatus";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -201,50 +201,14 @@ export function draftStatusDisplay(
     archived?: boolean;
   }
 ): { label: string; hint: string } {
-  if (opts?.archived) {
-    return {
-      label: "On website",
-      hint: "Photos were removed from this phone after catalog. Tap Add photos to shoot more for that listing."
-    };
-  }
-  switch (status) {
-    case "draft":
-      return {
-        label: "Saved on phone",
-        hint: "Photos are kept if you leave the app — tap Add photos to keep shooting, or Queue for upload"
-      };
-    case "queued":
-      if (opts?.syncing) {
-        return { label: "Ready to upload", hint: "In line — Sync is sending lots now" };
-      }
-      if (opts?.online === false) {
-        return { label: "Ready to upload", hint: "Will send when you're back online" };
-      }
-      return { label: "Ready to upload", hint: "Tap Sync now to send" };
-    case "uploading":
-      return {
-        label: "Uploading…",
-        hint: "Sending to the server first — the website Lots list fills in after catalog finishes (check Jobs)."
-      };
-    case "uploaded":
-      return {
-        label: "Sent to server",
-        hint: "Photos catalog first; videos attach after the lot is on the website. Tap Sync if a clip is still only on this phone. Forgot a shot? Tap Add photos."
-      };
-    case "failed":
-      if (isTransientSyncError(opts?.errorMessage) || !opts?.errorMessage) {
-        return {
-          label: "Needs a check",
-          hint: "Tap Sync now. If the lot is already on the website, remove it from the phone — do not Resend."
-        };
-      }
-      return {
-        label: "Failed",
-        hint: "Tap Sync now to retry. Only Resend if this lot is missing on the website."
-      };
-    default:
-      return { label: status, hint: "" };
-  }
+  const view = queueRowView({
+    status,
+    error_message: opts?.errorMessage,
+    archived_at: opts?.archived ? 1 : null,
+    online: opts?.online,
+    syncing: opts?.syncing
+  });
+  return { label: view.label, hint: view.hint };
 }
 
 const styles = StyleSheet.create({

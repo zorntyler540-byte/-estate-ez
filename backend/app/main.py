@@ -166,6 +166,11 @@ from app.schemas import (
     CatalogedMobileDraftLotOut,
     CatalogedMobileDraftsOut,
     SalePhotoHealthOut,
+    SaleUploadHealthOut,
+    SaleUploadHealthJobOut,
+    RetryFailedJobsOut,
+    StuckJobOut,
+    StuckJobsOut,
     SaleZipExportOut,
     SplitPhotosToNewLotIn,
     SplitPhotosToNewLotOut,
@@ -216,7 +221,7 @@ from app.services.photo_order import (
     renormalize_photo_sort_orders,
     reorder_photos_for_listing,
 )
-from app.services.mobile_drafts import cataloged_mobile_draft_lots
+from app.services.mobile_drafts import cataloged_mobile_draft_ids, cataloged_mobile_draft_lots
 from app.services.photo_roles import normalize_catalog_photo_role, photos_for_ctbids_listing
 from app.services.sale_covers import (
     SALE_COVER_SLOT_COUNT,
@@ -559,11 +564,81 @@ def _job_out(job: ProcessingJob) -> JobOut:
         single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
         single_lot_manual_sku=job.single_lot_manual_sku,
         listing_channel=normalize_listing_channel(getattr(job, "listing_channel", None)),
+        client_draft_id=getattr(job, "client_draft_id", None),
         progress_phase=getattr(job, "progress_phase", None),
         progress_done=int(getattr(job, "progress_done", 0) or 0),
         progress_total=int(getattr(job, "progress_total", 0) or 0),
         progress_file_name=getattr(job, "progress_file_name", None),
     )
+
+
+def _scoped_jobs_query(
+    db: Session,
+    current: User,
+    sale_id: str | None,
+):
+    """Same account / client / sale scoping as ``GET /jobs``. ``None`` = no rows (client with no sale)."""
+    q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
+    if is_client_role(current.role):
+        assigned = _client_assigned_sale_id(current)
+        if not assigned:
+            return None
+        if sale_id is not None and sale_id != assigned:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        q = q.filter(ProcessingJob.sale_id == assigned)
+    elif sale_id is not None:
+        _sale_for_user(sale_id, current, db)
+        q = q.filter(ProcessingJob.sale_id == sale_id)
+    return q
+
+
+def _stuck_jobs_out(db: Session, jobs: list[ProcessingJob]) -> list[StuckJobOut]:
+    now = datetime.now(timezone.utc)
+    sale_ids = list({j.sale_id for j in jobs if j.sale_id})
+    names = job_tasks.sale_names_for_ids(db, sale_ids)
+    sku_to_lot: dict[tuple[str, str], str] = {}
+    sku_counts: dict[tuple[str, str], int] = {}
+    if sale_ids:
+        account_id = jobs[0].account_id
+        for lot_id, sale_id, sku in (
+            db.query(Lot.id, Lot.sale_id, Lot.sku)
+            .filter(
+                Lot.account_id == account_id,
+                Lot.sale_id.in_(sale_ids),
+                Lot.sku.isnot(None),
+            )
+            .all()
+        ):
+            key = (str(sale_id), str(sku).strip().lower())
+            if not key[1]:
+                continue
+            sku_counts[key] = sku_counts.get(key, 0) + 1
+            sku_to_lot[key] = str(lot_id)
+    out: list[StuckJobOut] = []
+    for job in jobs:
+        sku = (getattr(job, "single_lot_manual_sku", None) or "").strip() or None
+        lot_id = None
+        if sku:
+            skey = (job.sale_id, sku.lower())
+            if sku_counts.get(skey) == 1:
+                lot_id = sku_to_lot.get(skey)
+        out.append(
+            StuckJobOut(
+                id=job.id,
+                sale_id=job.sale_id,
+                sale_name=names.get(job.sale_id) or None,
+                sku=sku,
+                lot_id=lot_id,
+                status=job.status.value,
+                age_seconds=int(job_tasks.job_age_seconds(job, now)),
+                progress_phase=getattr(job, "progress_phase", None),
+                progress_done=int(getattr(job, "progress_done", 0) or 0),
+                progress_total=int(getattr(job, "progress_total", 0) or 0),
+                error_message=job.error_message,
+                client_draft_id=getattr(job, "client_draft_id", None),
+            )
+        )
+    return out
 
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -597,7 +672,41 @@ def startup() -> None:
     _ensure_engagement_bucket_names()
     _ensure_ops_job_cuft_column()
     _ensure_ops_job_auction_columns()
+    _ensure_job_client_draft_id_column()
     _start_in_process_maintenance()
+
+
+def _ensure_job_client_draft_id_column() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing processing_jobs tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "processing_jobs" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("processing_jobs")}
+    stmts: list[str] = []
+    if "client_draft_id" not in cols:
+        stmts.append("ALTER TABLE processing_jobs ADD COLUMN client_draft_id VARCHAR(36)")
+    if not stmts:
+        indexes = {idx["name"] for idx in insp.get_indexes("processing_jobs")}
+        if "ix_processing_jobs_client_draft_id" not in indexes:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_processing_jobs_client_draft_id "
+                        "ON processing_jobs (client_draft_id)"
+                    )
+                )
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_processing_jobs_client_draft_id "
+                "ON processing_jobs (client_draft_id)"
+            )
+        )
 
 
 def _ensure_ops_job_cuft_column() -> None:
@@ -2096,11 +2205,12 @@ def sale_cataloged_mobile_drafts(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CatalogedMobileDraftsOut:
-    """Draft ids whose ``mobile-<draft>-NN.jpg`` photos already exist as catalog rows on this sale."""
+    """Draft ids already on this sale (job ``client_draft_id``, else ``mobile-<draft>-NN.jpg``)."""
     _sale_for_user(sale_id, current, db)
     mapped = cataloged_mobile_draft_lots(db, current.account_id, sale_id)
+    draft_ids = cataloged_mobile_draft_ids(db, current.account_id, sale_id)
     return CatalogedMobileDraftsOut(
-        draft_ids=[row.draft_id for row in mapped],
+        draft_ids=draft_ids,
         lots=[
             CatalogedMobileDraftLotOut(
                 draft_id=row.draft_id,
@@ -2111,6 +2221,42 @@ def sale_cataloged_mobile_drafts(
             )
             for row in mapped
         ],
+    )
+
+
+@app.get("/sales/{sale_id}/upload-health", response_model=SaleUploadHealthOut)
+def sale_upload_health(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleUploadHealthOut:
+    """Job-status counts for this sale, plus rows that carry a phone ``client_draft_id``."""
+    _sale_for_user(sale_id, current, db)
+    changed = job_tasks.maybe_reconcile_jobs_for_list(db, current.account_id)
+    if changed:
+        db.commit()
+    counts = job_tasks.sale_job_status_counts(db, current.account_id, sale_id)
+    stuck_rows = job_tasks.list_stuck_jobs(db, current.account_id, sale_id=sale_id)
+    now = datetime.now(timezone.utc)
+    draft_jobs = [
+        SaleUploadHealthJobOut(
+            id=row.id,
+            client_draft_id=str(row.client_draft_id),
+            status=row.status.value,
+            sku=(row.single_lot_manual_sku or "").strip() or None,
+            error_message=row.error_message,
+            age_seconds=int(job_tasks.job_age_seconds(row, now)),
+        )
+        for row in job_tasks.jobs_with_client_draft_id(db, current.account_id, sale_id)
+        if row.client_draft_id
+    ]
+    cataloging = int(counts.get("queued", 0) or 0) + int(counts.get("processing", 0) or 0)
+    return SaleUploadHealthOut(
+        sale_id=sale_id,
+        counts=counts,
+        stuck_count=len(stuck_rows),
+        cataloging_count=cataloging,
+        jobs_with_client_draft_id=draft_jobs,
     )
 
 
@@ -5545,6 +5691,7 @@ async def create_job_from_upload(
     single_lot_manual_sku: str = Form(""),
     listing_channel: str = Form("ctseller"),
     captured_at_ms: str | None = Form(None),
+    client_draft_id: str | None = Form(None),
 ) -> JobOut:
     """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
     account_id = current.account_id
@@ -5579,6 +5726,7 @@ async def create_job_from_upload(
             single_lot_mode=single,
             single_lot_manual_sku=_manual_sku,
             listing_channel=channel,
+            client_draft_id=job_tasks.normalize_client_draft_id(client_draft_id),
         )
         db2.add(job)
         db2.commit()
@@ -5613,6 +5761,7 @@ async def append_files_to_queued_job(
     current: User = Depends(get_current_user_upload),
     files: list[UploadFile] = File(),
     captured_at_ms: str | None = Form(None),
+    client_draft_id: str | None = Form(None),
 ) -> JobOut:
     """Append more images to a **receiving** (or legacy queued) upload job."""
     if not files:
@@ -5652,6 +5801,9 @@ async def append_files_to_queued_job(
             raise HTTPException(status_code=404, detail="Job not found")
         # Keep ``receiving`` jobs from looking stale while the phone is still appending.
         job.updated_at = datetime.now(timezone.utc)
+        stored_draft = job_tasks.normalize_client_draft_id(client_draft_id)
+        if stored_draft and not getattr(job, "client_draft_id", None):
+            job.client_draft_id = stored_draft
         db2.commit()
         db2.refresh(job)
         return _job_out(job)
@@ -5714,19 +5866,102 @@ def list_jobs(
         db.commit()
     job_tasks.kick_queue_if_idle_async(current.account_id)
 
-    q = db.query(ProcessingJob).filter(ProcessingJob.account_id == current.account_id)
-    if is_client_role(current.role):
-        assigned = _client_assigned_sale_id(current)
-        if not assigned:
-            return []
-        if sale_id is not None and sale_id != assigned:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
-        q = q.filter(ProcessingJob.sale_id == assigned)
-    elif sale_id is not None:
-        _sale_for_user(sale_id, current, db)
-        q = q.filter(ProcessingJob.sale_id == sale_id)
+    q = _scoped_jobs_query(db, current, sale_id)
+    if q is None:
+        return []
     rows = q.order_by(ProcessingJob.created_at.desc()).all()
     return [_job_out(r) for r in rows]
+
+
+@app.get("/jobs/stuck", response_model=StuckJobsOut)
+def list_stuck_jobs(
+    sale_id: str | None = Query(None, description="When set, only stuck jobs for this sale."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StuckJobsOut:
+    """Catalog jobs that look wedged (mid-upload, queued too long, hung processing, leftover fail)."""
+    changed = job_tasks.maybe_reconcile_jobs_for_list(db, current.account_id)
+    if changed:
+        db.commit()
+    q = _scoped_jobs_query(db, current, sale_id)
+    if q is None:
+        return StuckJobsOut(count=0, jobs=[])
+    rows = q.all()
+    stuck = [row for row in rows if job_tasks.is_stuck_job(row)]
+    stuck.sort(key=lambda row: job_tasks.job_age_seconds(row), reverse=True)
+    payload = _stuck_jobs_out(db, stuck)
+    return StuckJobsOut(count=len(payload), jobs=payload)
+
+
+@app.post("/jobs/retry-failed", response_model=RetryFailedJobsOut)
+def retry_failed_jobs(
+    sale_id: str | None = Query(None, description="When set, only retry failed jobs for this sale."),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    force_in_process: bool = Query(
+        True,
+        description=(
+            "When true (dashboard Retry failed), start the first re-queued job on this API "
+            "process even if a dedicated worker normally owns jobs. Phone Sync should leave this false."
+        ),
+    ),
+) -> RetryFailedJobsOut:
+    """Re-queue failed catalog jobs that still have photos (Gemini / Cancelled).
+
+    Leftover mid-upload / lost-disk failures are skipped — those need a phone Sync,
+    not another Gemini run.
+    """
+    q = _scoped_jobs_query(db, current, sale_id)
+    if q is None:
+        return RetryFailedJobsOut(retried=0, skipped=0, started=False, jobs=[])
+    rows = (
+        q.filter(ProcessingJob.status == JobStatus.failed)
+        .order_by(ProcessingJob.created_at.asc())
+        .all()
+    )
+    retryable: list[ProcessingJob] = []
+    skipped = 0
+    for row in rows:
+        if job_tasks.failed_job_can_retry(row):
+            retryable.append(row)
+        else:
+            skipped += 1
+    if not retryable:
+        return RetryFailedJobsOut(retried=0, skipped=skipped, started=False, jobs=[])
+
+    for row in retryable:
+        job_tasks.requeue_job_for_retry(row)
+    db.commit()
+    for row in retryable:
+        db.refresh(row)
+    payload = [_job_out(row) for row in retryable]
+    account_id = current.account_id
+    first_id = retryable[0].id
+    db.close()
+
+    started = False
+    job_tasks.kick_queue_if_idle(account_id)
+    if force_in_process:
+        try:
+            started = bool(
+                job_tasks.start_job_in_background(
+                    first_id, account_id, force_in_process=True
+                )
+            )
+        except RuntimeError as exc:
+            if str(exc) != "job_already_running":
+                raise
+            started = True
+    else:
+        job_tasks.schedule_worker_claim_fallback(account_id, first_id)
+    if started:
+        payload[0] = payload[0].model_copy(update={"status": JobStatus.processing.value})
+    return RetryFailedJobsOut(
+        retried=len(payload),
+        skipped=skipped,
+        started=started,
+        jobs=payload,
+    )
 
 
 @app.post("/jobs/{job_id}/run", response_model=JobOut)

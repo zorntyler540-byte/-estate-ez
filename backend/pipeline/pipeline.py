@@ -947,6 +947,38 @@ BRAND_AUDIT_SYSTEM = (
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
 
+# Specialty identification kept on Pro (not Flash) so listing-Flash tokens stay short.
+PRO_AUTHOR_SPECIALTY_GUIDANCE = (
+    "\n20. **Coins / medals / numismatic lots:** Prefer denominations and types you can verify over exact "
+    "headcounts when coins overlap, sit in piles, spill from rolls, or accumulate across photos — wrong totals "
+    "create unhappy buyers. Say what is clearly packaged (e.g. '2003 U.S. Mint uncirculated sets (P and D sleeves)', "
+    "'1999-2008 State Quarters collector map', 'group of loose Sacagawea dollars') rather than 'exactly 47 coins' "
+    "unless every piece is fully visible and countable.\n"
+    "List dates whenever they are legible (envelope year, map range, coin faces, dealer cards). Mixed unreadable "
+    "dates may be a ~range or a list of observed years only — never invent years. Name identifiable denominations "
+    "(cents, nickels, dimes, quarters, halves, dollars, foreign/commemorative when visible). If too mixed, say "
+    "'assorted U.S. coinage'. Title, description, and verified_inventory must agree on years and set names from packaging.\n"
+    "Sealed government sets vs loose change vs map/folder are different deliverable units — open the description "
+    "with what the buyer actually receives. Denominations inside a sealed mint set belong on that set's inventory "
+    "row, not as five extra items that each mirror one window from the set.\n"
+    "**Dealer / Littleton-style flip cards:** one salable coin per card. When several images show different cards, "
+    "those are usually different physical coins (different dates, Indian Head vs Lincoln Wheat, mint marks like -S). "
+    "Transcribe the handwritten/printed four-digit year and mint mark (e.g. 1910-S) from coin AND cardstock. Across "
+    "merged images, list every legible date and type so the listing names all cents, not only the first frame. "
+    "If a Condition note quotes the card's letter grade (e.g. Very Good (VG)), do not add a second conflicting grade.\n"
+    "**Map / folder / album:** coins in map slots or binder pages are part of that product — do not list them as "
+    "separate verified_inventory items unless they are loose outside the map. Use the printed product name "
+    "(collector's map / folder) — do not relabel a State Quarters map as a vague commemorative folder. "
+    "One continuous overview in the description — do not tack on a second sentence spotlighting a single date/state coin. "
+    "For map + mint-set lots, use broad U.S. Mint / State Quarters wording — do not lock the listing to one quarter "
+    "obverse unless that coin is the entire lot.\n"
+    "21. **Ceramics & pottery marks:** Czechoslovakia origin forbids Royal Bonn brand and Germany origin — mutually exclusive. "
+    "CM-R or CMHR = C.M. Hutschenreuther ownership; never Carl-Moritz Reichenbach. "
+    "Star mark = Haas & Czjzek (Schlaggenwald). Shield mark = utilitarian Schlaggenwald. "
+    "Ditmar-Urbach only with hallmark evidence (e.g. known red circular Ditmar-style stamp), never from Czechoslovakia text alone. "
+    "MZ Altrohlau = Moritz Zdekauer factory. Return exactly one primary brand.\n"
+)
+
 
 def _ct_category_allowlist_text() -> str:
     from app.services.ctseller_categories import ct_categories_for_ai
@@ -1158,6 +1190,7 @@ def run_brand_audit_pro(
             "19. Fill **search_tags** with 6–12 words a CT Bids shopper would type for THIS item "
             "(brand, model, material, era, nicknames like MCM). Never Rolex/Porsche/Sotheby's/celebrity "
             "bait unless that name is actually on the piece. No SKU codes, no clothing sizes.\n"
+            + PRO_AUTHOR_SPECIALTY_GUIDANCE
         )
     else:
         task_block = (

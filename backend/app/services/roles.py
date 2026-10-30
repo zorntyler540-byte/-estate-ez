@@ -92,12 +92,17 @@ def client_http_allowed(method: str, path: str) -> bool:
         ("PATCH", "/auth/password"),
         ("GET", "/sales"),
         ("GET", "/jobs"),
+        ("GET", "/jobs/stuck"),
+        ("POST", "/jobs/retry-failed"),
         ("POST", "/jobs/upload"),
     }
     if (verb, raw) in exact:
         return True
     if verb == "GET" and raw.startswith("/sales/") and raw.endswith("/cataloged-mobile-drafts"):
         sale_id = raw[len("/sales/") : -len("/cataloged-mobile-drafts")].strip("/")
+        return bool(sale_id) and "/" not in sale_id
+    if verb == "GET" and raw.startswith("/sales/") and raw.endswith("/upload-health"):
+        sale_id = raw[len("/sales/") : -len("/upload-health")].strip("/")
         return bool(sale_id) and "/" not in sale_id
     if not raw.startswith("/jobs/"):
         return False

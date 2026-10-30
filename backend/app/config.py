@@ -64,15 +64,15 @@ class Settings(BaseSettings):
     gemini_output_cost_per_million: float = Field(
         default=1.05, ge=0.0, alias="GEMINI_OUTPUT_COST_PER_MILLION"
     )
-    # Per-model rates (USD per 1M tokens). Defaults track published Gemini 2.5 paid pricing
-    # (Flash $0.30 in / $2.50 out; Pro $1.25 in / $10.00 out, prompts <=200k). Override via env
-    # when Google changes pricing or you move models. Flash covers triage + listing; Pro covers
-    # the brand/listing author pass.
+    # Per-model rates (USD per 1M tokens). Defaults track published paid pricing.
+    # Listing Flash (`GEMINI_MODEL` = gemini-flash-latest → gemini-3.8-flash) is $0.75 in / $3.75 out.
+    # Pro is $1.25 in / $10.00 out (prompts <=200k). Override via env when Google changes pricing.
+    # Flash-tier analytics use these rates for triage + listing; listing (flash-latest) dominates cost.
     gemini_flash_input_cost_per_million: float = Field(
-        default=0.30, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
+        default=0.75, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
     )
     gemini_flash_output_cost_per_million: float = Field(
-        default=2.50, ge=0.0, alias="GEMINI_FLASH_OUTPUT_COST_PER_MILLION"
+        default=3.75, ge=0.0, alias="GEMINI_FLASH_OUTPUT_COST_PER_MILLION"
     )
     gemini_pro_input_cost_per_million: float = Field(
         default=1.25, ge=0.0, alias="GEMINI_PRO_INPUT_COST_PER_MILLION"
@@ -149,6 +149,17 @@ class Settings(BaseSettings):
     tape_verify_prompt_suffix: str = Field(default="", alias="TAPE_VERIFY_PROMPT_SUFFIX")
     # When true, log each inventory-loop step (file, sku, tape-verify timing) at INFO for stuck-job diagnosis.
     job_debug_inventory: bool = Field(default=False, alias="JOB_DEBUG_INVENTORY")
+    # Dashboard / phone stuck-job banner. Receiving uses last append (updated_at); processing uses
+    # last progress/updated timestamp. Failed orphan-upload cards are stuck regardless of age.
+    job_stuck_receiving_seconds: int = Field(
+        default=30 * 60, ge=60, le=24 * 3600, alias="JOB_STUCK_RECEIVING_SECONDS"
+    )
+    job_stuck_queued_seconds: int = Field(
+        default=10 * 60, ge=30, le=24 * 3600, alias="JOB_STUCK_QUEUED_SECONDS"
+    )
+    job_stuck_processing_seconds: int = Field(
+        default=60 * 60, ge=60, le=24 * 3600, alias="JOB_STUCK_PROCESSING_SECONDS"
+    )
 
     # Comma-separated browser origins allowed to call the API (production Next URL). Dev localhost always included.
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
