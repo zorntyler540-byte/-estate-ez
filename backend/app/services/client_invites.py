@@ -14,6 +14,13 @@ from app.models import ClientInvite, ProcessingJob, Sale, User
 from app.services.roles import ROLE_CLIENT, is_client_role
 
 INVITE_LINK_DAYS = 14
+_APP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def new_app_password() -> str:
+    """Short password the client types into the Estate-EZ phone app."""
+    raw = "".join(secrets.choice(_APP_PASSWORD_ALPHABET) for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
 
 
 def hash_invite_token(token: str) -> str:
@@ -46,7 +53,7 @@ def create_client_invite(
     sale: Sale,
     email: str,
     access_expires_at: datetime | None,
-) -> tuple[ClientInvite, str]:
+) -> tuple[ClientInvite, str, str]:
     address = email.lower().strip()
     if not address:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -61,11 +68,13 @@ def create_client_invite(
     if existing is not None and not is_client_role(existing.role):
         raise HTTPException(status_code=400, detail="That email is already a staff login")
 
+    app_password = new_app_password()
+    password_hash = hash_password(app_password)
     if existing is None:
         existing = User(
             account_id=owner.account_id,
             email=address,
-            password_hash=hash_password(secrets.token_urlsafe(18)),
+            password_hash=password_hash,
             role=ROLE_CLIENT,
             assigned_sale_id=sale.id,
             access_expires_at=expires,
@@ -76,6 +85,7 @@ def create_client_invite(
         existing.assigned_sale_id = sale.id
         existing.access_expires_at = expires
         existing.revoked_at = None
+        existing.password_hash = password_hash
         bump_token_version(existing)
 
     raw = secrets.token_urlsafe(32)
@@ -103,7 +113,28 @@ def create_client_invite(
     db.add(invite)
     db.commit()
     db.refresh(invite)
-    return invite, raw
+    return invite, raw, app_password
+
+
+def mark_client_signed_in(db: Session, user: User) -> None:
+    """Record that a client reached the phone app with their password."""
+    if not is_client_role(user.role):
+        return
+    invite = (
+        db.query(ClientInvite)
+        .filter(
+            ClientInvite.account_id == user.account_id,
+            ClientInvite.user_id == user.id,
+            ClientInvite.revoked_at.is_(None),
+            ClientInvite.accepted_at.is_(None),
+        )
+        .order_by(ClientInvite.created_at.desc())
+        .first()
+    )
+    if invite is None:
+        return
+    invite.accepted_at = datetime.now(timezone.utc)
+    db.commit()
 
 
 def redeem_client_invite(db: Session, token: str) -> str:

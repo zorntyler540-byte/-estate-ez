@@ -37,7 +37,7 @@ export function ClientSaleAccess({
   const [expiresLocal, setExpiresLocal] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [link, setLink] = useState("");
+  const [appLogin, setAppLogin] = useState<{ email: string; password: string } | null>(null);
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [uploads, setUploads] = useState<UploadRow[]>([]);
 
@@ -51,7 +51,7 @@ export function ClientSaleAccess({
   }, [saleId, token]);
 
   useEffect(() => {
-    setLink("");
+    setAppLogin(null);
     setError("");
     void refresh().catch((e) => setError(e instanceof Error ? e.message : "Could not load client access"));
   }, [refresh]);
@@ -60,7 +60,7 @@ export function ClientSaleAccess({
     if (!email.trim()) return;
     setBusy(true);
     setError("");
-    setLink("");
+    setAppLogin(null);
     try {
       const body: { email: string; access_expires_at?: string } = { email: email.trim() };
       if (expiresLocal) {
@@ -71,8 +71,8 @@ export function ClientSaleAccess({
       const created = (await apiFetch(`/sales/${encodeURIComponent(saleId)}/client-invites`, token, {
         method: "POST",
         body: JSON.stringify(body)
-      })) as { invite_path: string };
-      setLink(`${window.location.origin}${created.invite_path}`);
+      })) as { email: string; app_password: string };
+      setAppLogin({ email: created.email, password: created.app_password });
       setEmail("");
       setExpiresLocal("");
       await refresh();
@@ -89,7 +89,7 @@ export function ClientSaleAccess({
       await apiFetch(`/sales/${encodeURIComponent(saleId)}/client-invites/${encodeURIComponent(userId)}`, token, {
         method: "DELETE"
       });
-      setLink("");
+      setAppLogin(null);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not revoke access");
@@ -99,8 +99,9 @@ export function ClientSaleAccess({
   return (
     <div className="ct-sale-watch" style={{ marginTop: "0.75rem" }}>
       <p className="ct-muted" style={{ margin: "0 0 0.35rem" }}>
-        Invite a client to upload photos into <strong>{saleName}</strong> only. Send the link once. Access
-        stops at the expiry time, or as soon as you revoke it.
+        Give a client the Estate-EZ phone app. They sign in with the email and password shown here, then
+        take pictures. Those photos upload into <strong>{saleName}</strong> only. Access stops at the end
+        time, or as soon as you revoke it.
       </p>
       <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
         <input
@@ -121,15 +122,21 @@ export function ClientSaleAccess({
           onChange={(e) => setExpiresLocal(e.target.value)}
         />
         <button type="button" className="ct-btn" disabled={busy || !email.trim()} onClick={() => void invite()}>
-          {busy ? "Creating…" : "Create upload link"}
+          {busy ? "Creating…" : "Create app login"}
         </button>
       </div>
-      {link ? (
-        <p className="ct-banner ct-banner--success" style={{ marginTop: "0.45rem" }}>
-          Copy this link now. It will not be shown again.
-          <br />
-          <a href={link}>{link}</a>
-        </p>
+      {appLogin ? (
+        <div className="ct-banner ct-banner--success" style={{ marginTop: "0.45rem" }}>
+          <p style={{ margin: "0 0 0.35rem" }}>
+            Shown once. Have them open the <strong>Estate-EZ</strong> app and sign in. Pictures they take go
+            into this sale.
+          </p>
+          <p style={{ margin: 0 }}>
+            Email: <strong>{appLogin.email}</strong>
+            <br />
+            Password: <strong>{appLogin.password}</strong>
+          </p>
+        </div>
       ) : null}
       {error ? (
         <p className="ct-banner ct-banner--error" style={{ marginTop: "0.45rem" }}>
@@ -141,7 +148,7 @@ export function ClientSaleAccess({
           {invites.map((row) => (
             <li key={row.id}>
               {row.email}
-              {row.revoked_at ? " · revoked" : row.accepted_at ? " · opened the link" : " · link not used yet"}
+              {row.revoked_at ? " · revoked" : row.accepted_at ? " · signed in" : " · not signed in yet"}
               {row.access_expires_at ? ` · ends ${new Date(row.access_expires_at).toLocaleString()}` : ""}
               {!row.revoked_at ? (
                 <>

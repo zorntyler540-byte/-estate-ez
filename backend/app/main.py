@@ -1199,6 +1199,10 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     acct_active = db.query(Account.is_active).filter(Account.id == user.account_id).scalar()
     if acct_active is False:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+    from app.services.client_invites import assert_client_access_open, mark_client_signed_in
+
+    assert_client_access_open(user)
+    mark_client_signed_in(db, user)
     token = create_access_token(
         user.id, user.account_id, user.role, token_version=token_version_of(user)
     )
@@ -1414,7 +1418,7 @@ def create_sale_client_invite(
     _require_open_sale(sale)
     if is_reserved_master_admin_email(str(payload.email)):
         raise HTTPException(status_code=400, detail="This email is reserved and cannot be invited.")
-    invite, raw = create_client_invite(
+    invite, raw, app_password = create_client_invite(
         db,
         owner=current,
         sale=sale,
@@ -1429,6 +1433,7 @@ def create_sale_client_invite(
         access_expires_at=invite.access_expires_at,
         invite_path=f"/client-invite?token={raw}",
         token=raw,
+        app_password=app_password,
     )
 
 

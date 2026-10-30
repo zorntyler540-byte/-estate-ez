@@ -89,6 +89,7 @@ class ClientInviteCreated(BaseModel):
     access_expires_at: datetime | None = None
     invite_path: str
     token: str
+    app_password: str
 
 
 class ClientInviteOut(BaseModel):

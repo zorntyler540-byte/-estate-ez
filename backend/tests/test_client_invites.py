@@ -62,7 +62,20 @@ def test_client_invite_is_sale_scoped_and_blocks_other_routes(tmp_path: Path, mo
         assert created.status_code == 201, created.text
         body = created.json()
         raw = body["token"]
+        app_password = body["app_password"]
         assert body["invite_path"] == f"/client-invite?token={raw}"
+        signed_in = client.post(
+            "/auth/login",
+            json={"email": "family@example.com", "password": app_password},
+        )
+        assert signed_in.status_code == 200, signed_in.text
+        phone = client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {signed_in.json()['access_token']}"},
+        )
+        assert phone.status_code == 200, phone.text
+        assert phone.json()["assigned_sale_id"] == sale_a_id
+        assert phone.json()["role"] == "client"
         assert raw not in created.text.replace(body["invite_path"], "").replace(f'"token":"{raw}"', "")
 
         db = Session()
@@ -159,6 +172,7 @@ def test_client_invite_expiry_and_revocation(tmp_path: Path, monkeypatch) -> Non
         )
         assert created.status_code == 201, created.text
         raw = created.json()["token"]
+        first_password = created.json()["app_password"]
         user_id = created.json()["user_id"]
         redeemed = client.post("/auth/client-invite/redeem", json={"token": raw})
         assert redeemed.status_code == 200, redeemed.text
@@ -174,6 +188,13 @@ def test_client_invite_expiry_and_revocation(tmp_path: Path, monkeypatch) -> Non
 
         expired = client.get("/auth/me", headers=headers)
         assert expired.status_code == 403, expired.text
+        assert (
+            client.post(
+                "/auth/login",
+                json={"email": "guest@example.com", "password": first_password},
+            ).status_code
+            == 403
+        )
         assert client.post(
             "/jobs/upload",
             headers=headers,
@@ -188,6 +209,18 @@ def test_client_invite_expiry_and_revocation(tmp_path: Path, monkeypatch) -> Non
             json={"email": "guest@example.com"},
         )
         assert again.status_code == 201, again.text
+        assert (
+            client.post(
+                "/auth/login",
+                json={"email": "guest@example.com", "password": first_password},
+            ).status_code
+            == 401
+        )
+        replacement = client.post(
+            "/auth/login",
+            json={"email": "guest@example.com", "password": again.json()["app_password"]},
+        )
+        assert replacement.status_code == 200, replacement.text
         fresh = client.post("/auth/client-invite/redeem", json={"token": again.json()["token"]})
         assert fresh.status_code == 200, fresh.text
         fresh_headers = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
