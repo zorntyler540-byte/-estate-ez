@@ -135,6 +135,7 @@ from app.schemas import (
     SuggestionIn,
     SuggestionSavedOut,
     TokenResponse,
+    TeamMemberAccessUpdate,
     TeamMemberCreate,
     TeamMemberOut,
     ClientInviteCreate,
@@ -1341,12 +1342,18 @@ def create_team_member(
         if sale is None:
             raise HTTPException(status_code=404, detail="Sale not found")
         assigned_sale_id = sale.id
+    access_expires_at = None
+    if role == ROLE_CLIENT and payload.access_expires_at is not None:
+        from app.services.client_invites import client_expiry_or_none
+
+        access_expires_at = client_expiry_or_none(payload.access_expires_at)
     row = User(
         account_id=current.account_id,
         email=email,
         password_hash=pw_hash,
         role=role,
         assigned_sale_id=assigned_sale_id,
+        access_expires_at=access_expires_at,
     )
     db.add(row)
     db.commit()
@@ -1355,6 +1362,28 @@ def create_team_member(
     if assigned_sale_id:
         sale_name = db.query(Sale.name).filter(Sale.id == assigned_sale_id).scalar()
     return _team_member_out(row, {assigned_sale_id: sale_name} if assigned_sale_id and sale_name else {})
+
+
+@app.patch("/team/members/{member_id}/access", response_model=TeamMemberOut)
+def update_team_member_access(
+    member_id: str,
+    payload: TeamMemberAccessUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeamMemberOut:
+    """Set or clear the end time on a client login. Cataloggers are unchanged by this."""
+    _require_owner(current)
+    from app.services.client_invites import client_expiry_or_none
+
+    row = db.query(User).filter(User.id == member_id, User.account_id == current.account_id).first()
+    if row is None or not is_client_role(row.role):
+        raise HTTPException(status_code=404, detail="Client login not found")
+    row.access_expires_at = client_expiry_or_none(payload.access_expires_at)
+    db.commit()
+    db.refresh(row)
+    sale_id = (row.assigned_sale_id or "").strip()
+    sale_name = db.query(Sale.name).filter(Sale.id == sale_id).scalar() if sale_id else None
+    return _team_member_out(row, {sale_id: sale_name} if sale_id and sale_name else {})
 
 
 @app.post("/team/members/{member_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
