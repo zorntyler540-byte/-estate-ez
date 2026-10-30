@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Activity, Briefcase, ClipboardList, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
+import { Activity, Briefcase, ClipboardList, FolderOpen, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import {
   isWatcherPlan,
@@ -34,6 +34,12 @@ const NAV_GROUPS = [
         label: "Dashboard",
         icon: LayoutDashboard,
         match: (p: string) => p.startsWith("/dashboard")
+      },
+      {
+        href: "/sales",
+        label: "Sales",
+        icon: FolderOpen,
+        match: (p: string) => p === "/sales" || p.startsWith("/sales/")
       },
       {
         href: "/facebook",

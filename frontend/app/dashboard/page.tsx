@@ -2047,10 +2047,6 @@ export default function DashboardPage() {
   const selectedSaleIdRef = useRef<string>("");
   const [newSaleName, setNewSaleName] = useState("");
   const [creatingSale, setCreatingSale] = useState(false);
-  const [mergeSourceSaleId, setMergeSourceSaleId] = useState("");
-  const [mergingSale, setMergingSale] = useState(false);
-  const [closingSale, setClosingSale] = useState(false);
-  const [removingSale, setRemovingSale] = useState(false);
   const [showClosedSales, setShowClosedSales] = useState(readShowClosedSales);
   const [isMasterAdmin, setIsMasterAdmin] = useState(false);
   const [adminLoadAttempted, setAdminLoadAttempted] = useState(false);
@@ -5477,43 +5473,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function mergeCatalogSaleIntoSelected() {
-    if (!token || !selectedSaleId || !mergeSourceSaleId) return;
-    const keeper = selectedSale?.name?.trim() || "this sale";
-    const incoming = sales.find((s) => s.id === mergeSourceSaleId)?.name?.trim() || "the other sale";
-    const typed = window.prompt(
-      `Merge "${incoming}" into "${keeper}"?\n\nAll lots, photos, videos, and catalog jobs from "${incoming}" move here. "${incoming}" is then removed from the sale list.\n\nThis does not combine CT Seller auctions. Lots already posted stay on the CT Bids sale they were posted to.\n\nPhones should select "${keeper}" after this.\n\nType MERGE to confirm.`
-    );
-    if (typed !== "MERGE") return;
-    setMergingSale(true);
-    setError("");
-    try {
-      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/merge`, token, {
-        method: "POST",
-        body: JSON.stringify({ source_sale_id: mergeSourceSaleId })
-      })) as {
-        lots_moved: number;
-        jobs_moved: number;
-        duplicate_sku_count: number;
-        source_sale_name: string;
-      };
-      setSales((prev) => prev.filter((s) => s.id !== mergeSourceSaleId));
-      setMergeSourceSaleId("");
-      setDataReloadNonce((n) => n + 1);
-      const dup =
-        res.duplicate_sku_count > 0
-          ? ` ${res.duplicate_sku_count} lot(s) now share a SKU in this sale — filter SKU checks for duplicates.`
-          : "";
-      window.alert(
-        `Moved ${res.lots_moved} lot(s) and ${res.jobs_moved} job(s) from "${res.source_sale_name}" into "${keeper}".${dup}`
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not merge sales");
-    } finally {
-      setMergingSale(false);
-    }
-  }
-
   async function pullCtSellerSalesIntoCatalog() {
     if (!token) return;
     setPullingCtSellerSales(true);
@@ -5675,79 +5634,6 @@ export default function DashboardPage() {
       setError(e instanceof Error ? e.message : "Could not sort photos for listing");
     } finally {
       setPullingCtSellerSales(false);
-    }
-  }
-
-  async function endSelectedSale() {
-    if (!token || !selectedSaleId || selectedSaleClosed) return;
-    const target = selectedSale?.name || "this sale";
-    if (!window.confirm(`Close "${target}"? Closed sales remain visible but should no longer be used for new work.`)) {
-      return;
-    }
-    setClosingSale(true);
-    setError("");
-    try {
-      const updated = (await apiFetch(`/sales/${selectedSaleId}`, token, {
-        method: "PATCH",
-        body: JSON.stringify({ is_closed: true })
-      })) as Sale;
-      setSales((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not close sale");
-    } finally {
-      setClosingSale(false);
-    }
-  }
-
-  async function removeSelectedSale() {
-    if (!token || !selectedSaleId || !selectedSale || !isAccountOwner) return;
-    const target = (selectedSale.name || "").trim();
-    if (!target) return;
-    const lotN = lots.length;
-    const mapped = Boolean(selectedSale.ctseller_sale_id);
-    const typed = window.prompt(
-      `Remove "${target}" from Change sale?\n\nThis deletes the Estate-EZ catalog for that sale only (${lotN} lot${lotN === 1 ? "" : "s"} on this website). CT Bids is not changed.\n\n${
-        mapped
-          ? "This tab is linked to a CT Bids auction. If that auction is still open, an empty tab with the same name can come back on the next sync — End sale instead if you only want it hidden.\n\n"
-          : ""
-      }Type the sale name exactly to confirm. Leave blank to cancel.`
-    );
-    if (typed == null) return;
-    if (typed.trim() !== target) {
-      if (typed.trim()) setError("Sale name did not match — nothing was deleted.");
-      return;
-    }
-    if (lotN > 0) {
-      if (
-        !window.confirm(
-          `Permanently delete ${lotN} lot${lotN === 1 ? "" : "s"} and their photos from Estate-EZ for "${target}"?\n\nThis cannot be undone. CT Bids listings stay up.`
-        )
-      ) {
-        return;
-      }
-    }
-    setRemovingSale(true);
-    setError("");
-    try {
-      await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/remove`, token, {
-        method: "POST",
-        body: JSON.stringify({ confirm_name: target })
-      });
-      const removedId = selectedSaleId;
-      const nextSales = sales.filter((s) => s.id !== removedId);
-      setSales(nextSales);
-      const visible = showClosedSales ? nextSales : nextSales.filter((s) => !s.closed_at);
-      const pool = visible.length ? visible : nextSales;
-      setSelectedSaleId(pool[0]?.id || "");
-      setLots([]);
-      setJobs([]);
-      setStuckJobs([]);
-      setPhotoHealthMissing({});
-      setPullCtSellerSalesMsg(`Removed "${target}" from Change sale.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not remove sale");
-    } finally {
-      setRemovingSale(false);
     }
   }
 
@@ -6967,68 +6853,9 @@ export default function DashboardPage() {
               </label>
             </div>
             {isAccountOwner ? (
-              <details className="ct-toolbar__more">
-                <summary>Sale options</summary>
-                <div className="ct-toolbar__more-body">
-                  {sales.filter((s) => s.id !== selectedSaleId && !s.closed_at).length > 0 ? (
-                    <>
-                      <label className="ct-label" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span className="ct-muted" style={{ fontSize: "0.8rem" }}>
-                          Merge into {selectedSale?.name || "this sale"}
-                        </span>
-                        <select
-                          className="ct-input"
-                          style={{ minWidth: 200 }}
-                          value={mergeSourceSaleId}
-                          disabled={mergingSale || !selectedSaleId || selectedSaleClosed}
-                          onChange={(e) => setMergeSourceSaleId(e.target.value)}
-                          aria-label="Sale to merge into the selected sale"
-                        >
-                          <option value="">Choose a sale to merge in…</option>
-                          {sales
-                            .filter((s) => s.id !== selectedSaleId && !s.closed_at)
-                            .map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        className="ct-btn"
-                        disabled={
-                          mergingSale ||
-                          !mergeSourceSaleId ||
-                          !selectedSaleId ||
-                          selectedSaleClosed
-                        }
-                        title="Move lots and jobs from the chosen sale into the selected sale, then remove the empty sale"
-                        onClick={() => void mergeCatalogSaleIntoSelected()}
-                      >
-                        {mergingSale ? "Merging…" : "Merge sales"}
-                      </button>
-                    </>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ct-btn"
-                    disabled={!selectedSaleId || selectedSaleClosed || closingSale || removingSale || busyProcessing}
-                    onClick={() => void endSelectedSale()}
-                  >
-                    {closingSale ? "Closing…" : "End sale"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ct-btn ct-btn--danger-outline"
-                    disabled={!selectedSaleId || removingSale || closingSale || busyProcessing}
-                    title="Type the sale name to remove this Estate-EZ tab. CT Bids is not changed."
-                    onClick={() => void removeSelectedSale()}
-                  >
-                    {removingSale ? "Removing…" : "Remove sale"}
-                  </button>
-                </div>
-              </details>
+              <Link href="/sales" className="ct-btn">
+                Manage sales
+              </Link>
             ) : null}
           </div>
           {pullCtSellerSalesMsg ? (
