@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { PhotoAddsPanel, photoAddsFromResponse, type PhotoAddLot } from "../../components/PhotoAddsPanel";
+import { ClientSaleAccess } from "../../components/ClientSaleAccess";
 import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
@@ -6805,6 +6806,9 @@ export default function DashboardPage() {
               </h1>
               {selectedSaleClosed ? (
                 <p className="ct-muted ct-dashboard-hero__note">This sale is closed — uploads and edits are disabled.</p>
+              ) : null}
+              {selectedSale && token && isAccountOwner && !selectedSaleClosed ? (
+                <ClientSaleAccess token={token} saleId={selectedSale.id} saleName={selectedSale.name} />
               ) : null}
               <p className="ct-muted ct-dashboard-hero__note" style={{ marginTop: "0.35rem" }}>
                 <Link href="/engagement">Push queue</Link>

@@ -32,6 +32,8 @@ type TeamMember = {
   created_at: string;
   assigned_sale_id?: string | null;
   assigned_sale_name?: string | null;
+  access_expires_at?: string | null;
+  revoked_at?: string | null;
 };
 
 type SaleOption = {
@@ -422,6 +424,19 @@ export default function AccountPage() {
       setTeamError(e instanceof Error ? e.message : "Could not add client login");
     } finally {
       setClientBusy(false);
+    }
+  }
+
+  async function revokeClient(saleId: string, memberId: string) {
+    if (!token || !saleId || !memberId) return;
+    setTeamError("");
+    try {
+      await apiFetch(`/sales/${encodeURIComponent(saleId)}/client-invites/${encodeURIComponent(memberId)}`, token, {
+        method: "DELETE"
+      });
+      await refreshTeamMembers();
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not revoke access");
     }
   }
 
@@ -1054,6 +1069,8 @@ export default function AccountPage() {
                     <p style={{ margin: 0, fontWeight: 600 }}>{m.email}</p>
                     <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.86rem" }}>
                       Uploads to {m.assigned_sale_name || "no sale"} · Added {new Date(m.created_at).toLocaleString()}
+                      {m.access_expires_at ? ` · ends ${new Date(m.access_expires_at).toLocaleString()}` : ""}
+                      {m.revoked_at ? " · revoked" : ""}
                     </p>
                     <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.55rem", flexWrap: "wrap" }}>
                       <select
@@ -1097,6 +1114,15 @@ export default function AccountPage() {
                       >
                         {resetBusyId === m.id ? "Resetting…" : "Reset password"}
                       </button>
+                      {m.assigned_sale_id && !m.revoked_at ? (
+                        <button
+                          type="button"
+                          className="ct-btn ct-btn--ghost"
+                          onClick={() => void revokeClient(m.assigned_sale_id || "", m.id)}
+                        >
+                          Revoke access
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );

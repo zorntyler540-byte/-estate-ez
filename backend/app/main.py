@@ -137,6 +137,11 @@ from app.schemas import (
     TokenResponse,
     TeamMemberCreate,
     TeamMemberOut,
+    ClientInviteCreate,
+    ClientInviteCreated,
+    ClientInviteOut,
+    ClientInviteRedeem,
+    ClientUploadOut,
     TeamMemberSaleUpdate,
     TeamActivityLotOut,
     TeamActivityMemberOut,
@@ -585,7 +590,7 @@ def _scoped_jobs_query(
             return None
         if sale_id is not None and sale_id != assigned:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
-        q = q.filter(ProcessingJob.sale_id == assigned)
+        q = q.filter(ProcessingJob.sale_id == assigned, ProcessingJob.user_id == current.id)
     elif sale_id is not None:
         _sale_for_user(sale_id, current, db)
         q = q.filter(ProcessingJob.sale_id == sale_id)
@@ -673,7 +678,28 @@ def startup() -> None:
     _ensure_ops_job_cuft_column()
     _ensure_ops_job_auction_columns()
     _ensure_job_client_draft_id_column()
+    _ensure_client_invite_columns()
     _start_in_process_maintenance()
+
+
+def _ensure_client_invite_columns() -> None:
+    """Local SQLite ``create_all`` does not ALTER existing users tables."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("users")}
+    stmts: list[str] = []
+    if "access_expires_at" not in cols:
+        stmts.append("ALTER TABLE users ADD COLUMN access_expires_at DATETIME")
+    if "revoked_at" not in cols:
+        stmts.append("ALTER TABLE users ADD COLUMN revoked_at DATETIME")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
 
 
 def _ensure_job_client_draft_id_column() -> None:
@@ -1179,6 +1205,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     return TokenResponse(access_token=token)
 
 
+@app.post("/auth/client-invite/redeem", response_model=TokenResponse)
+def redeem_client_invite_route(payload: ClientInviteRedeem, db: Session = Depends(get_db)) -> TokenResponse:
+    """Turn a client invite link into a session. The raw token is not a password."""
+    from app.services.client_invites import redeem_client_invite
+
+    access = redeem_client_invite(db, payload.token)
+    return TokenResponse(access_token=access)
+
+
 @app.get("/auth/me", response_model=UserSummary)
 def me(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> UserSummary:
     sale_id = _client_assigned_sale_id(current) or None
@@ -1198,6 +1233,7 @@ def me(current: User = Depends(get_current_user), db: Session = Depends(get_db))
         role=current.role,
         assigned_sale_id=sale_id,
         assigned_sale_name=sale_name,
+        access_expires_at=getattr(current, "access_expires_at", None),
         plan_code=plan_code,
         feature_analytics=feature_analytics,
         feature_facebook=feature_facebook,
@@ -1248,6 +1284,8 @@ def _team_member_out(row: User, sale_names: dict[str, str]) -> TeamMemberOut:
         created_at=row.created_at,
         assigned_sale_id=sale_id,
         assigned_sale_name=sale_names.get(sale_id) if sale_id else None,
+        access_expires_at=getattr(row, "access_expires_at", None),
+        revoked_at=getattr(row, "revoked_at", None),
     )
 
 
@@ -1359,6 +1397,114 @@ def update_team_member_sale(
     db.commit()
     db.refresh(row)
     return _team_member_out(row, {sale.id: sale.name})
+
+
+@app.post("/sales/{sale_id}/client-invites", response_model=ClientInviteCreated, status_code=status.HTTP_201_CREATED)
+def create_sale_client_invite(
+    sale_id: str,
+    payload: ClientInviteCreate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ClientInviteCreated:
+    """Owner invite for one sale. The token is returned once; only its hash is stored."""
+    from app.services.client_invites import create_client_invite
+
+    _require_owner(current)
+    sale = _sale_for_user(sale_id, current, db)
+    _require_open_sale(sale)
+    if is_reserved_master_admin_email(str(payload.email)):
+        raise HTTPException(status_code=400, detail="This email is reserved and cannot be invited.")
+    invite, raw = create_client_invite(
+        db,
+        owner=current,
+        sale=sale,
+        email=str(payload.email),
+        access_expires_at=payload.access_expires_at,
+    )
+    return ClientInviteCreated(
+        id=invite.id,
+        email=invite.email,
+        sale_id=invite.sale_id,
+        user_id=invite.user_id,
+        access_expires_at=invite.access_expires_at,
+        invite_path=f"/client-invite?token={raw}",
+        token=raw,
+    )
+
+
+@app.get("/sales/{sale_id}/client-invites", response_model=list[ClientInviteOut])
+def list_sale_client_invites(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ClientInviteOut]:
+    from app.models import ClientInvite
+
+    _require_owner(current)
+    _sale_for_user(sale_id, current, db)
+    rows = (
+        db.query(ClientInvite)
+        .filter(ClientInvite.account_id == current.account_id, ClientInvite.sale_id == sale_id)
+        .order_by(ClientInvite.created_at.desc())
+        .all()
+    )
+    return [
+        ClientInviteOut(
+            id=row.id,
+            email=row.email,
+            sale_id=row.sale_id,
+            user_id=row.user_id,
+            access_expires_at=row.access_expires_at,
+            expires_at=row.expires_at,
+            accepted_at=row.accepted_at,
+            revoked_at=row.revoked_at,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@app.delete("/sales/{sale_id}/client-invites/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_sale_client_invite(
+    sale_id: str,
+    user_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    from app.services.client_invites import revoke_client_user
+
+    _require_owner(current)
+    sale = _sale_for_user(sale_id, current, db)
+    user = db.query(User).filter(User.id == user_id, User.account_id == current.account_id).first()
+    if user is None or (user.assigned_sale_id or "") != sale.id:
+        raise HTTPException(status_code=404, detail="Client login not found")
+    revoke_client_user(db, account_id=current.account_id, user_id=user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/sales/{sale_id}/client-uploads", response_model=list[ClientUploadOut])
+def list_sale_client_uploads(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ClientUploadOut]:
+    from app.services.client_invites import client_uploads_for_sale
+
+    _require_owner(current)
+    _sale_for_user(sale_id, current, db)
+    return [
+        ClientUploadOut(
+            job_id=job.id,
+            user_id=job.user_id,
+            email=email,
+            status=job.status.value,
+            sku=job.single_lot_manual_sku,
+            client_draft_id=getattr(job, "client_draft_id", None),
+            created_at=job.created_at,
+            error_message=job.error_message,
+        )
+        for job, email in client_uploads_for_sale(db, account_id=current.account_id, sale_id=sale_id)
+    ]
 
 
 @app.get("/team/activity", response_model=TeamActivityOut)

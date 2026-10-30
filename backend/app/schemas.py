@@ -47,6 +47,7 @@ class UserSummary(BaseModel):
     role: str
     assigned_sale_id: str | None = None
     assigned_sale_name: str | None = None
+    access_expires_at: datetime | None = None
     plan_code: str = "beta_free"
     feature_analytics: bool = True
     feature_facebook: bool = True
@@ -71,6 +72,50 @@ class TeamMemberOut(BaseModel):
     created_at: datetime
     assigned_sale_id: str | None = None
     assigned_sale_name: str | None = None
+    access_expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ClientInviteCreate(BaseModel):
+    email: EmailStr
+    access_expires_at: datetime | None = None
+
+
+class ClientInviteCreated(BaseModel):
+    id: str
+    email: EmailStr
+    sale_id: str
+    user_id: str
+    access_expires_at: datetime | None = None
+    invite_path: str
+    token: str
+
+
+class ClientInviteOut(BaseModel):
+    id: str
+    email: EmailStr
+    sale_id: str
+    user_id: str
+    access_expires_at: datetime | None = None
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+
+
+class ClientUploadOut(BaseModel):
+    job_id: str
+    user_id: str
+    email: EmailStr
+    status: str
+    sku: str | None = None
+    client_draft_id: str | None = None
+    created_at: datetime
+    error_message: str | None = None
+
+
+class ClientInviteRedeem(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
 
 
 class TeamActivityPhotoTimeOut(BaseModel):
