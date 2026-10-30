@@ -239,6 +239,7 @@ from app.services.sale_covers import (
     validate_cover_photo_ids,
 )
 from app.services.ctseller_sale_sync import apply_ctseller_catalog_sale_sync
+from app.services.plans import ASSIGNABLE_PLANS, PLAN_WATCHER, features_for_client
 from app.services.roles import (
     ASSIGNABLE_ROLES,
     CLIENT_UPLOAD_DETAIL,
@@ -667,6 +668,7 @@ def startup() -> None:
     _ensure_user_token_version_column()
     _ensure_lot_engagement_column()
     _ensure_facebook_account_columns()
+    _ensure_account_feature_columns()
     _ensure_engagement_bucket_names()
     _ensure_ops_job_cuft_column()
     _ensure_ops_job_auction_columns()
@@ -885,6 +887,26 @@ def _ensure_facebook_account_columns() -> None:
     _ensure_facebook_page_post_columns()
 
 
+def _ensure_account_feature_columns() -> None:
+    """Existing SQLite accounts tables do not grow new plan switches from create_all."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "accounts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("accounts")}
+    stmts: list[str] = []
+    if "feature_analytics" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN feature_analytics BOOLEAN NOT NULL DEFAULT TRUE")
+    if "feature_facebook" not in cols:
+        stmts.append("ALTER TABLE accounts ADD COLUMN feature_facebook BOOLEAN NOT NULL DEFAULT TRUE")
+    if not stmts:
+        return
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
+
+
 def _ensure_facebook_page_post_columns() -> None:
     from sqlalchemy import inspect, text
 
@@ -1067,14 +1089,16 @@ def health() -> HealthResponse:
     )
 
 
-@app.post("/auth/register", response_model=TokenResponse)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    if not settings.registration_is_open():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="New account registration is disabled on this server.",
-        )
-    email = payload.email.lower()
+def _open_owner_account(
+    db: Session,
+    *,
+    account_name: str,
+    email: str,
+    password: str,
+    plan_code: str,
+    create_sale: bool,
+) -> TokenResponse:
+    email = email.lower()
     if is_reserved_master_admin_email(email):
         raise HTTPException(
             status_code=400,
@@ -1083,11 +1107,17 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
-    account = Account(name=payload.account_name.strip(), plan_code="beta_free", is_active=True)
+    account = Account(
+        name=account_name.strip(),
+        plan_code=plan_code,
+        is_active=True,
+        feature_analytics=True,
+        feature_facebook=True,
+    )
     db.add(account)
     db.flush()
     try:
-        pw_hash = hash_password(payload.password)
+        pw_hash = hash_password(password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     user = User(
@@ -1098,10 +1128,41 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     )
     db.add(user)
     db.flush()
-    db.add(Sale(account_id=account.id, user_id=user.id, name="General"))
+    if create_sale:
+        db.add(Sale(account_id=account.id, user_id=user.id, name="General"))
     db.commit()
     token = create_access_token(user.id, account.id, user.role, token_version=token_version_of(user))
     return TokenResponse(access_token=token)
+
+
+@app.post("/auth/register", response_model=TokenResponse)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    if not settings.registration_is_open():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="New account registration is disabled on this server.",
+        )
+    return _open_owner_account(
+        db,
+        account_name=payload.account_name,
+        email=payload.email,
+        password=payload.password,
+        plan_code="beta_free",
+        create_sale=True,
+    )
+
+
+@app.post("/auth/register-watcher", response_model=TokenResponse)
+def register_watcher(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    """Self-serve Auction Watcher signup. Stays open when full catalog registration is closed."""
+    return _open_owner_account(
+        db,
+        account_name=payload.account_name,
+        email=payload.email,
+        password=payload.password,
+        plan_code=PLAN_WATCHER,
+        create_sale=False,
+    )
 
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -1128,6 +1189,8 @@ def me(current: User = Depends(get_current_user), db: Session = Depends(get_db))
             sale_id = None
         else:
             sale_name = sale.name
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    plan_code, feature_analytics, feature_facebook = features_for_client(account)
     return UserSummary(
         id=current.id,
         account_id=current.account_id,
@@ -1135,6 +1198,9 @@ def me(current: User = Depends(get_current_user), db: Session = Depends(get_db))
         role=current.role,
         assigned_sale_id=sale_id,
         assigned_sale_name=sale_name,
+        plan_code=plan_code,
+        feature_analytics=feature_analytics,
+        feature_facebook=feature_facebook,
     )
 
 
@@ -1466,6 +1532,42 @@ def pull_team_ctseller_history(
     )
 
 
+def _admin_account_out(db: Session, row: Account) -> AdminAccountOut:
+    owner_email = (
+        db.query(User.email)
+        .filter(User.account_id == row.id, User.role == "owner")
+        .order_by(User.created_at.asc())
+        .scalar()
+    )
+    if not owner_email:
+        owner_email = (
+            db.query(User.email)
+            .filter(User.account_id == row.id)
+            .order_by(User.created_at.asc())
+            .scalar()
+        )
+    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
+    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
+    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
+    job_count = (
+        db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
+    )
+    return AdminAccountOut(
+        id=row.id,
+        name=row.name,
+        owner_email=owner_email,
+        plan_code=row.plan_code,
+        is_active=bool(row.is_active),
+        feature_analytics=bool(getattr(row, "feature_analytics", True)),
+        feature_facebook=bool(getattr(row, "feature_facebook", True)),
+        created_at=row.created_at,
+        user_count=int(user_count),
+        sale_count=int(sale_count),
+        lot_count=int(lot_count),
+        job_count=int(job_count),
+    )
+
+
 @app.get("/admin/accounts", response_model=list[AdminAccountOut])
 def admin_list_accounts(
     current: User = Depends(get_current_user),
@@ -1473,42 +1575,7 @@ def admin_list_accounts(
 ) -> list[AdminAccountOut]:
     _require_master_admin(current)
     rows = db.query(Account).order_by(Account.created_at.desc()).all()
-    out: list[AdminAccountOut] = []
-    for a in rows:
-        owner_email = (
-            db.query(User.email)
-            .filter(User.account_id == a.id, User.role == "owner")
-            .order_by(User.created_at.asc())
-            .scalar()
-        )
-        if not owner_email:
-            owner_email = (
-                db.query(User.email)
-                .filter(User.account_id == a.id)
-                .order_by(User.created_at.asc())
-                .scalar()
-            )
-        user_count = db.query(func.count()).select_from(User).filter(User.account_id == a.id).scalar() or 0
-        sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == a.id).scalar() or 0
-        lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == a.id).scalar() or 0
-        job_count = (
-            db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == a.id).scalar() or 0
-        )
-        out.append(
-            AdminAccountOut(
-                id=a.id,
-                name=a.name,
-                owner_email=owner_email,
-                plan_code=a.plan_code,
-                is_active=bool(a.is_active),
-                created_at=a.created_at,
-                user_count=int(user_count),
-                sale_count=int(sale_count),
-                lot_count=int(lot_count),
-                job_count=int(job_count),
-            )
-        )
-    return out
+    return [_admin_account_out(db, row) for row in rows]
 
 
 @app.patch("/admin/accounts/{account_id}", response_model=AdminAccountOut)
@@ -1527,38 +1594,22 @@ def admin_update_account(
     if payload.name is not None:
         row.name = payload.name.strip()
     if payload.plan_code is not None:
-        row.plan_code = payload.plan_code.strip().lower()
+        code = payload.plan_code.strip().lower()
+        current_code = (row.plan_code or "").strip().lower()
+        if code not in ASSIGNABLE_PLANS and code != current_code:
+            raise HTTPException(
+                status_code=400,
+                detail="Plan must be Full catalog or Auction Watcher.",
+            )
+        if code in ASSIGNABLE_PLANS:
+            row.plan_code = code
+    if payload.feature_analytics is not None:
+        row.feature_analytics = bool(payload.feature_analytics)
+    if payload.feature_facebook is not None:
+        row.feature_facebook = bool(payload.feature_facebook)
     db.commit()
     db.refresh(row)
-    owner_email = (
-        db.query(User.email)
-        .filter(User.account_id == row.id, User.role == "owner")
-        .order_by(User.created_at.asc())
-        .scalar()
-    )
-    if not owner_email:
-        owner_email = (
-            db.query(User.email)
-            .filter(User.account_id == row.id)
-            .order_by(User.created_at.asc())
-            .scalar()
-        )
-    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
-    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
-    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
-    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
-    return AdminAccountOut(
-        id=row.id,
-        name=row.name,
-        owner_email=owner_email,
-        plan_code=row.plan_code,
-        is_active=bool(row.is_active),
-        created_at=row.created_at,
-        user_count=int(user_count),
-        sale_count=int(sale_count),
-        lot_count=int(lot_count),
-        job_count=int(job_count),
-    )
+    return _admin_account_out(db, row)
 
 
 @app.post("/admin/accounts/{account_id}/archive", response_model=AdminAccountOut)
@@ -1574,35 +1625,7 @@ def admin_archive_account(
     row.is_active = False
     db.commit()
     db.refresh(row)
-    owner_email = (
-        db.query(User.email)
-        .filter(User.account_id == row.id, User.role == "owner")
-        .order_by(User.created_at.asc())
-        .scalar()
-    )
-    if not owner_email:
-        owner_email = (
-            db.query(User.email)
-            .filter(User.account_id == row.id)
-            .order_by(User.created_at.asc())
-            .scalar()
-        )
-    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
-    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
-    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
-    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
-    return AdminAccountOut(
-        id=row.id,
-        name=row.name,
-        owner_email=owner_email,
-        plan_code=row.plan_code,
-        is_active=bool(row.is_active),
-        created_at=row.created_at,
-        user_count=int(user_count),
-        sale_count=int(sale_count),
-        lot_count=int(lot_count),
-        job_count=int(job_count),
-    )
+    return _admin_account_out(db, row)
 
 
 @app.post("/admin/accounts/{account_id}/restore", response_model=AdminAccountOut)
@@ -1618,35 +1641,7 @@ def admin_restore_account(
     row.is_active = True
     db.commit()
     db.refresh(row)
-    owner_email = (
-        db.query(User.email)
-        .filter(User.account_id == row.id, User.role == "owner")
-        .order_by(User.created_at.asc())
-        .scalar()
-    )
-    if not owner_email:
-        owner_email = (
-            db.query(User.email)
-            .filter(User.account_id == row.id)
-            .order_by(User.created_at.asc())
-            .scalar()
-        )
-    user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
-    sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
-    lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
-    job_count = db.query(func.count()).select_from(ProcessingJob).filter(ProcessingJob.account_id == row.id).scalar() or 0
-    return AdminAccountOut(
-        id=row.id,
-        name=row.name,
-        owner_email=owner_email,
-        plan_code=row.plan_code,
-        is_active=bool(row.is_active),
-        created_at=row.created_at,
-        user_count=int(user_count),
-        sale_count=int(sale_count),
-        lot_count=int(lot_count),
-        job_count=int(job_count),
-    )
+    return _admin_account_out(db, row)
 
 
 @app.delete("/admin/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

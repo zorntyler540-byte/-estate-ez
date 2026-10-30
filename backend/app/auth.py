@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.models import Account, User
+from app.services.plans import enforce_watcher_http, request_path
 from app.services.roles import enforce_client_http
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -151,13 +152,27 @@ def user_from_sse_ticket(token: str, db: Session, job_id: str) -> User:
     return _load_active_user(db, str(user_id), str(account_id), ver)
 
 
+def enforce_account_http(db: Session, user: User, method: str, path: str) -> None:
+    """Client upload lock, then Auction Watcher allowlist.
+
+    Master admin keeps ``/admin/*`` even if that login's plan is watcher, so
+    the admin panel cannot be locked by a plan change.
+    """
+    enforce_client_http(user, method, path)
+    raw = request_path(path)
+    if is_master_admin(user) and (raw == "/admin" or raw.startswith("/admin/")):
+        return
+    account = db.query(Account).filter(Account.id == user.account_id).first()
+    enforce_watcher_http(account, method, path)
+
+
 def get_current_user(
     request: Request,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     user = user_from_access_token(token, db)
-    enforce_client_http(user, request.method, request.url.path)
+    enforce_account_http(db, user, request.method, request.url.path)
     return user
 
 
@@ -171,7 +186,7 @@ def get_current_user_upload(
         raise CREDENTIALS_EXCEPTION
     with SessionLocal() as db:
         user = user_from_access_token(token, db)
-        enforce_client_http(user, request.method, request.url.path)
+        enforce_account_http(db, user, request.method, request.url.path)
         return user
 
 
@@ -194,13 +209,13 @@ def get_current_user_sse(
     if ticket:
         with SessionLocal() as db:
             user = user_from_sse_ticket(ticket, db, job_id)
-            enforce_client_http(user, request.method, request.url.path)
+            enforce_account_http(db, user, request.method, request.url.path)
             return user
     if not bearer:
         raise CREDENTIALS_EXCEPTION
     with SessionLocal() as db:
         user = user_from_access_token(bearer, db)
-        enforce_client_http(user, request.method, request.url.path)
+        enforce_account_http(db, user, request.method, request.url.path)
         return user
 
 

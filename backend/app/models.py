@@ -49,6 +49,9 @@ class Account(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan_code: Mapped[str] = mapped_column(String(40), default="beta_free", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Auction Watcher switches. Full-catalog plans ignore these.
+    feature_analytics: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default="1")
+    feature_facebook: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default="1")
     ctseller_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ctseller_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_access_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)

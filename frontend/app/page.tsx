@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, apiFetch, isApiBaseMisconfiguredForHost } from "../lib/api";
+import { rememberAccountAccess, watcherHome } from "../lib/plans";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
 
 export default function HomePage() {
@@ -33,7 +34,7 @@ export default function HomePage() {
         mode === "register"
           ? { account_name: accountName, email: trimmedEmail, password }
           : { email: trimmedEmail, password };
-      const data = (await apiFetch(`/auth/${mode}`, undefined, {
+      const data = (await apiFetch(mode === "register" ? "/auth/register-watcher" : "/auth/login", undefined, {
         method: "POST",
         body: JSON.stringify(payload)
       })) as { access_token?: string };
@@ -50,9 +51,15 @@ export default function HomePage() {
         );
         return;
       }
-      const me = (await apiFetch("/auth/me", token)) as { role?: string };
+      const me = (await apiFetch("/auth/me", token)) as {
+        role?: string;
+        plan_code?: string;
+        feature_analytics?: boolean;
+        feature_facebook?: boolean;
+      };
       rememberAccountRole(me?.role);
-      router.push(isClientRole(me?.role) ? "/client" : "/dashboard");
+      rememberAccountAccess(me);
+      router.push(isClientRole(me?.role) ? "/client" : watcherHome(me));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Login failed");
     } finally {
@@ -75,7 +82,9 @@ export default function HomePage() {
           <h1 className="ct-auth-product">Estate-EZ</h1>
           <p className="ct-auth-action">Sign in</p>
           <p className="ct-subtitle" style={{ marginBottom: 0 }}>
-            Manage lots, photos, and AI-assisted cataloging.
+            {mode === "register"
+              ? "Create an Auction Watcher account for the Push queue and Facebook posts."
+              : "Sign in to Estate-EZ."}
           </p>
         </div>
         <div className="ct-seg" role="tablist" aria-label="Sign in or register">
@@ -141,7 +150,7 @@ export default function HomePage() {
             className="ct-btn ct-btn--primary"
             disabled={busy || !email.trim() || !password}
           >
-            {busy ? "Working…" : mode === "register" ? "Create account" : "Sign in"}
+            {busy ? "Working…" : mode === "register" ? "Create watcher account" : "Sign in"}
           </button>
         </form>
         {configWarning ? (
@@ -152,6 +161,11 @@ export default function HomePage() {
         {error ? (
           <p className="ct-banner ct-banner--error" style={{ marginBottom: 0, fontSize: "0.88rem" }}>
             {error}
+          </p>
+        ) : null}
+        {mode === "register" ? (
+          <p className="ct-muted" style={{ margin: 0, textAlign: "center", fontSize: "0.88rem" }}>
+            This account can test analytics and Facebook posting. Catalog, AI, and CT Seller stay off.
           </p>
         ) : null}
         <p className="ct-muted" style={{ margin: 0, textAlign: "center", fontSize: "0.88rem" }}>

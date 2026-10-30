@@ -47,6 +47,9 @@ class UserSummary(BaseModel):
     role: str
     assigned_sale_id: str | None = None
     assigned_sale_name: str | None = None
+    plan_code: str = "beta_free"
+    feature_analytics: bool = True
+    feature_facebook: bool = True
 
 
 class TeamMemberCreate(BaseModel):
@@ -177,6 +180,8 @@ class AdminAccountOut(BaseModel):
     owner_email: EmailStr | None = None
     plan_code: str
     is_active: bool
+    feature_analytics: bool = True
+    feature_facebook: bool = True
     created_at: datetime
     user_count: int = 0
     sale_count: int = 0
@@ -188,6 +193,8 @@ class AdminAccountUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
     is_active: bool | None = None
     plan_code: str | None = Field(default=None, min_length=2, max_length=40)
+    feature_analytics: bool | None = None
+    feature_facebook: bool | None = None
 
 
 class AdminUsageAccountOut(BaseModel):
