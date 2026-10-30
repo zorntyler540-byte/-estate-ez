@@ -22,6 +22,7 @@ export type SyncResult = {
   failed: number;
   reconciled: number;
   archived?: number;
+  healthSummary?: string | null;
 };
 
 type SyncStatusValue = {
@@ -46,20 +47,37 @@ const SyncStatusContext = createContext<SyncStatusValue | null>(null);
 const SyncRefreshContext = createContext<SyncRefreshValue | null>(null);
 const SyncActionsContext = createContext<SyncActionsValue | null>(null);
 
+function withHealth(message: string, healthSummary?: string | null): string {
+  if (!healthSummary) return message;
+  return `${message.replace(/\.$/, "")} (${healthSummary}).`;
+}
+
 function formatSyncMessage(result: SyncResult): string {
   if (result.uploaded === 0 && result.failed === 0) {
     if (result.archived) {
-      return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
+      return withHealth(
+        `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`,
+        result.healthSummary
+      );
     }
     if (result.reconciled > 0) {
-      return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
+      return withHealth(
+        `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`,
+        result.healthSummary
+      );
     }
-    return "Nothing queued to upload.";
+    return withHealth("Nothing queued to upload.", result.healthSummary);
   }
   if (result.failed === 0) {
-    return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}.`;
+    return withHealth(
+      `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}.`,
+      result.healthSummary
+    );
   }
-  return `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, ${result.failed} need a check.`;
+  return withHealth(
+    `Synced ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, ${result.failed} need a check.`,
+    result.healthSummary
+  );
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {

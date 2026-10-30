@@ -81,8 +81,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   finished”) even when a later Sync already cataloged the same SKU. `GET /jobs` (and the worker
   sweep) completes those orphan-upload rows when the sale already has that SKU, a completed job
   with the same SKU, or matching `mobile-<draft>-NN.jpg` names. Gemini / Cancelled failures stay
-  failed. The dashboard also treats matching FAILED cards as completed so they leave the “active”
-  list. Do not tell staff to Resend all — the lots are already on the website.
+  failed. Dashboard **Retry failed** / per-row **Run again** re-queues those (photos still staged);
+  leftover mid-upload / lost-disk failures cannot be retried from the website — delete the job and
+  Sync from the phone. The dashboard also treats matching FAILED cards as completed so they leave
+  the “active” list. Do not tell staff to Resend all — the lots are already on the website.
   **`GET /jobs` reconcile is debounced (~20s per account).** Dashboard and phone Sync poll this
   endpoint constantly during uploads; running leftover-job healing on every poll exhausted the
   Postgres QueuePool and froze the website on “Loading dashboard…”. The worker sweep still heals

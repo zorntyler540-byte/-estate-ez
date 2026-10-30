@@ -62,6 +62,7 @@ export type Job = {
   inherit_sku_from_subfolder?: boolean;
   single_lot_mode?: boolean;
   single_lot_manual_sku?: string | null;
+  client_draft_id?: string | null;
 };
 
 export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "failed";

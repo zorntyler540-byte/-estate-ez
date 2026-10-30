@@ -115,8 +115,10 @@ export function shouldSkipReupload(opts: {
   confirmedOnServer: boolean;
   catalogLookupFailed?: boolean;
   hasServerLotId?: boolean;
+  matchingJobLiveOrDone?: boolean;
 }): boolean {
   if (opts.hasServerLotId) return true;
+  if (opts.matchingJobLiveOrDone) return true;
   if (opts.catalogLookupFailed) return true;
   return opts.confirmedOnServer;
 }

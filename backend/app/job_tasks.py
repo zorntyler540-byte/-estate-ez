@@ -12,7 +12,7 @@ from sqlalchemy import update
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import JobStatus, Lot, ProcessingJob
+from app.models import JobStatus, Lot, ProcessingJob, Sale
 from app.services import job_events
 from app.services.mobile_drafts import cataloged_mobile_draft_ids, mobile_draft_id_from_original_name
 from app.services.processing import process_job
@@ -41,6 +41,8 @@ KICK_QUEUE_DEBOUNCE_SECONDS = 5.0
 # on each append (see ``append_files_to_queued_job``). When a later retry already
 # cataloged the same SKU/draft, mark the leftover **completed** instead of failed.
 RECEIVING_STALE_SECONDS = 30 * 60
+# Queued jobs should be claimed within seconds; 10 minutes means the worker is down or wedged.
+QUEUED_STALE_SECONDS = 10 * 60
 
 # Dashboard copy + worker fail text for mid-upload / lost ephemeral disk. Gemini and
 # Cancelled failures must not match — those still need staff attention.
@@ -275,6 +277,86 @@ def is_orphan_upload_error(msg: str | None) -> bool:
     return any(marker in text for marker in _ORPHAN_UPLOAD_ERROR_MARKERS)
 
 
+def failed_job_can_retry(job: ProcessingJob) -> bool:
+    """True when a failed catalog job still has photos and should be re-run.
+
+    Gemini / Cancelled failures keep the staged batch, so dashboard **Run again**
+    (or bulk **Retry failed**) can re-queue them. Leftover mid-upload / lost-disk
+    wording cannot — the phone must Sync again.
+    """
+    if job.status != JobStatus.failed:
+        return False
+    return not is_orphan_upload_error(job.error_message)
+
+
+def requeue_job_for_retry(job: ProcessingJob) -> None:
+    """Clear a failed catalog job so a worker / Run now can claim it again."""
+    job.status = JobStatus.queued
+    job.error_message = None
+    job.cancel_requested = False
+
+
+def normalize_client_draft_id(raw: str | None) -> str | None:
+    """Stable phone draft UUID (lowercase). Empty / whitespace is omitted."""
+    s = (raw or "").strip().lower()
+    if not s:
+        return None
+    return s[:36]
+
+
+def job_activity_at(job: ProcessingJob) -> datetime | None:
+    """Last progress/append time when present, else created_at."""
+    ts = getattr(job, "updated_at", None) or getattr(job, "created_at", None)
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def job_age_seconds(job: ProcessingJob, now: datetime | None = None) -> float:
+    ts = job_activity_at(job)
+    if ts is None:
+        return 0.0
+    clock = now or datetime.now(timezone.utc)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    return max(0.0, (clock - ts).total_seconds())
+
+
+def stuck_receiving_seconds() -> int:
+    return int(getattr(settings, "job_stuck_receiving_seconds", RECEIVING_STALE_SECONDS) or RECEIVING_STALE_SECONDS)
+
+
+def stuck_queued_seconds() -> int:
+    return int(getattr(settings, "job_stuck_queued_seconds", QUEUED_STALE_SECONDS) or QUEUED_STALE_SECONDS)
+
+
+def stuck_processing_seconds() -> int:
+    return int(
+        getattr(settings, "job_stuck_processing_seconds", PROCESSING_STALE_SECONDS) or PROCESSING_STALE_SECONDS
+    )
+
+
+def is_stuck_job(job: ProcessingJob, now: datetime | None = None) -> bool:
+    """True when a catalog ProcessingJob looks wedged for the dashboard / phone banner.
+
+    Thresholds (settings, with the same defaults as stale reconcile where those exist):
+    receiving > 30 min, queued > 10 min, processing > 60 min (last updated/progress),
+    or failed with leftover mid-upload / lost-disk wording.
+    """
+    status = job.status
+    if status == JobStatus.failed:
+        return is_orphan_upload_error(job.error_message)
+    if status == JobStatus.receiving:
+        return job_age_seconds(job, now) > stuck_receiving_seconds()
+    if status == JobStatus.queued:
+        return job_age_seconds(job, now) > stuck_queued_seconds()
+    if status == JobStatus.processing:
+        return job_age_seconds(job, now) > stuck_processing_seconds()
+    return False
+
+
 def _job_folder_mobile_draft_ids(job: ProcessingJob) -> set[str]:
     """Draft ids from leftover local filenames — never hits R2 (GET /jobs must stay cheap)."""
     folder_s = getattr(job, "input_folder", None)
@@ -294,6 +376,16 @@ def _job_folder_mobile_draft_ids(job: ProcessingJob) -> set[str]:
         return found
     except OSError:
         return set()
+
+
+def job_mobile_draft_ids(job: ProcessingJob) -> set[str]:
+    """Phone draft ids for this job: stored ``client_draft_id`` first, then filename fallback."""
+    found: set[str] = set()
+    stored = normalize_client_draft_id(getattr(job, "client_draft_id", None))
+    if stored:
+        found.add(stored)
+    found |= _job_folder_mobile_draft_ids(job)
+    return found
 
 
 def _mark_job_superseded_complete(row: ProcessingJob) -> None:
@@ -365,7 +457,7 @@ def job_outcome_already_on_sale(
     if job_sku_keys and (job_sku_keys & lot_keys or job_sku_keys & completed_keys):
         return True
 
-    drafts = _job_folder_mobile_draft_ids(job)
+    drafts = job_mobile_draft_ids(job)
     if drafts and drafts & cataloged_drafts:
         return True
     return False
@@ -454,6 +546,58 @@ def maybe_reconcile_jobs_for_list(db, account_id: str) -> bool:
     changed = reconcile_stale_receiving_jobs(db, account_id) or changed
     changed = reconcile_superseded_failed_jobs(db, account_id) or changed
     return changed
+
+
+def list_stuck_jobs(
+    db, account_id: str, sale_id: str | None = None, now: datetime | None = None
+) -> list[ProcessingJob]:
+    """Account-scoped stuck catalog jobs (same tenancy as ``GET /jobs``). Oldest activity last."""
+    q = db.query(ProcessingJob).filter(ProcessingJob.account_id == account_id)
+    if sale_id:
+        q = q.filter(ProcessingJob.sale_id == sale_id)
+    rows = q.order_by(ProcessingJob.created_at.desc()).all()
+    stuck = [row for row in rows if is_stuck_job(row, now=now)]
+    stuck.sort(key=lambda row: job_age_seconds(row, now), reverse=True)
+    return stuck
+
+
+def sale_job_status_counts(
+    db, account_id: str, sale_id: str
+) -> dict[str, int]:
+    """Counts of catalog jobs on one sale, keyed by ``JobStatus.value``."""
+    counts = {status.value: 0 for status in JobStatus}
+    rows = (
+        db.query(ProcessingJob.status)
+        .filter(ProcessingJob.account_id == account_id, ProcessingJob.sale_id == sale_id)
+        .all()
+    )
+    for (status,) in rows:
+        key = status.value if isinstance(status, JobStatus) else str(status)
+        if key in counts:
+            counts[key] += 1
+        else:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def jobs_with_client_draft_id(db, account_id: str, sale_id: str) -> list[ProcessingJob]:
+    return (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.sale_id == sale_id,
+            ProcessingJob.client_draft_id.isnot(None),
+        )
+        .order_by(ProcessingJob.created_at.desc())
+        .all()
+    )
+
+
+def sale_names_for_ids(db, sale_ids: list[str]) -> dict[str, str]:
+    if not sale_ids:
+        return {}
+    rows = db.query(Sale.id, Sale.name).filter(Sale.id.in_(sale_ids)).all()
+    return {str(sid): str(name or "") for sid, name in rows}
 
 
 def _release_claimed_job(job_id: str, account_id: str) -> None:

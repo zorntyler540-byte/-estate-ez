@@ -49,20 +49,41 @@ function QueueDraftRefresh({
   return null;
 }
 
+function withHealth(message: string, healthSummary?: string | null): string {
+  if (!healthSummary) return message;
+  const trimmed = message.replace(/\s+$/, "");
+  if (trimmed.endsWith(".")) {
+    return `${trimmed.slice(0, -1)} (${healthSummary}).`;
+  }
+  return `${trimmed} (${healthSummary})`;
+}
+
 function formatQueueSyncMessage(result: SyncResult, online: boolean | null): string {
   if (result.uploaded || result.failed) {
     const extra = result.archived
       ? ` Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive.`
       : "";
-    return `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.${extra}`;
+    return withHealth(
+      `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.${extra}`,
+      result.healthSummary
+    );
   }
   if (result.archived) {
-    return `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`;
+    return withHealth(
+      `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`,
+      result.healthSummary
+    );
   }
   if (result.reconciled > 0) {
-    return `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`;
+    return withHealth(
+      `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`,
+      result.healthSummary
+    );
   }
-  return online ? "Nothing queued to upload." : "Offline — connect to Wi‑Fi or cellular to sync.";
+  return withHealth(
+    online ? "Nothing queued to upload." : "Offline — connect to Wi‑Fi or cellular to sync.",
+    result.healthSummary
+  );
 }
 
 export default function QueueScreen() {

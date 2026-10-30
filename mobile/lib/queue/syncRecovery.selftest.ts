@@ -1,4 +1,4 @@
-import { decideSyncRecovery, isTransientSyncError } from "./syncRecovery";
+import { decideSyncRecovery, findJobForDraft, isTransientSyncError } from "./syncRecovery";
 
 const cases: Array<{
   status: "uploading" | "failed" | "queued" | "uploaded";
@@ -43,4 +43,25 @@ for (const c of transientCases) {
   }
 }
 
-console.log(`syncRecovery selftest ok (${cases.length + transientCases.length} cases)`);
+const jobs = [
+  { id: "job-old", client_draft_id: null as string | null, status: "receiving" },
+  { id: "job-match", client_draft_id: "1C86C230-A1C1-4433-B64E-5C2957E79027", status: "processing" }
+];
+const byDraft = findJobForDraft(jobs, "1c86c230-a1c1-4433-b64e-5c2957e79027", "job-old");
+if (byDraft?.id !== "job-match") {
+  throw new Error("findJobForDraft should prefer client_draft_id over server_job_id");
+}
+const byId = findJobForDraft(
+  [{ id: "job-old", client_draft_id: null, status: "queued" }],
+  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "job-old"
+);
+if (byId?.id !== "job-old") {
+  throw new Error("findJobForDraft should fall back to server_job_id");
+}
+const missing = findJobForDraft(jobs, "no-such-draft", "gone");
+if (missing !== null) {
+  throw new Error("findJobForDraft should return null when nothing matches");
+}
+
+console.log(`syncRecovery selftest ok (${cases.length + transientCases.length + 3} cases)`);

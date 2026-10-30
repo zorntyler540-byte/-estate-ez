@@ -282,6 +282,7 @@ export type UploadLotJobOptions = {
   manualSku?: string;
   listingChannel?: "ctseller" | "facebook";
   photoUris: UploadPhotoUri[];
+  clientDraftId?: string;
 };
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -402,6 +403,9 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
   if (opts.manualSku?.trim()) {
     parameters.single_lot_manual_sku = opts.manualSku.trim();
   }
+  if (opts.clientDraftId?.trim()) {
+    parameters.client_draft_id = opts.clientDraftId.trim().toLowerCase();
+  }
   if (first?.capturedAtMs && first.capturedAtMs > 0) {
     parameters.captured_at_ms = String(first.capturedAtMs);
   }
@@ -415,7 +419,7 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
   });
   const job = JSON.parse(text) as Job;
   for (const photo of rest) {
-    await appendFilesToQueuedJob(opts.token, job.id, [photo]);
+    await appendFilesToQueuedJob(opts.token, job.id, [photo], opts.clientDraftId);
   }
   return job;
 }
@@ -424,22 +428,26 @@ export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job
 export async function appendFilesToQueuedJob(
   token: string,
   jobId: string,
-  photoUris: UploadPhotoUri[]
+  photoUris: UploadPhotoUri[],
+  clientDraftId?: string
 ): Promise<Job> {
   if (!photoUris.length) {
     throw new Error("No photos to append");
   }
   let lastText = "";
+  const draftId = clientDraftId?.trim().toLowerCase();
   for (const photo of photoUris) {
+    const parameters: Record<string, string> = {};
+    if (photo.capturedAtMs && photo.capturedAtMs > 0) {
+      parameters.captured_at_ms = String(photo.capturedAtMs);
+    }
+    if (draftId) parameters.client_draft_id = draftId;
     lastText = await nativeMultipartUpload({
       path: `/jobs/${encodeURIComponent(jobId)}/upload-files`,
       token,
       fileUri: photo.uri,
       fileName: photo.name,
-      parameters:
-        photo.capturedAtMs && photo.capturedAtMs > 0
-          ? { captured_at_ms: String(photo.capturedAtMs) }
-          : undefined
+      parameters: Object.keys(parameters).length ? parameters : undefined
     });
   }
   return JSON.parse(lastText) as Job;
@@ -570,3 +578,27 @@ export async function listCatalogedMobileDrafts(token: string, saleId: string): 
 export async function deleteJob(jobId: string, token: string): Promise<void> {
   await apiFetch<void>(`/jobs/${encodeURIComponent(jobId)}`, token, { method: "DELETE" });
 }
+
+export type SaleUploadHealth = {
+  sale_id: string;
+  counts: Record<string, number>;
+  stuck_count: number;
+  cataloging_count: number;
+  jobs_with_client_draft_id?: Array<{
+    id: string;
+    client_draft_id: string;
+    status: string;
+    sku?: string | null;
+    error_message?: string | null;
+    age_seconds?: number;
+  }>;
+};
+
+export async function getSaleUploadHealth(token: string, saleId: string): Promise<SaleUploadHealth> {
+  return apiFetch<SaleUploadHealth>(
+    `/sales/${encodeURIComponent(saleId)}/upload-health`,
+    token
+  );
+}
+
+export { formatUploadHealthSummary } from "./formatUploadHealth";

@@ -3391,6 +3391,73 @@ select.ct-input option {
   padding: 0.2rem 0.45rem;
 }
 
+.ct-stuck-jobs-banner {
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--ct-radius-sm);
+  border: 1px solid var(--ct-error-border);
+  background: var(--ct-error-bg);
+  color: var(--ct-error);
+}
+
+.ct-stuck-jobs-banner__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ct-stuck-jobs-banner__list {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.ct-stuck-jobs-banner__list li {
+  background: var(--ct-bg-elevated);
+  border-radius: var(--ct-radius-sm);
+  padding: 0.5rem 0.6rem;
+  color: var(--ct-text);
+}
+
+.ct-stuck-jobs-banner__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.55rem;
+}
+
+.ct-stuck-jobs-banner__age {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ct-error);
+}
+
+.ct-stuck-jobs-banner__error {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  color: var(--ct-error);
+  white-space: pre-wrap;
+}
+
+.ct-stuck-jobs-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
 .ct-photo-progress {
   margin-bottom: 1rem;
   padding: 0.85rem 0.95rem;
