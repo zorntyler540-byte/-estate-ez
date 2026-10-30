@@ -47,7 +47,7 @@ export default function LoginScreen() {
       <Text style={styles.kicker}>Estate-EZ</Text>
       <Text style={styles.title}>Sign in</Text>
       <Text style={styles.sub}>
-        Sign in with the email and password from your account. Photos you take on this phone upload to your sale.
+        Sign in with the email and password from your account owner. Photos you take on this phone upload into your sale.
       </Text>
       <Text style={styles.api} numberOfLines={2}>
         API: {API_BASE}

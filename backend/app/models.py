@@ -87,10 +87,31 @@ class User(Base):
     assigned_sale_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # Incremented on password change and logout-all so previously issued JWTs stop working.
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Client logins only. Null means the login does not expire on its own.
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     account: Mapped["Account"] = relationship(back_populates="users")
     creator_jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="creator")
+
+
+class ClientInvite(Base):
+    """One-time client upload link. Only the SHA-256 of the token is stored."""
+
+    __tablename__ = "client_invites"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    sale_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Lot(Base):

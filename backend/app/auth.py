@@ -107,6 +107,9 @@ def _load_active_user(db: Session, user_id: str, account_id: str, token_version:
     user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
     if not user:
         raise CREDENTIALS_EXCEPTION
+    from app.services.client_invites import assert_client_access_open
+
+    assert_client_access_open(user)
     if token_version_of(user) != int(token_version or 0):
         raise CREDENTIALS_EXCEPTION
     acct_active = (
@@ -155,9 +158,15 @@ def user_from_sse_ticket(token: str, db: Session, job_id: str) -> User:
 def enforce_account_http(db: Session, user: User, method: str, path: str) -> None:
     """Client upload lock, then Auction Watcher allowlist.
 
+    Client expiry and revocation are checked before the route allowlist so a
+    closed login cannot upload.
+
     Master admin keeps ``/admin/*`` even if that login's plan is watcher, so
     the admin panel cannot be locked by a plan change.
     """
+    from app.services.client_invites import assert_client_access_open
+
+    assert_client_access_open(user)
     enforce_client_http(user, method, path)
     raw = request_path(path)
     if is_master_admin(user) and (raw == "/admin" or raw.startswith("/admin/")):

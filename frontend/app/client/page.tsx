@@ -13,6 +13,7 @@ type Me = {
   role?: string;
   assigned_sale_id?: string | null;
   assigned_sale_name?: string | null;
+  access_expires_at?: string | null;
 };
 
 type JobRow = {
@@ -104,6 +105,7 @@ export default function ClientUploadPage() {
       form.append("sale_id", me.assigned_sale_id);
       form.append("inherit_sku_from_subfolder", "false");
       form.append("single_lot_mode", "true");
+      form.append("client_draft_id", crypto.randomUUID());
       if (sku.trim()) form.append("single_lot_manual_sku", sku.trim());
       for (const file of files) form.append("files", file, file.name);
       const created = (await apiUploadFiles("/jobs/upload", token, form)) as JobRow;
@@ -171,6 +173,9 @@ export default function ClientUploadPage() {
           <>
             <p className="ct-lead" style={{ marginTop: "0.85rem" }}>
               Signed in as <strong>{me.email}</strong>. Photos go into <strong>{saleName}</strong>.
+              {me.access_expires_at
+                ? ` Access ends ${new Date(me.access_expires_at).toLocaleString()}.`
+                : ""}
             </p>
             {!me.assigned_sale_id ? (
               <div className="ct-banner ct-banner--error">
