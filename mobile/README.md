@@ -110,14 +110,14 @@ Scan the QR code with **Expo Go** on your iPhone, or press `a` for Android emula
 
 EAS **build** profiles bake `EXPO_PUBLIC_API_BASE` into the native binary (see `eas.json`). **EAS Update does not read that `env` block** — it uses local `.env` / the shell. Release JS (`__DEV__ === false`) ignores localhost and falls back to the Railway API in `mobile/lib/config.ts`. Local Expo Go (`__DEV__`) still uses `mobile/.env` / localhost.
 
-## App flow (MVP scaffold)
+## App flow
 
 1. **Sign in** — same email/password as web (`POST /auth/login`).
 2. **Sale tab** — pick an open sale (`GET /sales`).
 3. **Capture tab** — start lot session → native camera → **Snap** / **Done**.
-4. **Queue tab** — **Queue for upload** on drafts → **Sync queued lots** when online.
+4. **Queue tab** — **Sync now** sends new lots and checks leftover Sent rows. Cataloged lots move to **Phone archive** (photos off this phone; website listings stay). **Clear Archive** drops those phone rows only. Do not **Resend** if the lot is already on the website.
 
-Photos are stored under the app documents directory and indexed in SQLite until upload succeeds.
+Photos are stored under the app documents directory and indexed in SQLite until catalog is confirmed, then local JPEGs are deleted.
 
 ## Project layout
 
@@ -130,9 +130,9 @@ mobile/
   lib/queue/sync.ts    Upload + run job when online
 ```
 
-## Next steps (not in scaffold)
+## Next steps
 
 - Tap-to-focus, optical zoom, burst capture polish
-- Background sync when network returns
+- True background upload (OS background task) — auto-sync already runs on reconnect and foreground
 - CTBids photo cap enforcement
 - Push notification when catalog job completes

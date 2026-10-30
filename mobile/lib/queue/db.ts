@@ -443,3 +443,13 @@ export async function countLotsNeedingPhotoUpload(): Promise<number> {
   );
   return Number(row?.c ?? 0);
 }
+
+/** Leftover Sent / cataloging rows plus anything still waiting to upload. */
+export async function countLotsNeedingWebsiteCheck(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading', 'uploaded')`
+  );
+  return Number(row?.c ?? 0);
+}

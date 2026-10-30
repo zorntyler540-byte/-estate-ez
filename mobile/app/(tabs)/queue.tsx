@@ -12,8 +12,8 @@ import {
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 
-import { draftStatusDisplay, PhotoPreviewModal } from "@/components/DraftPhotos";
-import { isTransientSyncError } from "@/lib/queue/syncRecovery";
+import { PhotoPreviewModal } from "@/components/DraftPhotos";
+import { formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } from "@/context/SyncContext";
@@ -49,41 +49,8 @@ function QueueDraftRefresh({
   return null;
 }
 
-function withHealth(message: string, healthSummary?: string | null): string {
-  if (!healthSummary) return message;
-  const trimmed = message.replace(/\s+$/, "");
-  if (trimmed.endsWith(".")) {
-    return `${trimmed.slice(0, -1)} (${healthSummary}).`;
-  }
-  return `${trimmed} (${healthSummary})`;
-}
-
 function formatQueueSyncMessage(result: SyncResult, online: boolean | null): string {
-  if (result.uploaded || result.failed) {
-    const extra = result.archived
-      ? ` Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive.`
-      : "";
-    return withHealth(
-      `Synced ${result.uploaded} lot(s)${result.failed ? `, ${result.failed} need a check` : ""}.${extra}`,
-      result.healthSummary
-    );
-  }
-  if (result.archived) {
-    return withHealth(
-      `Moved ${result.archived} cataloged lot${result.archived === 1 ? "" : "s"} to Archive — photos were removed from this phone.`,
-      result.healthSummary
-    );
-  }
-  if (result.reconciled > 0) {
-    return withHealth(
-      `Cleared ${result.reconciled} leftover notice${result.reconciled === 1 ? "" : "s"} — those lots are already on the website.`,
-      result.healthSummary
-    );
-  }
-  return withHealth(
-    online ? "Nothing queued to upload." : "Offline — connect to Wi‑Fi or cellular to sync.",
-    result.healthSummary
-  );
+  return formatSyncOutcome(result, online);
 }
 
 export default function QueueScreen() {
@@ -99,6 +66,7 @@ export default function QueueScreen() {
   const [previewIndex, setPreviewIndex] = useState(0);
   const [focused, setFocused] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const focusedRef = useRef(false);
 
   const refresh = useCallback(async (opts?: { archive?: boolean }) => {
@@ -114,7 +82,7 @@ export default function QueueScreen() {
           const n = await sweepArchiveConfirmedDrafts(token);
           if (n > 0) {
             setMessage(
-              `Moved ${n} cataloged lot${n === 1 ? "" : "s"} to Archive — photos were removed from this phone.`
+              `Moved ${n} cataloged lot${n === 1 ? "" : "s"} to Phone archive — photos were removed from this phone. Website listings stay.`
             );
             const after = await listLotDrafts();
             const next = queueRowsFromDrafts(after);
@@ -254,7 +222,7 @@ export default function QueueScreen() {
     }
     Alert.alert(
       "Resend to server?",
-      "Uploads these photos again as a new catalog job. Use this if the web job failed or photos are missing on the dashboard.\n\nIf that listing already looks fine online, skip this — you may create a duplicate.",
+      "Uploads these photos again as a new catalog job. Only do this if the listing is missing on the website.\n\nIf it already looks fine online, Cancel — Resend can create a duplicate lot.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -300,7 +268,7 @@ export default function QueueScreen() {
     if (!n) return;
     Alert.alert(
       "Clear Archive?",
-      `Removes ${n} cataloged lot${n === 1 ? "" : "s"} from this phone only. Photos are already gone. Listings stay on the website. Add photos later from the Lots tab.`,
+      `Removes ${n} cataloged lot${n === 1 ? "" : "s"} from this phone only. Photos are already gone. Listings stay on the website. Add photos later from the Lots tab or by opening Archive before you clear it.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -331,16 +299,14 @@ export default function QueueScreen() {
       return;
     }
 
-    const alreadySent = item.status === "uploaded";
+    const view = queueRowView(item);
     Alert.alert(
-      alreadySent ? "Remove from phone?" : "Delete local lot?",
-      alreadySent
-        ? `${item.photo_count} photo${item.photo_count === 1 ? "" : "s"} already sent to the server. This only removes the copy saved on your phone.`
-        : `Delete ${item.photo_count} photo${item.photo_count === 1 ? "" : "s"} from this phone? This cannot be undone.`,
+      view.removeTitle,
+      view.removeBody,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: alreadySent ? "Remove" : "Delete",
+          text: view.removeLabel,
           style: "destructive",
           onPress: () => {
             void (async () => {
@@ -373,7 +339,7 @@ export default function QueueScreen() {
     }
   }
 
-  const banner = message || lastMessage;
+  const banner = syncing ? lastMessage || message : message || lastMessage;
 
   return (
     <View style={styles.root}>
@@ -384,8 +350,8 @@ export default function QueueScreen() {
       </Text>
       <Text style={styles.hint}>
         {showArchive
-          ? "Temporary list of cataloged lots. Photos are already off this phone. Clear Archive when you are done — website listings stay."
-          : "Unfinished lots stay here (names only). Sync now checks the website first — lots already cataloged move to Archive. It does not re-upload those."}
+          ? "Phone archive only — these listings stay on the website. Photos are already off this phone. Clear Archive when you are done."
+          : "Unfinished lots stay here. Sync now sends new ones and checks leftover Sent lots. Cataloged lots move to Phone archive. Do not Resend if the lot is already on the website."}
       </Text>
       {banner ? <Text style={styles.message}>{banner}</Text> : null}
 
@@ -397,21 +363,19 @@ export default function QueueScreen() {
         )}
       </Pressable>
 
-      {/* Bulk Resend is hidden — leftover Sent lots are usually already on the website. */}
-
       {archiveRows.length > 0 || showArchive ? (
-        <Pressable style={styles.resendAll} onPress={() => setShowArchive((v) => !v)}>
-          <Text style={styles.resendAllText}>
+        <Pressable style={styles.archiveBtn} onPress={() => setShowArchive((v) => !v)}>
+          <Text style={styles.archiveBtnText}>
             {showArchive
-              ? `Back to Queue (${activeRows.length})`
-              : `Archive (${archiveRows.length}) — cataloged, photos off this phone`}
+              ? `Back to unfinished lots (${activeRows.length})`
+              : `Phone archive (${archiveRows.length}) — website listings stay`}
           </Text>
         </Pressable>
       ) : null}
 
       {showArchive && archiveRows.length > 0 ? (
-        <Pressable style={styles.resendAll} onPress={confirmClearArchive}>
-          <Text style={styles.resendAllText}>Clear Archive ({archiveRows.length}) — keep website listings</Text>
+        <Pressable style={styles.archiveBtn} onPress={confirmClearArchive}>
+          <Text style={styles.archiveBtnText}>Clear Archive ({archiveRows.length}) — keep website listings</Text>
         </Pressable>
       ) : null}
 
@@ -422,11 +386,26 @@ export default function QueueScreen() {
         maxToRenderPerBatch={6}
         windowSize={5}
         removeClippedSubviews
-        refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor="#ff4d1a"
+            onRefresh={() => {
+              void (async () => {
+                setRefreshing(true);
+                try {
+                  await refresh();
+                } finally {
+                  setRefreshing(false);
+                }
+              })();
+            }}
+          />
+        }
         ListEmptyComponent={
           <Text style={styles.empty}>
             {showArchive
-              ? "Archive is empty. Cataloged lots land here until you Clear Archive. Website listings stay."
+              ? "Phone archive is empty. Cataloged lots land here until you Clear Archive. Website listings stay."
               : clientLogin
                 ? "No lots waiting on this phone. Take photos on the Photos tab."
                 : "No lots waiting on this phone. Capture photos on the Capture tab."}
@@ -434,45 +413,42 @@ export default function QueueScreen() {
         }
         renderItem={({ item }) => {
           const archived = Boolean(item.archived_at);
-          const status = draftStatusDisplay(item.status, {
+          const view = queueRowView({
+            ...item,
             online,
-            syncing,
-            errorMessage: item.error_message,
-            archived
+            syncing
           });
-          const noticeIsError =
-            item.status === "failed" &&
-            Boolean(item.error_message) &&
-            !isTransientSyncError(item.error_message);
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
+          const statusColor =
+            view.tone === "error"
+              ? styles.cardStatusError
+              : view.tone === "warn"
+                ? styles.cardStatusWarn
+                : view.tone === "ok"
+                  ? styles.cardStatusOk
+                  : styles.cardStatus;
           return (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>
-                  {archived
-                    ? `${item.photo_count || 0} photo${item.photo_count === 1 ? "" : "s"} cataloged`
-                    : `${item.photo_count} photo${item.photo_count === 1 ? "" : "s"}`}
-                </Text>
+                <Text style={styles.cardTitle}>{queueRowTitle(item)}</Text>
                 <Pressable
                   style={styles.deleteBtn}
                   hitSlop={8}
                   onPress={() => confirmRemoveLot(item)}
                 >
-                  <Text style={styles.deleteBtnText}>Delete</Text>
+                  <Text style={styles.deleteBtnText}>{view.removeLabel}</Text>
                 </Pressable>
               </View>
-              <Text style={styles.cardStatus}>{status.label}</Text>
+              <Text style={statusColor}>{view.label}</Text>
               <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
                 Sale: {getSaleName(item.sale_id, item.sale_name)}
                 {otherSale && !clientLogin ? " — not the sale currently selected" : ""}
               </Text>
-              <Text style={styles.cardHint}>{status.hint}</Text>
-              {item.manual_sku ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}
+              <Text style={styles.cardHint}>{view.hint}</Text>
+              {item.manual_sku && !archived ? <Text style={styles.cardMeta}>SKU: {item.manual_sku}</Text> : null}
 
-              {item.error_message ? (
-                <Text style={noticeIsError ? styles.error : styles.progress}>
-                  {item.error_message}
-                </Text>
+              {view.detail ? (
+                <Text style={view.tone === "error" ? styles.error : styles.progress}>{view.detail}</Text>
               ) : null}
               {item.status !== "uploading" ? (
                 <View style={styles.draftActions}>
@@ -495,7 +471,7 @@ export default function QueueScreen() {
                       <Text style={styles.secondaryText}>Queue for upload</Text>
                     </Pressable>
                   ) : null}
-                  {item.status === "uploaded" && !archived && item.photo_count > 0 ? (
+                  {view.showResend ? (
                     <Pressable
                       style={[styles.secondary, syncing && styles.disabled]}
                       disabled={syncing}
@@ -533,7 +509,7 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   primaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
-  resendAll: {
+  archiveBtn: {
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -541,7 +517,7 @@ const styles = StyleSheet.create({
     borderColor: "#3f3f46",
     backgroundColor: "#141416"
   },
-  resendAllText: { color: "#e7e5e4", fontWeight: "600", fontSize: 15 },
+  archiveBtnText: { color: "#e7e5e4", fontWeight: "600", fontSize: 15 },
   disabled: { opacity: 0.6 },
   empty: { color: "#78716c", marginTop: 24, textAlign: "center", lineHeight: 22 },
   card: {
@@ -565,6 +541,9 @@ const styles = StyleSheet.create({
   },
   deleteBtnText: { color: "#fecaca", fontSize: 12, fontWeight: "600" },
   cardStatus: { color: "#ff4d1a", fontSize: 14, fontWeight: "600" },
+  cardStatusOk: { color: "#86efac", fontSize: 14, fontWeight: "600" },
+  cardStatusWarn: { color: "#fdba74", fontSize: 14, fontWeight: "600" },
+  cardStatusError: { color: "#fca5a5", fontSize: 14, fontWeight: "600" },
   cardSale: { color: "#a8a29e", fontSize: 13, fontWeight: "600" },
   cardSaleOther: { color: "#fcd34d" },
   cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },

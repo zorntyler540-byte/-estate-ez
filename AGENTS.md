@@ -74,7 +74,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **Queue leftover “failed / didn’t finish” notices are often false.** A full DB pool can time out
   the phone after `/run` while the worker still catalogs. Sync Phase 0 calls
   `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
-  notice). Do not tell the user to Resend all when lots are already on the website. This needs
+  notice). Sync still runs that check when nothing is queued if leftover **Sent** rows remain
+  (do not early-exit those). Queue **Resend** is hidden once the lot is cataloging, linked, or
+  archived. Do not tell the user to Resend all when lots are already on the website. This needs
   an API deploy **and** an EAS Update (`production` channel) before phones stop showing the old copy.
 - **Dashboard leftover FAILED receiving cards are often superseded retries.** If phone Sync dies
   mid-lot, the abandoned `receiving` row is marked failed after 30 minutes (“Upload never
