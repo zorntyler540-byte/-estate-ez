@@ -64,15 +64,15 @@ class Settings(BaseSettings):
     gemini_output_cost_per_million: float = Field(
         default=1.05, ge=0.0, alias="GEMINI_OUTPUT_COST_PER_MILLION"
     )
-    # Per-model rates (USD per 1M tokens). Defaults track published Gemini 2.5 paid pricing
-    # (Flash $0.30 in / $2.50 out; Pro $1.25 in / $10.00 out, prompts <=200k). Override via env
-    # when Google changes pricing or you move models. Flash covers triage + listing; Pro covers
-    # the brand/listing author pass.
+    # Per-model rates (USD per 1M tokens). Defaults track published paid pricing.
+    # Listing Flash (`GEMINI_MODEL` = gemini-flash-latest → gemini-3.8-flash) is $0.75 in / $3.75 out.
+    # Pro is $1.25 in / $10.00 out (prompts <=200k). Override via env when Google changes pricing.
+    # Flash-tier analytics use these rates for triage + listing; listing (flash-latest) dominates cost.
     gemini_flash_input_cost_per_million: float = Field(
-        default=0.30, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
+        default=0.75, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
     )
     gemini_flash_output_cost_per_million: float = Field(
-        default=2.50, ge=0.0, alias="GEMINI_FLASH_OUTPUT_COST_PER_MILLION"
+        default=3.75, ge=0.0, alias="GEMINI_FLASH_OUTPUT_COST_PER_MILLION"
     )
     gemini_pro_input_cost_per_million: float = Field(
         default=1.25, ge=0.0, alias="GEMINI_PRO_INPUT_COST_PER_MILLION"
