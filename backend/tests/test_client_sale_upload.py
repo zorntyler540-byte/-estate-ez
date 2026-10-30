@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -141,5 +142,62 @@ def test_client_login_is_locked_to_one_sale(tmp_path: Path, monkeypatch) -> None
             files={"files": ("lot.jpg", _jpeg(), "image/jpeg")},
         )
         assert blocked.status_code == 403, blocked.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_account_client_login_can_set_and_clear_end_time(tmp_path: Path, monkeypatch) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'client-end.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    monkeypatch.setattr(auth_mod, "SessionLocal", Session)
+    monkeypatch.setattr(main_mod, "SessionLocal", Session)
+
+    def override_db():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    try:
+        reg = client.post(
+            "/auth/register",
+            json={"account_name": "CT", "email": "owner-end@example.com", "password": "owner-pass-1"},
+        )
+        assert reg.status_code == 200, reg.text
+        headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+        sale = client.post("/sales", headers=headers, json={"name": "Oak"})
+        assert sale.status_code == 201, sale.text
+        ends = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        created = client.post(
+            "/team/members",
+            headers=headers,
+            json={
+                "email": "guest-end@example.com",
+                "password": "client-pass-1",
+                "role": "client",
+                "sale_id": sale.json()["id"],
+                "access_expires_at": ends,
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["access_expires_at"]
+        member_id = created.json()["id"]
+        cleared = client.patch(
+            f"/team/members/{member_id}/access",
+            headers=headers,
+            json={"access_expires_at": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["access_expires_at"] is None
+        past = client.patch(
+            f"/team/members/{member_id}/access",
+            headers=headers,
+            json={"access_expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()},
+        )
+        assert past.status_code == 400, past.text
     finally:
         app.dependency_overrides.clear()

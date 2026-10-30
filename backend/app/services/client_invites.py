@@ -35,6 +35,14 @@ def _aware(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def client_expiry_or_none(value: datetime | None) -> datetime | None:
+    """Return a timezone-aware end time, or reject one that has already passed."""
+    expires = _aware(value)
+    if expires is not None and expires <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="End time must be in the future")
+    return expires
+
+
 def assert_client_access_open(user: User) -> None:
     """Expiry and revocation apply on every authenticated request."""
     if not is_client_role(getattr(user, "role", None)):
@@ -57,10 +65,8 @@ def create_client_invite(
     address = email.lower().strip()
     if not address:
         raise HTTPException(status_code=400, detail="Email is required")
-    expires = _aware(access_expires_at)
+    expires = client_expiry_or_none(access_expires_at)
     now = datetime.now(timezone.utc)
-    if expires is not None and expires <= now:
-        raise HTTPException(status_code=400, detail="Expiry must be in the future")
 
     existing = db.query(User).filter(User.email == address).first()
     if existing is not None and existing.account_id != owner.account_id:

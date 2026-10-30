@@ -59,6 +59,12 @@ class TeamMemberCreate(BaseModel):
     role: str = Field(default="catalogger", pattern="^(owner|catalogger|client)$")
     # Required when role is client. Ignored for owner and catalogger.
     sale_id: str | None = None
+    # Client logins only. Empty means the login stays until it is revoked.
+    access_expires_at: datetime | None = None
+
+
+class TeamMemberAccessUpdate(BaseModel):
+    access_expires_at: datetime | None = None
 
 
 class TeamMemberSaleUpdate(BaseModel):

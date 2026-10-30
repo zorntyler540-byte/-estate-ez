@@ -77,7 +77,10 @@ export default function AccountPage() {
   const [clientEmail, setClientEmail] = useState("");
   const [clientPassword, setClientPassword] = useState("");
   const [clientSaleId, setClientSaleId] = useState("");
+  const [clientEnds, setClientEnds] = useState("");
   const [clientBusy, setClientBusy] = useState(false);
+  const [clientEndById, setClientEndById] = useState<Record<string, string>>({});
+  const [clientEndBusyId, setClientEndBusyId] = useState("");
   const [clientSaleChoice, setClientSaleChoice] = useState<Record<string, string>>({});
   const [clientSaleBusyId, setClientSaleBusyId] = useState("");
   const [selfCurrentPassword, setSelfCurrentPassword] = useState("");
@@ -408,17 +411,27 @@ export default function AccountPage() {
     setClientBusy(true);
     setTeamError("");
     try {
+      const body: {
+        email: string;
+        password: string;
+        role: string;
+        sale_id: string;
+        access_expires_at?: string;
+      } = {
+        email: clientEmail.trim(),
+        password: clientPassword,
+        role: "client",
+        sale_id: clientSaleId
+      };
+      const ends = isoFromLocalInput(clientEnds);
+      if (ends) body.access_expires_at = ends;
       await apiFetch("/team/members", token, {
         method: "POST",
-        body: JSON.stringify({
-          email: clientEmail.trim(),
-          password: clientPassword,
-          role: "client",
-          sale_id: clientSaleId
-        })
+        body: JSON.stringify(body)
       });
       setClientEmail("");
       setClientPassword("");
+      setClientEnds("");
       await refreshTeamMembers();
     } catch (e) {
       setTeamError(e instanceof Error ? e.message : "Could not add client login");
@@ -437,6 +450,25 @@ export default function AccountPage() {
       await refreshTeamMembers();
     } catch (e) {
       setTeamError(e instanceof Error ? e.message : "Could not revoke access");
+    }
+  }
+
+  async function saveClientEnd(memberId: string) {
+    if (!token || !me || me.role.toLowerCase() !== "owner") return;
+    setClientEndBusyId(memberId);
+    setTeamError("");
+    try {
+      const member = teamMembers.find((row) => row.id === memberId);
+      const raw = clientEndById[memberId] ?? localDateTimeValue(member?.access_expires_at);
+      await apiFetch(`/team/members/${encodeURIComponent(memberId)}/access`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ access_expires_at: isoFromLocalInput(raw) })
+      });
+      await refreshTeamMembers();
+    } catch (e) {
+      setTeamError(e instanceof Error ? e.message : "Could not save the end time");
+    } finally {
+      setClientEndBusyId("");
     }
   }
 
@@ -1006,8 +1038,8 @@ export default function AccountPage() {
             Client logins
           </h2>
           <p className="ct-lead" style={{ marginTop: "0.35rem", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
-            A client can sign in on this website or the phone app and upload photos into one sale you choose.
-            They cannot open other sales, edit listings, or post to CT Seller.
+            A client signs in on the phone app and uploads photos into one sale. Set an end time, or leave it
+            blank until you revoke the login. They cannot open other sales, edit listings, or post to CT Seller.
           </p>
           {accountSales.length === 0 ? (
             <p className="ct-muted">Create a sale on the dashboard before adding a client login.</p>
@@ -1029,6 +1061,14 @@ export default function AccountPage() {
                 value={clientPassword}
                 onChange={(e) => setClientPassword(e.target.value)}
                 autoComplete="new-password"
+              />
+              <input
+                className="ct-input"
+                style={{ maxWidth: 220, width: "100%" }}
+                type="datetime-local"
+                aria-label="Access ends"
+                value={clientEnds}
+                onChange={(e) => setClientEnds(e.target.value)}
               />
               <select
                 className="ct-input"
@@ -1114,6 +1154,23 @@ export default function AccountPage() {
                       >
                         {resetBusyId === m.id ? "Resetting…" : "Reset password"}
                       </button>
+                      <input
+                        className="ct-input"
+                        style={{ maxWidth: 220, width: "100%" }}
+                        type="datetime-local"
+                        aria-label={`Access ends for ${m.email}`}
+                        value={clientEndById[m.id] ?? localDateTimeValue(m.access_expires_at)}
+                        onChange={(e) => setClientEndById((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                        disabled={Boolean(m.revoked_at)}
+                      />
+                      <button
+                        type="button"
+                        className="ct-btn ct-btn--ghost"
+                        disabled={clientEndBusyId === m.id || Boolean(m.revoked_at)}
+                        onClick={() => void saveClientEnd(m.id)}
+                      >
+                        {clientEndBusyId === m.id ? "Saving…" : "Save end time"}
+                      </button>
                       {m.assigned_sale_id && !m.revoked_at ? (
                         <button
                           type="button"
@@ -1173,4 +1230,20 @@ export default function AccountPage() {
       </div>
     </AppShell>
   );
+}
+
+function localDateTimeValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
+function isoFromLocalInput(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const when = new Date(raw);
+  if (Number.isNaN(when.getTime())) throw new Error("End time is not a valid date");
+  return when.toISOString();
 }
