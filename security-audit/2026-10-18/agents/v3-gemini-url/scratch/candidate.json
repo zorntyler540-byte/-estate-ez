@@ -1,0 +1,74 @@
+{
+  "proposed_verdict": "needs_validation",
+  "fingerprint": "gemini.engagement.untrusted-item-url-caption-sink",
+  "title": "Watcher item_url is stored unsanitized and deterministically copied into Gemini Facebook captions",
+  "description": "A catalogger (Watcher JWT on the same account) can POST /integrations/engagement/snapshots with an arbitrary item_url and auction_url. Those strings are stored, preferred over constructed CT Bids URLs, concatenated unlabeled into the Gemini Flash caption prompt, and then appended to the caption by arrange_facebook_caption / template_caption even if the model ignores them. normalize_ctbids_sale_url will also turn https://attacker.example/estate-sale/1/item/2 into a See the whole sale line on that host. Attacker is the catalogger. Affected principal is the account owner (Gemini caption spend and the Page caption the owner later posts). Execution identity is the API process holding GOOGLE_API_KEY and, if facebook_calendar_auto_approve is on, the Page token as a synthetic owner. This is not a claim that cataloggers bypass the Facebook owner publish gate (peer hunter-facebook); the code-level failure is the missing URL allowlist plus the deterministic caption sink.",
+  "claimed_root_cause": "Engagement ingest accepts unconstrained http(s) item_url/auction_url and later caption builders treat snapshot.item_url as the lot link without a CT Bids host check.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/engagement_routes.py",
+      "line": 28,
+      "scope": "ingest_engagement_snapshot",
+      "description": "Any authenticated non-client account member can POST a snapshot; there is no owner or Facebook-poster check."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/engagement_store.py",
+      "line": 214,
+      "scope": "apply_engagement_snapshot",
+      "description": "item_url is stored as (item.item_url or '')[:600] with no scheme or host validation."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 317,
+      "scope": "ctbids_lot_url",
+      "description": "A non-empty snapshot.item_url replaces the constructed ctbids.com sale/item URL."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_caption.py",
+      "line": 412,
+      "scope": "_draft_with_gemini",
+      "description": "Lot link and sale link are interpolated into the Flash user prompt without an untrusted label."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/services/facebook_caption.py",
+      "line": 214,
+      "scope": "arrange_facebook_caption",
+      "description": "The stored lot_url is appended to the caption after any model or template body, so the Watcher URL reaches the text that preview, publish, and auto-approve consume."
+    }
+  ],
+  "evidence": [
+    {
+      "file": "backend/app/schemas.py",
+      "line": 1036,
+      "description": "EngagementItemIn.item_url is str with extra=forbid only; not HttpUrl and not host-limited."
+    },
+    {
+      "file": "backend/app/services/ctbids_urls.py",
+      "line": 16,
+      "description": "normalize_ctbids_sale_url strips /item/ but never requires ctbids.com."
+    },
+    {
+      "file": "backend/app/services/facebook_calendar.py",
+      "line": 579,
+      "description": "_draft_item calls draft_facebook_caption with ctbids_lot_url(lot, snapshot=snapshot)."
+    },
+    {
+      "file": "backend/app/services/facebook_calendar.py",
+      "line": 698,
+      "description": "If facebook_calendar_auto_approve is set, snapshot ingest drafts and publishes as the first owner user; publish auth is peer-owned."
+    }
+  ],
+  "blockers": [
+    "No OS-enforced sandbox and no parent scratch-promotion procedure; this run forbids target execution, so template_caption/arrange_facebook_caption were not executed against a dummy URL.",
+    "Whether a production owner enabled facebook_calendar_auto_approve is a deployment fact; the URL-to-caption sink does not depend on it."
+  ],
+  "validation_plan": {
+    "local": "In an isolated fixture with GOOGLE_API_KEY unset (template path) or a mocked generate_content, call apply_engagement_snapshot with item_url=https://evil.example/estate-sale/9/item/8, then ctbids_lot_url and arrange_facebook_caption/template_caption. Observe the caption containing that host and a See the whole sale line derived from it. Do not call Meta or live Gemini.",
+    "deployment": "Owner confirms whether calendar auto-approve is enabled; if it is, treat snapshot ingest as also a Facebook publish confused-deputy under the Facebook owner-gate unit."
+  }
+}

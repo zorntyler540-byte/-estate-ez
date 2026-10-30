@@ -1,0 +1,198 @@
+[
+  {
+    "agent": "hunter-authz",
+    "note": "Bind master admin to enrolled user ids (or reject register/team-create of MASTER_ADMIN_EMAILS addresses) instead of first-claimer email membership."
+  },
+  {
+    "agent": "hunter-authz",
+    "note": "After a successful lot/photo/video account_id lookup, refuse to sign or read storage_path unless _object_key_from_storage_path is under catalog/{account_id}/ (or videos/), and chroot resolve_catalog_storage_path, delete_catalog_photo, and ZIP FileResponse to upload_root / export_dir_for_account."
+  },
+  {
+    "agent": "hunter-authz",
+    "note": "Treat CT Seller access+refresh JWTs from POST /integrations/ctseller/session as owner-equivalent on seller.ctbids.com; if Watcher should be owner-only, gate the route with can_manage_integrations."
+  },
+  {
+    "agent": "hunter-authz",
+    "note": "Keep JWT out of EventSource query strings (short-lived SSE ticket or cookie) so access logs do not store staff bearer tokens."
+  },
+  {
+    "agent": "hunter-authz",
+    "note": "Make GET /lots X-Total-Count apply the same listing_channel, sku_flags, and ctseller_sale_id predicates as the page query."
+  },
+  {
+    "agent": "hunter-authz",
+    "note": "If two client logins share one sale, bind job cancel/delete/run to job.user_id as well as assigned_sale_id if peer-client isolation is desired."
+  },
+  {
+    "agent": "hunter-browser",
+    "note": "cors_allow_origins() always includes http://localhost:3000 and http://127.0.0.1:3000, including production, and CORSMiddleware sets allow_credentials=True. That is unused today because no cookie exists and browser fetch omits credentials, but it should be dropped in production so a later cookie or credentials include change cannot open those origins."
+  },
+  {
+    "agent": "hunter-browser",
+    "note": "Dashboard logout removes only localStorage token and leaves ct_account_role, so a later login can briefly route through the stale client gate before /auth/me."
+  },
+  {
+    "agent": "hunter-browser",
+    "note": "POST /integrations/r2/cors applies the same localhost defaults to the bucket AllowedOrigins list used for signed-URL fetch."
+  },
+  {
+    "agent": "hunter-browser",
+    "note": "Audience hunt URLs are scheme-filtered server-side; engagement item_url and some dashboard hrefs are not. Same-tenant writers make this self-injection, not a foreign-origin XSS."
+  },
+  {
+    "agent": "hunter-browser",
+    "note": "Mobile sign-in persists the raw password in SecureStore for silent JWT refresh. That is same-app keychain access, not a deep-link bug; prefer a refresh token and requireAuthentication if device-sharing is in scope."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": "production_must_be_safe does not require TRUSTED_HOSTS, ALLOW_OPEN_REGISTRATION=false, docs disabled, or RUN_CATALOG_JOBS_IN_PROCESS=false."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": "cors_allow_origins always injects http://localhost:3000 and http://127.0.0.1:3000 even when ENVIRONMENT=production; leftover as a note because credentialed CORS is peer-owned."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": "DEPLOY.md recommends a Cloudflare R2 Account API token on both API and worker; least-privilege object-prefix keys are not encoded."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": "Worker is documented to copy SMTP and Meta secrets it does not need for catalog claims; extra env is blast-radius hardening, not a reachable worker HTTP surface in Dockerfile.worker."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": ".dockerignore omits .env.local and .env.production names that .gitignore already drops; GitHub-context Railway builds still follow gitignore unless those files are committed."
+  },
+  {
+    "agent": "hunter-cloud",
+    "note": "backend/.env.example placeholder SECRET_KEY=change-me is not copied as a live Railway secret, but it matches the weak set and can be pasted into the host UI during the development bootstrap."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Add aud, iss, and a consumed jti to OAuth state, or store the nonce on the owner row at /oauth/start and delete it on callback."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Require PKCE on the Facebook dialog and persist the verifier server-side for the code exchange."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Do not persist Page tokens on the unauthenticated callback; require a subsequent owner-authenticated confirm or page-select before seal."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Fail closed if cryptography is missing; reject xor: unseal when ENVIRONMENT=production."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "In production derive Facebook Fernet only from META_TOKEN_ENCRYPTION_KEY, not SECRET_KEY."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Require nonempty slot_keys on calendar Approve, matching cancel."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Re-check require_facebook_poster inside _run_facebook_posts before calling publish_posts."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Gate GET /facebook/posts and Facebook status fields that reveal page identity with require_facebook_poster; cataloggers can read them today."
+  },
+  {
+    "agent": "hunter-facebook",
+    "note": "Ordinary CSRF is not a publish finding while mutations stay Bearer-from-localStorage."
+  },
+  {
+    "agent": "hunter-gemini",
+    "note": "Catalog photo bytes, original filenames, SKU, scene_note, and listing fields are concatenated into Gemini user prompts with no untrusted delimiter anywhere under backend/app. That is prompt-provenance hygiene, not a finding by itself."
+  },
+  {
+    "agent": "hunter-gemini",
+    "note": "TAPE_VERIFY_PROMPT_SUFFIX is operator environment text appended to tape-audit prompts; tenants cannot set it."
+  },
+  {
+    "agent": "hunter-gemini",
+    "note": "GOOGLE_API_KEY does not appear in prompt assembly, hunt/caption/appraiser contents, or logs as a value; only Client(api_key=) and x-goog-api-key. Keep it that way."
+  },
+  {
+    "agent": "hunter-gemini",
+    "note": "Audience hunt start is correctly owner-only; catalog /jobs/{id}/run is correctly allowed for catalogger and client on their jobs."
+  },
+  {
+    "agent": "hunter-gemini",
+    "note": "Label listing/OCR/filename/item_url as untrusted in every Gemini user part; allowlist ctbids.com for engagement URLs; apply the 40-photo cap to batch and facebook-channel uploads; add a per-account daily Gemini token/$ ceiling; require can_run_audience_hunt (or an equivalent) for appraiser and grounded valuation."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "graph_request should ignore or reject any path that is not relative to GRAPH_API_BASE (including startswith('http')), even though current callers only pass /me-style paths; requests.request follows redirects by default."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "Reuse _queued_job_upload_folder (or equivalent) inside create_job, and compare parse_batch_folder's path account_id to ProcessingJob.account_id before R2 list/get."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "process_job error_message embeds the resolved folder path ('Input folder not found: {folder}'), which in non-production JobOut already returns full paths via public_job_input_folder."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "save_uploaded_files filename chroot (reject '..', relative_to after resolve) is the right write-side pattern; pair it with a streaming byte ceiling and a batch file-count cap even when single_lot_mode is false."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "Video MAX_VIDEO_BYTES should be enforced while streaming the part, not after await file.read()."
+  },
+  {
+    "agent": "hunter-jobs",
+    "note": "Path.rglob follows directory symlinks; even after a chroot, listing should not follow links out of the batch directory."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "JWT verification pins algorithms=[HS256], require_sub, and binds sub+account_id to the User row; inactive accounts are 403. OAuth state JWTs lack sub and require purpose=meta_oauth, so they are not usable as access tokens."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "Authorization uses DB User.role, not the JWT role claim, so role changes do not wait for expiry."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "No unauthenticated email password-reset token flow; team reset is owner-authenticated. bcrypt uses gensalt(rounds=12) and rejects >72-byte passwords."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "production_must_be_safe rejects documented weak SECRET_KEY values, SQLite, and empty CORS_ORIGINS when ENVIRONMENT is production."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "Login returns a uniform Invalid login 401 (register still enumerates existing emails with 400 Email already exists). No login rate limit is present."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "JWTs have no aud/iss/purpose claim; acceptable only while SECRET_KEY is unique to this API."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "TRUSTED_HOSTS empty disables TrustedHostMiddleware; Host is not used for JWT or register identity."
+  },
+  {
+    "agent": "hunter-unauth",
+    "note": "Tracked env templates and git history did not contain a live secret. .dockerignore ignores .env and backend/.env but not frontend/.env.local; Dockerfile.web COPY frontend/ could bake an untracked local env if present at image build."
+  },
+  {
+    "agent": "hunter-wildcard",
+    "note": "Add listings/ and Inventory_Report.md to .gitignore (or move samples under a clearly marked fixtures path) so a local python main.py run cannot be git-added as a live estate catalog."
+  },
+  {
+    "agent": "hunter-wildcard",
+    "note": "Remove the unused LISTINGS_DIR.mkdir leftover, or stop shipping the 18 SKU_*.json samples that current main.py no longer writes."
+  },
+  {
+    "agent": "hunter-wildcard",
+    "note": "Load Images/.env with override=False so a leftover local key file cannot clobber an already-set GOOGLE_API_KEY."
+  },
+  {
+    "agent": "hunter-wildcard",
+    "note": "Retire or isolate root main.py from the SaaS repo if operators no longer need the tkinter scanner; there are no tests for it."
+  }
+]

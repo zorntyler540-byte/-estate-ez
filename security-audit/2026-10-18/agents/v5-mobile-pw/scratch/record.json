@@ -1,0 +1,71 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "loginWithPassword persists the raw password in expo-secure-store using AFTER_FIRST_UNLOCK rather than a ThisDeviceOnly accessibility class or a refresh token, and app.json neither disables Android allowBackup nor pins SecureStore backup rules.",
+  "title": "Remembered staff password stored in backup-eligible SecureStore",
+  "description": "A backup or other-OS-profile restorer\u2014not another app on the live profile\u2014may recover the reusable Estate-EZ password. Each mobile sign-in writes email+password under ct_mobile_login_credentials with iOS AFTER_FIRST_UNLOCK and without requireAuthentication. That item can mint a new staff JWT via silent re-login. Same-app use on the signed-in OS user is out of scope.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "mobile/context/AuthContext.tsx",
+      "line": 110,
+      "scope": "loginWithPassword credential persist",
+      "description": "After POST /auth/login, the app writes JSON {email, password} to SecureStore key ct_mobile_login_credentials with no remember-me flag."
+    },
+    {
+      "kind": "propagation",
+      "file": "mobile/lib/secureStorage.ts",
+      "line": 5,
+      "scope": "STORE_OPTS keychainAccessible",
+      "description": "All secureSet calls, including the password, use AFTER_FIRST_UNLOCK and do not set requireAuthentication or a ThisDeviceOnly constant."
+    },
+    {
+      "kind": "sink",
+      "file": "mobile/lib/secureStorage.ts",
+      "line": 13,
+      "scope": "SecureStore.setItemAsync",
+      "description": "The password string is stored in the OS keychain/keystore-backed store. Boot and silentRefresh later read it with getItemAsync(key) and call login again."
+    }
+  ],
+  "validation_plan": {
+    "local": "On an isolated simulator/emulator with a dummy tenant, sign in, then read the written item's iOS accessibility class and Android backup XML/EncryptedSharedPreferences binding. Restore an encrypted backup onto a second dummy device or profile and see whether the dummy password silently logs in. Do not use live staff accounts.",
+    "deployment": "Owner inspects the EAS production APK/IPA AndroidManifest allowBackup and expo-secure-store backup rules, and the iOS keychain accessibility for com.caringtransitions.capture. Do not export or replay live staff passwords."
+  },
+  "blockers": [
+    "OS-enforced sandbox and parent artifact promotion unavailable (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion); target code was not executed",
+    "No android/ or ios/ trees; EAS merged AndroidManifest allowBackup plus SecureStore backup XML, and the shipped IPA keychain accessibility, are packaging facts",
+    "Encrypted iCloud/Finder/Google/MDM backup restore of dummy ct_mobile_login_credentials onto a second dummy device or OS profile was not observed"
+  ],
+  "fingerprint": "mobile.securestore.remembered-password-backup",
+  "evidence": [
+    {
+      "file": "mobile/context/AuthContext.tsx",
+      "line": 21,
+      "description": "CREDENTIALS_KEY is ct_mobile_login_credentials, documented as email+password for silent re-login when the JWT expires."
+    },
+    {
+      "file": "mobile/context/AuthContext.tsx",
+      "line": 112,
+      "description": "Stored value is JSON.stringify({ email, password }) of the staff password, not a refresh token."
+    },
+    {
+      "file": "mobile/lib/secureStorage.ts",
+      "line": 5,
+      "description": "keychainAccessible is AFTER_FIRST_UNLOCK, which is backup-eligible on iOS; AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY is not used."
+    },
+    {
+      "file": "mobile/lib/secureStorage.ts",
+      "line": 9,
+      "description": "secureGet calls getItemAsync(key) with no requireAuthentication options."
+    },
+    {
+      "file": "mobile/app.json",
+      "line": 28,
+      "description": "android package com.caringtransitions.capture sets no allowBackup false and no backup/dataExtraction rules."
+    },
+    {
+      "file": "mobile/app.json",
+      "line": 49,
+      "description": "plugins includes expo-secure-store as a string with no configureAndroidBackup object."
+    }
+  ]
+}

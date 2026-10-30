@@ -1,0 +1,312 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fjobs%2Fupload::backend%2Fapp%2Fupload_storage.py%23save_uploaded_files::backend%2Fapp::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/catalog_limits.py",
+        "backend/app/config.py",
+        "backend/app/main.py",
+        "backend/app/services/image_preprocess.py",
+        "backend/app/services/roles.py",
+        "backend/app/upload_storage.py",
+        "frontend/app/dashboard/page.tsx"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/catalog_limits.py",
+            "backend/app/config.py",
+            "backend/app/main.py",
+            "backend/app/services/image_preprocess.py",
+            "backend/app/upload_storage.py"
+          ],
+          "invariant": "Authenticated multipart photo ingest must reject or stream-cap each part before allocating the full body in the shared API process, and must enforce a stored-size bound independent of Pillow downscale.",
+          "method": "source",
+          "result": "save_uploaded_files does await uf.read() with no MAX_PHOTO_BYTES. FastAPI() sets no max body. catalog_limits caps videos and per-lot photo count, not photo bytes. compress_upload_bytes_if_image runs only after the full buffer. Non-image suffixes are stored as-is. Same read pattern is used by POST /jobs/upload, POST /jobs/{id}/upload-files, POST /lots/{id}/photos/upload, and photo replace.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/catalog_limits.py",
+            "backend/app/main.py"
+          ],
+          "invariant": "Video ingest must apply MAX_VIDEO_BYTES before the part is fully buffered, and photo cardinality must be bounded for non-single-lot folder uploads.",
+          "method": "source",
+          "result": "POST /lots/{id}/videos/upload reads each part fully, then calls lot_video_size_error(len(raw)) (80 MiB). CTBIDS_MAX_PHOTOS_PER_LOT=40 is enforced on /jobs/upload and upload-files only when single_lot_mode is true. Dashboard folder uploads chunk 48 client-side but the API accepts unbounded file lists for batch jobs.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/services/roles.py",
+            "backend/app/upload_storage.py"
+          ],
+          "invariant": "Multipart filenames cannot escape dest_root, and clients cannot call POST /jobs.",
+          "method": "source",
+          "result": "save_uploaded_files strips slashes, rejects '..' in Path parts, and relative_to(root) after resolve(). new_batch_dir is UPLOAD_ROOT/account_id/uuid. Clients are allowlisted for /jobs/upload and upload-files, so the unbounded-read path is reachable by the lowest-privilege authenticated role. Filename zip-slip/traversal on this write path is not a candidate.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "backend.app.upload_storage.save_uploaded_files.unbounded-multipart-buffer"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fjobs::backend%2Fapp%2Fservices%2Fprocessing.py%23folder.rglob::backend%2Fapp%2Fservices%2Fprocessing.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/catalog_storage.py",
+        "backend/app/config.py",
+        "backend/app/job_batch_storage.py",
+        "backend/app/job_tasks.py",
+        "backend/app/main.py",
+        "backend/app/schemas.py",
+        "backend/app/services/image_preprocess.py",
+        "backend/app/services/processing.py",
+        "backend/app/services/roles.py",
+        "backend/app/worker.py",
+        "frontend/app/dashboard/page.tsx",
+        "infra/docker/Dockerfile.api"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/schemas.py",
+            "backend/app/services/roles.py",
+            "frontend/app/dashboard/page.tsx"
+          ],
+          "invariant": "Caller-supplied CreateJobRequest.input_folder must be confined to UPLOAD_ROOT/current.account_id, the same chroot _queued_job_upload_folder uses for upload-files.",
+          "method": "source",
+          "result": "POST /jobs stores payload.input_folder verbatim after only a client-role 403 and sale ownership check. Dashboard Staff server-path control posts that string. upload-files resolves and relative_to(UPLOAD_ROOT/account_id); create_job does not. DELETE /jobs rmtree is chrooted, so the read/catalog path is weaker than delete.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/catalog_storage.py",
+            "backend/app/job_tasks.py",
+            "backend/app/main.py",
+            "backend/app/services/image_preprocess.py",
+            "backend/app/services/processing.py",
+            "backend/app/worker.py"
+          ],
+          "invariant": "process_job and /run may rglob and persist only images under the job owner's upload batch, not host paths or other accounts' catalog trees.",
+          "method": "source",
+          "result": "run_job uses Path(job.input_folder) with no chroot. create_job inserts status=queued; the worker claims any queued row. _process_job_body rglobs IMAGE_EXTS (symlink-following), normalize_job_folder_image may rewrite files in that tree, and _add_catalog_photo copies into catalog/{job.account_id}. Job HTTP access is filtered by ProcessingJob.account_id, which does not bind the filesystem selector.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/job_batch_storage.py",
+            "backend/app/job_tasks.py",
+            "infra/docker/Dockerfile.api"
+          ],
+          "invariant": "R2 job-batch restore keys must use job.account_id, not account/batch parsed from an attacker-chosen path under upload_root.",
+          "method": "source",
+          "result": "parse_batch_folder takes parts[0], parts[1] from folder.relative_to(upload_root()) and ignores ProcessingJob.account_id (except skipping the literal catalog prefix). ensure_job_input_folder / restore_job_folder_from_r2 then list job-batches/{path_account}/{path_batch}/. Dockerfile.api uses WORKDIR /app and uvicorn from backend, so upload_root is the in-repo backend/data/uploads layout.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "backend.app.main.create_job.input_folder.missing-upload-root-chroot"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fservices%2Fmeta_graph.py%23graph_request::backend%2Fapp%2Fservices%2Fmeta_graph.py%23path%20startswith%20http::backend%2Fapp%2Fservices%2Fmeta_graph.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/services/facebook_calendar.py",
+        "backend/app/services/facebook_page.py",
+        "backend/app/services/meta_graph.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/services/meta_graph.py"
+          ],
+          "invariant": "graph_request must not treat a client-controlled string as a full URL that requests.request can fetch, including cloud metadata hosts.",
+          "method": "source",
+          "result": "url = path if path.startswith('http') else GRAPH_API_BASE+path. Every in-module caller passes a relative path beginning with '/': /oauth/access_token, /debug_token, /me, /me/accounts, /{page_id}/photos, /{page_id}/feed, /{post_id}. Interpolated ids are still prefixed with '/', so they cannot satisfy startswith('http'). No other repository module calls graph_request.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-jobs",
+          "reviewed_paths": [
+            "backend/app/services/facebook_calendar.py",
+            "backend/app/services/facebook_page.py"
+          ],
+          "invariant": "HTTP/Facebook publishers cannot pass a user URL into graph_request; they must use typed helpers with Graph-relative paths.",
+          "method": "source",
+          "result": "facebook_page imports exchange/list/upload/feed helpers, not graph_request. facebook_calendar calls delete_page_post and update_scheduled_page_post with stored Graph post ids, which become '/'+post_id. list_user_pages does not follow paging next URLs. No assigned path lets a catalogger supply a full URL into the helper.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "backend.app.main.create_job.input_folder.missing-upload-root-chroot",
+      "title": "POST /jobs stores an un-chrooted input_folder that process_job rglobs into Gemini and the caller's catalog",
+      "description": "An authenticated catalogger or owner can POST /jobs with an arbitrary input_folder. Unlike POST /jobs/{id}/upload-files, create_job does not require that path to sit under UPLOAD_ROOT/{account_id}. The row is inserted as queued, so the catalog worker can claim it without a separate unsafe /run trick. process_job then Path.rglob-s image suffixes, may rewrite files in that tree, copies them into catalog/{job.account_id}, and sends them to Gemini. The job row's account_id filter only authorizes who may own the job; it does not isolate the filesystem or R2 batch key. A path equal to the shared upload root or catalog/ subtree therefore selects other tenants' on-disk images. A path shaped as upload_root/{victim_account}/{victim_batch} makes parse_batch_folder restore that tenant's job-batches/ objects using worker R2 credentials.",
+      "claimed_root_cause": "CreateJobRequest.input_folder is persisted and later used as a filesystem and R2-namespace selector without the account upload-root chroot that _queued_job_upload_folder already implements, and parse_batch_folder derives tenant from that path rather than from ProcessingJob.account_id.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 5506,
+          "scope": "create_job",
+          "description": "After blocking clients and binding sale_id via _sale_for_user, the handler writes payload.input_folder onto ProcessingJob with status=queued and no UPLOAD_ROOT/account_id relative_to check."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/main.py",
+          "line": 5585,
+          "scope": "run_job",
+          "description": "POST /jobs/{id}/run resolves the job by id and account_id, then uses Path(job.input_folder) for R2 staging with no second chroot. create_job already queued the row, so app.worker can also claim it."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/job_batch_storage.py",
+          "line": 32,
+          "scope": "parse_batch_folder",
+          "description": "account_id and batch_id are taken from the first two path components under upload_root(), not from the job row, then used as the R2 prefix job-batches/{account}/{batch}/."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/services/processing.py",
+          "line": 882,
+          "scope": "_process_job_body",
+          "description": "folder.rglob('*') collects IMAGE_EXTS under the attacker-chosen directory; _add_catalog_photo persists copies under job.account_id and the pipeline sends frames to Gemini."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/main.py",
+          "line": 5428,
+          "description": "_queued_job_upload_folder is the sibling control: resolve job.input_folder and relative_to(UPLOAD_ROOT/account_id), used only by upload-files, not by create_job."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 5747,
+          "description": "delete_job only rmtree when the resolved folder is under UPLOAD_ROOT, so destructive cleanup is chrooted while catalog read is not."
+        },
+        {
+          "file": "backend/app/services/processing.py",
+          "line": 173,
+          "description": "_add_catalog_photo calls persist_catalog_photo(job.account_id, photo_path), copying whatever rglob selected into the caller's catalog namespace."
+        },
+        {
+          "file": "backend/app/services/image_preprocess.py",
+          "line": 203,
+          "description": "normalize_job_folder_image writes re-encoded bytes back under job_folder, so a path into another tenant's batch or catalog directory is a write as well as a read."
+        },
+        {
+          "file": "frontend/app/dashboard/page.tsx",
+          "line": 4819,
+          "description": "Dashboard enqueueJob JSON-posts the Staff server-path text field as input_folder, documenting that the API is expected to accept a raw host path."
+        },
+        {
+          "file": "infra/docker/Dockerfile.api",
+          "line": 16,
+          "description": "Image layout is /app/backend/data/uploads (WORKDIR /app, uvicorn from backend), so the upload-root and catalog/ trees are a source-visible absolute layout on API and worker images."
+        }
+      ],
+      "blockers": [
+        "No OS-enforced empty-allowlist sandbox; hunters must not execute target code, so rglob, R2 restore, persist_catalog_photo, and Gemini were not observed on dummy tenants.",
+        "No trusted parent-side scratch promotion procedure, so no local fixture artifact can be retained.",
+        "Whether a given Railway worker disk currently holds catalog/{other_account} files, and whether R2 list/get on job-batches/* succeeds for a path-derived other account, is a deployment fact outside this source review."
+      ],
+      "validation_plan": {
+        "local": "In an isolated dummy two-account fixture with Gemini and R2 mocked, create catalog JPEGs under upload_root/catalog/{B} and a job-batch under upload_root/{B}/{batch}. As catalogger A, insert a ProcessingJob via the create_job request body with input_folder pointing at B's catalog directory and at B's batch directory. Invoke process_job. Confirm A's Photo rows receive B's pixels, B's files may be re-encoded, and restore_job_folder_from_r2 is invoked with job-batches/{B}/{batch}/ rather than A's id. Do not use production data or network.",
+        "deployment": "Owner-observed: inspect one worker replica's backend/data/uploads/catalog layout after mixed-tenant jobs, and confirm application-side R2 list is not additionally scoped by ProcessingJob.account_id. Do not probe a live customer tenant."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "backend.app.upload_storage.save_uploaded_files.unbounded-multipart-buffer",
+      "title": "Catalog multipart ingest buffers entire parts in the shared API process with no photo byte cap",
+      "description": "Restricted clients and staff upload photos through POST /jobs/upload and POST /jobs/{id}/upload-files into save_uploaded_files, which await-reads each UploadFile fully, optionally runs Pillow, writes the bytes, and mirrors to R2. catalog_limits defines MAX_VIDEO_BYTES and a 40-photo CTBids cap, but no photo-byte ceiling, and the 40-file cap applies only in single_lot_mode. Lot video upload does have an 80 MiB cap, but only after the entire part is already in memory. FastAPI is constructed with default options (no request-size limit in source). Concurrent saves use a semaphore of 12, so several large parts occupy RAM together on the single API process that also serves other tenants' dashboard and pool checkouts.",
+      "claimed_root_cause": "Multipart handlers treat UploadFile.read() as the size gate: photos never have a byte budget, and videos check MAX_VIDEO_BYTES only after the full buffer exists. There is no source-visible Starlette/FastAPI max body, per-request file-count cap for batch jobs, or streaming discard.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 5400,
+          "scope": "create_job_from_upload",
+          "description": "Authenticated client or catalogger posts files: list[UploadFile] with no length or byte Form constraint; CTBIDS_MAX_PHOTOS_PER_LOT applies only when single_lot_mode is true."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/upload_storage.py",
+          "line": 50,
+          "scope": "save_uploaded_files._save_one",
+          "description": "body = await uf.read() materializes the entire part. concurrency=12 gather runs many such reads. Pillow compress runs after this allocation; non-image names skip compress and keep raw bytes."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/upload_storage.py",
+          "line": 90,
+          "scope": "save_uploaded_files._save_one",
+          "description": "target.write_bytes(body) plus mirror_local_file_to_r2 retain the object on local disk and operator-owned R2. The same process hosts other tenants' HTTP and QueuePool."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/catalog_limits.py",
+          "line": 13,
+          "description": "MAX_VIDEO_BYTES is the only ingest byte constant; there is no MAX_PHOTO_BYTES. CTBIDS_MAX_PHOTOS_PER_LOT is a listing count, not a transfer-size cap."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 3825,
+          "description": "upload_lot_videos does raw = await file.read() then lot_video_size_error(len(raw)), so the advertised 80 MiB bound is after unbounded buffering."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 284,
+          "description": "app = FastAPI(title=settings.app_name) installs no max request size, body limit, or upload middleware."
+        },
+        {
+          "file": "backend/app/services/roles.py",
+          "line": 95,
+          "description": "client_http_allowed includes POST /jobs/upload, so the unbounded buffer is reachable by the client role, not only owners."
+        },
+        {
+          "file": "frontend/app/dashboard/page.tsx",
+          "line": 129,
+          "description": "UPLOAD_FILE_CHUNK = 48 is a browser timeout workaround, not an API cardinality or byte limit; additional chunks append to the same job."
+        }
+      ],
+      "blockers": [
+        "No sandbox or target execution, so peak RSS and disk growth were not measured with a small oversized fixture.",
+        "Railway/proxy/client_max_body_size and platform multipart limits are not declared in this repository; an upstream cap would change shared impact and must be owner-observed.",
+        "Paid R2 put and Gemini spend from a huge accepted batch were not exercised (mocked-only local check required)."
+      ],
+      "validation_plan": {
+        "local": "With Gemini and R2 mocked and strict process memory/time limits, post one oversize JPEG and one oversize non-image part to save_uploaded_files / create_job_from_upload, and one oversize video to upload_lot_videos. Observe that photo parts are fully buffered with no 413, and that video rejection happens only after len(raw) is known. Repeat with a large files list while single_lot_mode is false. Do not stress a shared host beyond the fixture limit.",
+        "deployment": "Owner-observed: record whether Railway/ingress enforces a request body ceiling in front of the API service, and whether that ceiling applies to multipart parts before uvicorn allocates them. Do not flood the production API."
+      }
+    }
+  ],
+  "hardening": [
+    "graph_request should ignore or reject any path that is not relative to GRAPH_API_BASE (including startswith('http')), even though current callers only pass /me-style paths; requests.request follows redirects by default.",
+    "Reuse _queued_job_upload_folder (or equivalent) inside create_job, and compare parse_batch_folder's path account_id to ProcessingJob.account_id before R2 list/get.",
+    "process_job error_message embeds the resolved folder path ('Input folder not found: {folder}'), which in non-production JobOut already returns full paths via public_job_input_folder.",
+    "save_uploaded_files filename chroot (reject '..', relative_to after resolve) is the right write-side pattern; pair it with a streaming byte ceiling and a batch file-count cap even when single_lot_mode is false.",
+    "Video MAX_VIDEO_BYTES should be enforced while streaming the part, not after await file.read().",
+    "Path.rglob follows directory symlinks; even after a chroot, listing should not follow links out of the batch directory."
+  ],
+  "uncovered": []
+}

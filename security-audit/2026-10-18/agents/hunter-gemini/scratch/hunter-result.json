@@ -1,0 +1,483 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Fengagement_routes.py%23POST%20%2Fintegrations%2Fengagement%2Fsnapshots::backend%2Fapp%2Fservices%2Fengagement_store.py%23item_url::backend%2Fapp%2Fservices%2Fengagement_store.py::ATTACK-CLASSES.md%23Injection",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/engagement_routes.py",
+        "backend/app/schemas.py",
+        "backend/app/services/ctbids_urls.py",
+        "backend/app/services/engagement_store.py",
+        "backend/app/services/facebook_calendar.py",
+        "backend/app/services/facebook_caption.py",
+        "backend/app/services/facebook_page.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/engagement_routes.py",
+            "backend/app/schemas.py",
+            "backend/app/services/engagement_store.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Watcher-supplied item_url and auction_url must be bound to a CT Bids host before storage; catalogger ingest must not be an unauthenticated or cross-account write.",
+          "method": "source",
+          "result": "POST /integrations/engagement/snapshots is JWT + account_id only. Clients are blocked by enforce_client_http. Cataloggers may ingest. EngagementItemIn.item_url is a bare str (max later 600 chars) with no scheme or host allowlist. apply_engagement_snapshot stores item_url and auction_url as submitted.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/services/ctbids_urls.py",
+            "backend/app/services/facebook_calendar.py",
+            "backend/app/services/facebook_caption.py",
+            "backend/app/services/facebook_page.py"
+          ],
+          "invariant": "Stored Watcher URLs must not enter Gemini caption context or the published caption sink unless they are constructed CT Bids item/sale URLs.",
+          "method": "source",
+          "result": "ctbids_lot_url prefers snapshot.item_url over sale_id/item_id construction. draft_facebook_caption concatenates that URL unlabeled as Lot link. arrange_facebook_caption and template_caption always append item_url and a sale line derived by normalize_ctbids_sale_url, which only strips /item/ and does not check host. Auto-approve calendar sync can call _draft_item then publish as a synthetic owner; Page publish authorization is peer-owned (hunter-facebook).",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "gemini.engagement.untrusted-item-url-caption-sink"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fjobs%2F%7Bid%7D%2Frun::backend%2Fapp%2Fconfig.py%23GOOGLE_API_KEY::backend%2Fpipeline::RESOURCE-EXHAUSTION-AND-AVAILABILITY.md%23Quota-accounting%20scope%20and%20reset%20gaps",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/catalog_limits.py",
+        "backend/app/config.py",
+        "backend/app/core/gemini_slots.py",
+        "backend/app/job_tasks.py",
+        "backend/app/main.py",
+        "backend/app/services/appraisal.py",
+        "backend/app/services/audience_hunt.py",
+        "backend/app/services/pipeline_integration.py",
+        "backend/app/services/processing.py",
+        "backend/app/services/roles.py",
+        "backend/app/upload_storage.py",
+        "backend/pipeline/appraiser.py",
+        "backend/pipeline/pipeline.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/catalog_limits.py",
+            "backend/app/job_tasks.py",
+            "backend/app/main.py",
+            "backend/app/services/processing.py",
+            "backend/app/services/roles.py",
+            "backend/app/upload_storage.py"
+          ],
+          "invariant": "A client or catalogger may run catalog jobs on their sale, but one request must not enqueue unbounded photo cardinality or an unbounded job queue against the shared operator Gemini key.",
+          "method": "source",
+          "result": "POST /jobs/{id}/run is allowed for catalogger and client on account-owned jobs (client_http_allowed includes upload-files and run). CTBIDS_MAX_PHOTOS_PER_LOT=40 applies only when single_lot_mode is true and listing_channel is not facebook. create_job_from_upload defaults single_lot_mode=false, so batch uploads and facebook-channel lots have no photo-count reject. save_uploaded_files has no file-count cap. /jobs/{id}/upload-files repeats the single-lot-only cap. process_job batch path calls triage_ordered_photo_batch on every image then Pro per tape segment. catalog_job_max_concurrent defaults to 1; queued job count and per-account token/$ quota are absent.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/config.py",
+            "backend/app/core/gemini_slots.py",
+            "backend/app/main.py",
+            "backend/app/services/audience_hunt.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Audience hunt (Pro+Search) is owner-only; catalog /jobs/{id}/run may spend Flash/Pro on the caller job but must not impersonate another account or leak GOOGLE_API_KEY into model context.",
+          "method": "source",
+          "result": "can_run_audience_hunt is owner-only and both hunt routes call _require_can_run_audience_hunt. GOOGLE_API_KEY is passed only to genai.Client and the REST x-goog-api-key header; prompts and hunt/caption/appraiser contents do not interpolate the key. Error strings name the env var, not the secret. gemini_global_concurrency (default 3) is process-wide across tenants.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/services/appraisal.py",
+            "backend/app/services/pipeline_integration.py",
+            "backend/pipeline/appraiser.py",
+            "backend/pipeline/pipeline.py"
+          ],
+          "invariant": "Gemini Pro + Google Search must use the same owner gate as audience hunt; cataloggers and clients must not attach Search to /jobs/run or /appraiser/checks.",
+          "method": "source",
+          "result": "POST /appraiser/checks is any authenticated sale member when ENABLE_APPRAISER is true (default false); no can_run_audience_hunt check. scene_note is concatenated as Scene note from appraiser and the first call enables Google Search. When ENABLE_GROUNDED_VALUATION is true, pipeline_integration sets the env flag and the catalog Pro author call adds tools=[GoogleSearch()], which clients can trigger via /jobs/{id}/run.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "gemini.jobs.uncapped-batch-queue-spend",
+        "gemini.pro-search.missing-owner-gate"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Flots%2F%7Bid%7D%2Faudience-hunt::backend%2Fapp%2Fservices%2Faudience_hunt.py%23_get_client::backend%2Fapp%2Fservices%2Faudience_hunt.py::AI-AND-LLM.md%23Tool-argument%20injection%20into%20a%20downstream%20sink",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/main.py",
+        "backend/app/services/audience_hunt.py",
+        "backend/app/services/roles.py",
+        "backend/pipeline/appraiser.py",
+        "backend/pipeline/pipeline.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Only the account owner may start lot or sale audience hunts.",
+          "method": "source",
+          "result": "POST /lots/{id}/audience-hunt and POST /sales/{id}/audience-hunt both call _require_can_run_audience_hunt. Catalogger and client roles fail can_run_audience_hunt. Clients are also blocked by the HTTP allowlist. Sale-wide limit is capped at 80 by schema.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/services/audience_hunt.py",
+            "backend/pipeline/appraiser.py",
+            "backend/pipeline/pipeline.py"
+          ],
+          "invariant": "Lot title, SKU, description, specs, and location must be labeled untrusted; Google Search tool arguments must be handler-constrained so listing text cannot aim Search at arbitrary or internal URLs.",
+          "method": "source",
+          "result": "No untrusted label exists in the repo. _lot_research_text concatenates Title, SKU, CT category, Brands, Condition, Description, Specs, and pickup city as ordinary prompt fields. Research uses tools=[GoogleSearch()] with no query/URL allowlist. Code does not implement a generic URL-fetch tool. parse_audience_payload/_safe_public_url accept any http(s) URL (javascript: and data: only), including RFC1918 and localhost, and persist up to 8 groups. recommend_hold can set lot.audience_hold. Whether Gemini Search grounding fetches listing-supplied URLs is a provider fact.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "gemini.hunt.unlabeled-listing-search-args"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fpipeline%2Fpipeline.py%23analyze%20photos::backend%2Fapp%2Fcore%2Fgemini.py%23_user_prompt::backend%2Fpipeline::ATTACK-CLASSES.md%23Injection",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/config.py",
+        "backend/app/core/gemini.py",
+        "backend/app/services/facebook_caption.py",
+        "backend/app/services/processing.py",
+        "backend/pipeline/pipeline.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/core/gemini.py",
+            "backend/pipeline/pipeline.py"
+          ],
+          "invariant": "Photo bytes, filenames, SKU, and listing text must not impersonate system/tool roles in a way that changes a deterministic trust decision or reaches a sink the caller cannot already use.",
+          "method": "source",
+          "result": "Grep of backend/app found no untrusted/UNTRUSTED delimiter. _user_prompt concatenates manifest_tag (job id / regen id, not caller prose) plus instructions; photos are inline blobs. Triage/gallery/Pro prompts include caller-controlled filenames and OCR as ordinary user text. Outputs are JSON-schema constrained and written to the same account lot the caller is cataloging. Prompt injection without a wrong-principal, unauthorized-tool, spend, or extra sink is not a finding. Guardrail system prompts are not counted as controls.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-gemini",
+          "reviewed_paths": [
+            "backend/app/config.py",
+            "backend/app/core/gemini.py",
+            "backend/app/services/facebook_caption.py",
+            "backend/app/services/processing.py"
+          ],
+          "invariant": "GOOGLE_API_KEY and TAPE_VERIFY_PROMPT_SUFFIX must not enter model-visible user content from a tenant attacker; tape SKU is caller lot data only.",
+          "method": "source",
+          "result": "The API key is used only as Client(api_key=) and REST header x-goog-api-key. Failed-job text is GOOGLE_API_KEY is not set in backend/.env, not the secret. TAPE_VERIFY_PROMPT_SUFFIX is operator env appended after the tape-audit instructions; tenants cannot set it. verify_tape_sku interpolates claimed_marking from tape OCR/SKU and returns a bool used to accept or reject a lot split; that is same-job catalog integrity, not cross-principal extraction. Facebook caption listing fields are covered on the engagement unit.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "gemini.engagement.untrusted-item-url-caption-sink",
+      "title": "Watcher item_url is stored unsanitized and deterministically copied into Gemini Facebook captions",
+      "description": "A catalogger (Watcher JWT on the same account) can POST /integrations/engagement/snapshots with an arbitrary item_url and auction_url. Those strings are stored, preferred over constructed CT Bids URLs, concatenated unlabeled into the Gemini Flash caption prompt, and then appended to the caption by arrange_facebook_caption / template_caption even if the model ignores them. normalize_ctbids_sale_url will also turn https://attacker.example/estate-sale/1/item/2 into a See the whole sale line on that host. Attacker is the catalogger. Affected principal is the account owner (Gemini caption spend and the Page caption the owner later posts). Execution identity is the API process holding GOOGLE_API_KEY and, if facebook_calendar_auto_approve is on, the Page token as a synthetic owner. This is not a claim that cataloggers bypass the Facebook owner publish gate (peer hunter-facebook); the code-level failure is the missing URL allowlist plus the deterministic caption sink.",
+      "claimed_root_cause": "Engagement ingest accepts unconstrained http(s) item_url/auction_url and later caption builders treat snapshot.item_url as the lot link without a CT Bids host check.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/engagement_routes.py",
+          "line": 28,
+          "scope": "ingest_engagement_snapshot",
+          "description": "Any authenticated non-client account member can POST a snapshot; there is no owner or Facebook-poster check."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/engagement_store.py",
+          "line": 214,
+          "scope": "apply_engagement_snapshot",
+          "description": "item_url is stored as (item.item_url or '')[:600] with no scheme or host validation."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/facebook_page.py",
+          "line": 317,
+          "scope": "ctbids_lot_url",
+          "description": "A non-empty snapshot.item_url replaces the constructed ctbids.com sale/item URL."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/facebook_caption.py",
+          "line": 412,
+          "scope": "_draft_with_gemini",
+          "description": "Lot link and sale link are interpolated into the Flash user prompt without an untrusted label."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/services/facebook_caption.py",
+          "line": 214,
+          "scope": "arrange_facebook_caption",
+          "description": "The stored lot_url is appended to the caption after any model or template body, so the Watcher URL reaches the text that preview, publish, and auto-approve consume."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/schemas.py",
+          "line": 1036,
+          "description": "EngagementItemIn.item_url is str with extra=forbid only; not HttpUrl and not host-limited."
+        },
+        {
+          "file": "backend/app/services/ctbids_urls.py",
+          "line": 16,
+          "description": "normalize_ctbids_sale_url strips /item/ but never requires ctbids.com."
+        },
+        {
+          "file": "backend/app/services/facebook_calendar.py",
+          "line": 579,
+          "description": "_draft_item calls draft_facebook_caption with ctbids_lot_url(lot, snapshot=snapshot)."
+        },
+        {
+          "file": "backend/app/services/facebook_calendar.py",
+          "line": 698,
+          "description": "If facebook_calendar_auto_approve is set, snapshot ingest drafts and publishes as the first owner user; publish auth is peer-owned."
+        }
+      ],
+      "blockers": [
+        "No OS-enforced sandbox and no parent scratch-promotion procedure; this run forbids target execution, so template_caption/arrange_facebook_caption were not executed against a dummy URL.",
+        "Whether a production owner enabled facebook_calendar_auto_approve is a deployment fact; the URL-to-caption sink does not depend on it."
+      ],
+      "validation_plan": {
+        "local": "In an isolated fixture with GOOGLE_API_KEY unset (template path) or a mocked generate_content, call apply_engagement_snapshot with item_url=https://evil.example/estate-sale/9/item/8, then ctbids_lot_url and arrange_facebook_caption/template_caption. Observe the caption containing that host and a See the whole sale line derived from it. Do not call Meta or live Gemini.",
+        "deployment": "Owner confirms whether calendar auto-approve is enabled; if it is, treat snapshot ingest as also a Facebook publish confused-deputy under the Facebook owner-gate unit."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "gemini.jobs.uncapped-batch-queue-spend",
+      "title": "Client and catalogger can stack uncapped batch catalog jobs on the shared operator Gemini key",
+      "description": "Catalog /jobs/{id}/run is intentionally allowed for catalogger and client on their jobs. The missing bound is cardinality, not the run permission. POST /jobs/upload defaults to single_lot_mode=false, and the 40-photo CT Bids cap is skipped for batch mode and for facebook listing_channel. upload-files repeats that single-lot-only cap. One /run then Flash-triages every file (plus tape-verify and a Pro author pass per tape segment) using the process-wide GOOGLE_API_KEY. Callers can also enqueue an unbounded number of jobs; only catalog_job_max_concurrent (default 1) and gemini_global_concurrency (default 3, shared across tenants) limit in-flight work. Attacker is a client or catalogger. Affected principal is the operator Gemini bill and other tenants waiting on the global Gemini semaphore. Execution identity is the API/worker with the operator key.",
+      "claimed_root_cause": "Photo-count enforcement is tied to single_lot_mode plus non-facebook channel, and there is no per-account job-count or Gemini token/$ quota on the shared key.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 5362,
+          "scope": "create_job_from_upload",
+          "description": "Authenticated client or staff uploads files; single_lot_mode defaults false; the 40-photo reject runs only for single-lot non-facebook jobs."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/main.py",
+          "line": 5467,
+          "scope": "upload-files",
+          "description": "Appending files applies CTBIDS_MAX_PHOTOS_PER_LOT only when the job is already single_lot_mode."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/main.py",
+          "line": 5546,
+          "scope": "run_job",
+          "description": "Client or catalogger may start their job; no spend quota is checked before queueing Gemini work."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/services/processing.py",
+          "line": 567,
+          "scope": "_process_job_batch_pipeline",
+          "description": "Every uploaded image is sent through triage_ordered_photo_batch (one Flash call per file) before per-segment Pro inventory, billed to the operator key."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/services/roles.py",
+          "line": 111,
+          "description": "Clients may POST /jobs/{id}/run and /jobs/upload."
+        },
+        {
+          "file": "backend/app/catalog_limits.py",
+          "line": 9,
+          "description": "The only catalog photo cap is CTBIDS_MAX_PHOTOS_PER_LOT=40, used solely for single-lot CT Seller uploads."
+        },
+        {
+          "file": "backend/app/upload_storage.py",
+          "line": 30,
+          "description": "save_uploaded_files has no maximum file count."
+        },
+        {
+          "file": "backend/app/job_tasks.py",
+          "line": 108,
+          "description": "can_start_job_for_account only caps concurrent running jobs, not queued jobs or tokens."
+        },
+        {
+          "file": "backend/app/core/gemini_slots.py",
+          "line": 25,
+          "description": "gemini_slot is a process-wide semaphore (default 3) shared by all accounts."
+        }
+      ],
+      "blockers": [
+        "No OS-enforced sandbox; executing /jobs/upload and /run would spend the real operator Gemini key or require a mocked pipeline that was not run.",
+        "Deployed Google Cloud/Gemini project quotas, Railway body-size limits, and reverse-proxy request limits are not source-visible."
+      ],
+      "validation_plan": {
+        "local": "With Gemini and R2 mocked, POST /jobs/upload single_lot_mode=false with 41 tiny JPEGs, then POST /jobs/{id}/run. Assert HTTP 200 and that process_job/triage receives 41 paths. Repeat upload+run to show a second queued job is stored. Do not call live Gemini.",
+        "deployment": "Owner checks whether an upstream proxy already rejects large multipart batches and whether the billed Gemini project has a hard daily cap that would contain a stacked client."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "gemini.pro-search.missing-owner-gate",
+      "title": "Pro plus Google Search is owner-gated only on audience hunt, not appraiser or grounded catalog valuation",
+      "description": "roles.can_run_audience_hunt documents that Pro tokens are owner-only, and hunt routes enforce that. Two other Pro+Search sinks do not. When ENABLE_APPRAISER is true, a catalogger (not client; path is outside the client allowlist) can POST /appraiser/checks with photos and an unlabeled scene_note; run_appraisal_research enables Google Search on Gemini Pro. When ENABLE_GROUNDED_VALUATION is true, the catalog Pro author call used by client-runnable /jobs/{id}/run also attaches Google Search. Attacker is a catalogger (appraiser) or client (valuation-on catalog). Affected principal is the operator Gemini Pro+Search bill. Execution identity is pipeline._get_client using the operator GOOGLE_API_KEY. This is an unauthorized-tool / quota-scope failure, not prompt injection.",
+      "claimed_root_cause": "The owner-only Pro+Search control is implemented only on audience-hunt routes; appraiser and ENABLE_GROUNDED_VALUATION reuse the same client and tool without that role check.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 6222,
+          "scope": "create_appraisal_check",
+          "description": "Any authenticated member of the sale can start an appraisal when ENABLE_APPRAISER is true; can_run_audience_hunt is not consulted."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/pipeline/appraiser.py",
+          "line": 64,
+          "scope": "run_appraisal_research",
+          "description": "Caller scene_note is concatenated as Scene note from appraiser and Search is enabled on Pro."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/pipeline_integration.py",
+          "line": 75,
+          "scope": "_sync_pipeline_env_from_settings",
+          "description": "ENABLE_GROUNDED_VALUATION is copied into the pipeline process environment for catalog jobs."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/pipeline/pipeline.py",
+          "line": 1211,
+          "scope": "Pro author generate_content",
+          "description": "When that flag is set, the catalog Pro call adds tools=[GoogleSearch()], reachable from client /jobs/{id}/run."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/services/roles.py",
+          "line": 74,
+          "description": "Comment and implementation: audience hunt burns Pro tokens — owners only."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 5123,
+          "description": "Hunt routes call _require_can_run_audience_hunt; appraiser routes do not."
+        },
+        {
+          "file": "backend/app/config.py",
+          "line": 110,
+          "description": "enable_grounded_valuation and enable_appraiser default false; both are env-enabled operator flags."
+        },
+        {
+          "file": "backend/app/services/appraisal.py",
+          "line": 45,
+          "description": "run_field_appraisal is invoked with stored scene_note and photos; usage is billed Pro tokens."
+        }
+      ],
+      "blockers": [
+        "Both features default off; whether production sets ENABLE_APPRAISER or ENABLE_GROUNDED_VALUATION is a deployment fact required for reachability.",
+        "No sandbox; Pro+Search must not be invoked against the live key to measure spend."
+      ],
+      "validation_plan": {
+        "local": "With flags forced true in a dummy settings object and genai.Client mocked, assert create_appraisal_check as role=catalogger reaches run_appraisal_research with GoogleSearch, and that a client /jobs/{id}/run path builds GenerateContentConfig with tools when ENABLE_GROUNDED_VALUATION=1. Assert the same catalogger cannot POST /lots/{id}/audience-hunt.",
+        "deployment": "Owner inspects Railway/API env for ENABLE_APPRAISER and ENABLE_GROUNDED_VALUATION."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "gemini.hunt.unlabeled-listing-search-args",
+      "title": "Audience-hunt listing text is unlabeled and can steer unconstrained Google Search arguments",
+      "description": "Owners alone may start hunts. The hunt still concatenates catalogger- or model-written Title, SKU, Description, Specs, and pickup city into the Pro+Search user prompt with no untrusted delimiter. The Search tool has no handler-side query or URL allowlist. _safe_public_url persists any http(s) group URL, including internal hosts, onto the lot; recommend_hold can set audience_hold and skip CT Seller posts. Attacker is a catalogger (or client photos that became listing text) who does not run the hunt. Affected principal is the owner who requested find groups (Search spend and stored URLs/hold) under the operator Gemini identity. Code does not implement a server-side fetch of those URLs. Whether Google Search grounding will fetch a listing-supplied internal URL is not source-visible.",
+      "claimed_root_cause": "Lot fields are interpolated as trusted labeled lines into a Google Search tool call with no query/URL allowlist, and hunt JSON URLs are stored after only a javascript:/data: filter.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 5115,
+          "scope": "hunt_lot_audience",
+          "description": "Owner starts a hunt on a lot whose title/description/SKU may have been written by a catalogger or prior Gemini catalog."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/audience_hunt.py",
+          "line": 451,
+          "scope": "_lot_research_text",
+          "description": "Listing fields are formatted as Title/SKU/Description/Specs with no untrusted wrapper."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/audience_hunt.py",
+          "line": 575,
+          "scope": "run_audience_research_and_structure",
+          "description": "Research GenerateContentConfig attaches tools=[GoogleSearch()] with no argument validation."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/services/audience_hunt.py",
+          "line": 205,
+          "scope": "_safe_public_url",
+          "description": "Model-chosen group URLs are stored if they start with http:// or https://; internal hosts are not excluded. recommend_hold may set audience_hold."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/services/audience_hunt.py",
+          "line": 511,
+          "description": "audience_research_prompt embeds _lot_research_text after operational instructions."
+        },
+        {
+          "file": "backend/app/services/audience_hunt.py",
+          "line": 662,
+          "description": "payload recommend_hold true sets lot.audience_hold without a separate owner confirm object."
+        },
+        {
+          "file": "backend/app/services/roles.py",
+          "line": 76,
+          "description": "Hunt start remains owner-only; the gap is tool-argument binding, not the route gate."
+        }
+      ],
+      "blockers": [
+        "Gemini Google Search tool argument schema and whether grounding fetches listing-supplied URLs (including RFC1918 or metadata hosts) is a provider behavior not present in this repository.",
+        "No sandbox; live Search must not be invoked."
+      ],
+      "validation_plan": {
+        "local": "Unit-test _safe_public_url and parse_audience_payload with http://127.0.0.1/, http://169.254.169.254/, and https://facebook.com/groups/x. Assert internal hosts are currently kept. With a mocked generate_content, set lot.auction_title to a string containing an internal URL and assert the research prompt contains that string next to the Search tool config.",
+        "deployment": "Owner reviews Gemini Search grounding logs for one hunt on a dummy lot whose description contains a non-public URL, without targeting real internal services."
+      }
+    }
+  ],
+  "hardening": [
+    "Catalog photo bytes, original filenames, SKU, scene_note, and listing fields are concatenated into Gemini user prompts with no untrusted delimiter anywhere under backend/app. That is prompt-provenance hygiene, not a finding by itself.",
+    "TAPE_VERIFY_PROMPT_SUFFIX is operator environment text appended to tape-audit prompts; tenants cannot set it.",
+    "GOOGLE_API_KEY does not appear in prompt assembly, hunt/caption/appraiser contents, or logs as a value; only Client(api_key=) and x-goog-api-key. Keep it that way.",
+    "Audience hunt start is correctly owner-only; catalog /jobs/{id}/run is correctly allowed for catalogger and client on their jobs.",
+    "Label listing/OCR/filename/item_url as untrusted in every Gemini user part; allowlist ctbids.com for engagement URLs; apply the 40-photo cap to batch and facebook-channel uploads; add a per-account daily Gemini token/$ ceiling; require can_run_audience_hunt (or an equivalent) for appraiser and grounded valuation."
+  ],
+  "uncovered": []
+}

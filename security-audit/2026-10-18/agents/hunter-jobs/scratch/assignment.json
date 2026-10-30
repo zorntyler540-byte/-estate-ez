@@ -1,0 +1,173 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fjobs%2Fupload::backend%2Fapp%2Fupload_storage.py%23save_uploaded_files::backend%2Fapp::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "surface": "Multipart photo and video ingest",
+    "boundary": "Client or staff upload versus disk, R2, and Gemini spend",
+    "subsystem": "Catalog jobs",
+    "attack_class": "Resource and file handling",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/upload_storage.py",
+      "backend/app/catalog_limits.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Unbounded buffering and cardinality",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Decompression and representation amplification"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fjobs::backend%2Fapp%2Fservices%2Fprocessing.py%23folder.rglob::backend%2Fapp%2Fservices%2Fprocessing.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "surface": "Create catalog job with caller input_folder",
+    "boundary": "Authenticated catalogger versus host filesystem and Gemini",
+    "subsystem": "Catalog jobs",
+    "attack_class": "Resource and file handling",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/services/processing.py",
+      "backend/app/job_batch_storage.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fservices%2Fmeta_graph.py%23graph_request::backend%2Fapp%2Fservices%2Fmeta_graph.py%23path%20startswith%20http::backend%2Fapp%2Fservices%2Fmeta_graph.py::ATTACK-CLASSES.md%23Resource%20and%20file%20handling",
+    "surface": "Meta Graph helper URL construction",
+    "boundary": "Caller-controlled path versus server-side fetch",
+    "subsystem": "Facebook Page posting",
+    "attack_class": "Resource and file handling",
+    "starting_paths": [
+      "backend/app/services/meta_graph.py",
+      "backend/app/services/facebook_page.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "CLOUD-AND-DEPLOYMENT.md#Core discipline",
+      "CLOUD-AND-DEPLOYMENT.md#Universal moves",
+      "CLOUD-AND-DEPLOYMENT.md#Validation rules",
+      "CLOUD-AND-DEPLOYMENT.md#Metadata and internal-service reachability"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  }
+]
