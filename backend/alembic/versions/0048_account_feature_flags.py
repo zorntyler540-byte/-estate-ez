@@ -1,14 +1,14 @@
 """Auction Watcher switches on accounts.
 
-Revision ID: 0047_account_feature_flags
-Revises: 0046_ops_job_auction_sale_day
+Revision ID: 0048_account_feature_flags
+Revises: 0047_job_client_draft_id
 """
 
 from alembic import op
 from sqlalchemy import inspect, text
 
-revision = "0047_account_feature_flags"
-down_revision = "0046_ops_job_auction_sale_day"
+revision = "0048_account_feature_flags"
+down_revision = "0047_job_client_draft_id"
 branch_labels = None
 depends_on = None
 
