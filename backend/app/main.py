@@ -2061,6 +2061,56 @@ def list_saved_suggestions(
     return [SuggestionSavedOut(**r) for r in rows]
 
 
+def _inventory_counts_by_sale(db: Session, account_id: str) -> dict[str, tuple[int, int, int]]:
+    """Lot, job, and in-progress job counts keyed by sale id."""
+    lot_counts = {
+        sale_id: int(n)
+        for sale_id, n in (
+            db.query(Lot.sale_id, func.count(Lot.id))
+            .filter(Lot.account_id == account_id)
+            .group_by(Lot.sale_id)
+            .all()
+        )
+    }
+    job_counts = {
+        sale_id: int(n)
+        for sale_id, n in (
+            db.query(ProcessingJob.sale_id, func.count(ProcessingJob.id))
+            .filter(ProcessingJob.account_id == account_id)
+            .group_by(ProcessingJob.sale_id)
+            .all()
+        )
+    }
+    active = (JobStatus.receiving, JobStatus.queued, JobStatus.processing)
+    active_counts = {
+        sale_id: int(n)
+        for sale_id, n in (
+            db.query(ProcessingJob.sale_id, func.count(ProcessingJob.id))
+            .filter(ProcessingJob.account_id == account_id, ProcessingJob.status.in_(active))
+            .group_by(ProcessingJob.sale_id)
+            .all()
+        )
+    }
+    keys = set(lot_counts) | set(job_counts) | set(active_counts)
+    return {
+        sale_id: (lot_counts.get(sale_id, 0), job_counts.get(sale_id, 0), active_counts.get(sale_id, 0))
+        for sale_id in keys
+    }
+
+
+def _sales_out(db: Session, rows: list[Sale], account_id: str) -> list[SaleOut]:
+    counts = _inventory_counts_by_sale(db, account_id)
+    listed: list[SaleOut] = []
+    for row in rows:
+        item = _sale_out(row)
+        lot_n, job_n, active_n = counts.get(row.id, (0, 0, 0))
+        item.lot_count = lot_n
+        item.job_count = job_n
+        item.active_job_count = active_n
+        listed.append(item)
+    return listed
+
+
 @app.get("/sales", response_model=list[SaleOut])
 def list_sales(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[SaleOut]:
     q = db.query(Sale).filter(Sale.account_id == current.account_id)
@@ -2070,7 +2120,7 @@ def list_sales(current: User = Depends(get_current_user), db: Session = Depends(
             return []
         q = q.filter(Sale.id == assigned)
     rows = q.order_by(Sale.created_at.asc()).all()
-    return [_sale_out(r) for r in rows]
+    return _sales_out(db, rows, current.account_id)
 
 
 def _ctseller_remote_sale_outs(rows: list) -> list[CTSellerRemoteSaleOut]:
@@ -2093,7 +2143,7 @@ def _account_sales_out(db: Session, account_id: str) -> list[SaleOut]:
         .order_by(Sale.created_at.asc())
         .all()
     )
-    return [_sale_out(r) for r in rows]
+    return _sales_out(db, rows, account_id)
 
 
 @app.post("/sales/sync-from-ctseller", response_model=CtsellerSaleSyncOut)

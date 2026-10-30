@@ -4999,3 +4999,31 @@ a.ct-ops-list__row:hover {
     padding: 0;
   }
 }
+
+.ct-sale-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ct-sale-manage__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.ct-sale-manage__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 16rem;
+}
+
+.ct-sale-manage__actions .ct-input {
+  min-width: 11rem;
+  max-width: 16rem;
+}

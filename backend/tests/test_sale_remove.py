@@ -152,6 +152,54 @@ def test_remove_sale_purges_lots_and_drops_tab(tmp_path: Path) -> None:
         db.close()
 
 
+def test_list_sales_includes_lot_and_job_counts(tmp_path: Path) -> None:
+    Session = _session(tmp_path)
+    db = Session()
+    account, user, sale = _seed(db)
+    db.add(
+        Lot(
+            id="lot-count",
+            account_id=account.id,
+            user_id=user.id,
+            sale_id=sale.id,
+            sku="12",
+            auction_title="Chair",
+        )
+    )
+    db.add(
+        ProcessingJob(
+            id="job-count",
+            account_id=account.id,
+            user_id=user.id,
+            sale_id=sale.id,
+            status=JobStatus.queued,
+            input_folder="batch",
+        )
+    )
+    db.commit()
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.get("/sales")
+        assert res.status_code == 200, res.text
+        row = next(item for item in res.json() if item["id"] == "sale-old")
+        assert row["lot_count"] == 1
+        assert row["job_count"] == 1
+        assert row["active_job_count"] == 1
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
 def test_remove_sale_owner_only(tmp_path: Path) -> None:
     Session = _session(tmp_path)
     db = Session()

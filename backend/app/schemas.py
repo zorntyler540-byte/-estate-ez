@@ -282,6 +282,9 @@ class SaleOut(BaseModel):
     ctseller_sale_id: int | None = None
     ctseller_reserve_price: float | None = None
     created_at: datetime
+    lot_count: int = 0
+    job_count: int = 0
+    active_job_count: int = 0
 
 
 class SaleCreate(BaseModel):

@@ -68,6 +68,7 @@ const WATCHER_BLOCKED_PREFIXES = [
   "/operations",
   "/appraiser",
   "/tools",
+  "/sales",
   "/activity",
   "/facebook",
   "/client"
