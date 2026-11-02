@@ -2063,6 +2063,14 @@ export default function DashboardPage() {
   const [adminUsage, setAdminUsage] = useState<AdminUsageSummary | null>(null);
   const [adminUsageLoading, setAdminUsageLoading] = useState(false);
   const [adminUsageDays, setAdminUsageDays] = useState(30);
+  const [adminCreateName, setAdminCreateName] = useState("");
+  const [adminCreateEmail, setAdminCreateEmail] = useState("");
+  const [adminCreatePassword, setAdminCreatePassword] = useState("");
+  const [adminCreatePlan, setAdminCreatePlan] = useState("beta_free");
+  const [adminCreateAnalytics, setAdminCreateAnalytics] = useState(true);
+  const [adminCreateFacebook, setAdminCreateFacebook] = useState(true);
+  const [adminCreateBusy, setAdminCreateBusy] = useState(false);
+  const [adminCreateNotice, setAdminCreateNotice] = useState("");
   const [lots, setLots] = useState<Lot[]>([]);
   /** ``lot_id`` → count of catalog photos whose files are missing on the API host (from ``GET /sales/{id}/photo-health``). */
   const [photoHealthMissing, setPhotoHealthMissing] = useState<Record<string, number>>({});
@@ -5638,6 +5646,42 @@ export default function DashboardPage() {
     }
   }
 
+  async function createAdminAccount() {
+    if (!token) return;
+    const name = adminCreateName.trim();
+    const email = adminCreateEmail.trim().toLowerCase();
+    const password = adminCreatePassword;
+    if (name.length < 2 || !email || password.length < 8) return;
+    setAdminCreateBusy(true);
+    setAdminError("");
+    setAdminCreateNotice("");
+    try {
+      await apiFetch("/admin/accounts", token, {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          plan_code: adminCreatePlan,
+          feature_analytics: adminCreateAnalytics,
+          feature_facebook: adminCreateFacebook
+        })
+      });
+      setAdminCreateName("");
+      setAdminCreateEmail("");
+      setAdminCreatePassword("");
+      setAdminCreatePlan("beta_free");
+      setAdminCreateAnalytics(true);
+      setAdminCreateFacebook(true);
+      setAdminCreateNotice(`${email} can sign in with the password you set.`);
+      await refreshAdminAccounts();
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Could not create account");
+    } finally {
+      setAdminCreateBusy(false);
+    }
+  }
+
   async function refreshAdminAccounts() {
     if (!token || !adminLoadAttempted) return;
     setAdminError("");
@@ -6965,8 +7009,115 @@ export default function DashboardPage() {
         <section className="ct-dash-panel ct-dash-admin" aria-label="Master admin">
           <h2 className="ct-dash-panel__title">Master admin</h2>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
-            Full catalog keeps every tool. Auction Watcher can sign up on their own and only use the Push queue and Facebook posting. Turn those two switches off while a piece is still being wired up.
+            Create a franchise login here, or change one that already exists. Full catalog keeps every tool. Auction Watcher only uses the Push queue and Facebook posting, and those two switches can be turned off.
           </p>
+          {isMasterAdmin ? (
+            <form
+              className="ct-dash-admin__create"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void createAdminAccount();
+              }}
+            >
+              <h3 className="ct-dash-admin__stats-title">New account</h3>
+              <div className="ct-dash-admin__create-fields">
+                <div>
+                  <label className="ct-label" htmlFor="admin-create-name">
+                    Account name
+                  </label>
+                  <input
+                    id="admin-create-name"
+                    className="ct-input"
+                    value={adminCreateName}
+                    onChange={(e) => setAdminCreateName(e.target.value)}
+                    placeholder="Oak Street franchise"
+                    disabled={adminCreateBusy}
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="admin-create-email">
+                    Owner email
+                  </label>
+                  <input
+                    id="admin-create-email"
+                    className="ct-input"
+                    type="email"
+                    value={adminCreateEmail}
+                    onChange={(e) => setAdminCreateEmail(e.target.value)}
+                    placeholder="owner@example.com"
+                    disabled={adminCreateBusy}
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="admin-create-password">
+                    Temporary password
+                  </label>
+                  <input
+                    id="admin-create-password"
+                    className="ct-input"
+                    type="text"
+                    value={adminCreatePassword}
+                    onChange={(e) => setAdminCreatePassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                    disabled={adminCreateBusy}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              <div className="ct-dash-admin__create-access">
+                <label className="ct-label" htmlFor="admin-create-plan">
+                  Plan
+                </label>
+                <select
+                  id="admin-create-plan"
+                  className="ct-input"
+                  value={adminCreatePlan}
+                  onChange={(e) => setAdminCreatePlan(e.target.value)}
+                  disabled={adminCreateBusy}
+                >
+                  <option value="beta_free">Full catalog</option>
+                  <option value="watcher">Auction Watcher</option>
+                </select>
+                <label className="ct-dash-admin__check">
+                  <input
+                    type="checkbox"
+                    checked={adminCreateAnalytics}
+                    disabled={adminCreateBusy}
+                    onChange={(e) => setAdminCreateAnalytics(e.target.checked)}
+                  />
+                  Push queue
+                </label>
+                <label className="ct-dash-admin__check">
+                  <input
+                    type="checkbox"
+                    checked={adminCreateFacebook}
+                    disabled={adminCreateBusy}
+                    onChange={(e) => setAdminCreateFacebook(e.target.checked)}
+                  />
+                  Facebook posting
+                </label>
+                <button
+                  type="submit"
+                  className="ct-btn ct-btn--primary"
+                  disabled={
+                    adminCreateBusy ||
+                    adminCreateName.trim().length < 2 ||
+                    !adminCreateEmail.trim() ||
+                    adminCreatePassword.length < 8
+                  }
+                >
+                  {adminCreateBusy ? "Creating…" : "Create account"}
+                </button>
+              </div>
+              {adminCreateNotice ? (
+                <p className="ct-banner ct-banner--success" style={{ margin: "0.75rem 0 0" }}>
+                  {adminCreateNotice}
+                </p>
+              ) : null}
+            </form>
+          ) : null}
           <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.75rem" }}>
             <button
               type="button"

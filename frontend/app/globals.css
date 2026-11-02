@@ -2815,6 +2815,46 @@ select.ct-input option {
   color: var(--ct-text);
 }
 
+.ct-dash-admin__create {
+  margin-bottom: 0.85rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
+  border: 1px solid var(--ct-border);
+}
+
+.ct-dash-admin__create-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.ct-dash-admin__create-access {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+}
+
+.ct-dash-admin__create-access .ct-input {
+  width: 180px;
+}
+
+.ct-dash-admin__check {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.85rem;
+  padding-bottom: 0.45rem;
+}
+
+@media (max-width: 800px) {
+  .ct-dash-admin__create-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 .ct-dash-admin-table.ct-table-wrap {
   margin-bottom: 0;
 }

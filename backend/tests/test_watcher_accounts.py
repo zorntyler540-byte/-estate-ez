@@ -208,3 +208,150 @@ def test_admin_switches_limit_watcher_and_leave_full_catalog_open(tmp_path, monk
         db.close()
     finally:
         _clear()
+
+
+def test_master_admin_can_create_full_and_watcher_accounts(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "master_admin_emails", "")
+    monkeypatch.setattr(settings, "allow_open_registration", True)
+    client, Session = _client(tmp_path, monkeypatch)
+    try:
+        admin = client.post(
+            "/auth/register",
+            json={"account_name": "Estate-EZ", "email": "boss@example.com", "password": "password1"},
+        )
+        assert admin.status_code == 200, admin.text
+        monkeypatch.setattr(settings, "master_admin_emails", "boss@example.com")
+        admin_headers = _auth(admin.json()["access_token"])
+
+        stranger = client.post(
+            "/auth/register-watcher",
+            json={"account_name": "Other", "email": "other@example.com", "password": "password1"},
+        )
+        assert stranger.status_code == 200, stranger.text
+        denied = client.post(
+            "/admin/accounts",
+            headers=_auth(stranger.json()["access_token"]),
+            json={
+                "name": "Nope",
+                "email": "nope@example.com",
+                "password": "password1",
+                "plan_code": "beta_free",
+            },
+        )
+        assert denied.status_code == 403
+
+        reserved = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Reserved",
+                "email": "boss@example.com",
+                "password": "password1",
+                "plan_code": "beta_free",
+            },
+        )
+        assert reserved.status_code == 400
+
+        bad_plan = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Bad Plan",
+                "email": "bad-plan@example.com",
+                "password": "password1",
+                "plan_code": "enterprise",
+            },
+        )
+        assert bad_plan.status_code == 400
+
+        full = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Oak Street",
+                "email": "oak@example.com",
+                "password": "franchise1",
+                "plan_code": "beta_free",
+                "feature_analytics": False,
+                "feature_facebook": False,
+            },
+        )
+        assert full.status_code == 201, full.text
+        full_body = full.json()
+        assert full_body["name"] == "Oak Street"
+        assert full_body["owner_email"] == "oak@example.com"
+        assert full_body["plan_code"] == "beta_free"
+        assert full_body["sale_count"] == 1
+        assert "password" not in full_body
+        assert "access_token" not in full_body
+
+        signed_in = client.post(
+            "/auth/login",
+            json={"email": "oak@example.com", "password": "franchise1"},
+        )
+        assert signed_in.status_code == 200, signed_in.text
+        oak_headers = _auth(signed_in.json()["access_token"])
+        oak_me = client.get("/auth/me", headers=oak_headers).json()
+        assert oak_me["role"] == "owner"
+        assert oak_me["plan_code"] == "beta_free"
+        assert oak_me["feature_analytics"] is True
+        assert oak_me["feature_facebook"] is True
+        sales = client.get("/sales", headers=oak_headers)
+        assert sales.status_code == 200, sales.text
+        assert [row["name"] for row in sales.json()] == ["General"]
+
+        duplicate = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Oak Again",
+                "email": "oak@example.com",
+                "password": "franchise1",
+                "plan_code": "beta_free",
+            },
+        )
+        assert duplicate.status_code == 400
+
+        watcher = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Push Only",
+                "email": "push@example.com",
+                "password": "watcherpass",
+                "plan_code": "watcher",
+                "feature_analytics": True,
+                "feature_facebook": False,
+            },
+        )
+        assert watcher.status_code == 201, watcher.text
+        assert watcher.json()["plan_code"] == "watcher"
+        assert watcher.json()["sale_count"] == 0
+        assert watcher.json()["feature_facebook"] is False
+
+        watcher_login = client.post(
+            "/auth/login",
+            json={"email": "push@example.com", "password": "watcherpass"},
+        )
+        assert watcher_login.status_code == 200, watcher_login.text
+        watcher_headers = _auth(watcher_login.json()["access_token"])
+        assert client.get("/engagement/sales", headers=watcher_headers).status_code == 200
+        hidden_fb = client.get("/integrations/facebook/status", headers=watcher_headers)
+        assert hidden_fb.status_code == 403
+        assert client.get("/sales", headers=watcher_headers).status_code == 403
+
+        db = Session()
+        oak = db.query(Account).filter(Account.name == "Oak Street").one()
+        assert oak.feature_analytics is False
+        assert oak.feature_facebook is False
+        assert db.query(User).filter(User.email == "boss@example.com").one().account_id != oak.id
+        db.close()
+
+        listed = client.get("/admin/accounts", headers=admin_headers)
+        emails = {row["owner_email"] for row in listed.json()}
+        assert "oak@example.com" in emails
+        assert "push@example.com" in emails
+    finally:
+        _clear()

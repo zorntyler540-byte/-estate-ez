@@ -152,6 +152,7 @@ from app.schemas import (
     SoldDocketItemOut,
     SoldCategoryRollupOut,
     AdminAccountOut,
+    AdminAccountCreateIn,
     AdminAccountUpdateIn,
     AdminUsageAccountOut,
     AdminUsageSummaryOut,
@@ -1116,7 +1117,7 @@ def health() -> HealthResponse:
     )
 
 
-def _open_owner_account(
+def _create_owner_account(
     db: Session,
     *,
     account_name: str,
@@ -1124,7 +1125,9 @@ def _open_owner_account(
     password: str,
     plan_code: str,
     create_sale: bool,
-) -> TokenResponse:
+    feature_analytics: bool = True,
+    feature_facebook: bool = True,
+) -> tuple[Account, User]:
     email = email.lower()
     if is_reserved_master_admin_email(email):
         raise HTTPException(
@@ -1138,8 +1141,8 @@ def _open_owner_account(
         name=account_name.strip(),
         plan_code=plan_code,
         is_active=True,
-        feature_analytics=True,
-        feature_facebook=True,
+        feature_analytics=feature_analytics,
+        feature_facebook=feature_facebook,
     )
     db.add(account)
     db.flush()
@@ -1158,6 +1161,28 @@ def _open_owner_account(
     if create_sale:
         db.add(Sale(account_id=account.id, user_id=user.id, name="General"))
     db.commit()
+    db.refresh(account)
+    db.refresh(user)
+    return account, user
+
+
+def _open_owner_account(
+    db: Session,
+    *,
+    account_name: str,
+    email: str,
+    password: str,
+    plan_code: str,
+    create_sale: bool,
+) -> TokenResponse:
+    account, user = _create_owner_account(
+        db,
+        account_name=account_name,
+        email=email,
+        password=password,
+        plan_code=plan_code,
+        create_sale=create_sale,
+    )
     token = create_access_token(user.id, account.id, user.role, token_version=token_version_of(user))
     return TokenResponse(access_token=token)
 
@@ -1746,6 +1771,32 @@ def _admin_account_out(db: Session, row: Account) -> AdminAccountOut:
         lot_count=int(lot_count),
         job_count=int(job_count),
     )
+
+
+@app.post("/admin/accounts", response_model=AdminAccountOut, status_code=status.HTTP_201_CREATED)
+def admin_create_account(
+    payload: AdminAccountCreateIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminAccountOut:
+    _require_master_admin(current)
+    code = payload.plan_code.strip().lower()
+    if code not in ASSIGNABLE_PLANS:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan must be Full catalog or Auction Watcher.",
+        )
+    account, _owner = _create_owner_account(
+        db,
+        account_name=payload.name,
+        email=str(payload.email),
+        password=payload.password,
+        plan_code=code,
+        create_sale=code != PLAN_WATCHER,
+        feature_analytics=payload.feature_analytics,
+        feature_facebook=payload.feature_facebook,
+    )
+    return _admin_account_out(db, account)
 
 
 @app.get("/admin/accounts", response_model=list[AdminAccountOut])
