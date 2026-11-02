@@ -249,6 +249,15 @@ class AdminAccountUpdateIn(BaseModel):
     feature_facebook: bool | None = None
 
 
+class AdminAccountCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    plan_code: str = Field(default="beta_free", min_length=2, max_length=40)
+    feature_analytics: bool = True
+    feature_facebook: bool = True
+
+
 class AdminUsageAccountOut(BaseModel):
     account_id: str
     account_name: str
