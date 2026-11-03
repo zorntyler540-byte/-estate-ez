@@ -17,7 +17,13 @@ from app.core.gemini_retry import (
     parse_catalog_retry_attempt,
     parse_retry_after,
 )
-from app.core.gemini_slots import generate_content, model_family, reset_gemini_slots_for_tests
+from app.core.gemini_slots import (
+    generate_content,
+    gemini_slot,
+    limiter_poll_seconds,
+    model_family,
+    reset_gemini_slots_for_tests,
+)
 
 
 class _HTTPError(Exception):
@@ -123,6 +129,58 @@ def test_generate_content_retries_429_then_succeeds(monkeypatch) -> None:
     assert out.text == "ok"
     assert calls["n"] == 3
     assert len(sleeps) == 2
+
+
+def test_limiter_poll_seconds_backs_off_from_200ms_to_2s() -> None:
+    rng = random.Random(0)
+    delays = [limiter_poll_seconds(attempt, rng=rng) for attempt in range(6)]
+    assert delays[0] >= 0.2
+    assert delays[0] < 0.3
+    assert delays[1] >= 0.4
+    assert delays[2] >= 0.8
+    assert delays[3] >= 1.6
+    assert delays[4] == pytest.approx(2.0, abs=0.01)
+    assert delays[5] == pytest.approx(2.0, abs=0.01)
+    assert all(d <= 2.0 for d in delays)
+    assert all(d >= 0.2 for d in delays)
+
+
+def test_gemini_slot_pg_wait_uses_backoff_not_50ms(monkeypatch) -> None:
+    reset_gemini_slots_for_tests()
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.core.gemini_slots.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        "app.core.gemini_slots.limiter_poll_seconds",
+        lambda attempt, **k: 0.2 * (2 ** attempt),
+    )
+
+    attempts = {"n": 0}
+
+    def _acquire(_conn, _cap):
+        attempts["n"] += 1
+        if attempts["n"] < 4:
+            return None
+        return 0
+
+    class _Conn:
+        def close(self) -> None:
+            return None
+
+    class _Engine:
+        def connect(self) -> _Conn:
+            return _Conn()
+
+    monkeypatch.setattr("app.core.gemini_slots._get_lock_engine", lambda: _Engine())
+    monkeypatch.setattr("app.core.gemini_slots._acquire_pg_slot", _acquire)
+    monkeypatch.setattr("app.core.gemini_slots._release_pg_slot", lambda *a, **k: None)
+    monkeypatch.setattr("app.core.gemini_slots.wait_for_model_quota", lambda *a, **k: None)
+
+    with gemini_slot("gemini-2.5-flash"):
+        pass
+
+    assert sleeps == [0.2, 0.4, 0.8]
+    assert min(sleeps) >= 0.2
+    assert 0.05 not in sleeps
 
 
 def test_generate_content_marks_retryable_after_exhausted_attempts(monkeypatch) -> None:

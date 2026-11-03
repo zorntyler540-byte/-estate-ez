@@ -14,6 +14,7 @@ from sqlalchemy import func, text, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.catalog_crash import processing_error_message_preserving_crash
 from app.core.gemini import verify_tape_sku
 from app.core.lotting import (
     LotOutput,
@@ -165,27 +166,61 @@ def _heartbeat_job(db: Session, job: ProcessingJob) -> None:
     db.commit()
 
 
-def _single_lot_batch_already_cataloged(
+def _photo_names(photo_paths: list[Path]) -> list[str]:
+    return [p.name for p in photo_paths if p.name]
+
+
+def _sale_lot_photos_by_name(db: Session, job: ProcessingJob, names: list[str]) -> dict[str, Photo]:
+    """Existing lot-linked photos on this sale, keyed by original filename (first wins)."""
+    if not names:
+        return {}
+    rows = (
+        db.query(Photo)
+        .join(Lot, Photo.lot_id == Lot.id)
+        .filter(
+            Lot.sale_id == job.sale_id,
+            Lot.account_id == job.account_id,
+            Photo.account_id == job.account_id,
+            Photo.original_name.in_(names),
+        )
+        .all()
+    )
+    found: dict[str, Photo] = {}
+    for row in rows:
+        if row.original_name and row.original_name not in found:
+            found[str(row.original_name)] = row
+    return found
+
+
+def _unlinked_job_photos_by_name(db: Session, job: ProcessingJob, names: list[str]) -> dict[str, Photo]:
+    """Unlinked leftovers from this job (same account + name, created at/after the job)."""
+    if not names:
+        return {}
+    q = db.query(Photo).filter(
+        Photo.account_id == job.account_id,
+        Photo.lot_id.is_(None),
+        Photo.original_name.in_(names),
+    )
+    created_after = job.created_at
+    if created_after is not None:
+        if created_after.tzinfo is None:
+            created_after = created_after.replace(tzinfo=timezone.utc)
+        q = q.filter(Photo.created_at >= created_after)
+    found: dict[str, Photo] = {}
+    for row in q.order_by(Photo.created_at.asc()).all():
+        if row.original_name and row.original_name not in found:
+            found[str(row.original_name)] = row
+    return found
+
+
+def _names_already_on_one_lot(
     db: Session,
     job: ProcessingJob,
-    photo_paths: list[Path],
+    names: list[str],
     *,
     same_sale: bool = False,
 ) -> bool:
-    """True when this Add-one-lot upload already produced catalog rows.
-
-    Default (``same_sale=False``) only looks at lots created at/after this job — used mid-pipeline
-    so we do not treat photos just inserted by *this* run as a prior listing.
-
-    ``same_sale=True`` looks at the whole sale. Use that *before* Gemini so a Sync retry / Resend
-    of the same ``mobile-<draft>-NN.jpg`` names does not pay for a second catalog pass.
-    """
-    if not bool(getattr(job, "single_lot_mode", False)) or not photo_paths:
-        return False
-    db.refresh(job)
-    if job.status == JobStatus.completed:
-        return True
-    names = [p.name for p in photo_paths if p.name]
+    """True when every name already sits on a single lot in this sale."""
     if not names:
         return False
     needed = set(names)
@@ -211,12 +246,89 @@ def _single_lot_batch_already_cataloged(
     return any(found >= needed for found in by_lot.values())
 
 
+def job_photos_already_cataloged_on_sale(
+    db: Session,
+    job: ProcessingJob,
+    photo_paths: list[Path],
+) -> bool:
+    """True when every input filename already sits on a lot in this sale (any number of lots).
+
+    Batch retries use this so completed lots are not Gemini'd again. Names split across lots
+    still count as cataloged — creating another lot would duplicate spend and the daily cap.
+    """
+    db.refresh(job)
+    if job.status == JobStatus.completed:
+        return True
+    names = _photo_names(photo_paths)
+    if not names:
+        return False
+    found = _sale_lot_photos_by_name(db, job, names)
+    return set(names) <= set(found)
+
+
+def _batch_segment_already_cataloged(
+    db: Session,
+    job: ProcessingJob,
+    photo_paths: list[Path],
+) -> bool:
+    """True when this tape-SKU segment already produced one lot on the sale."""
+    return _names_already_on_one_lot(db, job, _photo_names(photo_paths), same_sale=True)
+
+
+def _single_lot_batch_already_cataloged(
+    db: Session,
+    job: ProcessingJob,
+    photo_paths: list[Path],
+    *,
+    same_sale: bool = False,
+) -> bool:
+    """True when this Add-one-lot upload already produced catalog rows.
+
+    Default (``same_sale=False``) only looks at lots created at/after this job — used mid-pipeline
+    so we do not treat photos just inserted by *this* run as a prior listing.
+
+    ``same_sale=True`` looks at the whole sale. Use that *before* Gemini so a Sync retry / Resend
+    of the same ``mobile-<draft>-NN.jpg`` names does not pay for a second catalog pass.
+    """
+    if not bool(getattr(job, "single_lot_mode", False)) or not photo_paths:
+        return False
+    db.refresh(job)
+    if job.status == JobStatus.completed:
+        return True
+    names = _photo_names(photo_paths)
+    if not names:
+        return False
+    return _names_already_on_one_lot(db, job, names, same_sale=same_sale)
+
+
 def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
     job.status = JobStatus.completed
     job.cancel_requested = False
     job.error_message = None
     db.commit()
     _emit_job(job, {"type": "status", "status": "completed"})
+
+
+def _apply_listing_attrs_to_photo(
+    row: Photo,
+    *,
+    photo_role: str | None,
+    attrs: PhotoListingAttrs | None,
+) -> None:
+    listing = attrs or PhotoListingAttrs(photo_role=photo_role)
+    role = listing.photo_role if listing.photo_role is not None else photo_role
+    if role is not None:
+        row.photo_role = normalize_catalog_photo_role(role)
+    if listing.distinct_item_id is not None:
+        row.distinct_item_id = listing.distinct_item_id
+    if listing.is_primary_front is not None:
+        row.is_primary_front = listing.is_primary_front
+    if listing.shows_whole_lot is not None:
+        row.shows_whole_lot = listing.shows_whole_lot
+    if listing.shows_measuring_scale is not None:
+        row.shows_measuring_scale = listing.shows_measuring_scale
+    if listing.label_legibility is not None:
+        row.label_legibility = listing.label_legibility
 
 
 def _add_catalog_photo(
@@ -227,7 +339,17 @@ def _add_catalog_photo(
     photo_role: str | None = None,
     attrs: PhotoListingAttrs | None = None,
 ) -> Photo:
-    """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``."""
+    """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``.
+
+    Retries reuse unlinked leftovers from this job (same original_name) so a mid-persist
+    crash cannot insert duplicate Photo rows or double-count the daily photo cap.
+    """
+    existing = _unlinked_job_photos_by_name(db, job, [photo_path.name]).get(photo_path.name)
+    if existing is not None:
+        _apply_listing_attrs_to_photo(existing, photo_role=photo_role, attrs=attrs)
+        db.flush()
+        return existing
+
     photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
     listing = attrs or PhotoListingAttrs(photo_role=photo_role)
     from app.services.photo_captured_at import captured_at_from_path
@@ -604,6 +726,16 @@ def _process_job_batch_pipeline(
     cancel_event: threading.Event | None = None,
 ) -> None:
     """Choose photos / folder batch: triage once, split on tape SKU, pipeline each lot."""
+    already = _sale_lot_photos_by_name(db, job, _photo_names(photos))
+    photos = [p for p in photos if p.name not in already]
+    if not photos:
+        _LOG.info(
+            "batch pipeline skipped — all photos already cataloged on this sale job_id=%s",
+            job.id,
+        )
+        _finish_job_completed(db, job)
+        return
+
     total_photos = len(photos)
     _emit_job(job, {"type": "batch_start", "total_photos": total_photos, "phase": "pipeline"})
 
@@ -668,6 +800,15 @@ def _process_job_batch_pipeline(
         seg_entries = list(segment)
         seg_paths = [p for p, _k in seg_entries]
         seg_triage = [triage_by_key[k] for _p, k in seg_entries if k in triage_by_key]
+        if _batch_segment_already_cataloged(db, job, seg_paths):
+            _LOG.info(
+                "batch segment skipped — already cataloged job_id=%s seg=%s photos=%d",
+                job.id,
+                seg_idx,
+                len(seg_paths),
+            )
+            lots_saved += 1
+            continue
 
         try:
             lot, pipeline_result = run_single_lot_pipeline(
@@ -900,7 +1041,8 @@ def _process_job_body(
 
     retry_prior = parse_catalog_retry_attempt(job.error_message)
     job.status = JobStatus.processing
-    job.error_message = None
+    # Crash markers must survive this start so a later child OOM can increment the cap.
+    job.error_message = processing_error_message_preserving_crash(job.error_message)
     job.cancel_requested = False
     job.analyzed_photos = 0
     job.failed_photos = 0
@@ -982,7 +1124,7 @@ def _process_job_body(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    if _single_lot_batch_already_cataloged(db, job, photos, same_sale=True):
+    if job_photos_already_cataloged_on_sale(db, job, photos):
         _LOG.info(
             "process_job skipped — same photos already cataloged in this sale job_id=%s photos=%d",
             job.id,

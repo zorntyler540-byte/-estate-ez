@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
     # One worker process may run this many isolated catalog jobs at once (child-process pool).
     worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
+    # After this many isolated-child deaths (OOM / SIGKILL) the job is marked failed, not re-queued.
+    worker_child_crash_retries: int = Field(default=3, ge=1, le=10, alias="WORKER_CHILD_CRASH_RETRIES")
+    # Parent kills a child whose RSS exceeds this (MB). 0 disables. 3×1200 MB fits a 4 GB replica.
+    worker_child_rss_mb: int = Field(default=1200, ge=0, le=8192, alias="WORKER_CHILD_RSS_MB")
+    # Optional hard virtual-size cap on the child (MB) via RLIMIT_AS. 0 disables (RSS guard is primary).
+    worker_child_as_mb: int = Field(default=0, ge=0, le=8192, alias="WORKER_CHILD_AS_MB")
     # Per-account catalog spend brakes (Gemini runs on the shared operator key).
     catalog_max_queued_jobs_per_account: int = Field(
         default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"
@@ -122,7 +128,8 @@ class Settings(BaseSettings):
     gemini_image_max_edge: int = Field(default=2048, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=85, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     # In-memory pipeline copies (triage/gallery/Pro). Keep well below catalog 4096px originals.
-    pipeline_working_max_edge: int = Field(default=1600, ge=256, le=4096, alias="PIPELINE_WORKING_MAX_EDGE")
+    # 1280px keeps 3 concurrent jobs inside a 4 GB worker (one Oct 19 job decoded ~3 GB at 1600/4096).
+    pipeline_working_max_edge: int = Field(default=1280, ge=256, le=4096, alias="PIPELINE_WORKING_MAX_EDGE")
     pipeline_working_jpeg_quality: int = Field(
         default=80, ge=40, le=95, alias="PIPELINE_WORKING_JPEG_QUALITY"
     )

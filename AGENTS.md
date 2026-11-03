@@ -55,6 +55,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   The worker claims with `FOR UPDATE SKIP LOCKED`, round-robins across accounts, and runs up to
   `WORKER_MAX_CONCURRENT_JOBS` isolated children (default 3). Keep `CATALOG_JOB_MAX_CONCURRENT=1`
   per franchise. Gemini HTTP is capped cross-process (`GEMINI_GLOBAL_CONCURRENCY` + per-model RPM).
+  Isolated-child OOM/crash is capped (`WORKER_CHILD_CRASH_RETRIES`, default 3) and listed by
+  `/jobs/stuck`. Parent RSS kill (`WORKER_CHILD_RSS_MB=1200`) plus 1280px working images keep 3
+  jobs inside a 4 GB replica. Retries skip already-cataloged lot photos and reuse unlinked leftovers.
 - **R2 must be configured on BOTH the API and the worker, pointing at the same bucket**
   (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`). Because the services don't
   share a disk, an uploaded batch only reaches the worker via R2 (`job-batches/{account}/{batch}/…`).
