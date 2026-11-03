@@ -21,8 +21,8 @@ from app.db import SessionLocal
 from app.job_queue import claim_queued_job
 from app.models import JobStatus, Lot, ProcessingJob, Sale
 from app.services import job_events
+from app.job_lock import job_advisory_lock_key
 from app.services.mobile_drafts import cataloged_mobile_draft_ids, mobile_draft_id_from_original_name
-from app.services.processing import process_job
 
 _LOG = logging.getLogger(__name__)
 
@@ -228,8 +228,6 @@ def _orphaned_processing_lock_is_free(db, job_id: str) -> bool:
     if dialect != "postgresql":
         return True
     try:
-        from app.services.processing import job_advisory_lock_key
-
         key = job_advisory_lock_key(str(job_id))
         got = bool(db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
         if not got:
@@ -728,6 +726,8 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
             if job is None or job.status not in (JobStatus.queued, JobStatus.processing):
                 return
             try:
+                from app.services.processing import process_job
+
                 process_job(db, job, cancel_event=cancel_ev)
             except Exception as exc:
                 tb = traceback.format_exc()

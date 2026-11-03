@@ -184,7 +184,8 @@ Common optional variables:
 | `RUN_CATALOG_JOBS_IN_PROCESS` | `false` on the production API |
 | `WORKER_MAX_CONCURRENT_JOBS` | Isolated catalog children per worker (default 3) |
 | `WORKER_CHILD_CRASH_RETRIES` | Child OOM/crash cap before the job is failed (default 3) |
-| `WORKER_CHILD_RSS_MB` | Parent kills a child over this RSS (default 1200; 0 disables) |
+| `WORKER_CHILD_RSS_MB` | Parent kills a runaway child over this RSS (default 3000; 1200 is too low) |
+| `WORKER_CHILD_AS_MB` | Child `RLIMIT_AS` in MB, sized with the RSS cap (default 3000; 0 disables) |
 | `CATALOG_JOB_MAX_CONCURRENT` | Per-account catalog cap (default 1) |
 | `GEMINI_GLOBAL_CONCURRENCY` | Cross-process Gemini HTTP cap (default 8) |
 | `META_APP_ID` / `META_APP_SECRET` | Facebook Page connect/post |

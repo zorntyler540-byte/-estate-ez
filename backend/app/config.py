@@ -107,10 +107,11 @@ class Settings(BaseSettings):
     worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
     # After this many isolated-child deaths (OOM / SIGKILL) the job is marked failed, not re-queued.
     worker_child_crash_retries: int = Field(default=3, ge=1, le=10, alias="WORKER_CHILD_CRASH_RETRIES")
-    # Parent kills a child whose RSS exceeds this (MB). 0 disables. 3×1200 MB fits a 4 GB replica.
-    worker_child_rss_mb: int = Field(default=1200, ge=0, le=8192, alias="WORKER_CHILD_RSS_MB")
-    # Optional hard virtual-size cap on the child (MB) via RLIMIT_AS. 0 disables (RSS guard is primary).
-    worker_child_as_mb: int = Field(default=0, ge=0, le=8192, alias="WORKER_CHILD_AS_MB")
+    # Parent SIGKILLs an isolated child over this RSS (MiB). 0 disables. A 3-photo lot
+    # already peaked over 1.2 GB, so 1200 is too low — 3000 is the floor.
+    worker_child_rss_mb: int = Field(default=3000, ge=0, le=8192, alias="WORKER_CHILD_RSS_MB")
+    # Hard virtual-size cap on the child (MB) via RLIMIT_AS. Sized with the RSS cap. 0 disables.
+    worker_child_as_mb: int = Field(default=3000, ge=0, le=8192, alias="WORKER_CHILD_AS_MB")
     # Per-account catalog spend brakes (Gemini runs on the shared operator key).
     catalog_max_queued_jobs_per_account: int = Field(
         default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"

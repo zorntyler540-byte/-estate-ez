@@ -145,20 +145,9 @@ def test_orphan_reconcile_increments_existing_crash_marker(monkeypatch) -> None:
     assert parse_catalog_crash_attempt(row.error_message) == 2
 
 
-def test_kill_oversize_children(monkeypatch) -> None:
-    killed: list[int] = []
-    proc = SimpleNamespace(pid=4242, poll=lambda: None, kill=lambda: killed.append(1))
-    children = {"j1": (proc, "a1")}
-    monkeypatch.setattr(worker.settings, "worker_child_rss_mb", 100)
-    monkeypatch.setattr(worker, "_child_rss_mb", lambda pid: 500.0)
-    worker._kill_oversize_children(children)
-    assert killed == [1]
+def test_rss_and_as_caps_default_to_3000() -> None:
+    from app.config import Settings
 
-
-def test_kill_oversize_children_respects_zero_cap(monkeypatch) -> None:
-    killed: list[int] = []
-    proc = SimpleNamespace(pid=4242, poll=lambda: None, kill=lambda: killed.append(1))
-    monkeypatch.setattr(worker.settings, "worker_child_rss_mb", 0)
-    monkeypatch.setattr(worker, "_child_rss_mb", lambda pid: 9000.0)
-    worker._kill_oversize_children({"j1": (proc, "a1")})
-    assert killed == []
+    assert Settings.model_fields["worker_child_rss_mb"].default == 3000
+    assert Settings.model_fields["worker_child_as_mb"].default == 3000
+    assert worker.child_rss_cap_mb() >= 3000

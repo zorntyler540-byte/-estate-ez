@@ -19,5 +19,8 @@ RUN mkdir -p backend/data/uploads
 WORKDIR /app/backend
 ENV PYTHONUNBUFFERED=1
 ENV RUN_CATALOG_JOBS_IN_PROCESS=true
+# glibc creates one malloc arena per thread; catalog children use thread pools.
+# Two arenas return RSS to the OS after the child exits (see malloc_trim).
+ENV MALLOC_ARENA_MAX=2
 
 CMD ["python", "-m", "app.worker"]

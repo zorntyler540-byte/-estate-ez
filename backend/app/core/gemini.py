@@ -52,6 +52,23 @@ def _shutdown_tape_verify_pool() -> None:
         _tape_verify_pool = None
 
 
+def close_genai_client() -> None:
+    """Drop the cached SDK client so an isolated child can exit cleanly."""
+    global _genai_client
+    client = _genai_client
+    _genai_client = None
+    if client is None:
+        return
+    for name in ("close", "aclose"):
+        fn = getattr(client, name, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            return
+
+
 atexit.register(_shutdown_tape_verify_pool)
 
 
