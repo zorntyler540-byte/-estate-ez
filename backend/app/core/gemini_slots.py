@@ -128,6 +128,20 @@ def _semaphore() -> threading.Semaphore:
     return _sem
 
 
+def close_lock_engine() -> None:
+    """Dispose the extra NullPool engine used for advisory locks (isolated child exit)."""
+    global _lock_engine, _lock_engine_failed, _table_ready
+    engine = _lock_engine
+    _lock_engine = None
+    _lock_engine_failed = False
+    _table_ready = False
+    if engine is not None:
+        try:
+            engine.dispose()
+        except Exception:  # noqa: BLE001
+            _LOG.debug("gemini lock engine dispose failed", exc_info=True)
+
+
 def reset_gemini_slots_for_tests() -> None:
     """Drop cached semaphore / in-memory windows (unit tests only)."""
     global _sem, _table_ready, _lock_engine, _lock_engine_failed
@@ -135,8 +149,7 @@ def reset_gemini_slots_for_tests() -> None:
         _sem = None
     with _rate_lock:
         _rate_windows.clear()
-    _table_ready = False
-    _lock_engine = None
+    close_lock_engine()
     _lock_engine_failed = False
 
 

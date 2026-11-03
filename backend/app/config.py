@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     pipeline_triage_parallel: int = Field(default=2, ge=1, le=8, alias="PIPELINE_TRIAGE_PARALLEL")
     # Dedicated worker: run each catalog job in a child process so RSS drops when it exits.
     worker_isolate_jobs: bool = Field(default=True, alias="WORKER_ISOLATE_JOBS")
+    # Parent SIGKILLs an isolated child over this RSS (MiB). 0 disables. Job 2 of the
+    # 2026-11-03 idle-leak test peaked over 1.2 GB, so 1200 is too low — 3000 is the floor.
+    worker_child_rss_mb: int = Field(default=3000, ge=0, le=8192, alias="WORKER_CHILD_RSS_MB")
     # Parallel CT Seller photo upload (download/resize/POST). Keep modest — unofficial API + 2 GB API RAM.
     ctseller_post_photo_workers: int = Field(default=4, ge=1, le=8, alias="CTSELLER_POST_PHOTO_WORKERS")
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
