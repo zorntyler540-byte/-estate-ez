@@ -156,6 +156,22 @@ def test_failed_orphan_wording_is_stuck_gemini_is_not(tmp_path: Path) -> None:
     assert job_tasks.is_stuck_job(cancelled) is False
 
 
+def test_failed_child_crash_exhausted_is_stuck(tmp_path: Path) -> None:
+    db = _session(tmp_path)
+    crash = _add_job(
+        db,
+        job_id="fail-crash",
+        status=JobStatus.failed,
+        age=timedelta(minutes=2),
+        error=(
+            "Worker child crashed 3 times (OOM or unexpected exit). isolated worker child exited "
+            "Use Retry failed after reducing lot size or photo count."
+        ),
+    )
+    assert job_tasks.is_stuck_job(crash) is True
+    assert job_tasks.failed_job_can_retry(crash) is True
+
+
 def test_completed_jobs_are_never_stuck(tmp_path: Path) -> None:
     db = _session(tmp_path)
     done = _add_job(db, job_id="done", status=JobStatus.completed, age=timedelta(hours=5))

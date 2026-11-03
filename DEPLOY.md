@@ -158,18 +158,20 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
    - `WORKER_MAX_CONCURRENT_JOBS=3` — one replica runs up to 3 isolated child processes
    - `CATALOG_JOB_MAX_CONCURRENT=1` — per-account cap (fair round-robin across franchises)
    - `GEMINI_GLOBAL_CONCURRENCY=8` — cross-process Gemini HTTP cap (advisory locks)
-   - `WORKER_POLL_SECONDS=2`
+   - `WORKER_CHILD_CRASH_RETRIES=3` — isolated-child OOM/crash cap; then the job is failed and listed by `/jobs/stuck`
    - `WORKER_CHILD_RSS_MB=3000` — parent SIGKILLs a runaway child (do **not** use 1200; a 3-photo lot already exceeded 1.2 GB)
+   - `WORKER_CHILD_AS_MB=3000` — child `RLIMIT_AS` in MB, sized with the RSS cap (0 disables)
+   - `WORKER_POLL_SECONDS=2`
 6. **Memory limits (required for cost):** Railway bills RAM while the replica is sized large. Cataloging used to spike to 20–32 GB. Cap services so one location does not cost ~$10/GB-month:
 
 | Service | Memory limit | Notes |
 |---------|----------------|-------|
 | Web | 1 GB | Next.js |
 | API | 2 GB | Set `RUN_CATALOG_JOBS_IN_PROCESS=false` so Gemini is not on this box |
-| Worker | 4 GB | Isolated children exit after each job; idle parent should stay under 300 MB. Peak child RSS on a 3-photo lot exceeded 1.2 GB. |
+| Worker | 4 GB | Isolated children exit after each job; idle parent should stay under 300 MB. Peak child RSS on a 3-photo lot exceeded 1.2 GB. RSS cap 3000 MB + 1280px working images. |
 | Postgres | host default | Do not bump this for cataloging |
 
-Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, keep `PIPELINE_TRIAGE_PARALLEL=2` and `PIPELINE_WORKING_MAX_EDGE=1600` (defaults). `WORKER_ISOLATE_JOBS=true` is the default.
+Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, keep `PIPELINE_TRIAGE_PARALLEL=2` and `PIPELINE_WORKING_MAX_EDGE=1280` (defaults). `WORKER_ISOLATE_JOBS=true` is the default. A child that still dies is re-queued with a `[catalog-crash N/3]` marker; after `WORKER_CHILD_CRASH_RETRIES` it is marked failed (`Worker child crashed N times`) and `/jobs/stuck` surfaces it. Retries skip photos already on lots in that sale and reuse unlinked leftover Photo rows so Gemini is not billed twice and the daily photo cap is not double-counted.
 
 **Multiple worker replicas:** 2 replicas is enough for ~5 franchises (`WORKER_MAX_CONCURRENT_JOBS=3` each). Claiming uses `FOR UPDATE SKIP LOCKED` plus the existing per-job advisory lock. Gemini RPM/concurrency is shared via Postgres so two replicas cannot double the API-key budget. Do not run 3+ replicas until you raise `GEMINI_GLOBAL_CONCURRENCY` / Flash+Pro RPM env vars — they default to ~50% of current pre-Vertex paid limits.
 

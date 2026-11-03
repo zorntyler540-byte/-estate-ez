@@ -10,6 +10,7 @@ Rate windows live in ``gemini_rate_windows`` (created on first use; no Alembic m
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from contextlib import contextmanager
@@ -128,6 +129,20 @@ def _semaphore() -> threading.Semaphore:
     return _sem
 
 
+def limiter_poll_seconds(attempt: int, *, rng: random.Random | None = None) -> float:
+    """Jittered exponential backoff for limiter waits: 200ms × 2^attempt, cap 2s."""
+    dice = rng or random
+    base = 0.2 * (2 ** max(0, int(attempt)))
+    sleep = min(2.0, base)
+    jitter = dice.uniform(0.0, min(0.05, sleep * 0.25))
+    return min(2.0, max(0.2, sleep + jitter))
+
+
+def _rate_wait_sleep(sleep_for: float, attempt: int) -> float:
+    """Floor DB/window polls at limiter backoff so a tiny remaining window is not a 50ms loop."""
+    return max(limiter_poll_seconds(attempt), min(2.0, max(0.0, sleep_for)))
+
+
 def close_lock_engine() -> None:
     """Dispose the extra NullPool engine used for advisory locks (isolated child exit)."""
     global _lock_engine, _lock_engine_failed, _table_ready
@@ -154,6 +169,7 @@ def reset_gemini_slots_for_tests() -> None:
 
 
 def _memory_wait_and_consume(key: str, limit: int, window_seconds: int) -> None:
+    attempt = 0
     while True:
         now = int(time.time())
         window = now // window_seconds
@@ -165,7 +181,8 @@ def _memory_wait_and_consume(key: str, limit: int, window_seconds: int) -> None:
                 _rate_windows[key] = (window, count + 1)
                 return
         sleep_for = (window + 1) * window_seconds - time.time()
-        time.sleep(max(0.05, min(2.0, sleep_for)))
+        time.sleep(_rate_wait_sleep(sleep_for, attempt))
+        attempt += 1
 
 
 def _pg_wait_and_consume(engine: Engine, key: str, limit: int, window_seconds: int) -> None:
@@ -184,6 +201,7 @@ def _pg_wait_and_consume(engine: Engine, key: str, limit: int, window_seconds: i
         RETURNING call_count
         """
     )
+    attempt = 0
     while True:
         window = int(time.time()) // window_seconds
         with engine.begin() as conn:
@@ -191,7 +209,8 @@ def _pg_wait_and_consume(engine: Engine, key: str, limit: int, window_seconds: i
         if count <= limit:
             return
         sleep_for = (window + 1) * window_seconds - time.time()
-        time.sleep(max(0.05, min(2.0, sleep_for)))
+        time.sleep(_rate_wait_sleep(sleep_for, attempt))
+        attempt += 1
 
 
 def _memory_window_count(key: str, window_seconds: int) -> int:
@@ -239,6 +258,7 @@ def wait_for_model_quota(model: str | None, *, extra_tokens: int = 1) -> None:
         consume(f"{family}:tpm", tpm, 60)
         return
     tpm_key = f"{family}:tpm"
+    attempt = 0
     while True:
         used = (
             _pg_window_count(engine, tpm_key, 60)
@@ -248,7 +268,8 @@ def wait_for_model_quota(model: str | None, *, extra_tokens: int = 1) -> None:
         if used < tpm:
             return
         sleep_for = (int(time.time()) // 60 + 1) * 60 - time.time()
-        time.sleep(max(0.05, min(2.0, sleep_for)))
+        time.sleep(_rate_wait_sleep(sleep_for, attempt))
+        attempt += 1
 
 
 def record_model_tokens(model: str | None, tokens: int) -> None:
@@ -334,13 +355,15 @@ def gemini_slot(model: str | None = None):
     conn = engine.connect()
     slot: int | None = None
     try:
+        attempt = 0
         while True:
             slot = _acquire_pg_slot(conn, cap)
             if slot is not None:
                 break
             if time.monotonic() >= deadline:
                 raise TimeoutError("Timed out waiting for a Gemini concurrency slot")
-            time.sleep(0.05)
+            time.sleep(limiter_poll_seconds(attempt))
+            attempt += 1
         wait_for_model_quota(model)
         yield
     finally:

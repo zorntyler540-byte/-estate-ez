@@ -57,6 +57,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   when its job ends so Gemini/JPEG RAM leaves the Railway cgroup; the parent must not import the
   pipeline. Keep `CATALOG_JOB_MAX_CONCURRENT=1` per franchise. Gemini HTTP is capped cross-process
   (`GEMINI_GLOBAL_CONCURRENCY` + per-model RPM). Railway Metrics **Sum** view adds every replica.
+  Isolated-child OOM/crash is capped (`WORKER_CHILD_CRASH_RETRIES`, default 3) and listed by
+  `/jobs/stuck`. Parent RSS kill (`WORKER_CHILD_RSS_MB=3000`; 1200 is too low for a 3-photo lot)
+  plus 1280px working images. Retries skip already-cataloged lot photos and reuse unlinked leftovers.
 - **R2 must be configured on BOTH the API and the worker, pointing at the same bucket**
   (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`). Because the services don't
   share a disk, an uploaded batch only reaches the worker via R2 (`job-batches/{account}/{batch}/…`).

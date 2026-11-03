@@ -11,6 +11,12 @@ from pathlib import Path
 from sqlalchemy import text
 
 from app.config import settings
+from app.core.catalog_crash import (
+    apply_child_crash,
+    is_catalog_crash_exhausted_error,
+    parse_catalog_crash_attempt,
+)
+from app.core.gemini_retry import parse_catalog_retry_attempt
 from app.db import SessionLocal
 from app.job_queue import claim_queued_job
 from app.models import JobStatus, Lot, ProcessingJob, Sale
@@ -267,8 +273,23 @@ def reconcile_worker_orphaned_processing_jobs(
                 updated = updated.replace(tzinfo=timezone.utc)
             if (now - updated).total_seconds() < grace:
                 continue
+        # Child-death path increments the crash counter. A replica restart without a prior
+        # crash marker just frees the slot (keep Gemini-retry markers; drop other leftovers).
+        if parse_catalog_crash_attempt(row.error_message):
+            outcome = apply_child_crash(
+                row, reason="worker orphan after prior child crash"
+            )
+            n += 1
+            _LOG.warning(
+                "Orphan processing job after prior crash job_id=%s account_id=%s outcome=%s",
+                row.id,
+                row.account_id,
+                outcome,
+            )
+            continue
         row.status = JobStatus.queued
-        row.error_message = None
+        if not parse_catalog_retry_attempt(row.error_message):
+            row.error_message = None
         row.cancel_requested = False
         n += 1
         _LOG.warning(
@@ -369,11 +390,13 @@ def is_stuck_job(job: ProcessingJob, now: datetime | None = None) -> bool:
 
     Thresholds (settings, with the same defaults as stale reconcile where those exist):
     receiving > 30 min, queued > 10 min, processing > 60 min (last updated/progress),
-    or failed with leftover mid-upload / lost-disk wording.
+    failed leftover mid-upload / lost-disk wording, or failed after isolated-child crash cap.
     """
     status = job.status
     if status == JobStatus.failed:
-        return is_orphan_upload_error(job.error_message)
+        return is_orphan_upload_error(job.error_message) or is_catalog_crash_exhausted_error(
+            job.error_message
+        )
     if status == JobStatus.receiving:
         return job_age_seconds(job, now) > stuck_receiving_seconds()
     if status == JobStatus.queued:

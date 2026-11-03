@@ -34,10 +34,12 @@ os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 
 from app import job_tasks
 from app.config import settings
+from app.core.catalog_crash import apply_child_crash
 from app.db import SessionLocal
 from app.job_queue import claim_next_fair_job
 from app.models import JobStatus, Lot, ProcessingJob
 from app.proc_memory import process_rss_mb, process_tree_rss_mb
+from app.services import job_events
 from app.services.memory_trim import trim_process_memory
 
 logging.basicConfig(
@@ -117,8 +119,25 @@ def _requeue_orphaned_processing(*, min_age_seconds: int | None = None) -> int:
         return n
 
 
-def _requeue_if_still_processing(job_id: str, account_id: str) -> bool:
-    """If a child died while the row is still ``processing``, free the slot for another claim."""
+def _apply_child_as_limit() -> None:
+    """Optional ``RLIMIT_AS`` on the isolated child. RSS monitoring is the primary guard."""
+    cap_mb = int(getattr(settings, "worker_child_as_mb", 0) or 0)
+    if cap_mb <= 0:
+        return
+    try:
+        import resource
+
+        nbytes = cap_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (nbytes, nbytes))
+        _LOG.info("Isolated child RLIMIT_AS=%s MB", cap_mb)
+    except Exception:  # noqa: BLE001
+        _LOG.warning("Could not set RLIMIT_AS cap_mb=%s", cap_mb, exc_info=True)
+
+
+def _requeue_if_still_processing(
+    job_id: str, account_id: str, *, reason: str = "isolated worker child exited"
+) -> bool:
+    """If a child died while the row is still ``processing``, re-queue or fail after N crashes."""
     with SessionLocal() as db:
         row = (
             db.query(ProcessingJob)
@@ -127,14 +146,35 @@ def _requeue_if_still_processing(job_id: str, account_id: str) -> bool:
         )
         if row is None or row.status != JobStatus.processing:
             return False
-        row.status = JobStatus.queued
-        row.cancel_requested = False
+        outcome = apply_child_crash(row, reason=reason)
         db.commit()
-        _LOG.warning(
-            "Re-queued catalog job after isolated child exit job_id=%s account_id=%s",
-            job_id,
-            account_id,
-        )
+        try:
+            job_events.publish(
+                account_id,
+                job_id,
+                {
+                    "type": "status",
+                    "status": outcome,
+                    "error_message": row.error_message,
+                    "job_id": job_id,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.debug("crash-status SSE publish failed job_id=%s", job_id, exc_info=True)
+        if outcome == "failed":
+            _LOG.error(
+                "Catalog job failed after child crashes job_id=%s account_id=%s error=%s",
+                job_id,
+                account_id,
+                row.error_message,
+            )
+        else:
+            _LOG.warning(
+                "Re-queued catalog job after child crash job_id=%s account_id=%s error=%s",
+                job_id,
+                account_id,
+                row.error_message,
+            )
         return True
 
 
@@ -217,6 +257,7 @@ def _reconcile_stale_receiving_globally() -> int:
 def run_isolated_job(job_id: str, account_id: str) -> int:
     """Child entry: run one already-claimed job, then return so ``main`` can hard-exit."""
     os.environ["WORKER_ISOLATED_CHILD"] = "1"
+    _apply_child_as_limit()
     started = time.monotonic()
     try:
         started_ok = job_tasks.start_job_in_background(
