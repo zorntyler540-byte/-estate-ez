@@ -83,10 +83,28 @@ class Settings(BaseSettings):
     skip_tape_verify: bool = Field(default=False, alias="SKIP_TAPE_VERIFY")
     # Default is conservative: many parallel Gemini calls decode large JPEGs in RAM and trigger OOM on small hosts (e.g. Railway). Override with GEMINI_PARALLELISM=12–15 on a beefy machine.
     gemini_parallelism: int = Field(default=5, ge=1, le=32, alias="GEMINI_PARALLELISM")
-    # Cap simultaneous Gemini HTTP calls across upload jobs, regenerate, and triage threads.
-    gemini_global_concurrency: int = Field(default=3, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
-    # Stacked Add-one-lot uploads queue automatically when this many jobs are already running.
+    # Cap simultaneous Gemini HTTP calls across jobs, replicas, regenerate, and triage.
+    # Enforced with Postgres advisory locks so API + worker children share one ceiling.
+    gemini_global_concurrency: int = Field(default=8, ge=1, le=32, alias="GEMINI_GLOBAL_CONCURRENCY")
+    # Per-model RPM / TPM / RPD ceilings (~50% of pre-Vertex paid defaults). One shared GOOGLE_API_KEY.
+    gemini_flash_rpm: int = Field(default=1000, ge=1, le=20000, alias="GEMINI_FLASH_RPM")
+    gemini_flash_tpm: int = Field(default=1_500_000, ge=1000, le=10_000_000, alias="GEMINI_FLASH_TPM")
+    gemini_flash_rpd: int = Field(default=50_000, ge=100, le=500_000, alias="GEMINI_FLASH_RPD")
+    gemini_pro_rpm: int = Field(default=500, ge=1, le=20000, alias="GEMINI_PRO_RPM")
+    gemini_pro_tpm: int = Field(default=2_500_000, ge=1000, le=20_000_000, alias="GEMINI_PRO_TPM")
+    gemini_pro_rpd: int = Field(default=25_000, ge=100, le=500_000, alias="GEMINI_PRO_RPD")
+    gemini_38_flash_rpm: int = Field(default=1000, ge=1, le=20000, alias="GEMINI_38_FLASH_RPM")
+    gemini_38_flash_tpm: int = Field(default=1_500_000, ge=1000, le=10_000_000, alias="GEMINI_38_FLASH_TPM")
+    gemini_38_flash_rpd: int = Field(default=50_000, ge=100, le=500_000, alias="GEMINI_38_FLASH_RPD")
+    gemini_retry_max_attempts: int = Field(default=5, ge=1, le=12, alias="GEMINI_RETRY_MAX_ATTEMPTS")
+    gemini_retry_base_seconds: float = Field(default=1.0, ge=0.1, le=30.0, alias="GEMINI_RETRY_BASE_SECONDS")
+    gemini_retry_max_seconds: float = Field(default=32.0, ge=1.0, le=120.0, alias="GEMINI_RETRY_MAX_SECONDS")
+    # How many times a catalog job is re-queued after a retryable Gemini failure (then marked failed).
+    catalog_job_transient_retries: int = Field(default=3, ge=1, le=10, alias="CATALOG_JOB_TRANSIENT_RETRIES")
+    # Stacked Add-one-lot uploads queue automatically when this many jobs are already running per account.
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
+    # One worker process may run this many isolated catalog jobs at once (child-process pool).
+    worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
     # Per-account catalog spend brakes (Gemini runs on the shared operator key).
     catalog_max_queued_jobs_per_account: int = Field(
         default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"

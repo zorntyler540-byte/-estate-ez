@@ -60,8 +60,13 @@ _process_job_thread_locks_guard = threading.Lock()
 _LOG = logging.getLogger(__name__)
 
 
-def _job_lock_key(job_id: str) -> int:
+def job_advisory_lock_key(job_id: str) -> int:
+    """Stable 31-bit key for ``pg_try_advisory_lock`` (one catalog worker per job id)."""
     return zlib.crc32(job_id.encode("utf-8")) & 0x7FFFFFFF
+
+
+def _job_lock_key(job_id: str) -> int:
+    return job_advisory_lock_key(job_id)
 
 
 def _thread_job_process_lock(job_id: str) -> threading.Lock:
@@ -98,6 +103,59 @@ def _process_job_execution_lock(db: Session, job_id: str):
             yield True
         finally:
             lock.release()
+
+
+def _handle_transient_job_failure(
+    db: Session,
+    job: ProcessingJob,
+    exc: BaseException,
+    *,
+    prior_attempts: int,
+) -> None:
+    """Re-queue a catalog job after a retryable Gemini failure, or mark it failed (still retryable)."""
+    from app.core.gemini_retry import catalog_retry_exhausted_message, format_catalog_retry_message
+
+    max_n = max(1, int(settings.catalog_job_transient_retries))
+    nxt = int(prior_attempts) + 1
+    if nxt < max_n:
+        job.status = JobStatus.queued
+        job.error_message = format_catalog_retry_message(nxt, max_n, exc)
+        job.cancel_requested = False
+        db.commit()
+        _LOG.warning(
+            "Re-queued catalog job after Gemini transient error job_id=%s attempt=%s/%s",
+            job.id,
+            nxt,
+            max_n,
+        )
+        _emit_job(
+            job,
+            {
+                "type": "status",
+                "status": "queued",
+                "error_message": job.error_message,
+                "job_id": job.id,
+            },
+        )
+        return
+    job.status = JobStatus.failed
+    job.error_message = catalog_retry_exhausted_message(max_n, exc)[:4000]
+    job.cancel_requested = False
+    db.commit()
+    _LOG.error(
+        "Catalog job failed after Gemini transient retries job_id=%s attempts=%s",
+        job.id,
+        max_n,
+    )
+    _emit_job(
+        job,
+        {
+            "type": "status",
+            "status": "failed",
+            "error_message": job.error_message,
+            "job_id": job.id,
+        },
+    )
 
 
 def _heartbeat_job(db: Session, job: ProcessingJob) -> None:
@@ -838,6 +896,9 @@ def _process_job_body(
         _LOG.info("process_job skipped — already completed job_id=%s", job.id)
         return
 
+    from app.core.gemini_retry import parse_catalog_retry_attempt
+
+    retry_prior = parse_catalog_retry_attempt(job.error_message)
     job.status = JobStatus.processing
     job.error_message = None
     job.cancel_requested = False
@@ -940,14 +1001,19 @@ def _process_job_body(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
+    from app.core.gemini_retry import GeminiRetryableError
     from pipeline.pipeline import reset_usage_counters, usage_snapshot
 
     single_lot_mode = bool(getattr(job, "single_lot_mode", False))
     reset_usage_counters()
-    if single_lot_mode:
-        _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
-    else:
-        _process_job_batch_pipeline(db, job, photos, folder, cancel_event=cancel_event)
+    try:
+        if single_lot_mode:
+            _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
+        else:
+            _process_job_batch_pipeline(db, job, photos, folder, cancel_event=cancel_event)
+    except GeminiRetryableError as exc:
+        _handle_transient_job_failure(db, job, exc, prior_attempts=retry_prior)
+        return
 
     # Persist the real Gemini token usage metered during this job (feeds accurate admin cost analytics).
     try:

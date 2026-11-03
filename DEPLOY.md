@@ -154,17 +154,23 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
 2. Copy the same variables as the API (`DATABASE_URL`, `GOOGLE_API_KEY`, R2_*, `SECRET_KEY`, …).
 3. On the **API** only, set **`RUN_CATALOG_JOBS_IN_PROCESS=false`** and redeploy the API.
 4. Leave that variable unset/true on the worker (the Dockerfile defaults it to true).
-5. Optional: `WORKER_POLL_SECONDS=2`, `CATALOG_JOB_MAX_CONCURRENT=1`.
+5. Optional worker knobs (recommended before onboarding several franchises):
+   - `WORKER_MAX_CONCURRENT_JOBS=3` — one replica runs up to 3 isolated child processes
+   - `CATALOG_JOB_MAX_CONCURRENT=1` — per-account cap (fair round-robin across franchises)
+   - `GEMINI_GLOBAL_CONCURRENCY=8` — cross-process Gemini HTTP cap (advisory locks)
+   - `WORKER_POLL_SECONDS=2`
 6. **Memory limits (required for cost):** Railway bills RAM while the replica is sized large. Cataloging used to spike to 20–32 GB. Cap services so one location does not cost ~$10/GB-month:
 
 | Service | Memory limit | Notes |
 |---------|----------------|-------|
 | Web | 1 GB | Next.js |
 | API | 2 GB | Set `RUN_CATALOG_JOBS_IN_PROCESS=false` so Gemini is not on this box |
-| Worker | 4 GB | Jobs run in a child process and RAM drops when the lot finishes |
+| Worker | 4 GB | Up to 3 isolated children; peak RSS per job has been ~0.22 GB |
 | Postgres | host default | Do not bump this for cataloging |
 
 Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, keep `PIPELINE_TRIAGE_PARALLEL=2` and `PIPELINE_WORKING_MAX_EDGE=1600` (defaults). `WORKER_ISOLATE_JOBS=true` is the default.
+
+**Multiple worker replicas:** 2 replicas is enough for ~5 franchises (`WORKER_MAX_CONCURRENT_JOBS=3` each). Claiming uses `FOR UPDATE SKIP LOCKED` plus the existing per-job advisory lock. Gemini RPM/concurrency is shared via Postgres so two replicas cannot double the API-key budget. Do not run 3+ replicas until you raise `GEMINI_GLOBAL_CONCURRENCY` / Flash+Pro RPM env vars — they default to ~50% of current pre-Vertex paid limits.
 
 Local check: `cd backend && RUN_CATALOG_JOBS_IN_PROCESS=true python -m app.worker`
 

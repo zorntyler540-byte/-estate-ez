@@ -8,10 +8,11 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import update
+from sqlalchemy import text
 
 from app.config import settings
 from app.db import SessionLocal
+from app.job_queue import claim_queued_job
 from app.models import JobStatus, Lot, ProcessingJob, Sale
 from app.services import job_events
 from app.services.mobile_drafts import cataloged_mobile_draft_ids, mobile_draft_id_from_original_name
@@ -56,6 +57,7 @@ _ORPHAN_UPLOAD_ERROR_MARKERS = (
 
 _job_cancels: dict[str, threading.Event] = {}
 _job_accounts: dict[str, str] = {}
+_isolated_child_jobs: dict[str, str] = {}
 _job_cancels_lock = threading.Lock()
 _kick_debounce_lock = threading.Lock()
 _last_kick_mono: dict[str, float] = {}
@@ -67,14 +69,32 @@ _last_list_reconcile_mono: dict[str, float] = {}
 
 
 def is_job_running(job_id: str) -> bool:
-    """Return true when this API process currently tracks a live background job thread."""
+    """Return true when this process tracks a live job thread or isolated child."""
     with _job_cancels_lock:
-        return job_id in _job_cancels
+        return job_id in _job_cancels or job_id in _isolated_child_jobs
+
+
+def register_isolated_child_job(job_id: str, account_id: str) -> None:
+    """Parent worker tracks a child-process job so orphan reconcile does not steal it."""
+    with _job_cancels_lock:
+        _isolated_child_jobs[job_id] = account_id
+
+
+def unregister_isolated_child_job(job_id: str) -> None:
+    with _job_cancels_lock:
+        _isolated_child_jobs.pop(job_id, None)
+
+
+def isolated_child_job_ids() -> set[str]:
+    with _job_cancels_lock:
+        return set(_isolated_child_jobs)
 
 
 def running_count_for_account(account_id: str) -> int:
     with _job_cancels_lock:
-        return sum(1 for acc in _job_accounts.values() if acc == account_id)
+        n = sum(1 for acc in _job_accounts.values() if acc == account_id)
+        n += sum(1 for acc in _isolated_child_jobs.values() if acc == account_id)
+        return n
 
 
 def _processing_job_ids_in_db(account_id: str) -> set[str]:
@@ -114,25 +134,7 @@ def can_start_job_for_account(account_id: str) -> bool:
 
 def _claim_queued_job(job_id: str, account_id: str) -> bool:
     """Atomically mark a queued job as processing before the worker thread starts."""
-    with SessionLocal() as db:
-        result = db.execute(
-            update(ProcessingJob)
-            .where(
-                ProcessingJob.id == job_id,
-                ProcessingJob.account_id == account_id,
-                ProcessingJob.status == JobStatus.queued,
-            )
-            .values(
-                status=JobStatus.processing,
-                error_message=None,
-                cancel_requested=False,
-            )
-        )
-        if (result.rowcount or 0) != 1:
-            db.rollback()
-            return False
-        db.commit()
-        return True
+    return claim_queued_job(job_id, account_id)
 
 
 def reconcile_stale_processing_jobs(db, account_id: str) -> bool:
@@ -209,6 +211,30 @@ def requeue_stale_processing_for_account(
     return n
 
 
+def _orphaned_processing_lock_is_free(db, job_id: str) -> bool:
+    """True when no worker holds the process_job advisory lock (or this is not Postgres).
+
+    Live jobs on another replica hold ``pg_try_advisory_lock(job_key)`` for the whole run, so
+    boot reconcile can use ``min_age_seconds=0`` without stealing in-flight lots.
+    """
+    bind = getattr(db, "get_bind", lambda: None)()
+    dialect = getattr(getattr(bind, "dialect", None), "name", "")
+    if dialect != "postgresql":
+        return True
+    try:
+        from app.services.processing import job_advisory_lock_key
+
+        key = job_advisory_lock_key(str(job_id))
+        got = bool(db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
+        if not got:
+            return False
+        db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+        return True
+    except Exception:  # noqa: BLE001
+        _LOG.exception("advisory lock probe failed job_id=%s", job_id)
+        return False
+
+
 def reconcile_worker_orphaned_processing_jobs(
     db, *, min_age_seconds: int | None = None
 ) -> int:
@@ -234,6 +260,8 @@ def reconcile_worker_orphaned_processing_jobs(
     n = 0
     for row in rows:
         if is_job_running(row.id):
+            continue
+        if not _orphaned_processing_lock_is_free(db, row.id):
             continue
         updated = row.updated_at or row.created_at
         if grace > 0 and updated is not None:
@@ -705,6 +733,8 @@ def _background_runner(job_id: str, account_id: str, cancel_ev: threading.Event)
         trim_process_memory()
         if os.environ.get("WORKER_ISOLATED_CHILD") == "1":
             return
+        if os.environ.get("WORKER_POLL_LOOP") == "1":
+            return
         try_start_next_queued_job(account_id)
 
 
@@ -714,7 +744,11 @@ def catalog_jobs_run_in_process() -> bool:
 
 
 def start_job_in_background(
-    job_id: str, account_id: str, *, force_in_process: bool = False
+    job_id: str,
+    account_id: str,
+    *,
+    force_in_process: bool = False,
+    already_claimed: bool = False,
 ) -> bool:
     """
     Start a queued job when account capacity allows.
@@ -723,6 +757,10 @@ def start_job_in_background(
 
     ``force_in_process=True`` (dashboard **Run now**) starts on this API process even when
     ``RUN_CATALOG_JOBS_IN_PROCESS=false``, so staff are not stuck if the worker queue is wedged.
+
+    ``already_claimed=True`` skips the queued→processing UPDATE (the worker parent already
+    claimed with SKIP LOCKED). Capacity is not re-checked so the claimed row is not blocked
+    by its own processing slot.
     """
     if not force_in_process and not catalog_jobs_run_in_process():
         _LOG.debug(
@@ -732,7 +770,7 @@ def start_job_in_background(
         return False
 
     reconcile_memory_threads_for_account(account_id)
-    if not can_start_job_for_account(account_id):
+    if not already_claimed and not can_start_job_for_account(account_id):
         return False
 
     _clear_stale_registration(job_id, account_id)
@@ -744,7 +782,7 @@ def start_job_in_background(
         _job_cancels[job_id] = cancel_ev
         _job_accounts[job_id] = account_id
 
-    if not _claim_queued_job(job_id, account_id):
+    if not already_claimed and not _claim_queued_job(job_id, account_id):
         with _job_cancels_lock:
             _job_cancels.pop(job_id, None)
             _job_accounts.pop(job_id, None)

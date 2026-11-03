@@ -123,24 +123,24 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
         from google import genai
         from google.genai import types
 
-        from app.core.gemini_slots import gemini_slot
+        from app.core.gemini_slots import generate_content
 
         client = genai.Client(
             api_key=key,
             http_options=types.HttpOptions(timeout=50_000),
         )
-        with gemini_slot():
-            response = client.models.generate_content(
-                model=(settings.hero_bg_gemini_model or "gemini-nano-banana-2.1").strip(),
-                contents=[
-                    types.Part.from_bytes(data=prepared, mime_type="image/jpeg"),
-                    prompt,
-                ],
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio=aspect, image_size="1K"),
-                ),
-            )
+        response = generate_content(
+            client,
+            model=(settings.hero_bg_gemini_model or "gemini-nano-banana-2.1").strip(),
+            contents=[
+                types.Part.from_bytes(data=prepared, mime_type="image/jpeg"),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio=aspect, image_size="1K"),
+            ),
+        )
     except RuntimeError:
         raise
     except Exception as exc:
