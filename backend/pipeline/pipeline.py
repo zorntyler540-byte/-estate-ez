@@ -47,8 +47,8 @@ GALLERY_PLAN_MAX_PHOTOS = max(2, int(os.environ.get("GALLERY_PLAN_MAX_PHOTOS", "
 # Records real prompt/candidate token counts from ``response.usage_metadata`` split by model tier
 # (Flash = triage/listing, Pro = author) so the admin analytics can show true cost instead of an
 # estimate. Reset at the start of a catalog job and snapshotted at the end (see app.services.processing).
-# NOTE: this is a process-global counter guarded by a lock; it assumes catalog jobs run one at a time
-# per process, which holds for the dedicated worker (serial) and the default CATALOG_JOB_MAX_CONCURRENT=1.
+# NOTE: process-global counters. Isolated worker children (default) each have their own process so
+# concurrent catalog jobs do not mix token totals. Keep WORKER_ISOLATE_JOBS=true in production.
 _usage_lock = threading.Lock()
 _usage_state: dict[str, int] = {
     "flash_input": 0,
@@ -146,6 +146,13 @@ def _get_client() -> genai.Client:
             raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required for pipeline calls.")
         _genai_client = genai.Client(api_key=api_key)
     return _genai_client
+
+
+def _gemini_generate(model: str, contents: Any, config: Any) -> Any:
+    """SDK generateContent through the shared cross-process slot + retry wrapper."""
+    from app.core.gemini_slots import generate_content
+
+    return generate_content(_get_client(), model=model, contents=contents, config=config)
 
 
 def _detect_mime_type(img_bytes: bytes) -> str:
@@ -260,7 +267,6 @@ The preceding image filename is: {filename}
 
 def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
     """Stage 1: one light Flash call per file (order-independent)."""
-    client = _get_client()
     payload_bytes, mime_type = _maybe_downscale(img_bytes, _detect_mime_type(img_bytes))
 
     parts: list[Any] = [
@@ -275,14 +281,7 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
         temperature=0.1,
     )
 
-    from app.core.gemini_slots import gemini_slot
-
-    with gemini_slot():
-        response = client.models.generate_content(
-            model=GEMINI_FLASH_MODEL,
-            contents=parts,
-            config=config,
-        )
+    response = _gemini_generate(GEMINI_FLASH_MODEL, parts, config)
     _record_usage("flash", response)
 
     if response.parsed is not None:
@@ -435,15 +434,7 @@ def plan_listing_gallery(
         system_instruction=GALLERY_SYSTEM_INSTRUCTION,
         temperature=0.1,
     )
-    client = _get_client()
-    from app.core.gemini_slots import gemini_slot
-
-    with gemini_slot():
-        response = client.models.generate_content(
-            model=GEMINI_FLASH_MODEL,
-            contents=parts,
-            config=config,
-        )
+    response = _gemini_generate(GEMINI_FLASH_MODEL, parts, config)
     _record_usage("flash", response)
 
     if response.parsed is not None:
@@ -1087,8 +1078,6 @@ def run_brand_audit_pro(
     pro_author_mode: bool = True,
 ) -> str:
     """Stage 2: Pro writes (or proofreads) listing + brands using hero, labels, and triage OCR."""
-    client = _get_client()
-
     valuation_block = ""
     if ENABLE_GROUNDED_VALUATION:
         valuation_block = (
@@ -1245,14 +1234,7 @@ def run_brand_audit_pro(
         config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
     config = types.GenerateContentConfig(**config_kwargs)
 
-    from app.core.gemini_slots import gemini_slot
-
-    with gemini_slot():
-        response = client.models.generate_content(
-            model=GEMINI_PRO_MODEL,
-            contents=parts,
-            config=config,
-        )
+    response = _gemini_generate(GEMINI_PRO_MODEL, parts, config)
     _record_usage("pro", response)
 
     if response.text:
@@ -1350,6 +1332,10 @@ def _run_parallel_triage(
             try:
                 row = future.result()
             except Exception as exc:
+                from app.core.gemini_retry import GeminiRetryableError
+
+                if isinstance(exc, GeminiRetryableError):
+                    raise
                 row = PhotoTriageResult(
                     filename=filename,
                     photo_role="unusable",
@@ -1472,7 +1458,11 @@ def process_incoming_field_lot(user_images_dict: dict[str, bytes]) -> dict[str, 
             brand_audit = _manifest_to_brand_audit(
                 brand_audit_json, list(pro_images.keys()), flash_draft
             )
-        except Exception:
+        except Exception as exc:
+            from app.core.gemini_retry import GeminiRetryableError
+
+            if isinstance(exc, GeminiRetryableError):
+                raise
             # Section 4E — Pro error: keep Flash draft; no fake prices; no Unknown brand
             brand_audit = _brand_audit_from_flash_draft(flash_draft)
             brand_audit_json = FullyAuditedManifest(

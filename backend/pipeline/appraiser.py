@@ -75,7 +75,10 @@ def run_appraisal_research(
         tools=[types.Tool(google_search=types.GoogleSearch())],
         temperature=0.2,
     )
-    response = client.models.generate_content(
+    from app.core.gemini_slots import generate_content
+
+    response = generate_content(
+        client,
         model=GEMINI_PRO_MODEL,
         contents=parts,
         config=config,
@@ -111,7 +114,10 @@ def run_appraisal_structure(
         system_instruction=APPRAISER_STRUCTURE_SYSTEM,
         temperature=0.1,
     )
-    response = client.models.generate_content(
+    from app.core.gemini_slots import generate_content
+
+    response = generate_content(
+        client,
         model=GEMINI_PRO_MODEL,
         contents=parts,
         config=config,

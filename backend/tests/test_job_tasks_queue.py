@@ -15,6 +15,7 @@ class JobTasksQueueTests(unittest.TestCase):
         with job_tasks._job_cancels_lock:
             job_tasks._job_cancels.clear()
             job_tasks._job_accounts.clear()
+            job_tasks._isolated_child_jobs.clear()
         with job_tasks._kick_debounce_lock:
             job_tasks._last_kick_mono.clear()
         with job_tasks._list_reconcile_lock:

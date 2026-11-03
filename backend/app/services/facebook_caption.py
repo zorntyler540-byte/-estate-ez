@@ -421,7 +421,10 @@ def _draft_with_gemini(
         system_instruction=_SYSTEM,
         temperature=0.4,
     )
-    response = client.models.generate_content(
+    from app.core.gemini_slots import generate_content
+
+    response = generate_content(
+        client,
         model=GEMINI_FLASH_MODEL,
         contents=parts,
         config=config,

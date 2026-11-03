@@ -455,11 +455,18 @@ def _analyze_photo_sdk_from_bytes(
         system_instruction=SYSTEM_INSTRUCTION,
     )
 
+    from app.core.gemini_retry import GeminiRetryableError
+    from app.core.gemini_slots import generate_content
+
     try:
-        response = client.models.generate_content(model=settings.gemini_model, contents=contents, config=config)
+        response = generate_content(
+            client, model=settings.gemini_model, contents=contents, config=config
+        )
         if response.parsed:
             row = InventoryTableEntry.model_validate(response.parsed)
             return inventory_table_entry_to_lot_payload(row)
+    except GeminiRetryableError:
+        raise
     except Exception:
         return None
     return None
@@ -470,18 +477,47 @@ def _model_url() -> str:
 
 
 def _generate_content(payload: dict[str, Any], timeout: int = 120) -> str | None:
+    from app.core.gemini_retry import GeminiRetryableError, backoff_seconds, inspect_transient, retry_after_from_headers
     from app.core.gemini_slots import gemini_slot
 
     headers = {"Content-Type": "application/json", "x-goog-api-key": settings.google_api_key}
-    for _ in range(3): # Shorter retry loop for responsiveness
+    max_attempts = max(1, int(settings.gemini_retry_max_attempts))
+    base = float(settings.gemini_retry_base_seconds)
+    cap = float(settings.gemini_retry_max_seconds)
+    last_exc: BaseException | None = None
+    last_status: int | None = None
+    for attempt in range(max_attempts):
         try:
-            with gemini_slot():
+            with gemini_slot(settings.gemini_model):
                 response = requests.post(_model_url(), headers=headers, json=payload, timeout=timeout)
+            if response.status_code in TRANSIENT_HTTP:
+                retry_after = retry_after_from_headers(response.headers)
+                last_status = response.status_code
+                last_exc = requests.HTTPError(
+                    f"{response.status_code} Gemini REST", response=response
+                )
+                if attempt >= max_attempts - 1:
+                    break
+                time.sleep(backoff_seconds(attempt, retry_after, base=base, cap=cap))
+                continue
             response.raise_for_status()
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            time.sleep(2)
-    return None
+        except GeminiRetryableError:
+            raise
+        except Exception as exc:
+            transient, retry_after, status = inspect_transient(exc)
+            last_exc = exc
+            last_status = status
+            if not transient or attempt >= max_attempts - 1:
+                if transient:
+                    break
+                return None
+            time.sleep(backoff_seconds(attempt, retry_after, base=base, cap=cap))
+    raise GeminiRetryableError(
+        str(last_exc) if last_exc else "Gemini REST transient error",
+        attempts=max_attempts,
+        status_code=last_status,
+    ) from last_exc
 
 
 def _analyze_photo_rest_from_bytes(

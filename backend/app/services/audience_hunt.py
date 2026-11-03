@@ -575,7 +575,10 @@ def run_audience_research_and_structure(
         tools=[types.Tool(google_search=types.GoogleSearch())],
         temperature=0.2,
     )
-    research = client.models.generate_content(
+    from app.core.gemini_slots import generate_content
+
+    research = generate_content(
+        client,
         model=GEMINI_PRO_MODEL,
         contents=research_parts,
         config=research_config,
@@ -612,7 +615,8 @@ def run_audience_research_and_structure(
         ),
         temperature=0.1,
     )
-    structured = client.models.generate_content(
+    structured = generate_content(
+        client,
         model=GEMINI_PRO_MODEL,
         contents=structure_parts,
         config=structure_config,
