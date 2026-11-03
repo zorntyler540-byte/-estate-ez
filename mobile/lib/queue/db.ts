@@ -1,7 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import * as FileSystem from "expo-file-system/legacy";
 
-import { isVideoDraftRow } from "@/lib/mediaKind";
+import { isVideoDraftRow, splitDraftMedia } from "@/lib/mediaKind";
 import type { ListingChannel, LotDraft, LotDraftStatus, LotPhotoRow } from "@/lib/types";
 import { newLocalId } from "@/lib/uuid";
 
@@ -54,6 +54,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "archived_photo_count")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_photo_count INTEGER");
       }
+      if (!cols.some((c) => c.name === "archived_video_count")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_video_count INTEGER");
+      }
       const photoCols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_photos)");
       if (!photoCols.some((c) => c.name === "media_kind")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'image'");
@@ -70,7 +73,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   return dbPromise;
 }
 
-function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft {
+function rowToDraft(row: Record<string, unknown>, photoCount: number, videoCount = 0): LotDraft {
   const channelRaw = row.listing_channel != null ? String(row.listing_channel) : "ctseller";
   const listing_channel: ListingChannel = channelRaw === "facebook" ? "facebook" : "ctseller";
   return {
@@ -86,9 +89,18 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number): LotDraft 
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
     photo_count: photoCount,
+    video_count: videoCount,
     archived_at: row.archived_at != null ? Number(row.archived_at) : null
   };
 }
+
+const VIDEO_ROW_SQL = `(
+  lot_photos.media_kind = 'video'
+  OR lower(lot_photos.file_uri) LIKE '%.mp4%'
+  OR lower(lot_photos.file_uri) LIKE '%.mov%'
+  OR lower(lot_photos.file_uri) LIKE '%.m4v%'
+  OR lower(lot_photos.file_uri) LIKE '%.webm%'
+)`;
 
 export async function createLotDraft(
   saleId: string,
@@ -134,16 +146,26 @@ export async function listLotDrafts(): Promise<LotDraft[]> {
   const rows = await db.getAllAsync<Record<string, unknown>>(
     "SELECT * FROM lot_drafts ORDER BY updated_at DESC"
   );
-  const counts = await db.getAllAsync<{ draft_id: string; c: number }>(
-    "SELECT draft_id, COUNT(*) AS c FROM lot_photos GROUP BY draft_id"
+  const counts = await db.getAllAsync<{ draft_id: string; photos: number; videos: number }>(
+    `SELECT draft_id,
+            SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 0 ELSE 1 END) AS photos,
+            SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 1 ELSE 0 END) AS videos
+     FROM lot_photos GROUP BY draft_id`
   );
-  const countByDraft = new Map(counts.map((r) => [String(r.draft_id), Number(r.c)]));
+  const countByDraft = new Map(
+    counts.map((r) => [String(r.draft_id), { photos: Number(r.photos), videos: Number(r.videos) }])
+  );
   return rows.map((row) => {
     const archivedAt = row.archived_at != null ? Number(row.archived_at) : 0;
     if (archivedAt > 0) {
-      return rowToDraft(row, Number(row.archived_photo_count ?? 0));
+      return rowToDraft(
+        row,
+        Number(row.archived_photo_count ?? 0),
+        Number(row.archived_video_count ?? 0)
+      );
     }
-    return rowToDraft(row, countByDraft.get(String(row.id)) ?? 0);
+    const c = countByDraft.get(String(row.id));
+    return rowToDraft(row, c?.photos ?? 0, c?.videos ?? 0);
   });
 }
 
@@ -155,13 +177,20 @@ export async function getLotDraft(draftId: string): Promise<LotDraft | null> {
   );
   if (!row) return null;
   if (row.archived_at != null && Number(row.archived_at) > 0) {
-    return rowToDraft(row, Number(row.archived_photo_count ?? 0));
+    return rowToDraft(
+      row,
+      Number(row.archived_photo_count ?? 0),
+      Number(row.archived_video_count ?? 0)
+    );
   }
-  const pc = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+  const pc = await db.getFirstAsync<{ photos: number; videos: number }>(
+    `SELECT
+       SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 0 ELSE 1 END) AS photos,
+       SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 1 ELSE 0 END) AS videos
+     FROM lot_photos WHERE draft_id = ?`,
     [draftId]
   );
-  return rowToDraft(row, Number(pc?.c ?? 0));
+  return rowToDraft(row, Number(pc?.photos ?? 0), Number(pc?.videos ?? 0));
 }
 
 /**
@@ -184,11 +213,14 @@ export async function findOpenDraft(
   );
   if (!row) return null;
   const id = String(row.id);
-  const pc = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+  const pc = await db.getFirstAsync<{ photos: number; videos: number }>(
+    `SELECT
+       SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 0 ELSE 1 END) AS photos,
+       SUM(CASE WHEN ${VIDEO_ROW_SQL} THEN 1 ELSE 0 END) AS videos
+     FROM lot_photos WHERE draft_id = ?`,
     [id]
   );
-  return rowToDraft(row, Number(pc?.c ?? 0));
+  return rowToDraft(row, Number(pc?.photos ?? 0), Number(pc?.videos ?? 0));
 }
 
 function capturedAtFromPhotoRow(r: Record<string, unknown>): number {
@@ -326,7 +358,9 @@ export async function archiveCatalogedDraft(draftId: string): Promise<void> {
   const photos = await listDraftPhotos(draftId);
   const pendingVideos = photos.filter((p) => isVideoDraftRow(p) && !p.uploaded);
   const toRemove = photos.filter((p) => !(isVideoDraftRow(p) && !p.uploaded));
-  const count = photos.length || existing?.photo_count || 0;
+  const { images, videos } = splitDraftMedia(photos);
+  const count = images.length || existing?.photo_count || 0;
+  const videoCount = videos.length || existing?.video_count || 0;
   for (const photo of toRemove) {
     try {
       await FileSystem.deleteAsync(photo.file_uri, { idempotent: true });
@@ -349,9 +383,9 @@ export async function archiveCatalogedDraft(draftId: string): Promise<void> {
   await db.runAsync("DELETE FROM lot_photos WHERE draft_id = ?", [draftId]);
   await db.runAsync(
     `UPDATE lot_drafts
-     SET archived_at = ?, archived_photo_count = ?, error_message = NULL, server_job_id = NULL, updated_at = ?
+     SET archived_at = ?, archived_photo_count = ?, archived_video_count = ?, error_message = NULL, server_job_id = NULL, updated_at = ?
      WHERE id = ?`,
-    [Date.now(), count, Date.now(), draftId]
+    [Date.now(), count, videoCount, Date.now(), draftId]
   );
 }
 
@@ -447,6 +481,25 @@ export async function countLotsNeedingPhotoUpload(): Promise<number> {
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
      WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading')`
+  );
+  return Number(row?.c ?? 0);
+}
+
+/** Leftover "Cataloging…" / unsent-clip rows that should re-check the website soon. */
+export async function countLotsNeedingCatalogFollowUp(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE archived_at IS NULL
+       AND (
+         (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))
+         OR EXISTS (
+           SELECT 1 FROM lot_photos
+           WHERE lot_photos.draft_id = lot_drafts.id
+             AND lot_photos.uploaded = 0
+             AND ${VIDEO_ROW_SQL}
+         )
+       )`
   );
   return Number(row?.c ?? 0);
 }

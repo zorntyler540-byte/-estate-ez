@@ -59,3 +59,32 @@ export function splitDraftMedia<T extends { media_kind?: string | null; file_uri
 export function shouldPrepareAsPhoto(photo: { uri: string; name: string }): boolean {
   return !isVideoUri(photo.uri) && !isVideoUri(photo.name);
 }
+
+export function countDraftMedia<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): { photoCount: number; videoCount: number } {
+  const { images, videos } = splitDraftMedia(rows);
+  return { photoCount: images.length, videoCount: videos.length };
+}
+
+/** Queue card / Review button: never count a clip as a photo. */
+export function formatMediaCounts(photoCount: number, videoCount: number): string {
+  const photos = Math.max(0, photoCount);
+  const videos = Math.max(0, videoCount);
+  const photoWord = `${photos} photo${photos === 1 ? "" : "s"}`;
+  if (videos <= 0) return photoWord;
+  const videoWord = `${videos} video${videos === 1 ? "" : "s"}`;
+  if (photos <= 0) return videoWord;
+  return `${photoWord} · ${videoWord}`;
+}
+
+/** Still-photo multipart name. Videos must not take a slot in this sequence. */
+export function catalogPhotoFileName(draftId: string, indexFromZero: number): string {
+  return `mobile-${draftId}-${String(indexFromZero + 1).padStart(2, "0")}.jpg`;
+}
+
+export function catalogUploadPhotoRows<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): T[] {
+  return splitDraftMedia(rows).images;
+}

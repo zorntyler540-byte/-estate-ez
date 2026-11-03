@@ -13,7 +13,12 @@ import {
   uploadSingleLotJob
 } from "../api";
 import { formatUploadHealthSummary } from "../formatUploadHealth";
-import { isVideoDraftRow, mediaKindFromName, splitDraftMedia } from "../mediaKind";
+import {
+  catalogPhotoFileName,
+  isVideoDraftRow,
+  mediaKindFromName,
+  splitDraftMedia
+} from "../mediaKind";
 import { refreshSessionIfPossible } from "../sessionBridge";
 import type { Job } from "../types";
 import {
@@ -40,8 +45,10 @@ import {
   uniqueSkuLotMap
 } from "./archiveCataloged";
 import {
+  decideCatalogConfirm,
   decideSyncRecovery,
   findJobForDraft,
+  isDraftConfirmedOnServer,
   isTransientSyncError,
   jobIsLiveOrDone
 } from "./syncRecovery";
@@ -52,7 +59,7 @@ import {
  * that are still processing are reconciled on a later sync (Phase 0 below).
  */
 const SERVER_CONFIRM_TIMEOUT_MS = 45_000;
-const SERVER_CONFIRM_INTERVAL_MS = 3_000;
+const SERVER_CONFIRM_INTERVAL_MS = 1_500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -329,14 +336,21 @@ export async function syncPendingLots(
       allDraftLots.get(draftKey) ||
       skuLot ||
       undefined;
-    if (lotId) {
-      if (draft.server_lot_id !== lotId) {
+    const confirmed = isDraftConfirmedOnServer({
+      lotId,
+      catalogedIds: cataloged?.ok ? cataloged.ids : null,
+      draftKey
+    });
+    if (lotId || confirmed) {
+      if (lotId && draft.server_lot_id !== lotId) {
         await setDraftServerLotId(draft.id, lotId);
       }
-      try {
-        await uploadPendingDraftVideos(authToken, draft.id, lotId);
-      } catch {
-        /* leftover clips retry on the next Sync */
+      if (lotId) {
+        try {
+          await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        } catch {
+          /* leftover clips retry on the next Sync */
+        }
       }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
@@ -393,7 +407,12 @@ export async function syncPendingLots(
   for (const draft of await listLotDrafts()) {
     if (draft.archived_at) continue;
     const cataloged = catalogedBySale.get(draft.sale_id);
-    const confirmed = allDraftLots.has(draft.id.toLowerCase());
+    const draftKey = draft.id.toLowerCase();
+    const confirmed = isDraftConfirmedOnServer({
+      lotId: draft.server_lot_id || (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) || allDraftLots.get(draftKey),
+      catalogedIds: cataloged?.ok ? cataloged.ids : null,
+      draftKey
+    });
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
     const recoveryJobs = jobsBySale.get(draft.sale_id) || (await jobsForSale(draft.sale_id)) || [];
     const matchedJob = findJobForDraft(recoveryJobs, draft.id, draft.server_job_id);
@@ -452,7 +471,12 @@ export async function syncPendingLots(
   const pending = (await listLotDrafts()).filter((d) => {
     if (d.archived_at || d.status !== "queued") return false;
     const cataloged = catalogedBySale.get(d.sale_id);
-    const confirmed = allDraftLots.has(d.id.toLowerCase());
+    const draftKey = d.id.toLowerCase();
+    const confirmed = isDraftConfirmedOnServer({
+      lotId: d.server_lot_id || (cataloged?.ok ? cataloged.lotByDraft.get(draftKey) : null) || allDraftLots.get(draftKey),
+      catalogedIds: cataloged?.ok ? cataloged.ids : null,
+      draftKey
+    });
     const lookupFailed = Boolean(cataloged && !cataloged.ok);
     const liveJob = findJobForDraft(jobsBySale.get(d.sale_id) || [], d.id, d.server_job_id);
     return !shouldSkipReupload({
@@ -504,7 +528,7 @@ export async function syncPendingLots(
       const rows = images.map((p, i) => ({
         id: p.id,
         uri: p.file_uri,
-        name: `mobile-${draft.id}-${String(i + 1).padStart(2, "0")}.jpg`,
+        name: catalogPhotoFileName(draft.id, i),
         capturedAtMs: p.captured_at && p.captured_at > 0 ? p.captured_at : undefined
       }));
       const rowChunks = chunkPhotos(rows, UPLOAD_CHUNK_SIZE);
@@ -584,16 +608,31 @@ export async function syncPendingLots(
       let serverError: string | null = null;
       while (Date.now() < deadline) {
         const job = await fetchServerJob(authToken, draft.sale_id, jobId);
-        if (job?.status === "completed") {
-          outcome = "completed";
-          break;
-        }
         if (job?.status === "failed") {
           outcome = "failed";
           serverError = serverFailMessage(job);
           break;
         }
+        if (decideCatalogConfirm({ jobStatus: job?.status }) === "completed") {
+          outcome = "completed";
+          break;
+        }
         await sleep(SERVER_CONFIRM_INTERVAL_MS);
+      }
+      if (outcome === "pending") {
+        const lastJob = await fetchServerJob(authToken, draft.sale_id, jobId);
+        if (lastJob?.status === "failed") {
+          outcome = "failed";
+          serverError = serverFailMessage(lastJob);
+        } else {
+          const idx = await catalogedDraftIndex(authToken, draft.sale_id);
+          const lotId = idx.ok ? idx.lotByDraft.get(draft.id.toLowerCase()) : undefined;
+          outcome = decideCatalogConfirm({
+            jobStatus: lastJob?.status,
+            confirmedOnServer: idx.ok && idx.ids.has(draft.id.toLowerCase()),
+            lotId
+          });
+        }
       }
 
       if (outcome === "failed") {

@@ -608,6 +608,31 @@ def sale_job_status_counts(
     return counts
 
 
+def sale_active_cataloging_count(db, account_id: str, sale_id: str) -> int:
+    """Queued/processing jobs that are not leftovers for a draft already on this sale.
+
+    Phone Sync used leftover queued rows (superseded retries) to keep saying
+    "1 still cataloging" after the lot was already listed.
+    """
+    cataloged = set(cataloged_mobile_draft_ids(db, str(account_id), str(sale_id)))
+    live = (
+        db.query(ProcessingJob.client_draft_id)
+        .filter(
+            ProcessingJob.account_id == account_id,
+            ProcessingJob.sale_id == sale_id,
+            ProcessingJob.status.in_((JobStatus.queued, JobStatus.processing)),
+        )
+        .all()
+    )
+    n = 0
+    for (cid,) in live:
+        draft_id = (cid or "").strip().lower()
+        if draft_id and draft_id in cataloged:
+            continue
+        n += 1
+    return n
+
+
 def jobs_with_client_draft_id(db, account_id: str, sale_id: str) -> list[ProcessingJob]:
     return (
         db.query(ProcessingJob)

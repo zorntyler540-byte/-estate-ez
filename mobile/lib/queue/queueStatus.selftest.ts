@@ -15,6 +15,10 @@ assert(archived.showResend === false, "archived hides Resend");
 assert(archived.removeLabel === "Remove", "archived Remove");
 assert(archived.detail === null, "archived has one status line");
 assert(queueRowTitle({ archived_at: 1, photo_count: 8, manual_sku: "LV101" }).includes("on website"), "archived title");
+assert(
+  queueRowTitle({ photo_count: 4, video_count: 1 }) === "4 photos · 1 video",
+  "queue card does not count a clip as a photo"
+);
 
 const linked = queueRowView({
   status: "uploaded",
@@ -78,4 +82,4 @@ assert(
   "empty queue mentions archive"
 );
 
-console.log("queueStatus selftest ok (18 cases)");
+console.log("queueStatus selftest ok (19 cases)");

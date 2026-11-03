@@ -2531,7 +2531,7 @@ def sale_upload_health(
         for row in job_tasks.jobs_with_client_draft_id(db, current.account_id, sale_id)
         if row.client_draft_id
     ]
-    cataloging = int(counts.get("queued", 0) or 0) + int(counts.get("processing", 0) or 0)
+    cataloging = job_tasks.sale_active_cataloging_count(db, current.account_id, sale_id)
     return SaleUploadHealthOut(
         sale_id=sale_id,
         counts=counts,

@@ -11,22 +11,63 @@ export type SyncRecoveryAction = "adopt" | "retry";
  * create a second catalog job (that was creating duplicate listings + a second Gemini bill).
  * ``retry`` — upload never finished, job failed, or the server row is gone.
  */
-/** Prefer a job that stored this phone draft UUID; fall back to the local server_job_id. */
-export function findJobForDraft<T extends Pick<Job, "id" | "client_draft_id">>(
+const JOB_STATUS_RANK: Record<string, number> = {
+  completed: 0,
+  processing: 1,
+  queued: 2,
+  receiving: 3,
+  failed: 4
+};
+
+function jobStatusRank(status: string | undefined): number {
+  return JOB_STATUS_RANK[String(status || "")] ?? 9;
+}
+
+function pickPreferredJob<T extends { status?: string }>(matches: T[]): T | null {
+  if (!matches.length) return null;
+  return matches.slice().sort((a, b) => jobStatusRank(a.status) - jobStatusRank(b.status))[0] ?? null;
+}
+
+/** Prefer a job that stored this phone draft UUID; fall back to the local server_job_id.
+ * When several rows share a draft (leftover receiving + the real catalog job), pick
+ * completed first so Queue does not stay on "Cataloging…" after the lot is listed. */
+export function findJobForDraft<T extends Pick<Job, "id" | "client_draft_id"> & { status?: string }>(
   jobs: T[],
   draftId: string,
   serverJobId?: string | null
 ): T | null {
   const key = (draftId || "").trim().toLowerCase();
   if (key) {
-    const byDraft = jobs.find((j) => (j.client_draft_id || "").trim().toLowerCase() === key);
-    if (byDraft) return byDraft;
+    const byDraft = jobs.filter((j) => (j.client_draft_id || "").trim().toLowerCase() === key);
+    const preferred = pickPreferredJob(byDraft);
+    if (preferred) return preferred;
   }
   if (serverJobId) {
-    const byId = jobs.find((j) => j.id === serverJobId);
-    if (byId) return byId;
+    const byId = jobs.filter((j) => j.id === serverJobId);
+    const preferred = pickPreferredJob(byId);
+    if (preferred) return preferred;
   }
   return null;
+}
+
+export function isDraftConfirmedOnServer(opts: {
+  lotId?: string | null;
+  catalogedIds?: Set<string> | null;
+  draftKey?: string | null;
+}): boolean {
+  if (opts.lotId) return true;
+  const key = (opts.draftKey || "").trim().toLowerCase();
+  return Boolean(key && opts.catalogedIds?.has(key));
+}
+
+export function decideCatalogConfirm(opts: {
+  jobStatus?: string | null;
+  confirmedOnServer?: boolean;
+  lotId?: string | null;
+}): "completed" | "failed" | "pending" {
+  if (opts.jobStatus === "failed") return "failed";
+  if (opts.jobStatus === "completed" || opts.confirmedOnServer || opts.lotId) return "completed";
+  return "pending";
 }
 
 export function decideSyncRecovery(

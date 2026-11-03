@@ -1,3 +1,4 @@
+import { formatMediaCounts } from "../mediaKind";
 import { isStillCatalogingMessage } from "./archiveCataloged";
 import { isTransientSyncError } from "./syncRecovery";
 
@@ -21,27 +22,28 @@ export type QueueRowInput = {
   archived_at?: number | null;
   server_lot_id?: string | null;
   photo_count?: number;
+  video_count?: number;
   manual_sku?: string | null;
   online?: boolean | null;
   syncing?: boolean;
 };
 
-function photoWord(n: number): string {
-  return `${n} photo${n === 1 ? "" : "s"}`;
+function mediaWord(item: { photo_count?: number; video_count?: number }): string {
+  return formatMediaCounts(item.photo_count || 0, item.video_count || 0);
 }
 
 export function queueRowTitle(item: {
   archived_at?: number | null;
   photo_count?: number;
+  video_count?: number;
   manual_sku?: string | null;
 }): string {
-  const n = item.photo_count || 0;
   const sku = (item.manual_sku || "").trim();
-  const photos = photoWord(n);
+  const media = mediaWord(item);
   if (item.archived_at) {
-    return sku ? `${sku} · ${photos} · on website` : `${photos} · on website`;
+    return sku ? `${sku} · ${media} · on website` : `${media} · on website`;
   }
-  return sku ? `${sku} · ${photos}` : photos;
+  return sku ? `${sku} · ${media}` : media;
 }
 
 /** Resend starts a second catalog job — only when photos are still local and the website does not have this lot. */
@@ -84,12 +86,12 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
         removeTitle: "Remove from this phone?",
         removeBody: archived
           ? "This listing stays on the website. This only removes the phone archive row."
-          : `${photoWord(item.photo_count || 0)} already sent. This only removes the copy on this phone — the website listing stays.`
+          : `${mediaWord(item)} already sent. This only removes the copy on this phone — the website listing stays.`
       }
     : {
         removeLabel: "Delete" as const,
         removeTitle: "Delete local lot?",
-        removeBody: `Delete ${photoWord(item.photo_count || 0)} from this phone? This cannot be undone.`
+        removeBody: `Delete ${mediaWord(item)} from this phone? This cannot be undone.`
       };
 
   if (archived) {

@@ -173,6 +173,7 @@ export function queueRowFingerprint(row: {
   status: string;
   error_message?: string | null;
   photo_count?: number | null;
+  video_count?: number | null;
   photoUris?: string[];
   sale_id?: string;
   manual_sku?: string | null;
@@ -183,6 +184,7 @@ export function queueRowFingerprint(row: {
     row.status,
     row.error_message ?? "",
     row.photo_count ?? 0,
+    row.video_count ?? 0,
     row.sale_id ?? "",
     row.manual_sku ?? "",
     row.archived_at ?? "",

@@ -330,7 +330,11 @@ export default function CaptureSessionScreen() {
     // Prefer an existing unfinished draft so a remount / race doesn't orphan photos.
     const existing = await findOpenDraft(selectedSaleId, listingChannel);
     if (existing) {
-      await applyDraft(existing.id, existing.manual_sku || manualSku, existing.photo_count > 0);
+      await applyDraft(
+        existing.id,
+        existing.manual_sku || manualSku,
+        existing.photo_count + (existing.video_count || 0) > 0
+      );
       return existing.id;
     }
     const id = await createLotDraft(selectedSaleId, selectedSaleName, manualSku, listingChannel);
