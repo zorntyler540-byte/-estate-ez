@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:quote": "node --experimental-strip-types --test lib/quote.test.ts"
+    "test:quote": "node --experimental-strip-types --test lib/quote.test.ts",
+    "test:lot-media": "node --experimental-strip-types --test lib/lotMediaGallery.test.ts lib/lotPhotoThumbLoad.test.ts"
   },
   "dependencies": {
     "heic2any": "^0.0.4",

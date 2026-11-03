@@ -180,9 +180,13 @@ def lot_photos_out(
     """Serialize a lot's photos and mark frames uploaded after the original set."""
     from app.services.photo_adds import added_later_photo_ids
 
+    from app.catalog_limits import is_catalog_video_filename
+
     later = added_later_photo_ids(anchor_photos if anchor_photos is not None else photos)
     outs: list[LotPhotoOut] = []
     for photo in photos:
+        if is_catalog_video_filename(getattr(photo, "original_name", None)):
+            continue
         out = lot_photo_out(photo, lot_id=lot_id)
         out.added_later = photo.id in later
         outs.append(out)

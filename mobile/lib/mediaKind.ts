@@ -37,3 +37,25 @@ export function splitMediaUris(uris: string[]): { images: string[]; videos: stri
   }
   return { images, videos };
 }
+
+/** Draft row is a clip when staff marked it video **or** the file URI is a clip. */
+export function isVideoDraftRow(row: { media_kind?: string | null; file_uri?: string | null }): boolean {
+  return String(row.media_kind || "") === "video" || isVideoUri(row.file_uri);
+}
+
+export function splitDraftMedia<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): { images: T[]; videos: T[] } {
+  const images: T[] = [];
+  const videos: T[] = [];
+  for (const row of rows) {
+    if (isVideoDraftRow(row)) videos.push(row);
+    else images.push(row);
+  }
+  return { images, videos };
+}
+
+/** Clips must not go through ImageManipulator — that produced a gray ``.jpg`` tile. */
+export function shouldPrepareAsPhoto(photo: { uri: string; name: string }): boolean {
+  return !isVideoUri(photo.uri) && !isVideoUri(photo.name);
+}
