@@ -12,7 +12,12 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { countLotsNeedingPhotoUpload, countLotsNeedingWebsiteCheck } from "@/lib/queue/db";
+import { CATALOG_FOLLOWUP_MS } from "@/lib/queue/catalogFollowUp";
+import {
+  countLotsNeedingCatalogFollowUp,
+  countLotsNeedingPhotoUpload,
+  countLotsNeedingWebsiteCheck
+} from "@/lib/queue/db";
 import { formatSyncOutcome } from "@/lib/queue/queueStatus";
 import { attachPendingLotVideos, sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
 
@@ -175,6 +180,31 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       appSub.remove();
     };
   }, [token, tryAutoSync]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      void countLotsNeedingCatalogFollowUp().then((n) => {
+        if (cancelled || n <= 0) return;
+        timer = setTimeout(() => {
+          if (cancelled || syncPausedRef.current) return;
+          if (syncInProgressRef.current) {
+            schedule();
+            return;
+          }
+          lastSyncAtRef.current = 0;
+          void syncNow();
+        }, CATALOG_FOLLOWUP_MS);
+      });
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [token, refreshKey, syncNow]);
 
   const statusValue = useMemo(
     () => ({ syncing, lastMessage }),

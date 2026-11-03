@@ -1,4 +1,10 @@
-import { decideSyncRecovery, findJobForDraft, isTransientSyncError } from "./syncRecovery";
+import {
+  decideCatalogConfirm,
+  decideSyncRecovery,
+  findJobForDraft,
+  isDraftConfirmedOnServer,
+  isTransientSyncError
+} from "./syncRecovery";
 
 const cases: Array<{
   status: "uploading" | "failed" | "queued" | "uploaded";
@@ -64,4 +70,38 @@ if (missing !== null) {
   throw new Error("findJobForDraft should return null when nothing matches");
 }
 
-console.log(`syncRecovery selftest ok (${cases.length + transientCases.length + 3} cases)`);
+const leftoverPlusDone = [
+  { id: "job-new-left", client_draft_id: "1c86c230-a1c1-4433-b64e-5c2957e79027", status: "queued" },
+  { id: "job-done", client_draft_id: "1c86c230-a1c1-4433-b64e-5c2957e79027", status: "completed" }
+];
+const preferred = findJobForDraft(leftoverPlusDone, "1c86c230-a1c1-4433-b64e-5c2957e79027", "job-new-left");
+if (preferred?.id !== "job-done") {
+  throw new Error("findJobForDraft should prefer the completed job over a leftover live row");
+}
+
+if (
+  isDraftConfirmedOnServer({
+    lotId: null,
+    catalogedIds: new Set(["1c86c230-a1c1-4433-b64e-5c2957e79027"]),
+    draftKey: "1C86C230-A1C1-4433-B64E-5C2957E79027"
+  }) !== true
+) {
+  throw new Error("completed client_draft_id without lot mapping is still confirmed");
+}
+if (isDraftConfirmedOnServer({ lotId: null, catalogedIds: new Set(), draftKey: "x" }) !== false) {
+  throw new Error("empty cataloged ids is not confirmed");
+}
+if (decideCatalogConfirm({ jobStatus: "processing" }) !== "pending") {
+  throw new Error("processing stays pending");
+}
+if (decideCatalogConfirm({ jobStatus: "processing", confirmedOnServer: true }) !== "completed") {
+  throw new Error("cataloged draft ids complete the confirm loop");
+}
+if (decideCatalogConfirm({ jobStatus: "completed" }) !== "completed") {
+  throw new Error("completed job finishes confirm");
+}
+if (decideCatalogConfirm({ jobStatus: "failed" }) !== "failed") {
+  throw new Error("failed job stays failed");
+}
+
+console.log(`syncRecovery selftest ok (${cases.length + transientCases.length + 10} cases)`);
