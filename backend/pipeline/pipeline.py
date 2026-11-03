@@ -148,6 +148,23 @@ def _get_client() -> genai.Client:
     return _genai_client
 
 
+def close_genai_client() -> None:
+    """Drop the cached SDK client so an isolated worker child can exit."""
+    global _genai_client
+    client = _genai_client
+    _genai_client = None
+    if client is None:
+        return
+    for name in ("close", "aclose"):
+        fn = getattr(client, name, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            return
+
+
 def _gemini_generate(model: str, contents: Any, config: Any) -> Any:
     """SDK generateContent through the shared cross-process slot + retry wrapper."""
     from app.core.gemini_slots import generate_content

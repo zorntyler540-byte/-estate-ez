@@ -5,7 +5,6 @@ import logging
 import re
 import threading
 import time
-import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.gemini import verify_tape_sku
+from app.job_lock import job_advisory_lock_key
 from app.core.lotting import (
     LotOutput,
     folder_token_as_inherited_sku,
@@ -58,11 +58,6 @@ _process_job_thread_locks: dict[str, threading.Lock] = {}
 _process_job_thread_locks_guard = threading.Lock()
 
 _LOG = logging.getLogger(__name__)
-
-
-def job_advisory_lock_key(job_id: str) -> int:
-    """Stable 31-bit key for ``pg_try_advisory_lock`` (one catalog worker per job id)."""
-    return zlib.crc32(job_id.encode("utf-8")) & 0x7FFFFFFF
 
 
 def _job_lock_key(job_id: str) -> int:
@@ -871,6 +866,12 @@ def _process_job_single_lot_pipeline(
     db.commit()
     _verify_job_catalog_files_on_disk(db, job)
     _emit_job(job, {"type": "status", "status": "completed"})
+    _LOG.info(
+        "single-lot pipeline completed job_id=%s photos=%d lots=%d",
+        job.id,
+        total_photos,
+        1 if finalized is not None else 0,
+    )
 
 
 def process_job(

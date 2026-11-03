@@ -28,3 +28,4 @@ def test_worker_parse_run_job_argv() -> None:
     assert parse_worker_argv(["app.worker", "--run-job", "jid", "acct"]) == ("jid", "acct")
     assert parse_worker_argv(["app.worker"]) is None
     assert parse_worker_argv(["app.worker", "--run-job", "jid"]) is None
+    assert parse_worker_argv(["app.worker", "--self-test-alloc-mb", "8"]) is None
