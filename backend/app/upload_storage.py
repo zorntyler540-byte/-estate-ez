@@ -8,6 +8,7 @@ from datetime import datetime
 
 from fastapi import HTTPException, UploadFile
 
+from app.catalog_limits import should_store_as_catalog_image
 from app.catalog_storage import upload_root
 from app.job_batch_storage import mirror_local_file_to_r2
 from app.services.image_preprocess import compress_upload_bytes_if_image
@@ -48,6 +49,9 @@ async def save_uploaded_files(
     async def _save_one(uf: UploadFile) -> None:
         async with sem:
             body = await uf.read()
+            # A phone clip named ``mobile-…-01.jpg`` must not become a catalog still.
+            if not should_store_as_catalog_image(body, uf.filename or ""):
+                return
             cap = (
                 captured_at_from_image_bytes(body)
                 or captured_at_from_filename(Path(uf.filename or ""))

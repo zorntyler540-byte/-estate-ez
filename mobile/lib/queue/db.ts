@@ -1,6 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import * as FileSystem from "expo-file-system/legacy";
 
+import { isVideoDraftRow } from "@/lib/mediaKind";
 import type { ListingChannel, LotDraft, LotDraftStatus, LotPhotoRow } from "@/lib/types";
 import { newLocalId } from "@/lib/uuid";
 
@@ -323,8 +324,8 @@ export async function archiveCatalogedDraft(draftId: string): Promise<void> {
   const existing = await getLotDraft(draftId);
   if (existing?.archived_at) return;
   const photos = await listDraftPhotos(draftId);
-  const pendingVideos = photos.filter((p) => p.media_kind === "video" && !p.uploaded);
-  const toRemove = photos.filter((p) => !(p.media_kind === "video" && !p.uploaded));
+  const pendingVideos = photos.filter((p) => isVideoDraftRow(p) && !p.uploaded);
+  const toRemove = photos.filter((p) => !(isVideoDraftRow(p) && !p.uploaded));
   const count = photos.length || existing?.photo_count || 0;
   for (const photo of toRemove) {
     try {
@@ -367,7 +368,7 @@ export async function archiveCatalogedDraftIfReady(draftId: string): Promise<boo
 
 export async function draftHasPendingLocalVideos(draftId: string): Promise<boolean> {
   const photos = await listDraftPhotos(draftId);
-  return photos.some((p) => p.media_kind === "video" && !p.uploaded);
+  return photos.some((p) => isVideoDraftRow(p) && !p.uploaded);
 }
 
 /** Drop archived phone rows. Website listings stay. */
@@ -426,8 +427,14 @@ export async function countUploadPending(): Promise<number> {
          OR EXISTS (
            SELECT 1 FROM lot_photos
            WHERE lot_photos.draft_id = lot_drafts.id
-             AND lot_photos.media_kind = 'video'
              AND lot_photos.uploaded = 0
+             AND (
+               lot_photos.media_kind = 'video'
+               OR lower(lot_photos.file_uri) LIKE '%.mp4%'
+               OR lower(lot_photos.file_uri) LIKE '%.mov%'
+               OR lower(lot_photos.file_uri) LIKE '%.m4v%'
+               OR lower(lot_photos.file_uri) LIKE '%.webm%'
+             )
          )
        )`
   );

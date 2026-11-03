@@ -189,6 +189,7 @@ export function LotThumbnail({ lotId, token, hasThumbnail, size = 56, maxPx = 22
           alt=""
           width={size}
           height={size}
+          onError={() => setFailed(true)}
           style={{ ...box, objectFit: "cover", display: "block", imageOrientation: "from-image" }}
         />
       )}

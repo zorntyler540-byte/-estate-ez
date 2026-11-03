@@ -13,7 +13,7 @@ import {
   uploadSingleLotJob
 } from "../api";
 import { formatUploadHealthSummary } from "../formatUploadHealth";
-import { mediaKindFromName } from "../mediaKind";
+import { isVideoDraftRow, mediaKindFromName, splitDraftMedia } from "../mediaKind";
 import { refreshSessionIfPossible } from "../sessionBridge";
 import type { Job } from "../types";
 import {
@@ -64,7 +64,7 @@ async function uploadPendingDraftVideos(
   lotId: string
 ): Promise<void> {
   const rows = await listDraftPhotos(draftId);
-  const pending = rows.filter((p) => p.media_kind === "video" && !p.uploaded);
+    const pending = rows.filter((p) => isVideoDraftRow(p) && !p.uploaded);
   for (let i = 0; i < pending.length; i++) {
     const row = pending[i]!;
     // media_kind is the source of truth — a missing suffix used to skip the clip forever.
@@ -86,7 +86,7 @@ export async function attachPendingLotVideos(token: string): Promise<number> {
   let attached = 0;
   for (const draft of drafts) {
     const photos = await listDraftPhotos(draft.id);
-    const hasPending = photos.some((p) => p.media_kind === "video" && !p.uploaded);
+    const hasPending = photos.some((p) => isVideoDraftRow(p) && !p.uploaded);
     if (!hasPending) continue;
     const cataloged = bySale.get(draft.sale_id);
     const draftKey = draft.id.toLowerCase();
@@ -465,7 +465,7 @@ export async function syncPendingLots(
 
   for (const draft of pending) {
     const photos = await listDraftPhotos(draft.id);
-    const images = photos.filter((p) => p.media_kind !== "video");
+    const { images } = splitDraftMedia(photos);
     if (!images.length) {
       if (draft.server_lot_id) {
         try {

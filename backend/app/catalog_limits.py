@@ -170,6 +170,38 @@ def is_catalog_video_filename(name: object | None) -> bool:
     return Path(raw).suffix in _VIDEO_SUFFIXES
 
 
+def looks_like_video_bytes(data: bytes | None) -> bool:
+    """True when ``data`` is an MP4/MOV/M4V (ISO BMFF) or WebM clip, even if named ``.jpg``."""
+    raw = data or b""
+    if len(raw) < 8:
+        return False
+    if raw[4:8] == b"ftyp":
+        return True
+    # EBML / Matroska / WebM
+    return raw.startswith(b"\x1a\x45\xdf\xa3")
+
+
+def looks_like_video_file(path: Path | str | None) -> bool:
+    """Filename suffix **or** magic bytes (catches ``mobile-…-01.jpg`` that is actually a clip)."""
+    if path is None:
+        return False
+    p = Path(path)
+    if is_catalog_video_filename(p.name):
+        return True
+    try:
+        with p.open("rb") as fh:
+            return looks_like_video_bytes(fh.read(16))
+    except OSError:
+        return False
+
+
+def should_store_as_catalog_image(data: bytes, filename: str) -> bool:
+    """False for clips — even a video uploaded as ``mobile-draft-01.jpg`` must not become a Photo."""
+    if is_catalog_video_filename(filename):
+        return False
+    return not looks_like_video_bytes(data)
+
+
 def video_content_type(name: object | None) -> str:
     suffix = Path(str(name or "").strip().lower()).suffix
     return {
