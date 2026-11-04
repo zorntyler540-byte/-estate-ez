@@ -27,11 +27,10 @@ import {
   centeredAspectRect,
   type CameraAspectId
 } from "@/lib/cameraAspect";
-import { uploadLotPhotos, uploadLotVideos } from "@/lib/api";
-import { capturedAtMsFromUri } from "@/lib/uploadPrepare";
 import { MAX_DETAIL_CAPTURE_OPTIONS, pickLargestPictureSize } from "@/lib/cameraCapture";
 import { librarySaveNote, photoLibraryBackupAvailable, saveCaptureToPhotoLibrary } from "@/lib/saveToPhotos";
 import { CTBIDS_MAX_PHOTOS_PER_LOT } from "@/lib/catalogLimits";
+import { captureModesFor } from "@/lib/clientCapture";
 import {
   MAX_VIDEO_DURATION_SEC,
   MAX_VIDEOS_PER_LOT,
@@ -39,18 +38,21 @@ import {
   mediaKindFromName,
   splitMediaUris
 } from "@/lib/mediaKind";
+import { reopenForCapture } from "@/lib/queue/addPhotos";
 import {
   addPhotoToDraft,
+  createAppendDraft,
   createLotDraft,
+  deleteLotDraft,
   deletePhotoFromDraft,
+  findOpenAppendDraft,
   findOpenDraft,
   getLotDraft,
   listDraftPhotos,
-  setDraftStatus,
+  requeueDraft,
   updateDraftManualSku
 } from "@/lib/queue/db";
 import {
-  captureFileOps,
   captureQueue,
   moveCaptureIntoPlace,
   processPendingCaptures,
@@ -58,11 +60,18 @@ import {
 } from "@/lib/queue/captureFiles";
 import {
   encodeProcessRatio,
-  processCapture,
   processedUriForRaw,
   rawCaptureUri,
   type CaptureResult
 } from "@/lib/queue/captureProcessing";
+import type { LotDraft } from "@/lib/types";
+import {
+  VIDEO_BITRATE,
+  VIDEO_CODEC,
+  VIDEO_MAX_FILE_BYTES,
+  VIDEO_QUALITY,
+  videoSizeProblem
+} from "@/lib/videoCapture";
 import { theme } from "@/constants/theme";
 import { hitSlopFor } from "@/lib/a11y";
 
@@ -138,6 +147,7 @@ export default function CaptureSessionScreen() {
     appendSku?: string;
     appendTitle?: string;
     appendExistingCount?: string;
+    appendSaleId?: string;
   }>();
   const resumeDraftId = paramString(params.draftId);
   const appendLotId = paramString(params.appendLotId);
@@ -147,9 +157,11 @@ export default function CaptureSessionScreen() {
     0,
     Number.parseInt(paramString(params.appendExistingCount) || "0", 10) || 0
   );
+  const appendSaleId = paramString(params.appendSaleId);
   const isAppendMode = Boolean(appendLotId);
-  const { token, selectedSaleId, selectedSaleName, signedInRole } = useAuth();
+  const { selectedSaleId, selectedSaleName, signedInRole } = useAuth();
   const clientLogin = (signedInRole || "").toLowerCase() === "client";
+  const captureModes = captureModesFor(signedInRole);
   const listingChannel = !clientLogin && params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
   const { syncNow, setSyncPaused } = useSyncActions();
@@ -164,11 +176,6 @@ export default function CaptureSessionScreen() {
   /** Latest thumbs for background jobs (state in their closure would be stale). */
   const thumbsRef = useRef<string[]>([]);
   thumbsRef.current = thumbs;
-  // Append-mode shots live only in memory. Processing records swaps/deletes here, not in
-  // ``thumbsRef``, because a render between commit and setThumbs would reset that ref to a
-  // raw file that processing already deleted.
-  const appendSwapsRef = useRef(new Map<string, string>());
-  const appendRemovedRef = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
@@ -182,6 +189,8 @@ export default function CaptureSessionScreen() {
   const [sessionReady, setSessionReady] = useState(false);
   const [resumedNotice, setResumedNotice] = useState("");
   const [captureMode, setCaptureMode] = useState<"photo" | "video">("photo");
+  /** Set after a recording with sound failed (e.g. no microphone access); next try is silent. */
+  const [videoMuted, setVideoMuted] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -197,6 +206,10 @@ export default function CaptureSessionScreen() {
   const focusRingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftIdRef = useRef<string | null>(null);
+  /** Queued/failed lot reopened here; it goes back in the queue when this screen closes. */
+  const reopenedDraftRef = useRef<string | null>(null);
+  const syncNowRef = useRef(syncNow);
+  syncNowRef.current = syncNow;
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const applyZoom = useCallback((next: number) => {
@@ -278,18 +291,27 @@ export default function CaptureSessionScreen() {
     setSessionReady(false);
     setResumedNotice("");
 
-    async function hydrate() {
-      // Append-to-lot mode starts empty — do not pull an unfinished new-lot draft.
-      if (isAppendMode) {
-        if (!cancelled) setSessionReady(true);
-        return;
+    /** Resume this exact lot. A queued/failed lot goes back to draft so new shots join it. */
+    async function resumable(id: string | null): Promise<LotDraft | null> {
+      const draft = id ? await getLotDraft(id) : null;
+      if (!draft || draft.archived_at) return null;
+      if ((draft.append_lot_id || null) !== (appendLotId || null)) return null;
+      const decision = reopenForCapture(draft.status);
+      if (decision === "blocked") return null;
+      if (decision === "reopen") {
+        await requeueDraft(draft.id, "draft");
+        reopenedDraftRef.current = draft.id;
       }
+      return draft;
+    }
+
+    async function hydrate() {
       try {
-        let draft = resumeDraftId ? await getLotDraft(resumeDraftId) : null;
-        if (draft && draft.status !== "draft") {
-          draft = null;
-        }
-        if (!draft && selectedSaleId) {
+        let draft = await resumable(resumeDraftId);
+        if (!draft && isAppendMode && appendLotId) {
+          // Add photos sessions resume their own shots, never a new-lot draft.
+          draft = await findOpenAppendDraft(appendLotId);
+        } else if (!draft && selectedSaleId) {
           draft = await findOpenDraft(selectedSaleId, listingChannel);
         }
         if (cancelled) return;
@@ -320,7 +342,7 @@ export default function CaptureSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [applyDraft, isAppendMode, listingChannel, resumeDraftId, selectedSaleId]);
+  }, [appendLotId, applyDraft, isAppendMode, listingChannel, resumeDraftId, selectedSaleId]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
@@ -339,6 +361,17 @@ export default function CaptureSessionScreen() {
 
   useEffect(() => {
     return () => {
+      const reopened = reopenedDraftRef.current;
+      if (reopened) {
+        // Closing the camera means "done adding": send the lot again (Finish/Discard already handled it).
+        void (async () => {
+          const draft = await getLotDraft(reopened);
+          if (draft?.status === "draft" && draft.photo_count + (draft.video_count || 0) > 0) {
+            await requeueDraft(reopened, "queued");
+            void syncNowRef.current();
+          }
+        })().catch(() => undefined);
+      }
       if (focusRingTimerRef.current) clearTimeout(focusRingTimerRef.current);
       if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
       if (recordTimerRef.current) clearInterval(recordTimerRef.current);
@@ -352,6 +385,23 @@ export default function CaptureSessionScreen() {
 
   async function ensureDraft(): Promise<string | null> {
     if (draftIdRef.current) return draftIdRef.current;
+    if (isAppendMode && appendLotId) {
+      // Shots for a website lot persist in SQLite like any lot; Sync uploads them to the lot.
+      const open = await findOpenAppendDraft(appendLotId);
+      if (open) {
+        await applyDraft(open.id, null, open.photo_count + (open.video_count || 0) > 0);
+        return open.id;
+      }
+      const id = await createAppendDraft({
+        saleId: appendSaleId || selectedSaleId || "",
+        saleName: appendSaleId && appendSaleId !== selectedSaleId ? null : selectedSaleName,
+        lotId: appendLotId,
+        label: appendSku || appendTitle
+      });
+      draftIdRef.current = id;
+      setDraftId(id);
+      return id;
+    }
     if (!selectedSaleId) {
       setError(
         clientLogin
@@ -374,28 +424,6 @@ export default function CaptureSessionScreen() {
     draftIdRef.current = id;
     setDraftId(id);
     return id;
-  }
-
-  function appendDir(): string {
-    return `${FileSystem.documentDirectory}lot-append/${appendLotId}/`;
-  }
-
-  async function cleanupAppendFiles(uris: string[]) {
-    for (const uri of uris) appendRemovedRef.current.add(uri);
-    for (const uri of uris) {
-      try {
-        await FileSystem.deleteAsync(uri, { idempotent: true });
-      } catch {
-        /* already gone */
-      }
-    }
-    if (appendLotId) {
-      try {
-        await FileSystem.deleteAsync(appendDir(), { idempotent: true });
-      } catch {
-        /* ignore */
-      }
-    }
   }
 
   useEffect(() => {
@@ -456,40 +484,6 @@ export default function CaptureSessionScreen() {
       .catch(() => undefined);
   }
 
-  function queueAppendProcessing(
-    rawUri: string,
-    ratio: number | null,
-    size: { width?: number; height?: number }
-  ) {
-    void captureQueue
-      .enqueue(() =>
-        processCapture(
-          {
-            rawUri,
-            ratio,
-            size,
-            isPending: async () => !appendRemovedRef.current.has(rawUri),
-            commit: async (newUri) => {
-              if (appendRemovedRef.current.has(rawUri)) return false;
-              if (newUri) appendSwapsRef.current.set(rawUri, newUri);
-              return true;
-            }
-          },
-          captureFileOps
-        )
-      )
-      .then(async (result) => {
-        if (result.status === "processed" && appendRemovedRef.current.has(rawUri)) {
-          // Deleted from the strip after the swap landed.
-          await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => undefined);
-          return;
-        }
-        applyProcessedUri(rawUri, result);
-        if (result.status !== "gone") await mirrorToPhotoLibrary(result.uri);
-      })
-      .catch(() => undefined);
-  }
-
   async function snap() {
     if (!cameraRef.current || busy || !cameraReady || !sessionReady) return;
     const photoCount = thumbs.filter((u) => !isVideoUri(u)).length;
@@ -515,13 +509,6 @@ export default function CaptureSessionScreen() {
       const size = { width: photo.width, height: photo.height };
       // Durable first (move + SQLite row), then free the shutter. Orientation/crop
       // re-encode and the Photos copy run on the background queue.
-      if (isAppendMode && appendLotId) {
-        const raw = rawCaptureUri(appendDir(), Date.now());
-        await moveCaptureIntoPlace(photo.uri, raw);
-        setThumbs((prev) => [...prev, raw]);
-        queueAppendProcessing(raw, ratio, size);
-        return;
-      }
       const id = await ensureDraft();
       if (!id) return;
       const raw = rawCaptureUri(`${FileSystem.documentDirectory}lot-captures/${id}/`, Date.now());
@@ -555,15 +542,6 @@ export default function CaptureSessionScreen() {
   async function saveCapturedVideo(uri: string) {
     const match = uri.toLowerCase().match(/\.(mp4|mov|m4v|webm)/);
     const ext = match?.[0] || (mediaKindFromName(uri) === "video" ? ".mp4" : ".mp4");
-    if (isAppendMode && appendLotId) {
-      const dir = appendDir();
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-      const dest = `${dir}${Date.now()}${ext}`;
-      await FileSystem.copyAsync({ from: uri, to: dest });
-      setThumbs((prev) => [...prev, dest]);
-      void captureQueue.enqueue(() => mirrorToPhotoLibrary(dest)).catch(() => undefined);
-      return;
-    }
     const id = await ensureDraft();
     if (!id) return;
     const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
@@ -589,18 +567,36 @@ export default function CaptureSessionScreen() {
     try {
       let clip: { uri?: string } | undefined;
       try {
+        // 720p + bitrate cap (CameraView props; iOS needs the codec here to apply the bitrate)
+        // and a file-size stop keep a 45s clip well under the website's upload limit.
         clip = await cameraRef.current.recordAsync({
           maxDuration: MAX_VIDEO_DURATION_SEC,
-          mute: false
+          maxFileSize: VIDEO_MAX_FILE_BYTES,
+          codec: VIDEO_CODEC
         });
-      } catch {
-        clip = await cameraRef.current.recordAsync({
-          maxDuration: MAX_VIDEO_DURATION_SEC,
-          mute: true
-        });
+      } catch (e) {
+        if (!videoMuted) {
+          setVideoMuted(true);
+          setError("Could not record with sound — tap Record again to record without sound.");
+          return;
+        }
+        throw e;
       }
       if (!clip?.uri) {
         setError("Camera returned no video.");
+        return;
+      }
+      let size: number | null = null;
+      try {
+        const info = await FileSystem.getInfoAsync(clip.uri);
+        size = info.exists && !info.isDirectory ? (info.size ?? null) : null;
+      } catch {
+        size = null;
+      }
+      const problem = videoSizeProblem(size);
+      if (problem) {
+        await FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => undefined);
+        setError(problem);
         return;
       }
       await saveCapturedVideo(clip.uri);
@@ -634,36 +630,10 @@ export default function CaptureSessionScreen() {
   }
 
   async function removePhoto(uri: string) {
-    if (!isAppendMode && !draftId) return;
+    if (!draftId) return;
 
     async function performDelete() {
       try {
-        if (isAppendMode) {
-          const current = appendSwapsRef.current.get(uri) ?? uri;
-          appendRemovedRef.current.add(uri);
-          appendRemovedRef.current.add(current);
-          for (const target of new Set([uri, current])) {
-            try {
-              await FileSystem.deleteAsync(target, { idempotent: true });
-            } catch {
-              /* file may already be gone */
-            }
-          }
-          setThumbs((prev) => {
-            const uris = prev.filter((u) => u !== uri && u !== current);
-            if (previewUri === uri) {
-              if (!uris.length) {
-                setPreviewUri(null);
-              } else {
-                const nextIndex = Math.min(previewIndex, uris.length - 1);
-                setPreviewIndex(nextIndex);
-                setPreviewUri(uris[nextIndex] ?? null);
-              }
-            }
-            return uris;
-          });
-          return;
-        }
         // The thumb can still show the raw path for a moment after SQLite moved to the
         // processed file; delete whichever row this shot has now.
         const processed = processedUriForRaw(uri);
@@ -780,53 +750,64 @@ export default function CaptureSessionScreen() {
   }
 
   async function finishAppend() {
-    if (!isAppendMode || !appendLotId || !thumbs.length) return;
-    if (!token) {
-      setError("Sign in again to upload photos.");
-      return;
-    }
+    if (!isAppendMode || !draftId || !thumbs.length) return;
     setBusy(true);
     setError("");
     try {
+      // Let orientation/crop finish so Sync uploads the final files (it also re-checks).
       await captureQueue.idle();
-      const files = thumbsRef.current
-        .map((u) => appendSwapsRef.current.get(u) ?? u)
-        .filter((u) => !appendRemovedRef.current.has(u));
-      const { images, videos } = splitMediaUris(files);
-      if (images.length) {
-        await uploadLotPhotos(
-          token,
-          appendLotId,
-          images.map((uri, i) => ({
-            uri,
-            name: `append-${String(i + 1).padStart(2, "0")}.jpg`,
-            capturedAtMs: capturedAtMsFromUri(uri)
-          }))
-        );
-      }
-      if (videos.length) {
-        await uploadLotVideos(
-          token,
-          appendLotId,
-          videos.map((uri, i) => {
-            const ext = uri.toLowerCase().match(/\.(mp4|mov|m4v|webm)/)?.[0] || ".mp4";
-            return { uri, name: `append-vid-${String(i + 1).padStart(2, "0")}${ext}` };
-          })
-        );
-      }
-      const uploaded = files;
-      setThumbs([]);
-      await cleanupAppendFiles(uploaded);
-      Alert.alert(
-        "Added to lot",
-        `${uploaded.length} file${uploaded.length === 1 ? "" : "s"} added to the listing.`,
-        [{ text: "OK", onPress: () => router.back() }]
-      );
+      await requeueDraft(draftId, "queued");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not upload photos");
+      setError(e instanceof Error ? e.message : "Could not queue these shots");
+      return;
     } finally {
       setBusy(false);
     }
+    void syncNow();
+    const label = appendSku || appendTitle || "this lot";
+    Alert.alert(
+      "Queued for upload",
+      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} will be added to ${label}. They stay on this phone (Queue tab) until the website has them.`,
+      [{ text: "OK", onPress: () => router.back() }]
+    );
+  }
+
+  /** Cancel in Add photos mode discards the new shots — ask first, they are not on the website. */
+  function cancelAppend() {
+    const id = draftIdRef.current;
+    if (!id) {
+      router.back();
+      return;
+    }
+    if (!thumbs.length) {
+      void deleteLotDraft(id).finally(() => router.back());
+      return;
+    }
+    const { images, videos } = splitMediaUris(thumbs);
+    const parts = [
+      images.length ? `${images.length} photo${images.length === 1 ? "" : "s"}` : "",
+      videos.length ? `${videos.length} video${videos.length === 1 ? "" : "s"}` : ""
+    ].filter(Boolean);
+    Alert.alert(
+      "Discard new shots?",
+      `${parts.join(" · ")} will be deleted from this phone. They have not been added to the lot.`,
+      [
+        { text: "Keep shooting", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              await captureQueue.idle().catch(() => undefined);
+              await deleteLotDraft(id);
+              draftIdRef.current = null;
+              setThumbs([]);
+              router.back();
+            })();
+          }
+        }
+      ]
+    );
   }
 
   async function finishLot() {
@@ -839,7 +820,7 @@ export default function CaptureSessionScreen() {
       setBusy(false);
     }
     await updateDraftManualSku(draftId, manualSku);
-    await setDraftStatus(draftId, "queued", null);
+    await requeueDraft(draftId, "queued");
     void syncNow();
     Alert.alert(
       "Lot queued",
@@ -906,6 +887,9 @@ export default function CaptureSessionScreen() {
           style={StyleSheet.absoluteFill}
           facing="back"
           mode={captureMode === "video" ? "video" : "picture"}
+          videoQuality={VIDEO_QUALITY}
+          videoBitrate={VIDEO_BITRATE}
+          mute={videoMuted}
           zoom={zoom}
           enableTorch={torchOn}
           autofocus={autofocus}
@@ -1061,27 +1045,29 @@ export default function CaptureSessionScreen() {
             ) : null}
           </View>
 
-          <View style={styles.modeRow}>
-            {(["photo", "video"] as const).map((mode) => {
-              const active = captureMode === mode;
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={mode === "photo" ? "Photo mode" : "Video mode"}
-                  accessibilityState={{ selected: active, disabled: recording }}
-                  hitSlop={hitSlopFor(34)}
-                  key={mode}
-                  style={[styles.modeBtn, active && styles.modeBtnActive]}
-                  disabled={recording}
-                  onPress={() => setCaptureMode(mode)}
-                >
-                  <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
-                    {mode === "photo" ? "Photo" : "Video"}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {captureModes.length > 1 ? (
+            <View style={styles.modeRow}>
+              {captureModes.map((mode) => {
+                const active = captureMode === mode;
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={mode === "photo" ? "Photo mode" : "Video mode"}
+                    accessibilityState={{ selected: active, disabled: recording }}
+                    hitSlop={hitSlopFor(34)}
+                    key={mode}
+                    style={[styles.modeBtn, active && styles.modeBtnActive]}
+                    disabled={recording}
+                    onPress={() => setCaptureMode(mode)}
+                  >
+                    <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
+                      {mode === "photo" ? "Photo" : "Video"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
 
           <View style={[styles.actions, landscape && styles.actionsLandscape]}>
             {!landscape ? (
@@ -1090,11 +1076,8 @@ export default function CaptureSessionScreen() {
                 accessibilityLabel={isAppendMode ? "Cancel and discard these new shots" : "Close camera"}
                 style={styles.secondary}
                 onPress={() => {
-                  if (isAppendMode && thumbs.length) {
-                    void cleanupAppendFiles(thumbs).then(() => {
-                      setThumbs([]);
-                      router.back();
-                    });
+                  if (isAppendMode) {
+                    cancelAppend();
                     return;
                   }
                   router.back();

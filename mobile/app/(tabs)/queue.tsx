@@ -28,8 +28,8 @@ import {
   listDraftPhotos,
   listLotDrafts,
   removeBlockedClips,
-  setDraftServerLotId,
-  setDraftStatus
+  requeueDraft,
+  setDraftServerLotId
 } from "@/lib/queue/db";
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
@@ -128,27 +128,56 @@ export default function QueueScreen() {
   );
 
   async function queueDraft(id: string) {
-    await setDraftStatus(id, "queued", null);
+    await requeueDraft(id, "queued");
     await refresh();
-    void syncNow();
+    void syncNow({ manual: true });
   }
 
+  /** Needs attention: staff fixed the problem (or want another try) — send it again now. */
+  async function retryDraft(item: DraftRow) {
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
+      return;
+    }
+    await requeueDraft(item.id, "queued");
+    await refresh();
+    setMessage("Retrying…");
+    const result = await syncNow({ manual: true });
+    if (result) setMessage(formatQueueSyncMessage(result, online));
+    await refresh();
+  }
+
+  /** Reopens this exact lot in the camera (a queued/failed lot goes back to draft there). */
   function continueDraft(item: DraftRow) {
     router.push({
       pathname: "/capture-session",
       params: {
         draftId: item.id,
+        ...(item.append_lot_id
+          ? {
+              appendLotId: item.append_lot_id,
+              appendSaleId: item.sale_id,
+              ...(item.append_label ? { appendSku: item.append_label } : {})
+            }
+          : {}),
         ...(item.listing_channel === "facebook" ? { channel: "facebook" } : {})
       }
     });
   }
 
-  function openAppendCamera(lotId: string, photoCount: number, sku?: string | null, title?: string | null) {
+  function openAppendCamera(
+    lotId: string,
+    photoCount: number,
+    sku?: string | null,
+    title?: string | null,
+    saleId?: string | null
+  ) {
     router.push({
       pathname: "/capture-session",
       params: {
         appendLotId: lotId,
         appendExistingCount: String(photoCount || 0),
+        ...(saleId ? { appendSaleId: saleId } : {}),
         ...(sku?.trim() ? { appendSku: sku.trim() } : {}),
         ...(title?.trim() ? { appendTitle: title.trim().slice(0, 80) } : {})
       }
@@ -160,7 +189,7 @@ export default function QueueScreen() {
       Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
       return;
     }
-    if (queueAddPhotosIsLocal(item.status)) {
+    if (queueAddPhotosIsLocal(item.status) && !item.archived_at) {
       continueDraft(item);
       return;
     }
@@ -228,12 +257,15 @@ export default function QueueScreen() {
           `The website has ${sku ? `SKU ${sku}` : "a listing"}${title ? ` — ${title}` : ""}. Add photos to that listing?`,
           [
             { text: "Cancel", style: "cancel" },
-            { text: "Add photos", onPress: () => openAppendCamera(lotId, photoCount, sku, title) }
+            {
+              text: "Add photos",
+              onPress: () => openAppendCamera(lotId, photoCount, sku, title, item.sale_id)
+            }
           ]
         );
         return;
       }
-      openAppendCamera(picked.lotId, photoCount, sku, title);
+      openAppendCamera(picked.lotId, photoCount, sku, title, item.sale_id);
     } catch (e) {
       setMessage("");
       Alert.alert("Could not add photos", e instanceof Error ? e.message : "Try the Lots tab.");
@@ -259,10 +291,10 @@ export default function QueueScreen() {
           text: "Resend",
           onPress: () => {
             void (async () => {
-              await setDraftStatus(item.id, "queued", null);
+              await requeueDraft(item.id, "queued");
               await refresh();
               setMessage("Re-queued — syncing…");
-              const result = await syncNow();
+              const result = await syncNow({ manual: true });
               if (result) {
                 setMessage(formatQueueSyncMessage(result, online));
               }
@@ -280,7 +312,7 @@ export default function QueueScreen() {
 
   async function syncAll() {
     setMessage("");
-    const result = await syncNow();
+    const result = await syncNow({ manual: true });
     if (result) {
       setMessage(formatQueueSyncMessage(result, online));
     } else if (!syncing) {
@@ -330,6 +362,12 @@ export default function QueueScreen() {
     }
 
     const view = queueRowView(item);
+    const remove = () => {
+      void (async () => {
+        await deleteLotDraft(item.id);
+        await refresh();
+      })();
+    };
     Alert.alert(
       view.removeTitle,
       view.removeBody,
@@ -339,10 +377,16 @@ export default function QueueScreen() {
           text: view.removeLabel,
           style: "destructive",
           onPress: () => {
-            void (async () => {
-              await deleteLotDraft(item.id);
-              await refresh();
-            })();
+            const second = view.removeConfirm;
+            if (!second) {
+              remove();
+              return;
+            }
+            // Sent but not confirmed: if catalog fails, this phone has the only copy.
+            Alert.alert(second.title, second.body, [
+              { text: "Keep on phone", style: "cancel" },
+              { text: view.removeLabel, style: "destructive", onPress: remove }
+            ]);
           }
         }
       ]
@@ -561,7 +605,21 @@ export default function QueueScreen() {
                       style={styles.secondary}
                       onPress={() => void queueDraft(item.id)}
                     >
-                      <Text style={styles.secondaryText}>Queue for upload</Text>
+                      <Text style={styles.secondaryText}>
+                        {item.append_lot_id ? "Upload to lot" : "Queue for upload"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {view.showRetry ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Retry ${title}`}
+                      accessibilityState={{ disabled: syncing }}
+                      style={[styles.secondary, syncing && styles.disabled]}
+                      disabled={syncing}
+                      onPress={() => void retryDraft(item)}
+                    >
+                      <Text style={styles.secondaryText}>Retry</Text>
                     </Pressable>
                   ) : null}
                   {view.showResend ? (
