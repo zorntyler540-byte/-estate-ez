@@ -36,6 +36,16 @@ from app.services.search_tags import format_ctseller_tag_field
 logger = logging.getLogger(__name__)
 
 SELLER_API = "https://seller.ctbids.com/services/api/v1"
+# seller.ctbids.com sits behind an AWS load balancer that returns an HTML 403
+# unless the call carries a browser User-Agent plus the seller site Origin.
+_SELLER_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Origin": "https://seller.ctbids.com",
+    "Referer": "https://seller.ctbids.com/",
+}
 DEFAULT_TIMEOUT = 60.0
 IMAGE_MAX_EDGE = 1600
 IMAGE_JPEG_QUALITY = 85
@@ -115,6 +125,68 @@ def unseal_secret(sealed: str | None) -> str:
 def _btoa(s: str) -> str:
     """Match browser btoa() for Latin-1/ASCII passwords."""
     return base64.b64encode(s.encode("latin-1", errors="replace")).decode("ascii")
+
+
+# Seller password login can return an mfatoken. The code itself is sent and
+# checked on the CTBids MFA routes the seller sign-in already uses.
+MFA_SEND_URL = "https://api.ctbids.com/services/api/v1/buyer/user/mfa/otp/send"
+MFA_VERIFY_URL = "https://api.ctbids.com/services/api/v1/buyer/user/mfa/verify"
+MFA_RESEND_URL = "https://api.ctbids.com/services/api/v1/buyer/user/mfa/otp/resend"
+CT_SELLER_SITE = "https://seller.ctbids.com/"
+
+
+class CTSellerMfaRequired(CTSellerError):
+    """Password was accepted. CT Seller wants an email or text code."""
+
+    def __init__(self, mfa_token: str, *, email: str = "", mobile: str = "") -> None:
+        super().__init__("CT Seller needs a one-time code.")
+        self.mfa_token = (mfa_token or "").strip()
+        self.email = (email or "").strip()
+        self.mobile = (mobile or "").strip()
+
+
+def mfa_challenge_from_body(body: object) -> CTSellerMfaRequired | None:
+    if not isinstance(body, dict):
+        return None
+    blobs: list[dict[str, Any]] = [body]
+    data = body.get("data")
+    if isinstance(data, dict):
+        blobs.append(data)
+    for blob in blobs:
+        token = str(blob.get("mfatoken") or blob.get("mfaToken") or "").strip()
+        kind = str(blob.get("type") or "").lower()
+        email = str(blob.get("email") or "").strip()
+        mobile = str(blob.get("mobile") or "").strip()
+        if token and (kind in {"mfa", "otp"} or email or mobile):
+            return CTSellerMfaRequired(token, email=email, mobile=mobile)
+    return None
+
+
+def _tokens_from_body(body: object) -> CTSellerTokens | None:
+    if not isinstance(body, dict):
+        return None
+    blobs: list[dict[str, Any]] = [body]
+    data = body.get("data")
+    if isinstance(data, dict):
+        blobs.append(data)
+    access = ""
+    refresh = ""
+    for blob in blobs:
+        if not access:
+            for key in ("accessToken", "access_token", "newToken"):
+                val = blob.get(key)
+                if isinstance(val, str) and val.count(".") == 2:
+                    access = val.strip()
+                    break
+        if not refresh:
+            for key in ("refreshToken", "refresh_token", "newRefreshToken"):
+                val = blob.get(key)
+                if isinstance(val, str) and val.count(".") == 2:
+                    refresh = val.strip()
+                    break
+    if not access:
+        return None
+    return CTSellerTokens(access_token=access, refresh_token=refresh)
 
 
 def jwt_expiry_unix(token: str | None) -> float | None:
@@ -198,7 +270,11 @@ class CTSellerClient:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update(
-            {"Content-Type": "application/json", "Accept": "application/json"}
+            {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                **_SELLER_BROWSER_HEADERS,
+            }
         )
         self.set_token(access_token)
 
@@ -223,18 +299,92 @@ class CTSellerClient:
             headers={"Content-Type": "application/json"},
             timeout=self.timeout,
         )
+        try:
+            body = resp.json() if resp.content else {}
+        except Exception:  # noqa: BLE001
+            body = {}
+        mfa = mfa_challenge_from_body(body)
+        if mfa:
+            raise mfa
         if resp.status_code >= 400:
             raise CTSellerError(
                 _message_from_response(resp) or "CT Seller login failed",
                 status_code=resp.status_code,
             )
-        body = resp.json() if resp.content else {}
-        access = (body.get("accessToken") or body.get("access_token") or "").strip()
-        refresh = (body.get("refreshToken") or body.get("refresh_token") or "").strip()
-        if not access:
+        tokens = _tokens_from_body(body)
+        if not tokens:
             raise CTSellerError("CT Seller login did not return an access token")
-        self.set_token(access)
-        return CTSellerTokens(access_token=access, refresh_token=refresh)
+        self.set_token(tokens.access_token)
+        return tokens
+
+    def send_mfa(self, mfa_token: str, channel: str, *, resend: bool = False) -> None:
+        token = (mfa_token or "").strip()
+        if not token:
+            raise CTSellerError("Sign in again — the one-time-code session expired.")
+        url = MFA_RESEND_URL if resend else MFA_SEND_URL
+        kind = "email" if (channel or "").strip().lower() in {"email", "mail"} else "sms"
+        tried = [kind, "mobile"] if kind == "sms" else [kind]
+        last = "Could not send the code."
+        for type_val in tried:
+            resp = self.session.post(
+                url,
+                data=json.dumps({"data": {"mfatoken": token, "type": type_val}}),
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+            try:
+                body = resp.json() if resp.content else {}
+            except Exception:  # noqa: BLE001
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            if resp.status_code < 400 and str(body.get("status") or "").lower() != "failed":
+                return
+            last = _coerce_message(body.get("message")) or last
+            if "invalid" in last.lower() and "type" in last.lower():
+                continue
+            if resp.status_code < 400:
+                continue
+            if "CBMFA" in json.dumps(body):
+                break
+        raise CTSellerError(last)
+
+    def verify_mfa(self, mfa_token: str, otp: str) -> CTSellerTokens:
+        token = (mfa_token or "").strip()
+        code = "".join(ch for ch in (otp or "") if ch.isalnum())
+        if not token:
+            raise CTSellerError("Sign in again — the one-time-code session expired.")
+        if len(code) < 4:
+            raise CTSellerError("Enter the code CT Seller sent.")
+        payloads = [
+            {"data": {"mfatoken": token, "otp": code, "isTrustedMode": True}},
+            {"data": {"mfatoken": token, "otp": code}},
+            {"data": {"mfatoken": token, "code": code, "isTrustedMode": True}},
+        ]
+        last = "That code was not accepted."
+        for payload in payloads:
+            resp = self.session.post(
+                MFA_VERIFY_URL,
+                data=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+            try:
+                body = resp.json() if resp.content else {}
+            except Exception:  # noqa: BLE001
+                body = {}
+            if resp.status_code >= 400:
+                last = _coerce_message(body.get("message") if isinstance(body, dict) else None) or last
+                continue
+            tokens = _tokens_from_body(body)
+            if tokens:
+                self.set_token(tokens.access_token)
+                return tokens
+            if mfa_challenge_from_body(body):
+                last = "CT Seller still wants a code. Request a new one."
+                continue
+            last = _coerce_message(body.get("message") if isinstance(body, dict) else None) or last
+        raise CTSellerError(last)
 
     def refresh(self, refresh_token: str) -> str:
         """Refresh access token; returns new access token."""
@@ -801,13 +951,16 @@ class CTSellerClient:
 
 
 def _message_from_response(resp: requests.Response) -> str:
+    text = resp.text or ""
+    if "<html" in text[:300].lower() or "<title>403 forbidden" in text.lower():
+        return "CT Seller refused the sign-in. Try again in a moment."
     try:
         body = resp.json()
     except Exception:  # noqa: BLE001
-        return (resp.text or "")[:300]
+        return text[:300]
     if isinstance(body, dict):
-        return _coerce_message(body.get("message")) or (resp.text or "")[:300]
-    return (resp.text or "")[:300]
+        return _coerce_message(body.get("message")) or text[:300]
+    return text[:300]
 
 
 def _is_retryable_seller_error(exc: CTSellerError) -> bool:

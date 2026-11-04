@@ -71,6 +71,10 @@ from app.models import (
 from app.schemas import (
     CreateJobRequest,
     CTSellerCredentialsIn,
+    CTSellerConnectOut,
+    CTSellerMfaSendIn,
+    CTSellerMfaSentOut,
+    CTSellerMfaVerifyIn,
     CTSellerConditionOut,
     CTSellerRemoteSaleOut,
     CtsellerSaleSyncOut,
@@ -187,6 +191,7 @@ from app.schemas import (
 from app.services.ctseller import (
     CTSellerClient,
     CTSellerError,
+    CTSellerMfaRequired,
     access_token_should_refresh,
     build_item_payload,
     parse_sale_image_secondary_urls,
@@ -3393,13 +3398,22 @@ def ctseller_desktop_session(
     )
 
 
-@app.put("/integrations/ctseller/credentials", response_model=CTSellerStatusOut)
+def _save_ctseller_login(account: Account, username: str, password: str, tokens) -> None:
+    account.ctseller_username = username.strip()
+    account.ctseller_password_enc = seal_secret(password)
+    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
+    account.ctseller_refresh_token_enc = (
+        seal_secret(tokens.refresh_token) if tokens.refresh_token else None
+    )
+
+
+@app.put("/integrations/ctseller/credentials", response_model=CTSellerConnectOut)
 def ctseller_connect(
     payload: CTSellerCredentialsIn,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> CTSellerStatusOut:
-    """Store CT Seller login (encrypted) after verifying credentials."""
+) -> CTSellerConnectOut:
+    """Store CT Seller login after verifying it. A one-time code stays in the browser until verified."""
     _require_owner(current)
     account = db.query(Account).filter(Account.id == current.account_id).first()
     if not account:
@@ -3407,14 +3421,55 @@ def ctseller_connect(
     client = CTSellerClient()
     try:
         tokens = client.login(payload.username.strip(), payload.password)
+    except CTSellerMfaRequired as exc:
+        return CTSellerConnectOut(
+            connected=False,
+            username=payload.username.strip(),
+            mfa_required=True,
+            mfa_token=exc.mfa_token,
+            mfa_email=exc.email,
+            mfa_mobile=exc.mobile,
+        )
     except CTSellerError as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "CT Seller login failed") from exc
-    account.ctseller_username = payload.username.strip()
-    account.ctseller_password_enc = seal_secret(payload.password)
-    account.ctseller_access_token_enc = seal_secret(tokens.access_token)
-    account.ctseller_refresh_token_enc = (
-        seal_secret(tokens.refresh_token) if tokens.refresh_token else None
-    )
+    _save_ctseller_login(account, payload.username, payload.password, tokens)
+    db.add(account)
+    db.commit()
+    return CTSellerConnectOut(connected=True, username=account.ctseller_username)
+
+
+@app.post("/integrations/ctseller/mfa/send", response_model=CTSellerMfaSentOut)
+def ctseller_mfa_send(
+    payload: CTSellerMfaSendIn,
+    current: User = Depends(get_current_user),
+) -> CTSellerMfaSentOut:
+    """Ask CT Seller to email or text the one-time code for a password sign-in."""
+    _require_owner(current)
+    client = CTSellerClient()
+    try:
+        client.send_mfa(payload.mfa_token, payload.channel, resend=payload.resend)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Could not send the code") from exc
+    return CTSellerMfaSentOut(sent=True)
+
+
+@app.post("/integrations/ctseller/mfa/verify", response_model=CTSellerStatusOut)
+def ctseller_mfa_verify(
+    payload: CTSellerMfaVerifyIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CTSellerStatusOut:
+    """Finish a CT Seller one-time code and store the session on this account."""
+    _require_owner(current)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    client = CTSellerClient()
+    try:
+        tokens = client.verify_mfa(payload.mfa_token, payload.otp)
+    except CTSellerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "That code was not accepted") from exc
+    _save_ctseller_login(account, payload.username, payload.password, tokens)
     db.add(account)
     db.commit()
     return CTSellerStatusOut(connected=True, username=account.ctseller_username)

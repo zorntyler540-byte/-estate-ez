@@ -623,3 +623,160 @@ def test_add_item_video_rejects_empty_and_oversize_before_upload(monkeypatch) ->
             raise AssertionError("oversize")
         except CTSellerError as exc:
             assert "2 MB" in str(exc)
+
+
+class _Resp:
+    def __init__(self, body: dict, status: int = 200) -> None:
+        self.status_code = status
+        self._body = body
+        self.content = b"{}"
+        self.text = ""
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_login_surfaces_one_time_code() -> None:
+    from app.services.ctseller import CTSellerMfaRequired, mfa_challenge_from_body
+
+    challenge = mfa_challenge_from_body(
+        {"data": {"mfatoken": "mfa-token-1", "type": "mfa", "email": "seller@example.com", "mobile": "555"}}
+    )
+    assert challenge is not None
+    assert challenge.mfa_token == "mfa-token-1"
+    assert challenge.email == "seller@example.com"
+
+    client = CTSellerClient()
+    with patch.object(
+        client.session,
+        "post",
+        return_value=_Resp(
+            {"data": {"mfatoken": "mfa-token-1", "type": "mfa", "email": "seller@example.com"}}
+        ),
+    ):
+        try:
+            client.login("seller@example.com", "secret")
+            raise AssertionError("expected one-time code")
+        except CTSellerMfaRequired as exc:
+            assert exc.mfa_token == "mfa-token-1"
+
+
+def test_login_looks_like_the_seller_site_and_hides_the_block_page() -> None:
+    client = CTSellerClient()
+    names = {key.lower() for key in client.session.headers}
+    assert "user-agent" in names
+    assert client.session.headers["Origin"] == "https://seller.ctbids.com"
+
+    class Html403:
+        status_code = 403
+        content = b"<html><head><title>403 Forbidden</title></head></html>"
+        text = "<html>\r\n<head><title>403 Forbidden</title></head>\r\n<body>\r\n<center><h1>403 Forbidden</h1></center>\r\n</body>\r\n</html>\r\n"
+        headers: dict = {}
+
+        def json(self):
+            raise ValueError("not json")
+
+    with patch.object(client.session, "post", return_value=Html403()):
+        try:
+            client.login("seller@example.com", "secret")
+            raise AssertionError("expected a sign-in error")
+        except CTSellerError as exc:
+            assert "<html" not in str(exc).lower()
+            assert "refused the sign-in" in str(exc)
+
+
+def test_verify_mfa_reads_nested_tokens() -> None:
+    client = CTSellerClient()
+    with patch.object(
+        client.session,
+        "post",
+        return_value=_Resp(
+            {"data": {"accessToken": "aaa.bbb.ccc", "refreshToken": "ddd.eee.fff"}}
+        ),
+    ):
+        tokens = client.verify_mfa("mfa-token-1", "123456")
+    assert tokens.access_token == "aaa.bbb.ccc"
+    assert tokens.refresh_token == "ddd.eee.fff"
+    assert client.access_token == "aaa.bbb.ccc"
+
+
+def test_account_connect_keeps_the_code_in_the_browser(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import Account
+    from app.services.ctseller import CTSellerClient, CTSellerMfaRequired, CTSellerTokens, unseal_secret
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'mfa.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+    def override_db():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    import app.auth as auth_mod
+    import app.main as main_mod
+
+    monkeypatch.setattr(auth_mod, "SessionLocal", Session)
+    monkeypatch.setattr(main_mod, "SessionLocal", Session)
+    app.dependency_overrides[get_db] = override_db
+    try:
+        client = TestClient(app)
+        reg = client.post(
+            "/auth/register",
+            json={"account_name": "CT", "email": "owner@example.com", "password": "password1"},
+        )
+        assert reg.status_code == 200, reg.text
+        headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+        def boom(self, username, password, **kwargs):
+            raise CTSellerMfaRequired("mfa-token-1", email="seller@example.com")
+
+        monkeypatch.setattr(CTSellerClient, "login", boom)
+        res = client.put(
+            "/integrations/ctseller/credentials",
+            headers=headers,
+            json={"username": "seller@example.com", "password": "seller-pass"},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["mfa_required"] is True
+        assert body["mfa_token"] == "mfa-token-1"
+        assert body["connected"] is False
+        db = Session()
+        account = db.query(Account).one()
+        assert not account.ctseller_password_enc
+        db.close()
+
+        def verify(self, mfa_token, otp):
+            assert mfa_token == "mfa-token-1"
+            assert otp == "123456"
+            return CTSellerTokens(access_token="aaa.bbb.ccc", refresh_token="ddd.eee.fff")
+
+        monkeypatch.setattr(CTSellerClient, "verify_mfa", verify)
+        done = client.post(
+            "/integrations/ctseller/mfa/verify",
+            headers=headers,
+            json={
+                "username": "seller@example.com",
+                "password": "seller-pass",
+                "mfa_token": "mfa-token-1",
+                "otp": "123456",
+            },
+        )
+        assert done.status_code == 200, done.text
+        assert done.json()["connected"] is True
+        db = Session()
+        account = db.query(Account).one()
+        assert unseal_secret(account.ctseller_password_enc) == "seller-pass"
+        assert unseal_secret(account.ctseller_access_token_enc) == "aaa.bbb.ccc"
+        db.close()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
