@@ -77,6 +77,10 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!photoCols.some((c) => c.name === "upload_blocked")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN upload_blocked TEXT");
       }
+      if (!photoCols.some((c) => c.name === "process_ratio")) {
+        // Non-null = raw camera JPEG still waiting for orientation/crop (see captureProcessing).
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN process_ratio TEXT");
+      }
       return db;
     })();
   }
@@ -136,7 +140,8 @@ export async function createLotDraft(
 export async function addPhotoToDraft(
   draftId: string,
   fileUri: string,
-  mediaKind: "image" | "video" = "image"
+  mediaKind: "image" | "video" = "image",
+  opts?: { processRatio?: string | null }
 ): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
@@ -147,11 +152,67 @@ export async function addPhotoToDraft(
   const sortOrder = Number(row?.c ?? 0);
   const kind = mediaKind === "video" ? "video" : "image";
   await db.runAsync(
-    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded, captured_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-    [id, draftId, fileUri, sortOrder, kind, capturedAtFromPhotoRow({ file_uri: fileUri, captured_at: 0 }) || Date.now()]
+    "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded, captured_at, process_ratio) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+    [
+      id,
+      draftId,
+      fileUri,
+      sortOrder,
+      kind,
+      capturedAtFromPhotoRow({ file_uri: fileUri, captured_at: 0 }) || Date.now(),
+      opts?.processRatio ?? null
+    ]
   );
   await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
   return id;
+}
+
+export async function listPhotosPendingProcess(
+  draftId: string
+): Promise<{ id: string; file_uri: string; process_ratio: string }[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Record<string, unknown>>(
+    "SELECT id, file_uri, process_ratio FROM lot_photos WHERE draft_id = ? AND process_ratio IS NOT NULL ORDER BY sort_order ASC",
+    [draftId]
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    file_uri: String(r.file_uri),
+    process_ratio: String(r.process_ratio)
+  }));
+}
+
+export async function isPhotoPendingProcess(photoId: string, fileUri: string): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM lot_photos WHERE id = ? AND file_uri = ? AND process_ratio IS NOT NULL",
+    [photoId, fileUri]
+  );
+  return Number(row?.c ?? 0) > 0;
+}
+
+/**
+ * Swap a raw capture for its processed file (``null`` keeps the raw file) and clear the
+ * pending flag. Only matches while the row still points at ``rawUri``; false = row gone.
+ */
+export async function finishPhotoProcessing(
+  photoId: string,
+  rawUri: string,
+  newUri: string | null
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    "UPDATE lot_photos SET file_uri = ?, process_ratio = NULL WHERE id = ? AND file_uri = ?",
+    [newUri ?? rawUri, photoId, rawUri]
+  );
+  return Number(result.changes || 0) > 0;
+}
+
+/** Every file a queue row still uses (cache cleanup must never delete these). */
+export async function listAllPhotoUris(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ file_uri: string }>("SELECT file_uri FROM lot_photos");
+  return rows.map((r) => String(r.file_uri));
 }
 
 export async function listLotDrafts(): Promise<LotDraft[]> {
@@ -285,6 +346,47 @@ export async function markDraftMediaBlocked(
     draftId,
     photoId
   ]);
+}
+
+/** Refusal reasons for clips the website will not take, keyed by draft id. */
+export async function listBlockedClipReasons(): Promise<Map<string, string[]>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ draft_id: string; upload_blocked: string }>(
+    `SELECT draft_id, upload_blocked FROM lot_photos
+     WHERE upload_blocked IS NOT NULL AND uploaded = 0
+     ORDER BY sort_order ASC`
+  );
+  const out = new Map<string, string[]>();
+  for (const r of rows) {
+    const list = out.get(String(r.draft_id)) ?? [];
+    list.push(String(r.upload_blocked));
+    out.set(String(r.draft_id), list);
+  }
+  return out;
+}
+
+/**
+ * Delete refused clips from the phone so the lot can move to Phone archive. Only touches rows
+ * the website already refused for good — sent photos and pending clips are left alone.
+ */
+export async function removeBlockedClips(draftId: string): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: string; file_uri: string }>(
+    "SELECT id, file_uri FROM lot_photos WHERE draft_id = ? AND upload_blocked IS NOT NULL AND uploaded = 0",
+    [draftId]
+  );
+  for (const row of rows) {
+    await db.runAsync("DELETE FROM lot_photos WHERE id = ?", [row.id]);
+    try {
+      await FileSystem.deleteAsync(row.file_uri, { idempotent: true });
+    } catch {
+      /* file may already be gone */
+    }
+  }
+  if (rows.length) {
+    await db.runAsync("UPDATE lot_drafts SET updated_at = ? WHERE id = ?", [Date.now(), draftId]);
+  }
+  return rows.length;
 }
 
 export async function markDraftMediaUploaded(draftId: string, photoId: string): Promise<void> {
@@ -461,6 +563,18 @@ export async function deleteLotDraft(draftId: string): Promise<void> {
   const db = await getDb();
   await db.runAsync("DELETE FROM lot_photos WHERE draft_id = ?", [draftId]);
   await db.runAsync("DELETE FROM lot_drafts WHERE id = ?", [draftId]);
+}
+
+/** Queue tab badge: lots still on this phone that are not on the website yet. */
+export async function countQueueBadge(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM lot_drafts
+     WHERE archived_at IS NULL
+       AND status IN ('draft', 'queued', 'uploading', 'failed')
+       AND EXISTS (SELECT 1 FROM lot_photos WHERE lot_photos.draft_id = lot_drafts.id)`
+  );
+  return Number(row?.c ?? 0);
 }
 
 export async function countPendingDrafts(): Promise<number> {

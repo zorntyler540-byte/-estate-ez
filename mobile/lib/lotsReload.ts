@@ -13,6 +13,35 @@ export function shouldSkipLotsFocusReload(
   return hasLots && lastLoadAt > 0 && now - lastLoadAt < minIntervalMs;
 }
 
+/** ``GET /lots`` returns at most 500 rows per call. */
+export const LOTS_PAGE_SIZE = 500;
+export const LOTS_MAX_PAGES = 10;
+
+/**
+ * Read every page of a sale's lots. Search filters on the phone, so a lot past the first page
+ * would otherwise be unfindable. ``capped`` means we stopped at ``maxPages`` and more may exist.
+ */
+export async function fetchAllLotPages<T extends { id: string }>(
+  fetchPage: (offset: number, limit: number) => Promise<T[]>,
+  opts?: { pageSize?: number; maxPages?: number }
+): Promise<{ rows: T[]; capped: boolean }> {
+  const pageSize = Math.max(1, opts?.pageSize ?? LOTS_PAGE_SIZE);
+  const maxPages = Math.max(1, opts?.maxPages ?? LOTS_MAX_PAGES);
+  const seen = new Set<string>();
+  const rows: T[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await fetchPage(page * pageSize, pageSize);
+    for (const row of batch) {
+      // Offset paging can repeat a row when lots are added mid-read.
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push(row);
+    }
+    if (batch.length < pageSize) return { rows, capped: false };
+  }
+  return { rows, capped: true };
+}
+
 /** Identity of the list so we can keep existing cover URLs when nothing catalog-changed. */
 export function lotListSignature(lots: LotReloadRow[]): string {
   return lots.map((lot) => `${lot.id}:${lot.photo_count ?? 0}`).join(",");

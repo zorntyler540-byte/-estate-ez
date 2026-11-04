@@ -1,7 +1,8 @@
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Text } from "@/components/AppText";
 
 import {
   getTeamActivity,
@@ -9,6 +10,8 @@ import {
   type TeamActivity,
   type TeamActivityLot
 } from "@/lib/api";
+import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 
 type Days = 1 | 7 | 30;
 type Panel = "catalog" | "sales";
@@ -95,7 +98,11 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
   }
   return (
     <View style={styles.lotChip}>
-      <Pressable onPress={openLot}>
+      <Pressable
+        accessibilityRole="imagebutton"
+        accessibilityLabel="Open lot"
+        onPress={openLot}
+      >
         {source ? (
           <Image source={source} style={styles.lotThumb} contentFit="cover" cachePolicy="memory-disk" />
         ) : (
@@ -168,6 +175,9 @@ export function TeamActivityPanel({ token }: { token: string }) {
           ] as const
         ).map(([id, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: panel === id }}
             key={id}
             style={[styles.chip, panel === id && styles.chipOn]}
             onPress={() => setPanel(id)}
@@ -185,6 +195,9 @@ export function TeamActivityPanel({ token }: { token: string }) {
           ] as const
         ).map(([n, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: days === n }}
             key={n}
             style={[styles.chip, days === n && styles.chipOn]}
             onPress={() => selectDays(n)}
@@ -192,12 +205,19 @@ export function TeamActivityPanel({ token }: { token: string }) {
             <Text style={[styles.chipText, days === n && styles.chipTextOn]}>{label}</Text>
           </Pressable>
         ))}
-        <Pressable style={styles.chip} onPress={() => void load(days)} disabled={loading}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh activity"
+          accessibilityState={{ disabled: loading, busy: loading }}
+          style={styles.chip}
+          onPress={() => void load(days)}
+          disabled={loading}
+        >
           <Text style={styles.chipText}>{loading ? "…" : "Refresh"}</Text>
         </Pressable>
       </View>
       {error ? <Text style={styles.err}>{error}</Text> : null}
-      {loading && !row ? <ActivityIndicator color="#ff4d1a" style={{ marginTop: 8 }} /> : null}
+      {loading && !row ? <ActivityIndicator color={theme.primary} style={{ marginTop: 8 }} /> : null}
       {!row && !loading && !error ? (
         <Text style={styles.meta}>No activity in this window.</Text>
       ) : null}
@@ -257,6 +277,8 @@ export function TeamActivityPanel({ token }: { token: string }) {
               ))}
               {(row.sold_items || []).slice(0, 40).map((item) => (
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open lot ${item.sku?.trim() || ""}`.trim()}
                   key={item.lot_id}
                   onPress={() => router.push(`/lot/${item.lot_id}`)}
                   style={styles.saleRow}
@@ -284,38 +306,40 @@ const styles = StyleSheet.create({
     marginBottom: 0,
     padding: 12,
     borderRadius: 10,
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderWidth: 1,
-    borderColor: "#141416"
+    borderColor: theme.border
   },
-  title: { color: "#f5f5f4", fontSize: 16, fontWeight: "700" },
-  hint: { color: "#a8a29e", fontSize: 12, marginTop: 6, lineHeight: 17 },
+  title: { color: theme.text, fontSize: 16, fontWeight: "700" },
+  hint: { color: theme.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   chip: {
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#292524"
+    borderColor: theme.border,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
-  chipOn: { borderColor: "#ff4d1a", backgroundColor: "#2a120c" },
-  chipText: { color: "#a8a29e", fontSize: 13, fontWeight: "600" },
-  chipTextOn: { color: "#ff4d1a" },
-  err: { color: "#f87171", fontSize: 13, marginTop: 8 },
-  meta: { color: "#78716c", fontSize: 12, marginTop: 8 },
+  chipOn: { borderColor: theme.primary, backgroundColor: theme.primaryMuted },
+  chipText: { color: theme.textMuted, fontSize: 13, fontWeight: "600" },
+  chipTextOn: { color: theme.primary },
+  err: { color: theme.error, fontSize: 13, marginTop: 8 },
+  meta: { color: theme.textSubtle, fontSize: 12, marginTop: 8 },
   person: {
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#1c1917"
+    borderTopColor: theme.border
   },
-  email: { color: "#f5f5f4", fontSize: 14, fontWeight: "600" },
-  counts: { color: "#d6d3d1", fontSize: 13, marginTop: 4 },
+  email: { color: theme.text, fontSize: 14, fontWeight: "600" },
+  counts: { color: theme.textSoft, fontSize: 13, marginTop: 4 },
   saleRow: {
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#1c1917"
+    borderTopColor: theme.border
   },
   lotRow: { marginTop: 10, marginHorizontal: -4 },
   lotChip: { width: 120, marginRight: 8 },
@@ -323,20 +347,22 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 8,
-    backgroundColor: "#1c1917"
+    backgroundColor: theme.surfaceRaised
   },
-  lotThumbEmpty: { borderWidth: 1, borderColor: "#292524" },
-  lotSku: { color: "#f5f5f4", fontSize: 12, fontWeight: "700", marginTop: 4 },
-  lotMeta: { color: "#78716c", fontSize: 11, marginTop: 2 },
-  lotTimes: { color: "#78716c", fontSize: 10, marginTop: 2, lineHeight: 13 },
+  lotThumbEmpty: { borderWidth: 1, borderColor: theme.border },
+  lotSku: { color: theme.text, fontSize: 12, fontWeight: "700", marginTop: 4 },
+  lotMeta: { color: theme.textSubtle, fontSize: 11, marginTop: 2 },
+  lotTimes: { color: theme.textSubtle, fontSize: 10, marginTop: 2, lineHeight: 13 },
   lotOpen: {
     marginTop: 6,
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#292524",
-    backgroundColor: "#141416",
-    alignItems: "center"
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+    alignItems: "center",
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
-  lotOpenText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" }
+  lotOpenText: { color: theme.text, fontSize: 12, fontWeight: "700" }
 });

@@ -6,13 +6,14 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
-  Text,
   View
 } from "react-native";
+import { Text } from "@/components/AppText";
 
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { shouldSkipLotsFocusReload } from "@/lib/lotsReload";
+import { theme } from "@/constants/theme";
 
 export default function SaleScreen() {
   const { selectedSaleId, setSelectedSale } = useAuth();
@@ -45,13 +46,16 @@ export default function SaleScreen() {
           data={sales}
           keyExtractor={(item) => item.id}
           refreshControl={
-            <RefreshControl refreshing={loading} onRefresh={() => void refreshSales()} tintColor="#ff4d1a" />
+            <RefreshControl refreshing={loading} onRefresh={() => void refreshSales()} tintColor={theme.primary} />
           }
           ListEmptyComponent={<Text style={styles.empty}>No open sales.</Text>}
           renderItem={({ item }) => {
             const active = item.id === selectedSaleId;
             return (
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${item.name}${active ? ", selected" : ""}`}
+                accessibilityState={{ selected: active }}
                 style={[styles.row, active && styles.rowActive]}
                 onPress={() => void setSelectedSale(item.id, item.name)}
               >
@@ -67,18 +71,18 @@ export default function SaleScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, backgroundColor: "#070708" },
-  lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
-  empty: { color: "#78716c", textAlign: "center", marginTop: 32 },
+  root: { flex: 1, padding: 16, backgroundColor: theme.bg },
+  lead: { color: theme.textMuted, fontSize: 14, marginBottom: 12 },
+  empty: { color: theme.textSubtle, textAlign: "center", marginTop: 32 },
   row: {
     padding: 14,
     borderRadius: 10,
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderWidth: 1,
-    borderColor: "#141416",
+    borderColor: theme.border,
     marginBottom: 8
   },
-  rowActive: { borderColor: "#ff4d1a" },
-  rowTitle: { color: "#f5f5f4", fontSize: 16, fontWeight: "600" },
-  rowMeta: { color: "#78716c", fontSize: 12, marginTop: 4 }
+  rowActive: { borderColor: theme.primary },
+  rowTitle: { color: theme.text, fontSize: 16, fontWeight: "600" },
+  rowMeta: { color: theme.textSubtle, fontSize: 12, marginTop: 4 }
 });

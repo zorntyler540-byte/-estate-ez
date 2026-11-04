@@ -6,10 +6,9 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
-  TextInput,
   View
 } from "react-native";
+import { Text, TextInput } from "@/components/AppText";
 
 import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";
@@ -84,6 +83,9 @@ export default function LoginScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Sign in"
+        accessibilityState={{ disabled: busy || !email.trim() || !password, busy }}
         style={[styles.button, busy && styles.buttonDisabled]}
         disabled={busy || !email.trim() || !password}
         onPress={() => void onSubmit()}

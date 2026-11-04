@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AccessibilityInfo, AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -24,6 +24,7 @@ import {
   countLotsNeedingWebsiteCheck,
   listFollowUpDrafts
 } from "@/lib/queue/db";
+import { nextAnnouncement } from "@/lib/a11y";
 import { formatSyncOutcome } from "@/lib/queue/queueStatus";
 import {
   attachPendingLotVideos,
@@ -32,8 +33,10 @@ import {
   sweepArchiveConfirmedDrafts,
   syncPendingLots
 } from "@/lib/queue/sync";
+import { sweepImageCache } from "@/lib/queue/captureFiles";
 
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
+const CACHE_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 export type SyncResult = {
   uploaded: number;
@@ -78,6 +81,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const syncInProgressRef = useRef(false);
   const syncPausedRef = useRef(false);
   const lastSyncAtRef = useRef(0);
+  const lastCacheSweepAtRef = useRef(0);
   const wasConnectedRef = useRef<boolean | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
@@ -160,6 +164,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } finally {
       syncInProgressRef.current = false;
       setSyncing(false);
+      if (Date.now() - lastCacheSweepAtRef.current >= CACHE_SWEEP_INTERVAL_MS) {
+        lastCacheSweepAtRef.current = Date.now();
+        void sweepImageCache().catch(() => 0);
+      }
     }
   }, [token]);
 
@@ -275,6 +283,20 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (timer) clearTimeout(timer);
     };
   }, [token, appActive, refreshKey, followUpWake, syncNow]);
+
+  // Screen readers hear the outcome of each Sync once. Interim "Checking…" copy is skipped
+  // because auto-sync runs on every foreground and would talk over whatever the user is doing.
+  const wasSyncingRef = useRef(false);
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const finished = wasSyncingRef.current && !syncing;
+    wasSyncingRef.current = syncing;
+    if (!finished) return;
+    const text = nextAnnouncement(announcedRef.current, lastMessage);
+    if (!text) return;
+    announcedRef.current = text;
+    AccessibilityInfo.announceForAccessibility(text);
+  }, [syncing, lastMessage]);
 
   const statusValue = useMemo(
     () => ({ syncing, lastMessage }),

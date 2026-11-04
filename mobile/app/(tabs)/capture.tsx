@@ -1,9 +1,11 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Text } from "@/components/AppText";
 
 import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { captureGate } from "@/lib/clientCapture";
@@ -96,7 +98,12 @@ export default function CaptureScreen() {
         <Text style={styles.warn}>{gate.message}</Text>
       )}
 
-      <Pressable style={styles.primary} onPress={startCapture}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Start lot capture"
+        style={styles.primary}
+        onPress={startCapture}
+      >
         <Text style={styles.primaryText}>Start lot capture</Text>
       </Pressable>
 
@@ -105,6 +112,9 @@ export default function CaptureScreen() {
       </Text>
 
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Sign out"
+        accessibilityState={{ disabled: signingOut, busy: signingOut }}
         style={[styles.signOut, signingOut && styles.signOutDisabled]}
         disabled={signingOut}
         onPress={confirmSignOut}
@@ -161,7 +171,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: theme.borderStrong,
-    backgroundColor: theme.bgElevated
+    backgroundColor: theme.bgElevated,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   signOutDisabled: { opacity: 0.55 },
   signOutText: { color: theme.text, fontSize: 15, fontWeight: "600" }

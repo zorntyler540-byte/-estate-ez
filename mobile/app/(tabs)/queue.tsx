@@ -7,24 +7,35 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
-  Text,
   View
 } from "react-native";
+import { Text } from "@/components/AppText";
 import NetInfo from "@react-native-community/netinfo";
 
 import { PhotoPreviewModal } from "@/components/DraftPhotos";
 import { formatMediaCounts } from "@/lib/mediaKind";
-import { formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
+import { blockedClipLine, formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } from "@/context/SyncContext";
 import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
-import { queueRowsUnchanged } from "@/lib/lotsReload";
+import { fetchAllLotPages, queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
-import { deleteArchivedDrafts, deleteLotDraft, listDraftPhotos, listLotDrafts, setDraftServerLotId, setDraftStatus } from "@/lib/queue/db";
+import {
+  deleteArchivedDrafts,
+  deleteLotDraft,
+  listBlockedClipReasons,
+  listDraftPhotos,
+  listLotDrafts,
+  removeBlockedClips,
+  setDraftServerLotId,
+  setDraftStatus
+} from "@/lib/queue/db";
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
+import { theme } from "@/constants/theme";
+import { MIN_TAP_PX, hitSlopFor } from "@/lib/a11y";
 type DraftRow = LotDraft & { photoUris: string[] };
 
 /** Subscribes to sync ticks without making the Queue list re-render on every lot upload. */
@@ -68,14 +79,20 @@ export default function QueueScreen() {
   const [focused, setFocused] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [blockedByDraft, setBlockedByDraft] = useState<Map<string, string[]>>(() => new Map());
   const focusedRef = useRef(false);
 
   const refresh = useCallback(async (opts?: { archive?: boolean }) => {
     try {
       // Text-only first. Loading every JPEG URI and decoding thumbs is what
       // hard-killed the pink iPhone when this tab opened.
-      const [drafts, net] = await Promise.all([listLotDrafts(), NetInfo.fetch()]);
+      const [drafts, net, blocked] = await Promise.all([
+        listLotDrafts(),
+        NetInfo.fetch(),
+        listBlockedClipReasons().catch(() => new Map<string, string[]>())
+      ]);
       const enriched = queueRowsFromDrafts(drafts);
+      setBlockedByDraft(blocked);
       setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
       setOnline(net.isConnected ?? false);
       if (opts?.archive !== false && token && !syncing) {
@@ -168,11 +185,10 @@ export default function QueueScreen() {
         mapped
       });
       if (!picked && item.manual_sku?.trim()) {
-        const saleLots = await listLots(token, item.sale_id, {
-          sort: "sku_asc",
-          limit: 500,
-          listingChannel: item.listing_channel === "facebook" ? "facebook" : "ctseller"
-        });
+        const channel = item.listing_channel === "facebook" ? "facebook" : "ctseller";
+        const { rows: saleLots } = await fetchAllLotPages((offset, limit) =>
+          listLots(token, item.sale_id, { sort: "sku_asc", limit, offset, listingChannel: channel })
+        );
         picked = pickCatalogLotForDraft({
           draftId: item.id,
           manualSku: item.manual_sku,
@@ -332,6 +348,35 @@ export default function QueueScreen() {
       ]
     );
   }
+
+  function confirmRemoveBlockedClips(item: DraftRow, count: number) {
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
+      return;
+    }
+    const noun = count === 1 ? "video" : `${count} videos`;
+    Alert.alert(
+      `Delete refused ${noun}?`,
+      `The website will not take ${count === 1 ? "this clip" : "these clips"}, so Sync stopped sending ${
+        count === 1 ? "it" : "them"
+      }. Deleting removes ${count === 1 ? "it" : "them"} from this phone only — photos and the website listing are not changed.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              const removed = await removeBlockedClips(item.id);
+              setMessage(removed ? `Deleted ${removed} refused video${removed === 1 ? "" : "s"} from this phone.` : "");
+              await refresh();
+            })();
+          }
+        }
+      ]
+    );
+  }
+
   function openPreview(uris: string[], index: number) {
     if (!uris.length) return;
     setPreviewUris(uris);
@@ -367,18 +412,34 @@ export default function QueueScreen() {
           ? "Phone archive only — these listings stay on the website. Photos are already off this phone. Clear Archive when you are done."
           : "Unfinished lots stay here. Sync now sends new ones and checks leftover Sent lots. Cataloged lots move to Phone archive. Do not Resend if the lot is already on the website."}
       </Text>
-      {banner ? <Text style={styles.message}>{banner}</Text> : null}
+      {banner ? (
+        <Text style={styles.message} accessibilityLiveRegion="polite">
+          {banner}
+        </Text>
+      ) : null}
 
-      <Pressable style={[styles.primary, syncing && styles.disabled]} disabled={syncing} onPress={() => void syncAll()}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={syncing ? "Syncing" : "Sync now"}
+        accessibilityState={{ disabled: syncing, busy: syncing }}
+        style={[styles.primary, syncing && styles.disabled]}
+        disabled={syncing}
+        onPress={() => void syncAll()}
+      >
         {syncing ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={theme.onPrimary} />
         ) : (
           <Text style={styles.primaryText}>Sync now</Text>
         )}
       </Pressable>
 
       {archiveRows.length > 0 || showArchive ? (
-        <Pressable style={styles.archiveBtn} onPress={() => setShowArchive((v) => !v)}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ selected: showArchive }}
+          style={styles.archiveBtn}
+          onPress={() => setShowArchive((v) => !v)}
+        >
           <Text style={styles.archiveBtnText}>
             {showArchive
               ? `Back to unfinished lots (${activeRows.length})`
@@ -388,7 +449,7 @@ export default function QueueScreen() {
       ) : null}
 
       {showArchive && archiveRows.length > 0 ? (
-        <Pressable style={styles.archiveBtn} onPress={confirmClearArchive}>
+        <Pressable accessibilityRole="button" style={styles.archiveBtn} onPress={confirmClearArchive}>
           <Text style={styles.archiveBtnText}>Clear Archive ({archiveRows.length}) — keep website listings</Text>
         </Pressable>
       ) : null}
@@ -403,7 +464,7 @@ export default function QueueScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            tintColor="#ff4d1a"
+            tintColor={theme.primary}
             onRefresh={() => {
               void (async () => {
                 setRefreshing(true);
@@ -433,6 +494,9 @@ export default function QueueScreen() {
             syncing
           });
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
+          const blockedReasons = archived ? [] : blockedByDraft.get(item.id) ?? [];
+          const blockedLine = blockedClipLine(blockedReasons);
+          const title = queueRowTitle(item);
           const statusColor =
             view.tone === "error"
               ? styles.cardStatusError
@@ -444,10 +508,12 @@ export default function QueueScreen() {
           return (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>{queueRowTitle(item)}</Text>
+                <Text style={styles.cardTitle}>{title}</Text>
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${view.removeLabel} ${title}`}
                   style={styles.deleteBtn}
-                  hitSlop={8}
+                  hitSlop={hitSlopFor(32)}
                   onPress={() => confirmRemoveLot(item)}
                 >
                   <Text style={styles.deleteBtnText}>{view.removeLabel}</Text>
@@ -464,16 +530,25 @@ export default function QueueScreen() {
               {view.detail ? (
                 <Text style={view.tone === "error" ? styles.error : styles.progress}>{view.detail}</Text>
               ) : null}
+              {blockedLine ? <Text style={styles.error}>{blockedLine}</Text> : null}
               {item.status !== "uploading" ? (
                 <View style={styles.draftActions}>
                   {!archived && (item.photo_count > 0 || item.video_count > 0) ? (
-                    <Pressable style={styles.secondary} onPress={() => void reviewDraftPhotos(item)}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Review ${formatMediaCounts(item.photo_count, item.video_count)}`}
+                      style={styles.secondary}
+                      onPress={() => void reviewDraftPhotos(item)}
+                    >
                       <Text style={styles.secondaryText}>
                         Review {formatMediaCounts(item.photo_count, item.video_count)}
                       </Text>
                     </Pressable>
                   ) : null}
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Add photos to ${title}`}
+                    accessibilityState={{ disabled: syncing && item.status === "uploaded" }}
                     style={[styles.continueBtn, syncing && item.status === "uploaded" && styles.disabled]}
                     disabled={syncing && item.status === "uploaded"}
                     onPress={() => void addPhotosToLot(item)}
@@ -481,17 +556,37 @@ export default function QueueScreen() {
                     <Text style={styles.continueBtnText}>Add photos</Text>
                   </Pressable>
                   {item.status === "draft" ? (
-                    <Pressable style={styles.secondary} onPress={() => void queueDraft(item.id)}>
+                    <Pressable
+                      accessibilityRole="button"
+                      style={styles.secondary}
+                      onPress={() => void queueDraft(item.id)}
+                    >
                       <Text style={styles.secondaryText}>Queue for upload</Text>
                     </Pressable>
                   ) : null}
                   {view.showResend ? (
                     <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: syncing }}
                       style={[styles.secondary, syncing && styles.disabled]}
                       disabled={syncing}
                       onPress={() => confirmResendLot(item)}
                     >
                       <Text style={styles.secondaryText}>Resend to server</Text>
+                    </Pressable>
+                  ) : null}
+                  {blockedReasons.length ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${blockedReasons.length} refused video${blockedReasons.length === 1 ? "" : "s"}`}
+                      accessibilityState={{ disabled: syncing }}
+                      style={[styles.secondary, styles.dangerOutline, syncing && styles.disabled]}
+                      disabled={syncing}
+                      onPress={() => confirmRemoveBlockedClips(item, blockedReasons.length)}
+                    >
+                      <Text style={styles.dangerText}>
+                        Delete refused video{blockedReasons.length === 1 ? "" : "s"}
+                      </Text>
                     </Pressable>
                   ) : null}
                 </View>
@@ -512,73 +607,83 @@ export default function QueueScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, gap: 12, backgroundColor: "#070708" },
-  status: { color: "#a8a29e", fontSize: 14 },
-  hint: { color: "#78716c", fontSize: 13 },
-  message: { color: "#d6d3d1", fontSize: 14 },
+  root: { flex: 1, padding: 16, gap: 12, backgroundColor: theme.bg },
+  status: { color: theme.textMuted, fontSize: 14 },
+  hint: { color: theme.textSubtle, fontSize: 13 },
+  message: { color: theme.textSoft, fontSize: 14 },
   primary: {
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
   },
-  primaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  primaryText: { color: theme.onPrimary, fontWeight: "600", fontSize: 16 },
   archiveBtn: {
     borderRadius: 10,
     paddingVertical: 12,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#3f3f46",
-    backgroundColor: "#141416"
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface
   },
-  archiveBtnText: { color: "#e7e5e4", fontWeight: "600", fontSize: 15 },
+  archiveBtnText: { color: theme.textSoft, fontWeight: "600", fontSize: 15 },
   disabled: { opacity: 0.6 },
-  empty: { color: "#78716c", marginTop: 24, textAlign: "center", lineHeight: 22 },
+  empty: { color: theme.textSubtle, marginTop: 24, textAlign: "center", lineHeight: 22 },
   card: {
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#141416",
+    borderColor: theme.border,
     gap: 6
   },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  cardTitle: { color: "#f5f5f4", fontWeight: "700", fontSize: 16, flex: 1 },
+  cardTitle: { color: theme.text, fontWeight: "700", fontSize: 16, flex: 1 },
   deleteBtn: {
     paddingVertical: 4,
+    minHeight: 32,
+    justifyContent: "center",
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#7f1d1d",
-    backgroundColor: "#450a0a"
+    borderColor: theme.errorBorder,
+    backgroundColor: theme.errorBg
   },
-  deleteBtnText: { color: "#fecaca", fontSize: 12, fontWeight: "600" },
-  cardStatus: { color: "#ff4d1a", fontSize: 14, fontWeight: "600" },
-  cardStatusOk: { color: "#86efac", fontSize: 14, fontWeight: "600" },
-  cardStatusWarn: { color: "#fdba74", fontSize: 14, fontWeight: "600" },
-  cardStatusError: { color: "#fca5a5", fontSize: 14, fontWeight: "600" },
-  cardSale: { color: "#a8a29e", fontSize: 13, fontWeight: "600" },
-  cardSaleOther: { color: "#fcd34d" },
-  cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },
-  cardMeta: { color: "#78716c", fontSize: 12, marginTop: 2 },
-  error: { color: "#fca5a5", fontSize: 12 },
-  progress: { color: "#fdba74", fontSize: 12, marginTop: 4 },
+  deleteBtnText: { color: theme.error, fontSize: 12, fontWeight: "600" },
+  cardStatus: { color: theme.primary, fontSize: 14, fontWeight: "600" },
+  cardStatusOk: { color: theme.success, fontSize: 14, fontWeight: "600" },
+  cardStatusWarn: { color: theme.warning, fontSize: 14, fontWeight: "600" },
+  cardStatusError: { color: theme.error, fontSize: 14, fontWeight: "600" },
+  cardSale: { color: theme.textMuted, fontSize: 13, fontWeight: "600" },
+  cardSaleOther: { color: theme.warning },
+  cardHint: { color: theme.textMuted, fontSize: 13, lineHeight: 18 },
+  cardMeta: { color: theme.textSubtle, fontSize: 12, marginTop: 2 },
+  error: { color: theme.error, fontSize: 12 },
+  progress: { color: theme.warning, fontSize: 12, marginTop: 4 },
   draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   continueBtn: {
     alignSelf: "flex-start",
     paddingVertical: 8,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center",
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#ff4d1a"
+    backgroundColor: theme.primary
   },
-  continueBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  continueBtnText: { color: theme.onPrimary, fontSize: 13, fontWeight: "700" },
   secondary: {
     alignSelf: "flex-start",
     paddingVertical: 8,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center",
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#141416"
+    backgroundColor: theme.surface
   },
-  secondaryText: { color: "#e7e5e4", fontSize: 13, fontWeight: "600" }
+  secondaryText: { color: theme.textSoft, fontSize: 13, fontWeight: "600" },
+  dangerOutline: { borderWidth: 1, borderColor: theme.errorBorder, backgroundColor: theme.errorBg },
+  dangerText: { color: theme.error, fontSize: 13, fontWeight: "600" }
 });

@@ -1,4 +1,5 @@
 import { Image, StyleSheet, type ImageStyle, type StyleProp } from "react-native";
+import { theme } from "@/constants/theme";
 
 type BrandLogoProps = {
   size?: number;
@@ -18,6 +19,6 @@ export function BrandLogo({ size = 120, style }: BrandLogoProps) {
 const styles = StyleSheet.create({
   logo: {
     borderRadius: 12,
-    backgroundColor: "#000"
+    backgroundColor: theme.black
   }
 });

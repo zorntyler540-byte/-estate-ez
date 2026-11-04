@@ -28,6 +28,19 @@ export type QueueRowInput = {
   syncing?: boolean;
 };
 
+/**
+ * Clips the website refused for good (``lot_photos.upload_blocked``). Sync stops resending them,
+ * so the row has to say why — otherwise the lot sits in Queue with no explanation.
+ */
+export function blockedClipLine(reasons: readonly (string | null | undefined)[]): string | null {
+  const cleaned = reasons.map((r) => (r || "").trim()).filter(Boolean);
+  if (!cleaned.length) return null;
+  const unique = [...new Set(cleaned)];
+  const n = cleaned.length;
+  const head = n === 1 ? "1 video was not accepted by the website" : `${n} videos were not accepted by the website`;
+  return `${head}: ${unique.join("; ")}. It stays on this phone until you remove it.`;
+}
+
 function mediaWord(item: { photo_count?: number; video_count?: number }): string {
   return formatMediaCounts(item.photo_count || 0, item.video_count || 0);
 }
@@ -164,7 +177,7 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
           label: "Needs a check",
           hint: "Tap Sync now. If the lot is already on the website, Remove — do not Resend.",
           tone: "warn",
-          detail: null,
+          detail: detailIfUseful(error, "Tap Sync now.", false),
           showResend: false,
           ...remove
         };
@@ -183,7 +196,7 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
           label: "Needs a check",
           hint: "Tap Sync now. If the lot is already on the website, Remove — do not Resend.",
           tone: "warn",
-          detail: null,
+          detail: error ? detailIfUseful(error, "Tap Sync now.", false) : "The last upload stopped without an error message.",
           showResend: false,
           ...remove
         };

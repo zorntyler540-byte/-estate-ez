@@ -1,45 +1,16 @@
-/**
- * Learn more about Light and Dark modes:
- * https://docs.expo.io/guides/color-schemes/
- */
-import { Text as DefaultText, View as DefaultView } from 'react-native';
+import { View as DefaultView, type TextProps as RNTextProps, type ViewProps as RNViewProps } from "react-native";
 
-import { useColorScheme } from './useColorScheme';
+import { Text as DefaultText } from "@/components/AppText";
+import { theme } from "@/constants/theme";
 
-import Colors from '@/constants/Colors';
+/** Dark-only app: these just default to the Estate-EZ text / background tokens. */
+export type TextProps = RNTextProps;
+export type ViewProps = RNViewProps;
 
-type ThemeProps = {
-  lightColor?: string;
-  darkColor?: string;
-};
-
-export type TextProps = ThemeProps & DefaultText['props'];
-export type ViewProps = ThemeProps & DefaultView['props'];
-
-export function useThemeColor(
-  props: { light?: string; dark?: string },
-  colorName: keyof typeof Colors.light & keyof typeof Colors.dark
-) {
-  const theme = useColorScheme();
-  const colorFromProps = props[theme];
-
-  if (colorFromProps) {
-    return colorFromProps;
-  } else {
-    return Colors[theme][colorName];
-  }
+export function Text({ style, ...otherProps }: TextProps) {
+  return <DefaultText style={[{ color: theme.text }, style]} {...otherProps} />;
 }
 
-export function Text(props: TextProps) {
-  const { style, lightColor, darkColor, ...otherProps } = props;
-  const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
-
-  return <DefaultText style={[{ color }, style]} {...otherProps} />;
-}
-
-export function View(props: ViewProps) {
-  const { style, lightColor, darkColor, ...otherProps } = props;
-  const backgroundColor = useThemeColor({ light: lightColor, dark: darkColor }, 'background');
-
-  return <DefaultView style={[{ backgroundColor }, style]} {...otherProps} />;
+export function View({ style, ...otherProps }: ViewProps) {
+  return <DefaultView style={[{ backgroundColor: theme.bg }, style]} {...otherProps} />;
 }

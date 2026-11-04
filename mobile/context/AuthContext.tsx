@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { login as apiLogin, getAuthMe } from "@/lib/api";
+import { accountLock, parseCachedAccount, serializeAccount } from "@/lib/cachedAccount";
 import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
 import { selectedSaleUnchanged } from "@/lib/lotsReload";
 import { normalizeSaleName } from "@/lib/selectedSale";
@@ -19,6 +20,8 @@ import { registerSessionRefresher } from "@/lib/sessionBridge";
 const TOKEN_KEY = "ct_mobile_access_token";
 /** Email + password for silent re-login when the JWT expires (field sessions). */
 const CREDENTIALS_KEY = "ct_mobile_login_credentials";
+/** Last ``/auth/me`` so the client sale lock still applies when the phone starts offline. */
+const ACCOUNT_KEY = "ct_mobile_auth_me";
 /** Refresh when fewer than this many ms remain on the JWT. */
 const REFRESH_SKEW_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -178,24 +181,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [persistToken, silentRefresh]);
 
-  const loadAccount = useCallback(async (accessToken: string) => {
-    const me = await getAuthMe(accessToken);
-    setSignedInRole(me.role || null);
-    if (me.email) setSignedInEmail(me.email);
-    if ((me.role || "").toLowerCase() === "client") {
-      if (me.assigned_sale_id) {
-        const name = me.assigned_sale_name || null;
-        clientSaleLockRef.current = { id: me.assigned_sale_id, name };
-        await setSelectedSaleRef.current?.(me.assigned_sale_id, name);
-      } else {
+  const applyAccount = useCallback(
+    async (me: {
+      email?: string | null;
+      role?: string | null;
+      assigned_sale_id?: string | null;
+      assigned_sale_name?: string | null;
+    }) => {
+      setSignedInRole(me.role || null);
+      if (me.email) setSignedInEmail(me.email);
+      const lock = accountLock(me);
+      if (lock.kind === "client-sale") {
+        clientSaleLockRef.current = { id: lock.saleId, name: lock.saleName };
+        await setSelectedSaleRef.current?.(lock.saleId, lock.saleName);
+      } else if (lock.kind === "client-no-sale") {
         // Drop a sale left on this phone so a client cannot shoot into the wrong one.
         clientSaleLockRef.current = null;
         await setSelectedSaleRef.current?.(null, null);
+      } else {
+        clientSaleLockRef.current = null;
       }
-    } else {
-      clientSaleLockRef.current = null;
-    }
-  }, []);
+    },
+    []
+  );
+
+  const loadAccount = useCallback(
+    async (accessToken: string) => {
+      const me = await getAuthMe(accessToken);
+      await applyAccount(me);
+      await secureSet(ACCOUNT_KEY, serializeAccount(me)).catch(() => undefined);
+    },
+    [applyAccount]
+  );
+
+  /** Offline (or API down): reuse the last ``/auth/me`` for this user so client limits still hold. */
+  const applyCachedAccount = useCallback(async (): Promise<boolean> => {
+    const [raw, creds] = await Promise.all([
+      secureGet(ACCOUNT_KEY).catch(() => null),
+      readStoredCredentials().catch(() => null)
+    ]);
+    const cached = parseCachedAccount(raw, creds?.email);
+    if (!cached) return false;
+    await applyAccount(cached);
+    return true;
+  }, [applyAccount]);
 
   useEffect(() => {
     if (!ready) return;
@@ -207,8 +236,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     setSessionReady(false);
     void loadAccount(token)
-      .catch(() => {
-        if (!cancelled) setSignedInRole(null);
+      .catch(async () => {
+        if (cancelled) return;
+        const applied = await applyCachedAccount().catch(() => false);
+        if (!applied && !cancelled) setSignedInRole(null);
       })
       .finally(() => {
         if (!cancelled) setSessionReady(true);
@@ -216,7 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [token, ready, loadAccount]);
+  }, [token, ready, loadAccount, applyCachedAccount]);
 
   useEffect(() => {
     registerSessionRefresher(async () => silentRefresh());
@@ -232,6 +263,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         await persistToken(null);
         await secureDelete(CREDENTIALS_KEY);
+        await secureDelete(ACCOUNT_KEY);
         setSignedInEmail(null);
         setSignedInRole(null);
         clientSaleLockRef.current = null;
@@ -246,6 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await Promise.all([
       secureDelete(TOKEN_KEY),
       secureDelete(CREDENTIALS_KEY),
+      secureDelete(ACCOUNT_KEY),
       secureDelete(SELECTED_SALE_KEY),
       secureDelete(SELECTED_SALE_NAME_KEY)
     ]);

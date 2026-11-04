@@ -7,15 +7,17 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
-  Text,
-  TextInput,
   View
 } from "react-native";
+import { Text, TextInput } from "@/components/AppText";
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { useAuth } from "@/context/AuthContext";
 import { getSaleHeroBackground, listLots, listSaleLotCoverUrls, startSaleHeroBackground } from "@/lib/api";
 import {
+  LOTS_MAX_PAGES,
+  LOTS_PAGE_SIZE,
+  fetchAllLotPages,
   lotIdsWithChangedPhotoCount,
   lotListSignature,
   lotRowsUnchanged,
@@ -24,6 +26,8 @@ import {
   shouldSkipLotsFocusReload
 } from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
+import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 
 function lotSubtitle(lot: Lot): string {
   const parts: string[] = [];
@@ -43,6 +47,7 @@ export default function LotsScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [capped, setCapped] = useState(false);
   const [query, setQuery] = useState("");
   const [heroColor, setHeroColor] = useState<"studio" | "white" | "gray">("studio");
   const [heroBusy, setHeroBusy] = useState(false);
@@ -73,11 +78,11 @@ export default function LotsScreen() {
       setError("");
       try {
         // Show the list immediately — do not wait on cover signing.
-        const rows = await listLots(token, selectedSaleId, {
-          sort: "sku_asc",
-          limit: 500,
-          listingChannel: "ctseller"
-        });
+        const saleId = selectedSaleId;
+        const { rows, capped: hitCap } = await fetchAllLotPages((offset, limit) =>
+          listLots(token, saleId, { sort: "sku_asc", limit, offset, listingChannel: "ctseller" })
+        );
+        setCapped(hitCap);
         const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
         const refreshCovers =
@@ -238,7 +243,12 @@ export default function LotsScreen() {
     return (
       <View style={styles.root}>
         <Text style={styles.lead}>Select a sale to browse its catalog listings.</Text>
-        <Pressable style={styles.primary} onPress={() => router.push("/(tabs)/sale")}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose sale"
+          style={styles.primary}
+          onPress={() => router.push("/(tabs)/sale")}
+        >
           <Text style={styles.primaryText}>Choose sale</Text>
         </Pressable>
       </View>
@@ -262,6 +272,9 @@ export default function LotsScreen() {
           ] as const
         ).map(([id, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Background ${label}`}
+            accessibilityState={{ selected: heroColor === id, disabled: heroBusy }}
             key={id}
             style={[styles.heroChip, heroColor === id && styles.heroChipOn]}
             disabled={heroBusy}
@@ -270,7 +283,14 @@ export default function LotsScreen() {
             <Text style={[styles.heroChipText, heroColor === id && styles.heroChipTextOn]}>{label}</Text>
           </Pressable>
         ))}
-        <Pressable style={[styles.heroGo, heroBusy && styles.heroGoBusy]} disabled={heroBusy || lots.length === 0} onPress={askHeroBackground}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Run AI background on first photos"
+          accessibilityState={{ disabled: heroBusy || lots.length === 0, busy: heroBusy }}
+          style={[styles.heroGo, heroBusy && styles.heroGoBusy]}
+          disabled={heroBusy || lots.length === 0}
+          onPress={askHeroBackground}
+        >
           <Text style={styles.heroGoText}>{heroBusy ? "Working…" : "AI on first photos"}</Text>
         </Pressable>
       </View>
@@ -279,7 +299,7 @@ export default function LotsScreen() {
       <TextInput
         style={styles.search}
         placeholder="Search SKU or title"
-        placeholderTextColor="#78716c"
+        placeholderTextColor={theme.textSubtle}
         value={query}
         onChangeText={setQuery}
         autoCapitalize="none"
@@ -288,9 +308,15 @@ export default function LotsScreen() {
       />
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {capped ? (
+        <Text style={styles.heroNote}>
+          Showing the first {(LOTS_PAGE_SIZE * LOTS_MAX_PAGES).toLocaleString()} listings. Find the rest on the
+          website.
+        </Text>
+      ) : null}
 
       {loading && !lots.length ? (
-        <ActivityIndicator style={{ marginTop: 24 }} color="#ff4d1a" />
+        <ActivityIndicator style={{ marginTop: 24 }} color={theme.primary} />
       ) : (
         <FlatList
           data={filtered}
@@ -300,7 +326,7 @@ export default function LotsScreen() {
           windowSize={5}
           removeClippedSubviews={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor="#ff4d1a" />
+            <RefreshControl refreshing={refreshing} onRefresh={() => void load("pull")} tintColor={theme.primary} />
           }
           ListEmptyComponent={
             <Text style={styles.empty}>
@@ -313,7 +339,12 @@ export default function LotsScreen() {
             const signed = coverUrls[item.id];
             return (
               <View style={styles.row}>
-                <Pressable style={styles.rowMain} onPress={() => router.push(`/lot/${item.id}`)}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open lot ${item.sku?.trim() || item.auction_title?.trim() || ""}`.trim()}
+                  style={styles.rowMain}
+                  onPress={() => router.push(`/lot/${item.id}`)}
+                >
                   <View style={styles.thumbWrap}>
                     {signed ? (
                       <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
@@ -345,6 +376,8 @@ export default function LotsScreen() {
                   </View>
                 </Pressable>
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add photos to ${item.sku?.trim() || "this lot"}`}
                   style={styles.addBtn}
                   onPress={() =>
                     router.push({
@@ -372,54 +405,56 @@ export default function LotsScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, backgroundColor: "#070708" },
-  saleName: { color: "#f5f5f4", fontSize: 18, fontWeight: "700", marginBottom: 4 },
-  lead: { color: "#a8a29e", fontSize: 14, marginBottom: 12 },
+  root: { flex: 1, padding: 16, backgroundColor: theme.bg },
+  saleName: { color: theme.text, fontSize: 18, fontWeight: "700", marginBottom: 4 },
+  lead: { color: theme.textMuted, fontSize: 14, marginBottom: 12 },
   heroRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" },
   heroChip: {
     borderWidth: 1,
-    borderColor: "#3f3f46",
+    borderColor: theme.borderStrong,
     borderRadius: 8,
     paddingHorizontal: 10,
-    paddingVertical: 8
+    paddingVertical: 8,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
-  heroChipOn: { backgroundColor: "#ff4d1a", borderColor: "#ff4d1a" },
-  heroChipText: { color: "#e7e5e4", fontSize: 13 },
-  heroChipTextOn: { color: "#fff", fontWeight: "700" },
-  heroGo: { backgroundColor: "#ff4d1a", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  heroChipOn: { backgroundColor: theme.primary, borderColor: theme.primary },
+  heroChipText: { color: theme.textSoft, fontSize: 13 },
+  heroChipTextOn: { color: theme.onPrimary, fontWeight: "700" },
+  heroGo: { backgroundColor: theme.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, minHeight: MIN_TAP_PX, justifyContent: "center" },
   heroGoBusy: { opacity: 0.7 },
-  heroGoText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  heroNote: { color: "#a8a29e", fontSize: 13, marginBottom: 8 },
+  heroGoText: { color: theme.onPrimary, fontWeight: "700", fontSize: 13 },
+  heroNote: { color: theme.textMuted, fontSize: 13, marginBottom: 8 },
   search: {
     borderWidth: 1,
-    borderColor: "#3f3f46",
+    borderColor: theme.borderStrong,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "#f5f5f4",
+    color: theme.text,
     marginBottom: 10,
-    backgroundColor: "#0e0e10"
+    backgroundColor: theme.bgElevated
   },
-  error: { color: "#fca5a5", marginBottom: 8 },
-  empty: { color: "#78716c", textAlign: "center" },
+  error: { color: theme.error, marginBottom: 8 },
+  empty: { color: theme.textSubtle, textAlign: "center" },
   emptyPad: { flexGrow: 1, justifyContent: "center", paddingVertical: 48 },
   primary: {
     marginTop: 16,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
   },
-  primaryText: { color: "#fff", fontWeight: "600" },
+  primaryText: { color: theme.onPrimary, fontWeight: "600" },
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     padding: 10,
     borderRadius: 10,
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderWidth: 1,
-    borderColor: "#141416",
+    borderColor: theme.border,
     marginBottom: 8
   },
   rowMain: { flex: 1, flexDirection: "row", gap: 12, alignItems: "center" },
@@ -427,19 +462,20 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 8,
     borderRadius: 8,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 64
+    minWidth: 64,
+    minHeight: MIN_TAP_PX
   },
-  addBtnText: { color: "#fff", fontSize: 11, fontWeight: "700", textAlign: "center", lineHeight: 14 },
-  thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: "#141416" },
+  addBtnText: { color: theme.onPrimary, fontSize: 11, fontWeight: "700", textAlign: "center", lineHeight: 14 },
+  thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: theme.surface },
   thumb: { width: "100%", height: "100%" },
   thumbEmpty: { flex: 1, alignItems: "center", justifyContent: "center" },
-  thumbEmptyText: { color: "#78716c", fontSize: 11, textAlign: "center", fontWeight: "600" },
+  thumbEmptyText: { color: theme.textSubtle, fontSize: 11, textAlign: "center", fontWeight: "600" },
   rowBody: { flex: 1, gap: 4, justifyContent: "center" },
-  rowTitle: { color: "#f5f5f4", fontSize: 15, fontWeight: "600" },
-  rowMeta: { color: "#a8a29e", fontSize: 12 },
+  rowTitle: { color: theme.text, fontSize: 15, fontWeight: "600" },
+  rowMeta: { color: theme.textMuted, fontSize: 12 },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 },
   badge: {
     fontSize: 11,
@@ -449,8 +485,8 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 999
   },
-  badgePosted: { color: "#140500", backgroundColor: "#ff4d1a" },
-  badgeDraft: { color: "#e7e5e4", backgroundColor: "#3f3f46" },
-  badgeDone: { color: "#ecfdf5", backgroundColor: "#047857" },
-  badgeWarn: { color: "#451a03", backgroundColor: "#fbbf24" }
+  badgePosted: { color: theme.onPrimary, backgroundColor: theme.primary },
+  badgeDraft: { color: theme.textSoft, backgroundColor: theme.borderStrong },
+  badgeDone: { color: theme.onSuccess, backgroundColor: theme.successBg },
+  badgeWarn: { color: theme.warningText, backgroundColor: theme.warning }
 });
