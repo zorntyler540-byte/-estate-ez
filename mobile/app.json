@@ -46,6 +46,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-background-task",
       "expo-secure-store",
       "expo-sqlite",
       [

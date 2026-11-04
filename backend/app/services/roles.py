@@ -116,7 +116,7 @@ def client_http_allowed(method: str, path: str) -> bool:
     action = parts[1]
     if verb == "POST" and action in {"upload-files", "run", "cancel"}:
         return True
-    if verb == "GET" and action == "events":
+    if verb == "GET" and action in {"events", "received-files"}:
         return True
     return False
 

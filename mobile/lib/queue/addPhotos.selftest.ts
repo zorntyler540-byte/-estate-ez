@@ -1,4 +1,4 @@
-import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "./addPhotos";
+import { pickCatalogLotForDraft, queueAddPhotosIsLocal, reopenForCapture } from "./addPhotos";
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
@@ -68,5 +68,12 @@ assert(queueAddPhotosIsLocal("draft"), "draft stays on the phone");
 assert(queueAddPhotosIsLocal("failed"), "failed stays on the phone");
 assert(!queueAddPhotosIsLocal("uploaded"), "uploaded must append on the website");
 assert(!queueAddPhotosIsLocal("uploading"), "uploading waits");
+
+assert(reopenForCapture("draft") === "keep", "draft opens as is");
+assert(reopenForCapture("queued") === "reopen", "queued lot reopens (not a new lot)");
+assert(reopenForCapture("failed") === "reopen", "failed lot reopens");
+assert(reopenForCapture("queued", { syncing: true }) === "blocked", "not while Sync may send it");
+assert(reopenForCapture("uploading") === "blocked", "uploading never reopens");
+assert(reopenForCapture("uploaded") === "blocked", "sent lots append on the website");
 
 console.log("addPhotos.selftest ok");

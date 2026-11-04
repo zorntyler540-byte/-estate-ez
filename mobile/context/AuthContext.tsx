@@ -11,13 +11,13 @@ import {
 
 import { login as apiLogin, getAuthMe } from "@/lib/api";
 import { accountLock, parseCachedAccount, serializeAccount } from "@/lib/cachedAccount";
-import { SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
+import { ACCESS_TOKEN_KEY, SELECTED_SALE_KEY, SELECTED_SALE_NAME_KEY } from "@/lib/config";
 import { selectedSaleUnchanged } from "@/lib/lotsReload";
 import { normalizeSaleName } from "@/lib/selectedSale";
 import { secureDelete, secureGet, secureSet } from "@/lib/secureStorage";
 import { registerSessionRefresher } from "@/lib/sessionBridge";
 
-const TOKEN_KEY = "ct_mobile_access_token";
+const TOKEN_KEY = ACCESS_TOKEN_KEY;
 /** Email + password for silent re-login when the JWT expires (field sessions). */
 const CREDENTIALS_KEY = "ct_mobile_login_credentials";
 /** Last ``/auth/me`` so the client sale lock still applies when the phone starts offline. */

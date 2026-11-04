@@ -15,6 +15,8 @@ import "react-native-reanimated";
 import { StatusBar } from "expo-status-bar";
 
 import { FONT_FAMILY } from "@/lib/typography";
+// Defines the background upload task at startup — the OS can launch the app just to run it.
+import "@/lib/backgroundUpload";
 
 export { ErrorBoundary } from "expo-router";
 

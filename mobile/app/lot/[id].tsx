@@ -347,6 +347,7 @@ export default function LotDetailScreen() {
                   pathname: "/capture-session",
                   params: {
                     appendLotId: lot.id,
+                    ...(lot.sale_id ? { appendSaleId: lot.sale_id } : {}),
                     appendExistingCount: String(photos.length || lot.photo_count || 0),
                     ...(lot.sku?.trim() ? { appendSku: lot.sku.trim() } : {}),
                     ...(lot.auction_title?.trim()

@@ -4,6 +4,8 @@ import * as FileSystem from "expo-file-system/legacy";
 import { isVideoDraftRow, splitDraftMedia } from "@/lib/mediaKind";
 import type { ListingChannel, LotDraft, LotDraftStatus, LotPhotoRow } from "@/lib/types";
 import { newLocalId } from "@/lib/uuid";
+import { nextAttemptAt, type RetryKind } from "./retryPolicy";
+import { draftIdFromPreparedEntry, planUploadNames, preparedDirName } from "./uploadNames";
 
 const DB_NAME = "ct_capture.db";
 
@@ -32,6 +34,11 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           FOREIGN KEY (draft_id) REFERENCES lot_drafts(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_lot_photos_draft ON lot_photos(draft_id);
+        CREATE TABLE IF NOT EXISTS app_kv (
+          key TEXT PRIMARY KEY NOT NULL,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
       `);
       const cols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_drafts)");
       if (!cols.some((c) => c.name === "sale_name")) {
@@ -57,6 +64,22 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "archived_video_count")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_video_count INTEGER");
       }
+      if (!cols.some((c) => c.name === "attempts")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!cols.some((c) => c.name === "next_attempt_at")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN next_attempt_at INTEGER");
+      }
+      if (!cols.some((c) => c.name === "error_kind")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN error_kind TEXT");
+      }
+      if (!cols.some((c) => c.name === "append_lot_id")) {
+        // Non-null = Add photos session for a lot already on the website (not a new catalog job).
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN append_lot_id TEXT");
+      }
+      if (!cols.some((c) => c.name === "append_label")) {
+        await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN append_label TEXT");
+      }
       if (!cols.some((c) => c.name === "server_lot_verified")) {
         // Older builds also wrote server_lot_id from SKU guesses. Those stay untrusted (0)
         // until Sync maps this exact draft id again.
@@ -76,6 +99,10 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       }
       if (!photoCols.some((c) => c.name === "upload_blocked")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN upload_blocked TEXT");
+      }
+      if (!photoCols.some((c) => c.name === "upload_name")) {
+        // Multipart name, assigned once (see uploadNames.ts) so retries resend the same name.
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN upload_name TEXT");
       }
       if (!photoCols.some((c) => c.name === "process_ratio")) {
         // Non-null = raw camera JPEG still waiting for orientation/crop (see captureProcessing).
@@ -107,7 +134,12 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number, videoCount
     updated_at: Number(row.updated_at),
     photo_count: photoCount,
     video_count: videoCount,
-    archived_at: row.archived_at != null ? Number(row.archived_at) : null
+    archived_at: row.archived_at != null ? Number(row.archived_at) : null,
+    attempts: Number(row.attempts || 0),
+    next_attempt_at: row.next_attempt_at != null ? Number(row.next_attempt_at) : null,
+    error_kind: row.error_kind === "permanent" || row.error_kind === "transient" ? row.error_kind : null,
+    append_lot_id: row.append_lot_id != null ? String(row.append_lot_id) : null,
+    append_label: row.append_label != null ? String(row.append_label) : null
   };
 }
 
@@ -137,6 +169,36 @@ export async function createLotDraft(
   return id;
 }
 
+/** Add photos session for a website lot: shots live in SQLite until Sync uploads them. */
+export async function createAppendDraft(opts: {
+  saleId: string;
+  saleName: string | null;
+  lotId: string;
+  label: string | null;
+}): Promise<string> {
+  const db = await getDb();
+  const id = newLocalId();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, listing_channel, status, error_message, created_at, updated_at, append_lot_id, append_label)
+     VALUES (?, ?, ?, NULL, 'ctseller', 'draft', NULL, ?, ?, ?, ?)`,
+    [id, opts.saleId, opts.saleName?.trim() || null, now, now, opts.lotId, opts.label?.trim() || null]
+  );
+  return id;
+}
+
+/** Unfinished Add photos session for this lot (survives leaving the camera / an app kill). */
+export async function findOpenAppendDraft(lotId: string): Promise<LotDraft | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: string }>(
+    `SELECT id FROM lot_drafts
+     WHERE append_lot_id = ? AND status = 'draft' AND archived_at IS NULL
+     ORDER BY updated_at DESC LIMIT 1`,
+    [lotId]
+  );
+  return row ? getLotDraft(String(row.id)) : null;
+}
+
 export async function addPhotoToDraft(
   draftId: string,
   fileUri: string,
@@ -145,11 +207,12 @@ export async function addPhotoToDraft(
 ): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
-  const row = await db.getFirstAsync<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM lot_photos WHERE draft_id = ?",
+  // MAX+1, not COUNT: after a delete COUNT reused a live sort_order and scrambled capture order.
+  const row = await db.getFirstAsync<{ m: number | null }>(
+    "SELECT MAX(sort_order) AS m FROM lot_photos WHERE draft_id = ?",
     [draftId]
   );
-  const sortOrder = Number(row?.c ?? 0);
+  const sortOrder = row?.m == null ? 0 : Number(row.m) + 1;
   const kind = mediaKind === "video" ? "video" : "image";
   await db.runAsync(
     "INSERT INTO lot_photos (id, draft_id, file_uri, sort_order, media_kind, uploaded, captured_at, process_ratio) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
@@ -280,7 +343,7 @@ export async function findOpenDraft(
   const channel: ListingChannel = listingChannel === "facebook" ? "facebook" : "ctseller";
   const row = await db.getFirstAsync<Record<string, unknown>>(
     `SELECT * FROM lot_drafts
-     WHERE sale_id = ? AND listing_channel = ? AND status = 'draft'
+     WHERE sale_id = ? AND listing_channel = ? AND status = 'draft' AND append_lot_id IS NULL
      ORDER BY updated_at DESC
      LIMIT 1`,
     [saleId, channel]
@@ -327,8 +390,74 @@ export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
     media_kind: String(r.media_kind || "image") === "video" ? "video" : "image",
     uploaded: Number(r.uploaded || 0) === 1,
     captured_at: capturedAtFromPhotoRow(r),
-    upload_blocked: r.upload_blocked != null ? String(r.upload_blocked) : null
+    upload_blocked: r.upload_blocked != null ? String(r.upload_blocked) : null,
+    upload_name: r.upload_name != null ? String(r.upload_name) : null
   }));
+}
+
+/**
+ * Give every photo/clip of this draft its permanent upload name (rows that already have one
+ * keep it) and return the rows in capture order.
+ */
+export async function assignUploadNames(draftId: string, appendSession: boolean): Promise<LotPhotoRow[]> {
+  const rows = await listDraftPhotos(draftId);
+  const names = planUploadNames(
+    appendSession ? "append" : "mobile",
+    draftId,
+    rows.map((r) => ({
+      id: r.id,
+      kind: isVideoDraftRow(r) ? ("video" as const) : ("image" as const),
+      uploadName: r.upload_name,
+      fileUri: r.file_uri
+    }))
+  );
+  if (!names.size) return rows;
+  const db = await getDb();
+  for (const [id, name] of names) {
+    await db.runAsync("UPDATE lot_photos SET upload_name = ? WHERE id = ? AND upload_name IS NULL", [name, id]);
+  }
+  return listDraftPhotos(draftId);
+}
+
+/** Failed attempt: remember why, and when an automatic retry may run (transient only). */
+export async function recordDraftFailure(
+  draftId: string,
+  message: string,
+  kind: RetryKind
+): Promise<void> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ attempts: number }>(
+    "SELECT attempts FROM lot_drafts WHERE id = ?",
+    [draftId]
+  );
+  const attempts = Number(row?.attempts || 0) + 1;
+  const now = Date.now();
+  await db.runAsync(
+    `UPDATE lot_drafts
+     SET status = 'failed', error_message = ?, error_kind = ?, attempts = ?, next_attempt_at = ?, updated_at = ?
+     WHERE id = ?`,
+    [message, kind, attempts, kind === "transient" ? nextAttemptAt(attempts, now) : null, now, draftId]
+  );
+}
+
+/** Success, Retry, or a fresh edit: forget earlier failures. */
+export async function clearDraftRetry(draftId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE lot_drafts SET attempts = 0, next_attempt_at = NULL, error_kind = NULL WHERE id = ?",
+    [draftId]
+  );
+}
+
+/** Staff tapped Retry (or Add photos reopened the lot): queue it again with a clean slate. */
+export async function requeueDraft(draftId: string, status: "queued" | "draft" = "queued"): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE lot_drafts
+     SET status = ?, error_message = NULL, error_kind = NULL, attempts = 0, next_attempt_at = NULL, updated_at = ?
+     WHERE id = ?`,
+    [status, Date.now(), draftId]
+  );
 }
 
 /**
@@ -409,7 +538,7 @@ export async function setDraftStatus(
   );
 }
 
-/** Remember the server ``receiving`` job so a killed Sync can delete the orphan and retry cleanly. */
+/** Remember the server ``receiving`` job so a killed Sync can resume it (send only missing photos). */
 export async function setDraftServerJobId(draftId: string, serverJobId: string | null): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
@@ -504,6 +633,7 @@ export async function archiveCatalogedDraft(draftId: string): Promise<void> {
       /* file may already be gone */
     }
   }
+  await deletePreparedDir(draftId);
   const db = await getDb();
   for (const photo of toRemove) {
     await db.runAsync("DELETE FROM lot_photos WHERE id = ?", [photo.id]);
@@ -551,7 +681,51 @@ export async function deleteArchivedDrafts(): Promise<number> {
   return archived.length;
 }
 
+function preparedDirUri(draftId: string): string | null {
+  const doc = FileSystem.documentDirectory;
+  return doc ? `${doc}${preparedDirName(draftId)}` : null;
+}
+
+/** Folder for this draft's upload-ready JPEGs (see ``prepareCachedUploadJpeg``). */
+export function preparedUploadUri(draftId: string, uploadName: string): string | null {
+  const dir = preparedDirUri(draftId);
+  return dir ? `${dir}${uploadName}` : null;
+}
+
+async function deletePreparedDir(draftId: string): Promise<void> {
+  const dir = preparedDirUri(draftId);
+  if (!dir) return;
+  await FileSystem.deleteAsync(dir, { idempotent: true }).catch(() => undefined);
+}
+
+/** Remove upload-ready JPEG folders whose lot is gone or already archived. */
+export async function sweepPreparedDirs(): Promise<number> {
+  const doc = FileSystem.documentDirectory;
+  if (!doc) return 0;
+  let entries: string[] = [];
+  try {
+    entries = await FileSystem.readDirectoryAsync(`${doc}lot-prepared/`);
+  } catch {
+    return 0;
+  }
+  const db = await getDb();
+  const live = new Set(
+    (
+      await db.getAllAsync<{ id: string }>("SELECT id FROM lot_drafts WHERE archived_at IS NULL")
+    ).map((r) => String(r.id))
+  );
+  let removed = 0;
+  for (const entry of entries) {
+    const id = draftIdFromPreparedEntry(entry);
+    if (!id || live.has(id)) continue;
+    await deletePreparedDir(id);
+    removed += 1;
+  }
+  return removed;
+}
+
 export async function deleteLotDraft(draftId: string): Promise<void> {
+  await deletePreparedDir(draftId);
   const photos = await listDraftPhotos(draftId);
   for (const photo of photos) {
     try {
@@ -599,7 +773,7 @@ export async function countUploadPending(): Promise<number> {
   // Also include leftover "uploaded" notices (timeout / still-cataloging copy) so Phase 0
   // can clear fake errors even when nothing is queued.
   // Unsent local videos must keep Sync alive after photos already look uploaded —
-  // catalog usually finishes after the 45s confirm window, and clips attach then.
+  // catalog usually finishes after Sync's batched status check, and clips attach then.
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
      WHERE archived_at IS NULL
@@ -623,7 +797,8 @@ export async function countLotsNeedingPhotoUpload(): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
-     WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading')`
+     WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading')
+       AND NOT (status = 'failed' AND error_kind = 'permanent')`
   );
   return Number(row?.c ?? 0);
 }
@@ -690,4 +865,24 @@ export async function countLotsNeedingWebsiteCheck(): Promise<number> {
      WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading', 'uploaded')`
   );
   return Number(row?.c ?? 0);
+}
+
+/** Small phone-only settings / caches (not secrets — those live in SecureStore). */
+export async function getAppValue(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM app_kv WHERE key = ?", [key]);
+  return row?.value ?? null;
+}
+
+export async function setAppValue(key: string, value: string | null): Promise<void> {
+  const db = await getDb();
+  if (value == null) {
+    await db.runAsync("DELETE FROM app_kv WHERE key = ?", [key]);
+    return;
+  }
+  await db.runAsync(
+    `INSERT INTO app_kv (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [key, value, Date.now()]
+  );
 }

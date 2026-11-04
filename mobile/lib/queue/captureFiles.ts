@@ -13,7 +13,8 @@ import {
   finishPhotoProcessing,
   isPhotoPendingProcess,
   listAllPhotoUris,
-  listPhotosPendingProcess
+  listPhotosPendingProcess,
+  sweepPreparedDirs
 } from "./db";
 
 /** One queue for every full-resolution re-encode (capture screen and Sync share it). */
@@ -108,9 +109,13 @@ async function listCacheFiles(): Promise<CacheFile[]> {
   return out;
 }
 
-/** Delete stale scratch JPEGs. Skipped while capture processing is running. */
+/**
+ * Delete stale scratch JPEGs, and upload-ready copies of lots that are gone or archived.
+ * Skipped while capture processing is running.
+ */
 export async function sweepImageCache(now = Date.now()): Promise<number> {
   if (captureQueue.size > 0) return 0;
+  await sweepPreparedDirs().catch(() => 0);
   const [files, referenced] = await Promise.all([listCacheFiles(), listAllPhotoUris()]);
   const doomed = planCacheCleanup({ files, referenced, now });
   let removed = 0;

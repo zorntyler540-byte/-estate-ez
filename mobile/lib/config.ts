@@ -29,6 +29,8 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** SecureStore key for the API token (read by the background upload task too). */
+export const ACCESS_TOKEN_KEY = "ct_mobile_access_token";
 export const SELECTED_SALE_KEY = "ct_mobile_selected_sale_id";
 
 export const SELECTED_SALE_NAME_KEY = "ct_mobile_selected_sale_name";

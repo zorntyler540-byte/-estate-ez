@@ -9,6 +9,7 @@
     "@react-native-community/netinfo": "11.4.1",
     "@react-navigation/native": "^7.1.33",
     "expo": "^54.0.0",
+    "expo-background-task": "~1.0.10",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.13",
     "expo-file-system": "~19.0.23",
@@ -24,6 +25,7 @@
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",
+    "expo-task-manager": "~14.0.9",
     "expo-updates": "~29.0.19",
     "expo-web-browser": "~15.0.11",
     "react": "19.1.0",
@@ -46,6 +48,6 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "for f in lib/*.selftest.ts lib/queue/*.selftest.ts; do tsx \"$f\" || exit 1; done"
+    "test": "for f in lib/*.selftest.ts lib/queue/*.selftest.ts; do out=$(tsx \"$f\") || { echo \"$out\"; exit 1; }; echo \"$out\"; case \"$out\" in *\"selftest ok\"*) ;; *) echo \"$f exited without finishing (a pending await?)\"; exit 1;; esac; done"
   }
 }

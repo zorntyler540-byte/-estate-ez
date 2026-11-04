@@ -43,3 +43,11 @@ export function captureGate(input: {
     staffHint: "Wrong sale? Change it on the Sale tab before capturing."
   };
 }
+
+/**
+ * Client logins shoot stills only. Clips attach to a lot after catalog through a route clients
+ * may not call, so a client clip could never leave the phone.
+ */
+export function captureModesFor(role: string | null | undefined): ("photo" | "video")[] {
+  return isClientAccountRole(role) ? ["photo"] : ["photo", "video"];
+}

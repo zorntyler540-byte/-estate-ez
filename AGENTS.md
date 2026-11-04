@@ -85,12 +85,36 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   those processes, so the worker persists each SSE payload and the API replays/polls it. Do not
   revert `job_events.publish` to memory-only. Deploy **API and worker together** after this change;
   wait until the catalog queue is idle so a worker restart does not kill a processing lot.
-- **Mobile confirms the real outcome** by polling `GET /jobs` after `/run` (see `mobile/lib/queue/sync.ts`);
-  it no longer treats a `/run` 200 as "cataloged." A dedicated worker being down/mid-deploy is the main
+- **Mobile confirms the real outcome** with one batched `POST /mobile/drafts/status` at the end of
+  Sync (see `mobile/lib/queue/sync.ts`); there is no per-lot wait after `/run`, and a `/run` 200 is not
+  "cataloged." A dedicated worker being down/mid-deploy is the main
   way jobs stall in `queued`. After `/run` the draft is marked **uploaded** immediately. Sync must
   **adopt** (not delete + re-upload) a `queued`/`processing`/`completed` job — retrying created
   duplicate lots and a second Gemini bill. Server-side, `process_job` skips Gemini when the same
   `mobile-<draft>-NN.jpg` names already exist on a lot in that sale (`same_sale=True`).
+- **Phone uploads are idempotent and resumable.** Upload names are stable per photo
+  (`mobile-<draft>-NN.jpg`, `append-<draft>-NN.jpg`, `…-vid-NN.ext`, stored in `lot_photos.upload_name`).
+  `/jobs/upload` reuses the account's `receiving` job for the same `client_draft_id`; a name the batch
+  already has counts as success. `GET /jobs/{id}/received-files` lets Sync send only missing photos
+  (it restarts only when the server has names the phone never assigned). `/run` refuses >40 photos.
+  Lot photo (stable names) and video (`lot_id` + `original_name`) uploads dedupe. Sync sends up to
+  3 photos at a time per lot on Wi-Fi (1 on cellular) and 2 lots at once, using background upload
+  tasks. Failures are `permanent` (4xx except 401/408/429 → Queue **Retry**) or `transient`
+  (backoff 30s doubling to 30 min; manual Sync skips the wait). Add photos sessions are SQLite
+  drafts with `append_lot_id` that Sync uploads to the lot; never treat them as new lots.
+- **Automatic uploads wait for a stable connection** (`mobile/lib/connectivity.ts`). NetInfo must be
+  connected with `isInternetReachable !== false`, steady for 12s (up to 60s when flapping), then
+  `GET /health/ping` must answer (<500). Do not start Sync straight from NetInfo events or from
+  "lot queued" — call `requestUpload()`; only staff taps (Sync now / Retry) call `syncNow({manual})`.
+  A drop lasting 3s pauses the running Sync (`uploadPause`): in-flight upload tasks are cancelled,
+  the lot goes back to `queued` with a "Paused —" note, no attempt is counted, and the next Sync
+  resumes from `received-files`. **Upload on Wi‑Fi only** (Queue switch, SQLite `app_kv`, default
+  off) holds photo *and* video bytes on cellular; website checks still run. The open-sales list is
+  cached in `app_kv` so capture works after an offline restart.
+- **Background resume** uses `expo-background-task` + `expo-task-manager` (task defined in
+  `mobile/lib/backgroundUpload.ts`, imported by `app/_layout.tsx`). It needs a **new native build**;
+  the JS checks `requireOptionalNativeModule` first, so the same OTA is safe on older `1.1.0`
+  binaries (they just skip background resume). The app and the task share `sharedSyncGate`.
 - **Queue leftover “failed / didn’t finish” notices are often false.** A full DB pool can time out
   the phone after `/run` while the worker still catalogs. Sync Phase 0 calls
   `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
@@ -156,7 +180,8 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   those on seller.ctbids.com if needed. Dashboard **Move** and the lot Details
   **Sale** panel both call this. Do not Resend-all after a move.
 - **Lot videos are extra media, not catalog frames.** The phone capture session has a Photo /
-  Video toggle (`expo-camera` `recordAsync`, 45s / 80 MB / 8 per lot). Clips upload to
+  Video toggle (`expo-camera` `recordAsync`, 720p ~5 Mbps, 45s / 80 MB / 8 per lot; hidden for
+  client logins, which cannot upload clips). Clips upload to
   `POST /lots/{id}/videos/upload` after the lot exists (append immediately; new lots wait until
   catalog finishes). They are **not** sent through Gemini and **not** posted to CT Bids.
   Still photos are still required to catalog a lot. Playing uses a signed R2 URL

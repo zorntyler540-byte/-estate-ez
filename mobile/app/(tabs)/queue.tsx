@@ -7,17 +7,30 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
+  Switch,
   View
 } from "react-native";
 import { Text } from "@/components/AppText";
-import NetInfo from "@react-native-community/netinfo";
 
 import { PhotoPreviewModal } from "@/components/DraftPhotos";
 import { formatMediaCounts } from "@/lib/mediaKind";
-import { blockedClipLine, formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
+import { connectionStatusLine } from "@/lib/connectivity";
+import {
+  blockedClipLine,
+  countWaitingLots,
+  formatSyncOutcome,
+  queueRowTitle,
+  queueRowView
+} from "@/lib/queue/queueStatus";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
-import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } from "@/context/SyncContext";
+import {
+  useConnectionStatus,
+  useSyncActions,
+  useSyncRefreshKey,
+  useSyncStatus,
+  type SyncResult
+} from "@/context/SyncContext";
 import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
 import { fetchAllLotPages, queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
@@ -28,8 +41,8 @@ import {
   listDraftPhotos,
   listLotDrafts,
   removeBlockedClips,
-  setDraftServerLotId,
-  setDraftStatus
+  requeueDraft,
+  setDraftServerLotId
 } from "@/lib/queue/db";
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
@@ -70,9 +83,11 @@ export default function QueueScreen() {
   const clientLogin = (signedInRole || "").toLowerCase() === "client";
   const { getSaleName } = useSales();
   const { syncing, lastMessage } = useSyncStatus();
-  const { syncNow } = useSyncActions();
+  const { syncNow, requestUpload, setWifiOnly } = useSyncActions();
+  const connection = useConnectionStatus();
+  const online = connection.phase !== "offline";
   const [rows, setRows] = useState<DraftRow[]>([]);
-  const [online, setOnline] = useState<boolean | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [message, setMessage] = useState("");
   const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -86,16 +101,14 @@ export default function QueueScreen() {
     try {
       // Text-only first. Loading every JPEG URI and decoding thumbs is what
       // hard-killed the pink iPhone when this tab opened.
-      const [drafts, net, blocked] = await Promise.all([
+      const [drafts, blocked] = await Promise.all([
         listLotDrafts(),
-        NetInfo.fetch(),
         listBlockedClipReasons().catch(() => new Map<string, string[]>())
       ]);
       const enriched = queueRowsFromDrafts(drafts);
       setBlockedByDraft(blocked);
       setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
-      setOnline(net.isConnected ?? false);
-      if (opts?.archive !== false && token && !syncing) {
+      if (opts?.archive !== false && token && !syncing && online) {
         try {
           const n = await sweepArchiveConfirmedDrafts(token);
           if (n > 0) {
@@ -113,7 +126,15 @@ export default function QueueScreen() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load Queue");
     }
-  }, [token, syncing]);
+  }, [token, syncing, online]);
+
+  // Countdown for "Waiting for stable connection (~Ns)" — only while that line is showing.
+  useEffect(() => {
+    if (!focused || (connection.phase !== "waiting_stable" && connection.phase !== "unreachable")) return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [focused, connection.phase]);
 
   useFocusEffect(
     useCallback(() => {
@@ -128,27 +149,56 @@ export default function QueueScreen() {
   );
 
   async function queueDraft(id: string) {
-    await setDraftStatus(id, "queued", null);
+    await requeueDraft(id, "queued");
     await refresh();
-    void syncNow();
+    requestUpload();
   }
 
+  /** Needs attention: staff fixed the problem (or want another try) — send it again now. */
+  async function retryDraft(item: DraftRow) {
+    if (syncing) {
+      Alert.alert("Wait for upload", "Sync is running. Try again in a moment.");
+      return;
+    }
+    await requeueDraft(item.id, "queued");
+    await refresh();
+    setMessage("Retrying…");
+    const result = await syncNow({ manual: true });
+    if (result) setMessage(formatQueueSyncMessage(result, online));
+    await refresh();
+  }
+
+  /** Reopens this exact lot in the camera (a queued/failed lot goes back to draft there). */
   function continueDraft(item: DraftRow) {
     router.push({
       pathname: "/capture-session",
       params: {
         draftId: item.id,
+        ...(item.append_lot_id
+          ? {
+              appendLotId: item.append_lot_id,
+              appendSaleId: item.sale_id,
+              ...(item.append_label ? { appendSku: item.append_label } : {})
+            }
+          : {}),
         ...(item.listing_channel === "facebook" ? { channel: "facebook" } : {})
       }
     });
   }
 
-  function openAppendCamera(lotId: string, photoCount: number, sku?: string | null, title?: string | null) {
+  function openAppendCamera(
+    lotId: string,
+    photoCount: number,
+    sku?: string | null,
+    title?: string | null,
+    saleId?: string | null
+  ) {
     router.push({
       pathname: "/capture-session",
       params: {
         appendLotId: lotId,
         appendExistingCount: String(photoCount || 0),
+        ...(saleId ? { appendSaleId: saleId } : {}),
         ...(sku?.trim() ? { appendSku: sku.trim() } : {}),
         ...(title?.trim() ? { appendTitle: title.trim().slice(0, 80) } : {})
       }
@@ -160,7 +210,7 @@ export default function QueueScreen() {
       Alert.alert("Wait for upload", "This lot is uploading. Try again in a moment.");
       return;
     }
-    if (queueAddPhotosIsLocal(item.status)) {
+    if (queueAddPhotosIsLocal(item.status) && !item.archived_at) {
       continueDraft(item);
       return;
     }
@@ -228,12 +278,15 @@ export default function QueueScreen() {
           `The website has ${sku ? `SKU ${sku}` : "a listing"}${title ? ` — ${title}` : ""}. Add photos to that listing?`,
           [
             { text: "Cancel", style: "cancel" },
-            { text: "Add photos", onPress: () => openAppendCamera(lotId, photoCount, sku, title) }
+            {
+              text: "Add photos",
+              onPress: () => openAppendCamera(lotId, photoCount, sku, title, item.sale_id)
+            }
           ]
         );
         return;
       }
-      openAppendCamera(picked.lotId, photoCount, sku, title);
+      openAppendCamera(picked.lotId, photoCount, sku, title, item.sale_id);
     } catch (e) {
       setMessage("");
       Alert.alert("Could not add photos", e instanceof Error ? e.message : "Try the Lots tab.");
@@ -259,10 +312,10 @@ export default function QueueScreen() {
           text: "Resend",
           onPress: () => {
             void (async () => {
-              await setDraftStatus(item.id, "queued", null);
+              await requeueDraft(item.id, "queued");
               await refresh();
               setMessage("Re-queued — syncing…");
-              const result = await syncNow();
+              const result = await syncNow({ manual: true });
               if (result) {
                 setMessage(formatQueueSyncMessage(result, online));
               }
@@ -280,12 +333,12 @@ export default function QueueScreen() {
 
   async function syncAll() {
     setMessage("");
-    const result = await syncNow();
+    const result = await syncNow({ manual: true });
     if (result) {
       setMessage(formatQueueSyncMessage(result, online));
-    } else if (!syncing) {
-      setMessage(lastMessage ?? "Sync skipped.");
     }
+    // No result (offline, or a Sync was already running): the banner falls back to the live
+    // Sync message ("Offline, N lots waiting…") instead of a stale copy captured at tap time.
     await refresh();
   }
 
@@ -330,6 +383,12 @@ export default function QueueScreen() {
     }
 
     const view = queueRowView(item);
+    const remove = () => {
+      void (async () => {
+        await deleteLotDraft(item.id);
+        await refresh();
+      })();
+    };
     Alert.alert(
       view.removeTitle,
       view.removeBody,
@@ -339,10 +398,16 @@ export default function QueueScreen() {
           text: view.removeLabel,
           style: "destructive",
           onPress: () => {
-            void (async () => {
-              await deleteLotDraft(item.id);
-              await refresh();
-            })();
+            const second = view.removeConfirm;
+            if (!second) {
+              remove();
+              return;
+            }
+            // Sent but not confirmed: if catalog fails, this phone has the only copy.
+            Alert.alert(second.title, second.body, [
+              { text: "Keep on phone", style: "cancel" },
+              { text: view.removeLabel, style: "destructive", onPress: remove }
+            ]);
           }
         }
       ]
@@ -399,14 +464,48 @@ export default function QueueScreen() {
   }
 
   const banner = syncing ? lastMessage || message : message || lastMessage;
+  const waitingLots = countWaitingLots(activeRows);
+  const statusLine = connectionStatusLine({
+    phase: connection.phase,
+    waiting: waitingLots,
+    syncing,
+    retryAt: connection.retryAt,
+    now: clock
+  });
+  const showCellularOverride =
+    connection.phase === "wifi_required" && waitingLots > 0 && !syncing && !showArchive;
+
+  async function uploadOnCellularOnce() {
+    setMessage("");
+    const result = await syncNow({ manual: true, allowCellular: true });
+    if (result) setMessage(formatQueueSyncMessage(result, online));
+    await refresh();
+  }
 
   return (
     <View style={styles.root}>
       <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ archive: false })} />
-      <Text style={styles.status}>
-        Network: {online === null ? "…" : online ? "Online" : "Offline"}
-        {syncing ? " · Syncing…" : ""}
+      <Text
+        style={[
+          styles.status,
+          statusLine.tone === "warn" ? styles.statusWarn : statusLine.tone === "ok" ? styles.statusOk : null
+        ]}
+        accessibilityLiveRegion="polite"
+      >
+        {statusLine.text}
       </Text>
+      <View style={styles.settingRow}>
+        <View style={styles.settingText}>
+          <Text style={styles.settingLabel}>Upload on Wi‑Fi only</Text>
+          <Text style={styles.hint}>Photos and videos wait for Wi‑Fi. Off = cellular is fine.</Text>
+        </View>
+        <Switch
+          accessibilityLabel="Upload on Wi‑Fi only"
+          value={connection.wifiOnly}
+          onValueChange={(on) => void setWifiOnly(on)}
+          trackColor={{ true: theme.primary, false: theme.borderStrong }}
+        />
+      </View>
       <Text style={styles.hint}>
         {showArchive
           ? "Phone archive only — these listings stay on the website. Photos are already off this phone. Clear Archive when you are done."
@@ -432,6 +531,16 @@ export default function QueueScreen() {
           <Text style={styles.primaryText}>Sync now</Text>
         )}
       </Pressable>
+
+      {showCellularOverride ? (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.archiveBtn}
+          onPress={() => void uploadOnCellularOnce()}
+        >
+          <Text style={styles.archiveBtnText}>Upload now on cellular (this time only)</Text>
+        </Pressable>
+      ) : null}
 
       {archiveRows.length > 0 || showArchive ? (
         <Pressable
@@ -491,7 +600,9 @@ export default function QueueScreen() {
           const view = queueRowView({
             ...item,
             online,
-            syncing
+            connection: connection.phase,
+            syncing,
+            now: clock
           });
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           const blockedReasons = archived ? [] : blockedByDraft.get(item.id) ?? [];
@@ -561,7 +672,21 @@ export default function QueueScreen() {
                       style={styles.secondary}
                       onPress={() => void queueDraft(item.id)}
                     >
-                      <Text style={styles.secondaryText}>Queue for upload</Text>
+                      <Text style={styles.secondaryText}>
+                        {item.append_lot_id ? "Upload to lot" : "Queue for upload"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {view.showRetry ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Retry ${title}`}
+                      accessibilityState={{ disabled: syncing }}
+                      style={[styles.secondary, syncing && styles.disabled]}
+                      disabled={syncing}
+                      onPress={() => void retryDraft(item)}
+                    >
+                      <Text style={styles.secondaryText}>Retry</Text>
                     </Pressable>
                   ) : null}
                   {view.showResend ? (
@@ -609,6 +734,16 @@ export default function QueueScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, padding: 16, gap: 12, backgroundColor: theme.bg },
   status: { color: theme.textMuted, fontSize: 14 },
+  statusWarn: { color: theme.warning, fontWeight: "600" },
+  statusOk: { color: theme.success },
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minHeight: MIN_TAP_PX
+  },
+  settingText: { flex: 1, gap: 2 },
+  settingLabel: { color: theme.text, fontSize: 15, fontWeight: "600" },
   hint: { color: theme.textSubtle, fontSize: 13 },
   message: { color: theme.textSoft, fontSize: 14 },
   primary: {

@@ -11,6 +11,7 @@ import {
   uriWithUploadFileName,
   type UploadPhotoUri
 } from "./uploadPrepare";
+import { UploadPausedError, uploadPause } from "./uploadPause";
 import * as FileSystem from "expo-file-system/legacy";
 
 export type SaleLotCoverUrls = {
@@ -70,6 +71,26 @@ export async function apiFetch<T>(
   }
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
+}
+
+export const API_PING_TIMEOUT_MS = 5_000;
+
+/**
+ * Quick reachability check before automatic uploads start. Any answer from the API below 500
+ * counts (an older API without ``/health/ping`` answers 404 — still up); a proxy 502/503,
+ * timeout, or network error does not.
+ */
+export async function pingApi(timeoutMs = API_PING_TIMEOUT_MS): Promise<boolean> {
+  try {
+    const res = await fetch(apiUrl("/health/ping"), {
+      method: "GET",
+      headers: { "Cache-Control": "no-cache" },
+      signal: abortSignalFor(timeoutMs)
+    });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
 }
 
 export async function login(email: string, password: string): Promise<TokenResponse> {
@@ -278,26 +299,54 @@ export function lotPhotoThumbnailSource(
   };
 }
 
-export type UploadLotJobOptions = {
-  saleId: string;
-  token: string;
-  manualSku?: string;
-  listingChannel?: "ctseller" | "facebook";
-  photoUris: UploadPhotoUri[];
-  clientDraftId?: string;
-};
+function uploadTimeoutMessage(): string {
+  return `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`;
+}
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+/**
+ * One native upload task. BACKGROUND sessions keep going when the screen locks or staff switch
+ * apps mid-Sync. A task that hits the timeout — or is still running when the connection drops
+ * (``uploadPause``) — is cancelled, not just abandoned: an abandoned task kept the connection
+ * (and the server's upload slot) busy and could land a late duplicate.
+ */
+async function runUploadTask(
+  url: string,
+  fileUri: string,
+  options: FileSystem.FileSystemUploadOptions
+): Promise<FileSystem.FileSystemUploadResult> {
+  uploadPause.throwIfPaused();
+  const task = FileSystem.createUploadTask(url, fileUri, {
+    ...options,
+    sessionType: FileSystem.FileSystemSessionType.BACKGROUND
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel = false;
+  let stopListening: () => void = () => undefined;
   try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(label)), ms);
+    const result = await Promise.race([
+      task.uploadAsync(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          cancel = true;
+          reject(new Error(uploadTimeoutMessage()));
+        }, UPLOAD_PER_FILE_TIMEOUT_MS);
+      }),
+      new Promise<never>((_, reject) => {
+        stopListening = uploadPause.onPause((reason) => {
+          cancel = true;
+          reject(new UploadPausedError(reason));
+        });
       })
     ]);
+    if (!result) {
+      if (uploadPause.reason) throw new UploadPausedError(uploadPause.reason);
+      throw new Error(uploadTimeoutMessage());
+    }
+    return result;
   } finally {
     if (timer) clearTimeout(timer);
+    stopListening();
+    if (cancel) void task.cancelAsync().catch(() => undefined);
   }
 }
 
@@ -314,8 +363,8 @@ async function nativeMultipartUpload(opts: {
   parameters?: Record<string, string>;
   alreadyRetried?: boolean;
 }): Promise<string> {
-  // ``preparePhotosForUpload`` already materializes a cache JPEG when possible.
-  // Do not copyAsync — that was the Build 14 "File … is not readable" failure.
+  // Sync hands over upload-ready files already named for the server; anything else is
+  // resolved (and renamed into a cache copy) here.
   let uploadUri = opts.fileUri.trim();
   if (!uploadUri.startsWith("file://") && uploadUri.startsWith("/")) {
     uploadUri = `file://${uploadUri}`;
@@ -326,56 +375,43 @@ async function nativeMultipartUpload(opts: {
       ? await resolveUploadVideoUri(opts.fileUri)
       : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
   }
-  uploadUri = await uriWithUploadFileName(uploadUri, opts.fileName);
+  const namedUri = await uriWithUploadFileName(uploadUri, opts.fileName);
+  const renamedCopy = namedUri !== uploadUri ? namedUri : null;
+  uploadUri = namedUri;
 
   const url = apiUrl(opts.path);
+  const options: FileSystem.FileSystemUploadOptions = {
+    httpMethod: "POST",
+    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+    fieldName: "files",
+    mimeType: opts.mimeType || "image/jpeg",
+    headers: { Authorization: `Bearer ${opts.token}` },
+    parameters: opts.parameters
+  };
   let result: FileSystem.FileSystemUploadResult;
   try {
-    result = await withTimeout(
-      FileSystem.uploadAsync(url, uploadUri, {
-        httpMethod: "POST",
-        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-        fieldName: "files",
-        mimeType: opts.mimeType || "image/jpeg",
-        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-        headers: { Authorization: `Bearer ${opts.token}` },
-        parameters: opts.parameters
-      }),
-      UPLOAD_PER_FILE_TIMEOUT_MS,
-      `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`
-    );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/not readable|could not be opened|no such file/i.test(msg)) {
+    try {
+      result = await runUploadTask(url, uploadUri, options);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/not readable|could not be opened|no such file/i.test(msg)) throw e;
       // Last chance: rematerialize from the original path / remapped Documents URI.
       // Videos skip JPEG rematerialize — that turned clips into stills.
       const retryUri = isVideoUpload
         ? await resolveUploadVideoUri(opts.fileUri)
         : await resolveUploadFileUri({ uri: opts.fileUri, name: opts.fileName });
-      if (retryUri !== uploadUri) {
-        result = await withTimeout(
-          FileSystem.uploadAsync(url, retryUri, {
-            httpMethod: "POST",
-            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-            fieldName: "files",
-            mimeType: opts.mimeType || "image/jpeg",
-            sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
-            headers: { Authorization: `Bearer ${opts.token}` },
-            parameters: opts.parameters
-          }),
-          UPLOAD_PER_FILE_TIMEOUT_MS,
-          `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`
-        );
-      } else {
+      if (retryUri === uploadUri) {
         throw new Error(
           isVideoUpload
             ? "Video file is not readable on this phone — record that clip again."
             : "Photo file is not readable on this phone — open the preview; if it is blank, re-snap that lot."
         );
       }
-    } else {
-      throw e;
+      result = await runUploadTask(url, await uriWithUploadFileName(retryUri, opts.fileName), options);
     }
+  } finally {
+    // Renamed clip copies can be ~80 MB; do not leave them for the 6h cache sweep.
+    if (renamedCopy) void FileSystem.deleteAsync(renamedCopy, { idempotent: true }).catch(() => undefined);
   }
 
   if (result.status === 401 && opts.token && !opts.alreadyRetried) {
@@ -393,132 +429,117 @@ async function nativeMultipartUpload(opts: {
   return result.body ?? "";
 }
 
-/** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
-export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
-  if (!opts.photoUris.length) {
-    throw new Error("No photos to upload");
+function jobUploadParameters(opts: {
+  photo: UploadPhotoUri;
+  clientDraftId?: string;
+}): Record<string, string> {
+  const parameters: Record<string, string> = {};
+  if (opts.photo.capturedAtMs && opts.photo.capturedAtMs > 0) {
+    parameters.captured_at_ms = String(opts.photo.capturedAtMs);
   }
-  const [first, ...rest] = opts.photoUris;
+  const draftId = opts.clientDraftId?.trim().toLowerCase();
+  if (draftId) parameters.client_draft_id = draftId;
+  return parameters;
+}
+
+/**
+ * First photo of a lot: creates the ``receiving`` job, or — when this draft already has one —
+ * the server adds to it. The response lists every name already in the batch.
+ */
+export async function createLotJobWithPhoto(opts: {
+  saleId: string;
+  token: string;
+  manualSku?: string;
+  listingChannel?: "ctseller" | "facebook";
+  clientDraftId?: string;
+  photo: UploadPhotoUri;
+}): Promise<Job> {
   const parameters: Record<string, string> = {
     sale_id: opts.saleId,
     inherit_sku_from_subfolder: "false",
     single_lot_mode: "true",
-    listing_channel: opts.listingChannel === "facebook" ? "facebook" : "ctseller"
+    listing_channel: opts.listingChannel === "facebook" ? "facebook" : "ctseller",
+    ...jobUploadParameters({ photo: opts.photo, clientDraftId: opts.clientDraftId })
   };
   if (opts.manualSku?.trim()) {
     parameters.single_lot_manual_sku = opts.manualSku.trim();
   }
-  if (opts.clientDraftId?.trim()) {
-    parameters.client_draft_id = opts.clientDraftId.trim().toLowerCase();
-  }
-  if (first?.capturedAtMs && first.capturedAtMs > 0) {
-    parameters.captured_at_ms = String(first.capturedAtMs);
-  }
-
   const text = await nativeMultipartUpload({
     path: "/jobs/upload",
     token: opts.token,
-    fileUri: first!.uri,
-    fileName: first!.name,
+    fileUri: opts.photo.uri,
+    fileName: opts.photo.name,
     parameters
   });
-  const job = JSON.parse(text) as Job;
-  for (const photo of rest) {
-    await appendFilesToQueuedJob(opts.token, job.id, [photo], opts.clientDraftId);
-  }
-  return job;
+  return JSON.parse(text) as Job;
 }
 
-/** Append more images to a queued upload job (one photo per request). */
-export async function appendFilesToQueuedJob(
+/** One more photo into a ``receiving`` job. A name the batch already has counts as sent. */
+export async function appendPhotoToJob(
   token: string,
   jobId: string,
-  photoUris: UploadPhotoUri[],
+  photo: UploadPhotoUri,
   clientDraftId?: string
 ): Promise<Job> {
-  if (!photoUris.length) {
-    throw new Error("No photos to append");
-  }
-  let lastText = "";
-  const draftId = clientDraftId?.trim().toLowerCase();
-  for (const photo of photoUris) {
-    const parameters: Record<string, string> = {};
-    if (photo.capturedAtMs && photo.capturedAtMs > 0) {
-      parameters.captured_at_ms = String(photo.capturedAtMs);
-    }
-    if (draftId) parameters.client_draft_id = draftId;
-    lastText = await nativeMultipartUpload({
-      path: `/jobs/${encodeURIComponent(jobId)}/upload-files`,
-      token,
-      fileUri: photo.uri,
-      fileName: photo.name,
-      parameters: Object.keys(parameters).length ? parameters : undefined
-    });
-  }
-  return JSON.parse(lastText) as Job;
+  const parameters = jobUploadParameters({ photo, clientDraftId });
+  const text = await nativeMultipartUpload({
+    path: `/jobs/${encodeURIComponent(jobId)}/upload-files`,
+    token,
+    fileUri: photo.uri,
+    fileName: photo.name,
+    parameters: Object.keys(parameters).length ? parameters : undefined
+  });
+  return JSON.parse(text) as Job;
 }
 
-/** Append photos to an existing catalog lot (same as web lot page “Add photos”). */
-export async function uploadLotPhotos(
-  token: string,
-  lotId: string,
-  photoUris: UploadPhotoUri[]
-): Promise<LotPhoto[]> {
-  if (!photoUris.length) {
-    throw new Error("No photos to upload");
-  }
-  const out: LotPhoto[] = [];
-  for (const photo of photoUris) {
-    const text = await nativeMultipartUpload({
-      path: `/lots/${encodeURIComponent(lotId)}/photos/upload`,
-      token,
-      fileUri: photo.uri,
-      fileName: photo.name,
-      parameters:
-        photo.capturedAtMs && photo.capturedAtMs > 0
-          ? { captured_at_ms: String(photo.capturedAtMs) }
-          : undefined
-    });
-    const raw = text ? (JSON.parse(text) as unknown) : null;
-    if (Array.isArray(raw)) {
-      out.push(...(raw as LotPhoto[]));
-    } else if (raw && typeof raw === "object") {
-      out.push(raw as LotPhoto);
-    } else {
-      throw new Error("Upload response was not a photo list");
-    }
-  }
-  return out;
+export type JobReceivedFiles = { job_id: string; status: string; names: string[]; folder_missing: boolean };
+
+/** Names already staged for a job (resume a half-sent lot). 404 on older APIs or a deleted job. */
+export async function getJobReceivedFiles(token: string, jobId: string): Promise<JobReceivedFiles> {
+  const res = await apiFetch<Partial<JobReceivedFiles>>(
+    `/jobs/${encodeURIComponent(jobId)}/received-files`,
+    token
+  );
+  return {
+    job_id: String(res?.job_id || jobId),
+    status: String(res?.status || ""),
+    names: Array.isArray(res?.names) ? res!.names!.map(String) : [],
+    folder_missing: Boolean(res?.folder_missing)
+  };
 }
 
-/** Attach clips to an existing catalog lot (skips Gemini / CT Bids). */
-export async function uploadLotVideos(
-  token: string,
-  lotId: string,
-  videoUris: UploadPhotoUri[]
-): Promise<LotVideo[]> {
-  if (!videoUris.length) {
-    throw new Error("No videos to upload");
-  }
-  const out: LotVideo[] = [];
-  for (const video of videoUris) {
-    const text = await nativeMultipartUpload({
-      path: `/lots/${encodeURIComponent(lotId)}/videos/upload`,
-      token,
-      fileUri: video.uri,
-      fileName: video.name,
-      mimeType: videoMimeType(video.name)
-    });
-    const raw = text ? (JSON.parse(text) as unknown) : null;
-    if (Array.isArray(raw)) {
-      out.push(...(raw as LotVideo[]));
-    } else if (raw && typeof raw === "object") {
-      out.push(raw as LotVideo);
-    } else {
-      throw new Error("Upload response was not a video list");
-    }
-  }
-  return out;
+function listFromUploadResponse<T>(text: string, what: string): T[] {
+  const raw = text ? (JSON.parse(text) as unknown) : null;
+  if (Array.isArray(raw)) return raw as T[];
+  if (raw && typeof raw === "object") return [raw as T];
+  throw new Error(`Upload response was not a ${what} list`);
+}
+
+/** One photo onto an existing catalog lot. A stable phone name already on the lot is skipped. */
+export async function uploadLotPhoto(token: string, lotId: string, photo: UploadPhotoUri): Promise<LotPhoto[]> {
+  const text = await nativeMultipartUpload({
+    path: `/lots/${encodeURIComponent(lotId)}/photos/upload`,
+    token,
+    fileUri: photo.uri,
+    fileName: photo.name,
+    parameters:
+      photo.capturedAtMs && photo.capturedAtMs > 0
+        ? { captured_at_ms: String(photo.capturedAtMs) }
+        : undefined
+  });
+  return listFromUploadResponse<LotPhoto>(text, "photo");
+}
+
+/** One clip onto a catalog lot (skips Gemini / CT Bids). The same name twice is stored once. */
+export async function uploadLotVideo(token: string, lotId: string, video: UploadPhotoUri): Promise<LotVideo[]> {
+  const text = await nativeMultipartUpload({
+    path: `/lots/${encodeURIComponent(lotId)}/videos/upload`,
+    token,
+    fileUri: video.uri,
+    fileName: video.name,
+    mimeType: videoMimeType(video.name)
+  });
+  return listFromUploadResponse<LotVideo>(text, "video");
 }
 
 export async function getLotVideoPlayUrl(

@@ -120,6 +120,20 @@ assert(
   ) === false,
   "queue status change"
 );
+assert(
+  queueRowsUnchanged(
+    [{ id: "d1", status: "failed", error_kind: "transient", next_attempt_at: 1 }],
+    [{ id: "d1", status: "failed", error_kind: "permanent", next_attempt_at: null }]
+  ) === false,
+  "retry kind change re-renders (Needs attention / Retry)"
+);
+assert(
+  queueRowsUnchanged(
+    [{ id: "d1", status: "uploaded", server_lot_id: null }],
+    [{ id: "d1", status: "uploaded", server_lot_id: "lot-1" }]
+  ) === false,
+  "linked lot re-renders"
+);
 
 void (async () => {
   const all = Array.from({ length: 1203 }, (_, i) => ({ id: `lot-${i}` }));
