@@ -57,6 +57,13 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       if (!cols.some((c) => c.name === "archived_video_count")) {
         await db.execAsync("ALTER TABLE lot_drafts ADD COLUMN archived_video_count INTEGER");
       }
+      if (!cols.some((c) => c.name === "server_lot_verified")) {
+        // Older builds also wrote server_lot_id from SKU guesses. Those stay untrusted (0)
+        // until Sync maps this exact draft id again.
+        await db.execAsync(
+          "ALTER TABLE lot_drafts ADD COLUMN server_lot_verified INTEGER NOT NULL DEFAULT 0"
+        );
+      }
       const photoCols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_photos)");
       if (!photoCols.some((c) => c.name === "media_kind")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'image'");
@@ -66,6 +73,9 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       }
       if (!photoCols.some((c) => c.name === "captured_at")) {
         await db.execAsync("ALTER TABLE lot_photos ADD COLUMN captured_at INTEGER");
+      }
+      if (!photoCols.some((c) => c.name === "upload_blocked")) {
+        await db.execAsync("ALTER TABLE lot_photos ADD COLUMN upload_blocked TEXT");
       }
       return db;
     })();
@@ -85,7 +95,10 @@ function rowToDraft(row: Record<string, unknown>, photoCount: number, videoCount
     status: row.status as LotDraftStatus,
     error_message: row.error_message != null ? String(row.error_message) : null,
     server_job_id: row.server_job_id != null ? String(row.server_job_id) : null,
-    server_lot_id: row.server_lot_id != null ? String(row.server_lot_id) : null,
+    server_lot_id:
+      row.server_lot_id != null && Number(row.server_lot_verified || 0) === 1
+        ? String(row.server_lot_id)
+        : null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
     photo_count: photoCount,
@@ -252,8 +265,26 @@ export async function listDraftPhotos(draftId: string): Promise<LotPhotoRow[]> {
     sort_order: Number(r.sort_order),
     media_kind: String(r.media_kind || "image") === "video" ? "video" : "image",
     uploaded: Number(r.uploaded || 0) === 1,
-    captured_at: capturedAtFromPhotoRow(r)
+    captured_at: capturedAtFromPhotoRow(r),
+    upload_blocked: r.upload_blocked != null ? String(r.upload_blocked) : null
   }));
+}
+
+/**
+ * The website refused this clip for good (too large, forbidden, lot gone). Keep the file on
+ * the phone, but stop re-sending it on every Sync / follow-up check.
+ */
+export async function markDraftMediaBlocked(
+  draftId: string,
+  photoId: string,
+  reason: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE lot_photos SET upload_blocked = ? WHERE draft_id = ? AND id = ?", [
+    reason.trim() || "Website refused this file",
+    draftId,
+    photoId
+  ]);
 }
 
 export async function markDraftMediaUploaded(draftId: string, photoId: string): Promise<void> {
@@ -287,13 +318,16 @@ export async function setDraftServerJobId(draftId: string, serverJobId: string |
 }
 
 /** Remember the catalog lot so Queue can add forgotten photos without a new Sync job. */
+/**
+ * Remember the lot this phone's own job became. Only pass ids the server mapped to this exact
+ * draft (``cataloged-mobile-drafts`` / ``/mobile/drafts/status``) — never a SKU match.
+ */
 export async function setDraftServerLotId(draftId: string, serverLotId: string | null): Promise<void> {
   const db = await getDb();
-  await db.runAsync("UPDATE lot_drafts SET server_lot_id = ?, updated_at = ? WHERE id = ?", [
-    serverLotId,
-    Date.now(),
-    draftId
-  ]);
+  await db.runAsync(
+    "UPDATE lot_drafts SET server_lot_id = ?, server_lot_verified = ?, updated_at = ? WHERE id = ?",
+    [serverLotId, serverLotId ? 1 : 0, Date.now(), draftId]
+  );
 }
 
 export async function updateDraftManualSku(draftId: string, manualSku: string): Promise<void> {
@@ -462,13 +496,8 @@ export async function countUploadPending(): Promise<number> {
            SELECT 1 FROM lot_photos
            WHERE lot_photos.draft_id = lot_drafts.id
              AND lot_photos.uploaded = 0
-             AND (
-               lot_photos.media_kind = 'video'
-               OR lower(lot_photos.file_uri) LIKE '%.mp4%'
-               OR lower(lot_photos.file_uri) LIKE '%.mov%'
-               OR lower(lot_photos.file_uri) LIKE '%.m4v%'
-               OR lower(lot_photos.file_uri) LIKE '%.webm%'
-             )
+             AND lot_photos.upload_blocked IS NULL
+             AND ${VIDEO_ROW_SQL}
          )
        )`
   );
@@ -485,23 +514,58 @@ export async function countLotsNeedingPhotoUpload(): Promise<number> {
   return Number(row?.c ?? 0);
 }
 
-/** Leftover "Cataloging…" / unsent-clip rows that should re-check the website soon. */
-export async function countLotsNeedingCatalogFollowUp(): Promise<number> {
+export type FollowUpDraftRow = {
+  id: string;
+  sale_id: string;
+  status: string;
+  server_job_id: string | null;
+  /** Verified lot id only (see ``setDraftServerLotId``). */
+  server_lot_id: string | null;
+  has_pending_clip: boolean;
+};
+
+/**
+ * Sent lots with a leftover "Cataloging…" notice, or with clips still waiting for their lot.
+ * These drive the bounded follow-up check. Drafts still being shot and clips the website
+ * refused for good are not included.
+ */
+export async function listFollowUpDrafts(): Promise<FollowUpDraftRow[]> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ c: number }>(
-    `SELECT COUNT(*) AS c FROM lot_drafts
+  const rows = await db.getAllAsync<Record<string, unknown>>(
+    `SELECT lot_drafts.id, lot_drafts.sale_id, lot_drafts.status, lot_drafts.server_job_id,
+            lot_drafts.server_lot_id, lot_drafts.server_lot_verified,
+            EXISTS (
+              SELECT 1 FROM lot_photos
+              WHERE lot_photos.draft_id = lot_drafts.id
+                AND lot_photos.uploaded = 0
+                AND lot_photos.upload_blocked IS NULL
+                AND ${VIDEO_ROW_SQL}
+            ) AS has_pending_clip
+     FROM lot_drafts
      WHERE archived_at IS NULL
        AND (
          (status = 'uploaded' AND (error_message IS NOT NULL OR server_job_id IS NOT NULL))
-         OR EXISTS (
-           SELECT 1 FROM lot_photos
-           WHERE lot_photos.draft_id = lot_drafts.id
-             AND lot_photos.uploaded = 0
-             AND ${VIDEO_ROW_SQL}
+         OR (
+           status = 'uploaded'
+           AND EXISTS (
+             SELECT 1 FROM lot_photos
+             WHERE lot_photos.draft_id = lot_drafts.id
+               AND lot_photos.uploaded = 0
+               AND lot_photos.upload_blocked IS NULL
+               AND ${VIDEO_ROW_SQL}
+           )
          )
        )`
   );
-  return Number(row?.c ?? 0);
+  return rows.map((r) => ({
+    id: String(r.id),
+    sale_id: String(r.sale_id),
+    status: String(r.status),
+    server_job_id: r.server_job_id != null ? String(r.server_job_id) : null,
+    server_lot_id:
+      r.server_lot_id != null && Number(r.server_lot_verified || 0) === 1 ? String(r.server_lot_id) : null,
+    has_pending_clip: Number(r.has_pending_clip || 0) === 1
+  }));
 }
 
 /** Leftover Sent / cataloging rows plus anything still waiting to upload. */

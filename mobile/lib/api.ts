@@ -1,4 +1,4 @@
-import { parseApiError } from "./apiError";
+import { ApiError, parseApiError } from "./apiError";
 import { API_BASE, apiUrl } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import { teamActivityQuery } from "./teamActivity";
@@ -18,7 +18,7 @@ export type SaleLotCoverUrls = {
   urls: Record<string, string>;
 };
 
-export { isProxyBusyError, parseApiError } from "./apiError";
+export { ApiError, isPermanentClientError, isProxyBusyError, parseApiError } from "./apiError";
 
 type ApiFetchInit = RequestInit & {
   /** Internal: already retried after a silent credential refresh. */
@@ -66,7 +66,7 @@ export async function apiFetch<T>(
         return apiFetch<T>(path, refreshed, { ...init, _authRetried: true });
       }
     }
-    throw new Error(parseApiError(text, `HTTP ${res.status}`));
+    throw new ApiError(parseApiError(text, `HTTP ${res.status}`), res.status);
   }
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
@@ -383,7 +383,10 @@ async function nativeMultipartUpload(opts: {
     }
   }
   if (result.status < 200 || result.status >= 300) {
-    throw new Error(parseApiError(result.body ?? "", `Upload failed (${result.status})`));
+    throw new ApiError(
+      parseApiError(result.body ?? "", `Upload failed (${result.status})`),
+      result.status
+    );
   }
   return result.body ?? "";
 }
@@ -566,6 +569,36 @@ export async function listCatalogedMobileDraftsDetailed(
   const lots = Array.isArray(res.lots) ? res.lots : [];
   const draftIds = (res.draft_ids || lots.map((row) => row.draft_id)).map((id) => id.toLowerCase());
   return { draftIds, lots };
+}
+
+export type MobileDraftStatus = {
+  draft_id: string;
+  sale_id?: string | null;
+  job_id?: string | null;
+  job_status?: string | null;
+  error_message?: string | null;
+  lot_id?: string | null;
+  cataloged?: boolean;
+};
+
+/** Server accepts at most this many ids per request. */
+export const MOBILE_DRAFT_STATUS_MAX_IDS = 200;
+
+/** Job + lot state for specific phone drafts in one request (no per-sale catalog scan). */
+export async function getMobileDraftStatuses(
+  token: string,
+  draftIds: string[]
+): Promise<MobileDraftStatus[]> {
+  const ids = [...new Set(draftIds.map((id) => id.trim().toLowerCase()).filter(Boolean))].slice(
+    0,
+    MOBILE_DRAFT_STATUS_MAX_IDS
+  );
+  if (!ids.length) return [];
+  const res = await apiFetch<{ drafts?: MobileDraftStatus[] }>("/mobile/drafts/status", token, {
+    method: "POST",
+    body: JSON.stringify({ draft_ids: ids })
+  });
+  return Array.isArray(res?.drafts) ? res.drafts : [];
 }
 
 /** Phone draft ids that already have catalog photos on this sale. */

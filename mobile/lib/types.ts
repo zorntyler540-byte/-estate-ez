@@ -101,6 +101,8 @@ export type LotPhotoRow = {
   media_kind: LotMediaKind;
   uploaded: boolean;
   captured_at?: number;
+  /** Website refused this clip permanently (e.g. too large); Sync stops re-sending it. */
+  upload_blocked?: string | null;
 };
 
 export type LotVideo = {

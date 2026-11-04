@@ -189,7 +189,7 @@ export default function QueueScreen() {
         );
         return;
       }
-      if (item.server_lot_id !== picked.lotId) {
+      if (picked.match === "exact" && item.server_lot_id !== picked.lotId) {
         await setDraftServerLotId(item.id, picked.lotId);
       }
       let photoCount = picked.photoCount;
@@ -204,6 +204,19 @@ export default function QueueScreen() {
         /* cached mapping is enough to open the camera */
       }
       setMessage("");
+      if (picked.match === "sku") {
+        // SKU numbers repeat across sales and typos happen — never append without a human check.
+        const lotId = picked.lotId;
+        Alert.alert(
+          "Possible match",
+          `The website has ${sku ? `SKU ${sku}` : "a listing"}${title ? ` — ${title}` : ""}. Add photos to that listing?`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Add photos", onPress: () => openAppendCamera(lotId, photoCount, sku, title) }
+          ]
+        );
+        return;
+      }
       openAppendCamera(picked.lotId, photoCount, sku, title);
     } catch (e) {
       setMessage("");
