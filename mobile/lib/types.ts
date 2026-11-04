@@ -63,6 +63,8 @@ export type Job = {
   single_lot_mode?: boolean;
   single_lot_manual_sku?: string | null;
   client_draft_id?: string | null;
+  /** Names already in this job's upload batch (upload responses only; older APIs omit it). */
+  received_files?: string[] | null;
 };
 
 export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "failed";
@@ -89,6 +91,15 @@ export type LotDraft = {
   video_count: number;
   /** Set after the server confirmed catalog — local JPEGs were removed. */
   archived_at: number | null;
+  /** Failed attempts since the last success / Retry. */
+  attempts?: number;
+  /** Earliest automatic retry (ms). Manual Sync ignores it for transient failures. */
+  next_attempt_at?: number | null;
+  /** ``permanent`` failures wait for Retry; ``transient`` ones back off and retry. */
+  error_kind?: "permanent" | "transient" | null;
+  /** Add photos session for this website lot (uploads to the lot, not a new catalog job). */
+  append_lot_id?: string | null;
+  append_label?: string | null;
 };
 
 export type LotMediaKind = "image" | "video";
@@ -103,6 +114,8 @@ export type LotPhotoRow = {
   captured_at?: number;
   /** Website refused this clip permanently (e.g. too large); Sync stops re-sending it. */
   upload_blocked?: string | null;
+  /** Stable multipart name (``mobile-<draft>-NN.jpg``), assigned on first upload. */
+  upload_name?: string | null;
 };
 
 export type LotVideo = {
