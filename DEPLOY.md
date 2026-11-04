@@ -64,7 +64,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 
 6. **Generate domain** for the API service → note the HTTPS URL, e.g. `https://caring-api.up.railway.app`.
 
-7. Redeploy after changing env vars. On start, the container runs **`alembic upgrade head`** then **uvicorn**.
+7. Redeploy after changing env vars. On start, the container runs **`alembic upgrade head`** then **uvicorn** (Railpack uses the root `Procfile`; `Dockerfile.api` has the same `CMD`). If you set a custom Start Command in Railway, keep the `python -m alembic upgrade head &&` prefix. The API itself never runs DDL; it only logs `Schema check:` warnings when the database is behind. Migrations hold a Postgres advisory lock, so several API replicas starting together apply them once. The worker does not migrate.
 
 **Health check:** open `https://<your-api-domain>/health` — should return JSON `{"status":"ok"}`.
 
