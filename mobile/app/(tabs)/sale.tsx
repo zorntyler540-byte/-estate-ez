@@ -53,6 +53,9 @@ export default function SaleScreen() {
             const active = item.id === selectedSaleId;
             return (
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${item.name}${active ? ", selected" : ""}`}
+                accessibilityState={{ selected: active }}
                 style={[styles.row, active && styles.rowActive]}
                 onPress={() => void setSelectedSale(item.id, item.name)}
               >

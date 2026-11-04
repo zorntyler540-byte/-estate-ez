@@ -29,6 +29,7 @@ import { playVideoUri } from "@/lib/playVideo";
 import { lotDetailSnapshot, mediaIdsKey, shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 import type { Lot, LotPhoto, LotVideo } from "@/lib/types";
 import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 
 function Field({ label, value }: { label: string; value: string }) {
   if (!value.trim()) return null;
@@ -104,7 +105,12 @@ function LotPhotoPreviewModal({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.previewBackdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close preview"
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+        />
         <View style={styles.previewCard}>
           <Text style={styles.previewTitle}>
             Photo {index + 1} of {photos.length}
@@ -130,6 +136,9 @@ function LotPhotoPreviewModal({
           </View>
           <View style={styles.previewNav}>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous photo"
+              accessibilityState={{ disabled: !canPrev }}
               style={[styles.previewNavBtn, !canPrev && styles.previewNavBtnDisabled]}
               disabled={!canPrev}
               onPress={() => onIndexChange(index - 1)}
@@ -137,6 +146,9 @@ function LotPhotoPreviewModal({
               <Text style={styles.previewNavText}>Previous</Text>
             </Pressable>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next photo"
+              accessibilityState={{ disabled: !canNext }}
               style={[styles.previewNavBtn, !canNext && styles.previewNavBtnDisabled]}
               disabled={!canNext}
               onPress={() => onIndexChange(index + 1)}
@@ -144,7 +156,12 @@ function LotPhotoPreviewModal({
               <Text style={styles.previewNavText}>Next</Text>
             </Pressable>
           </View>
-          <Pressable style={styles.previewClose} onPress={onClose}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close preview"
+            style={styles.previewClose}
+            onPress={onClose}
+          >
             <Text style={styles.previewCloseText}>Close</Text>
           </Pressable>
         </View>
@@ -220,7 +237,12 @@ export default function LotDetailScreen() {
         ) : error && !lot ? (
           <>
             <Text style={styles.error}>{error}</Text>
-            <Pressable style={styles.addPhotosBtn} onPress={() => void load()}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Try again"
+              style={styles.addPhotosBtn}
+              onPress={() => void load()}
+            >
               <Text style={styles.addPhotosBtnText}>Try again</Text>
             </Pressable>
           </>
@@ -229,6 +251,8 @@ export default function LotDetailScreen() {
             <View style={styles.heroWrap}>
               {lot.has_thumbnail && heroSource ? (
                 <Pressable
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel="Open main photo"
                   style={styles.hero}
                   onPress={() => {
                     if (photos.length) setPreviewIndex(0);
@@ -272,7 +296,12 @@ export default function LotDetailScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
               {photos.length && token
                 ? photos.map((photo, photoIndex) => (
-                    <Pressable key={photo.id} onPress={() => setPreviewIndex(photoIndex)}>
+                    <Pressable
+                      accessibilityRole="imagebutton"
+                      accessibilityLabel={`Open photo ${photoIndex + 1}`}
+                      key={photo.id}
+                      onPress={() => setPreviewIndex(photoIndex)}
+                    >
                       <LotPhotoThumb lotId={lot.id} photoId={photo.id} token={token} />
                     </Pressable>
                   ))
@@ -285,6 +314,8 @@ export default function LotDetailScreen() {
               <View style={styles.videoList}>
                 {videos.map((video, index) => (
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Play video"
                     key={video.id}
                     style={styles.videoRow}
                     onPress={() => {
@@ -308,6 +339,8 @@ export default function LotDetailScreen() {
             )}
 
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add photos or video to this lot"
               style={styles.addPhotosBtn}
               onPress={() =>
                 router.push({
@@ -389,7 +422,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
     borderRadius: 10,
     paddingVertical: 10,
-    paddingHorizontal: 12
+    paddingHorizontal: 12,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   videoPlay: { color: theme.text, fontSize: 16, fontWeight: "700" },
   videoName: { color: theme.textSoft, fontSize: 14, flex: 1 },

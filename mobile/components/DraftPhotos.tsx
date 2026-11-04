@@ -10,6 +10,7 @@ import { playVideoUri } from "@/lib/playVideo";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 import { queueRowView } from "@/lib/queue/queueStatus";
 import { theme } from "@/constants/theme";
+import { hitSlopFor } from "@/lib/a11y";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -44,7 +45,12 @@ export function DraftPhotoStrip({
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
       {shown.map((uri, index) => (
         <View key={`${index}:${uri}`} style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
-          <Pressable style={styles.thumbPress} onPress={() => onPressPhoto?.(uri, index)}>
+          <Pressable
+            accessibilityRole="imagebutton"
+            accessibilityLabel={`${isVideoUri(uri) ? "Video" : "Photo"} ${index + 1}, open preview`}
+            style={styles.thumbPress}
+            onPress={() => onPressPhoto?.(uri, index)}
+          >
             {isVideoUri(uri) ? (
               <View style={[styles.thumbImage, styles.videoThumb]}>
                 <Text style={styles.videoThumbMark}>▶</Text>
@@ -63,8 +69,9 @@ export function DraftPhotoStrip({
           </Pressable>
           {onDeletePhoto ? (
             <Pressable
+              accessibilityRole="button"
               style={styles.stripDelete}
-              hitSlop={8}
+              hitSlop={hitSlopFor(24)}
               onPress={() => onDeletePhoto(uri, index)}
               accessibilityLabel={`Delete photo ${index + 1}`}
             >
@@ -123,7 +130,12 @@ export function PhotoPreviewModal({
   return (
     <Modal visible={Boolean(uri)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close preview"
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+        />
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>
             {isVideoUri(uri) ? "Video" : "Photo"} {index + 1} of {total}
@@ -136,6 +148,7 @@ export function PhotoPreviewModal({
             <View style={styles.modalImageWrap}>
               {isVideoUri(uri) ? (
                 <Pressable
+                  accessibilityRole="button"
                   style={[styles.modalImage, styles.videoPreview]}
                   onPress={() => void playCurrent()}
                   accessibilityLabel="Play video"
@@ -156,6 +169,8 @@ export function PhotoPreviewModal({
           {total > 1 ? (
             <View style={styles.modalNav}>
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canPrev }}
                 style={[styles.modalNavBtn, !canPrev && styles.modalNavBtnDisabled]}
                 disabled={!canPrev}
                 onPress={() => go(-1)}
@@ -164,6 +179,8 @@ export function PhotoPreviewModal({
                 <Text style={styles.modalNavText}>Previous</Text>
               </Pressable>
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canNext }}
                 style={[styles.modalNavBtn, styles.modalNavBtnNext, !canNext && styles.modalNavBtnDisabled]}
                 disabled={!canNext}
                 onPress={() => go(1)}
@@ -175,16 +192,31 @@ export function PhotoPreviewModal({
           ) : null}
           <View style={styles.modalActions}>
             {uri && isVideoUri(uri) ? (
-              <Pressable style={styles.modalPlay} onPress={() => void playCurrent()}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Play video"
+                style={styles.modalPlay}
+                onPress={() => void playCurrent()}
+              >
                 <Text style={styles.modalPlayText}>{playing ? "Opening…" : "Play video"}</Text>
               </Pressable>
             ) : null}
             {onDelete ? (
-              <Pressable style={styles.modalDelete} onPress={onDelete}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isVideoUri(uri) ? "Delete video" : "Delete photo"}
+                style={styles.modalDelete}
+                onPress={onDelete}
+              >
                 <Text style={styles.modalDeleteText}>{isVideoUri(uri) ? "Delete video" : "Delete photo"}</Text>
               </Pressable>
             ) : null}
-            <Pressable style={styles.modalClose} onPress={onClose}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close preview"
+              style={styles.modalClose}
+              onPress={onClose}
+            >
               <Text style={styles.modalCloseText}>Close</Text>
             </Pressable>
           </View>

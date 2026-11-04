@@ -63,6 +63,7 @@ import {
   type CaptureResult
 } from "@/lib/queue/captureProcessing";
 import { theme } from "@/constants/theme";
+import { hitSlopFor } from "@/lib/a11y";
 
 /** Pinch spread doubling ≈ this much extra zoom (0–1 native zoom range). */
 const PINCH_ZOOM_SENSITIVITY = 0.6;
@@ -835,7 +836,12 @@ export default function CaptureSessionScreen() {
     return (
       <View style={styles.center}>
         <Text style={styles.text}>Camera permission is required for lot capture.</Text>
-        <Pressable style={styles.primary} onPress={() => void requestPermission()}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Allow camera access"
+          style={styles.primary}
+          onPress={() => void requestPermission()}
+        >
           <Text style={styles.primaryText}>Allow camera</Text>
         </Pressable>
       </View>
@@ -904,6 +910,7 @@ export default function CaptureSessionScreen() {
           />
         ) : null}
         <Pressable
+          accessibilityRole="button"
           style={[
             styles.closeFab,
             { top: landscape ? 10 : Math.max(10, 4), left: landscape ? 10 : 12 }
@@ -922,6 +929,10 @@ export default function CaptureSessionScreen() {
                   Math.abs(zoom - preset.value) < (preset.value === 0 ? 0.02 : 0.08);
                 return (
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Zoom ${preset.label}`}
+                    accessibilityState={{ selected: active }}
+                    hitSlop={hitSlopFor(30)}
                     key={preset.label}
                     style={[styles.zoomBtn, active && styles.zoomBtnActive]}
                     onPress={() => applyZoom(preset.value)}
@@ -934,6 +945,9 @@ export default function CaptureSessionScreen() {
               })}
             </View>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: torchOn }}
+              hitSlop={hitSlopFor(32)}
               style={[styles.torchBtn, torchOn && styles.torchBtnActive]}
               onPress={() => setTorchOn((v) => !v)}
               accessibilityLabel={torchOn ? "Turn torch off" : "Turn torch on"}
@@ -963,6 +977,9 @@ export default function CaptureSessionScreen() {
               const active = aspectId === preset.id;
               return (
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  hitSlop={hitSlopFor(32)}
                   key={preset.id}
                   style={[styles.aspectBtn, active && styles.aspectBtnActive]}
                   onPress={() => setAspectId(preset.id)}
@@ -1025,6 +1042,10 @@ export default function CaptureSessionScreen() {
               const active = captureMode === mode;
               return (
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={mode === "photo" ? "Photo mode" : "Video mode"}
+                  accessibilityState={{ selected: active, disabled: recording }}
+                  hitSlop={hitSlopFor(34)}
                   key={mode}
                   style={[styles.modeBtn, active && styles.modeBtnActive]}
                   disabled={recording}
@@ -1041,6 +1062,8 @@ export default function CaptureSessionScreen() {
           <View style={[styles.actions, landscape && styles.actionsLandscape]}>
             {!landscape ? (
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isAppendMode ? "Cancel and discard these new shots" : "Close camera"}
                 style={styles.secondary}
                 onPress={() => {
                   if (isAppendMode && thumbs.length) {
@@ -1057,6 +1080,9 @@ export default function CaptureSessionScreen() {
               </Pressable>
             ) : null}
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={captureMode === "video" ? (recording ? "Stop recording" : "Record video") : "Take photo"}
+              accessibilityState={{ disabled: !recording && (busy || !cameraReady || !sessionReady) }}
               style={[
                 styles.snap,
                 landscape && styles.snapLandscape,
@@ -1086,6 +1112,9 @@ export default function CaptureSessionScreen() {
               )}
             </Pressable>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isAppendMode ? "Upload to lot" : "Finish lot"}
+              accessibilityState={{ disabled: !thumbs.length || busy }}
               style={[
                 styles.primary,
                 landscape && styles.primaryLandscape,

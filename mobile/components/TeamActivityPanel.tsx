@@ -11,6 +11,7 @@ import {
   type TeamActivityLot
 } from "@/lib/api";
 import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 
 type Days = 1 | 7 | 30;
 type Panel = "catalog" | "sales";
@@ -97,7 +98,11 @@ function LotChip({ lot, token }: { lot: TeamActivityLot; token: string }) {
   }
   return (
     <View style={styles.lotChip}>
-      <Pressable onPress={openLot}>
+      <Pressable
+        accessibilityRole="imagebutton"
+        accessibilityLabel="Open lot"
+        onPress={openLot}
+      >
         {source ? (
           <Image source={source} style={styles.lotThumb} contentFit="cover" cachePolicy="memory-disk" />
         ) : (
@@ -170,6 +175,9 @@ export function TeamActivityPanel({ token }: { token: string }) {
           ] as const
         ).map(([id, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: panel === id }}
             key={id}
             style={[styles.chip, panel === id && styles.chipOn]}
             onPress={() => setPanel(id)}
@@ -187,6 +195,9 @@ export function TeamActivityPanel({ token }: { token: string }) {
           ] as const
         ).map(([n, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: days === n }}
             key={n}
             style={[styles.chip, days === n && styles.chipOn]}
             onPress={() => selectDays(n)}
@@ -194,7 +205,14 @@ export function TeamActivityPanel({ token }: { token: string }) {
             <Text style={[styles.chipText, days === n && styles.chipTextOn]}>{label}</Text>
           </Pressable>
         ))}
-        <Pressable style={styles.chip} onPress={() => void load(days)} disabled={loading}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh activity"
+          accessibilityState={{ disabled: loading, busy: loading }}
+          style={styles.chip}
+          onPress={() => void load(days)}
+          disabled={loading}
+        >
           <Text style={styles.chipText}>{loading ? "…" : "Refresh"}</Text>
         </Pressable>
       </View>
@@ -259,6 +277,8 @@ export function TeamActivityPanel({ token }: { token: string }) {
               ))}
               {(row.sold_items || []).slice(0, 40).map((item) => (
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open lot ${item.sku?.trim() || ""}`.trim()}
                   key={item.lot_id}
                   onPress={() => router.push(`/lot/${item.lot_id}`)}
                   style={styles.saleRow}
@@ -298,7 +318,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.border
+    borderColor: theme.border,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   chipOn: { borderColor: theme.primary, backgroundColor: theme.primaryMuted },
   chipText: { color: theme.textMuted, fontSize: 13, fontWeight: "600" },
@@ -338,7 +360,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     backgroundColor: theme.surface,
-    alignItems: "center"
+    alignItems: "center",
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   lotOpenText: { color: theme.text, fontSize: 12, fontWeight: "700" }
 });
