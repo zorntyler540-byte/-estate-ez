@@ -11,6 +11,7 @@ import {
   uriWithUploadFileName,
   type UploadPhotoUri
 } from "./uploadPrepare";
+import { UploadPausedError, uploadPause } from "./uploadPause";
 import * as FileSystem from "expo-file-system/legacy";
 
 export type SaleLotCoverUrls = {
@@ -70,6 +71,26 @@ export async function apiFetch<T>(
   }
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
+}
+
+export const API_PING_TIMEOUT_MS = 5_000;
+
+/**
+ * Quick reachability check before automatic uploads start. Any answer from the API below 500
+ * counts (an older API without ``/health/ping`` answers 404 — still up); a proxy 502/503,
+ * timeout, or network error does not.
+ */
+export async function pingApi(timeoutMs = API_PING_TIMEOUT_MS): Promise<boolean> {
+  try {
+    const res = await fetch(apiUrl("/health/ping"), {
+      method: "GET",
+      headers: { "Cache-Control": "no-cache" },
+      signal: abortSignalFor(timeoutMs)
+    });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
 }
 
 export async function login(email: string, password: string): Promise<TokenResponse> {
@@ -284,35 +305,48 @@ function uploadTimeoutMessage(): string {
 
 /**
  * One native upload task. BACKGROUND sessions keep going when the screen locks or staff switch
- * apps mid-Sync. A task that hits the timeout is cancelled, not just abandoned — an abandoned
- * task kept the connection (and the server's upload slot) busy and could land a late duplicate.
+ * apps mid-Sync. A task that hits the timeout — or is still running when the connection drops
+ * (``uploadPause``) — is cancelled, not just abandoned: an abandoned task kept the connection
+ * (and the server's upload slot) busy and could land a late duplicate.
  */
 async function runUploadTask(
   url: string,
   fileUri: string,
   options: FileSystem.FileSystemUploadOptions
 ): Promise<FileSystem.FileSystemUploadResult> {
+  uploadPause.throwIfPaused();
   const task = FileSystem.createUploadTask(url, fileUri, {
     ...options,
     sessionType: FileSystem.FileSystemSessionType.BACKGROUND
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
+  let cancel = false;
+  let stopListening: () => void = () => undefined;
   try {
     const result = await Promise.race([
       task.uploadAsync(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          timedOut = true;
+          cancel = true;
           reject(new Error(uploadTimeoutMessage()));
         }, UPLOAD_PER_FILE_TIMEOUT_MS);
+      }),
+      new Promise<never>((_, reject) => {
+        stopListening = uploadPause.onPause((reason) => {
+          cancel = true;
+          reject(new UploadPausedError(reason));
+        });
       })
     ]);
-    if (!result) throw new Error(uploadTimeoutMessage());
+    if (!result) {
+      if (uploadPause.reason) throw new UploadPausedError(uploadPause.reason);
+      throw new Error(uploadTimeoutMessage());
+    }
     return result;
   } finally {
     if (timer) clearTimeout(timer);
-    if (timedOut) void task.cancelAsync().catch(() => undefined);
+    stopListening();
+    if (cancel) void task.cancelAsync().catch(() => undefined);
   }
 }
 

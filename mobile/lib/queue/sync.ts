@@ -26,7 +26,15 @@ import {
   resolveUploadFileUri,
   type UploadPhotoUri
 } from "../uploadPrepare";
+import { classifyNet } from "../connectivity";
 import { LOTS_AT_ONCE, mapPool, runUploadPipeline, uploadConcurrencyFor } from "../uploadPool";
+import {
+  UPLOAD_PAUSED_MESSAGE,
+  UploadPausedError,
+  isUploadPausedError,
+  treatAsPause,
+  uploadPause
+} from "../uploadPause";
 import { draftNeedsVideoAttach } from "./attachVideos";
 import { processPendingCaptures } from "./captureFiles";
 import {
@@ -114,7 +122,13 @@ async function activeDrafts(): Promise<LotDraft[]> {
   return (await listLotDrafts()).filter((d) => !d.archived_at && !d.append_lot_id);
 }
 
-export async function attachPendingLotVideos(token: string, index?: WebsiteIndex): Promise<number> {
+/** ``mediaAllowed`` false = Upload on Wi‑Fi only is on and this phone is on cellular. */
+export async function attachPendingLotVideos(
+  token: string,
+  index?: WebsiteIndex,
+  mediaAllowed = true
+): Promise<number> {
+  if (!mediaAllowed || uploadPause.paused) return 0;
   const withClips: LotDraft[] = [];
   for (const draft of await activeDrafts()) {
     if (await draftHasPendingClip(draft.id)) withClips.push(draft);
@@ -125,6 +139,7 @@ export async function attachPendingLotVideos(token: string, index?: WebsiteIndex
   for (const draft of withClips) {
     const { lotId } = resolveDraftOnServer(draft, idx);
     if (!draftNeedsVideoAttach({ hasPendingLocalVideos: true, lotId })) continue;
+    if (uploadPause.paused) break;
     try {
       await rememberServerLot(draft, lotId);
       if ((await uploadPendingDraftVideos(token, draft.id, lotId!)) > 0) attached += 1;
@@ -267,6 +282,7 @@ async function preparePhoto(draftId: string, item: UploadItem): Promise<UploadPh
 type SyncCtx = {
   token: string;
   manual: boolean;
+  mediaAllowed: boolean;
   concurrency: number;
   index: WebsiteIndex;
   /** Lots whose ``/run`` was accepted this Sync — confirmed in one batched call at the end. */
@@ -274,7 +290,31 @@ type SyncCtx = {
   onProgress?: () => void;
 };
 
-type LotOutcome = "sent" | "failed" | "skipped";
+type LotOutcome = "sent" | "failed" | "skipped" | "paused";
+
+/**
+ * The connection dropped (or Wi‑Fi only stopped this upload): not a failed attempt. The native
+ * task often errors a moment before NetInfo reports the drop, so a transient error while the
+ * phone now reads offline counts too.
+ */
+async function pausedByConnection(e: unknown): Promise<boolean> {
+  if (isUploadPausedError(e) || uploadPause.paused) return true;
+  const permanent = classifyUploadError(e) === "permanent";
+  if (permanent) return false;
+  let netOffline = false;
+  try {
+    netOffline = classifyNet(await NetInfo.fetch(), false) === "offline";
+  } catch {
+    netOffline = false;
+  }
+  return treatAsPause({ error: e, signalPaused: uploadPause.paused, permanent, netOffline });
+}
+
+/** Back in line with no attempt counted; ``server_job_id`` stays so the next Sync resumes it. */
+async function pauseDraft(draftId: string, e: unknown): Promise<void> {
+  const reason = isUploadPausedError(e) ? e.reason : uploadPause.reason;
+  await setDraftStatus(draftId, "queued", reason ? new UploadPausedError(reason).message : UPLOAD_PAUSED_MESSAGE);
+}
 
 async function failDraft(draftId: string, e: unknown): Promise<void> {
   const kind = classifyUploadError(e);
@@ -370,6 +410,8 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
     await setDraftStatus(draft.id, "uploading", text);
     ctx.onProgress?.();
   };
+  /** Set right before ``/run``: only then can the job be live without this phone knowing. */
+  let runRequested = false;
 
   try {
     await progress(`Preparing ${total} photo${total === 1 ? "" : "s"}…`);
@@ -439,6 +481,7 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
       concurrency: ctx.concurrency,
       prepare: (item) => preparePhoto(draft.id, item),
       upload: async (photo) => {
+        uploadPause.throwIfPaused();
         const job = await appendPhotoToJob(token, liveJobId, photo, draft.id);
         sentHere.add(photo.name);
         if (job.received_files && received) {
@@ -461,7 +504,9 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
       );
     }
 
+    uploadPause.throwIfPaused();
     await progress(`Starting catalog (${sendable.length} photos) — Lots appear when AI finishes`);
+    runRequested = true;
     await runJob(liveJobId, token);
     // Sent as soon as catalog is queued; the batched status check below and the follow-up
     // timer confirm it. Waiting here is what made a killed Sync start a second AI job.
@@ -470,9 +515,10 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
     ctx.sent.push(draft);
     return "sent";
   } catch (e) {
-    // If /run already queued catalog, keep that job and treat the lot as sent — deleting it
-    // used to start a duplicate. A receiving job is kept so the next Sync resumes it.
-    if (jobId) {
+    // If /run may have queued catalog, keep that job and treat the lot as sent — deleting it
+    // used to start a duplicate. Before /run the job can only be "receiving": an unreadable
+    // job list (offline) must not mark a half-sent lot "On server".
+    if (jobId && runRequested) {
       const looked = await fetchServerJobChecked(token, draft.sale_id, jobId);
       if (!looked.ok || (looked.job && jobIsLiveOrDone(looked.job.status))) {
         await setDraftStatus(
@@ -483,9 +529,16 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
         if (looked.ok) ctx.sent.push(draft);
         return "sent";
       }
-      if (!looked.job) {
+    }
+    if (await pausedByConnection(e)) {
+      await pauseDraft(draft.id, e);
+      return "paused";
+    }
+    if (jobId) {
+      const looked = await fetchServerJobChecked(token, draft.sale_id, jobId);
+      if (looked.ok && !looked.job) {
         await setDraftServerJobId(draft.id, null);
-      } else if (looked.job.status === "failed") {
+      } else if (looked.ok && looked.job?.status === "failed") {
         await dropJob(token, draft.id, jobId);
       }
     }
@@ -521,6 +574,7 @@ async function uploadAppendSession(ctx: SyncCtx, queued: LotDraft): Promise<LotO
       concurrency: ctx.concurrency,
       prepare: (item) => preparePhoto(draft.id, item),
       upload: async (photo, item) => {
+        uploadPause.throwIfPaused();
         await uploadLotPhoto(token, lotId, photo);
         await markDraftMediaUploaded(draft.id, item.id);
         done += 1;
@@ -542,6 +596,10 @@ async function uploadAppendSession(ctx: SyncCtx, queued: LotDraft): Promise<LotO
     await archiveCatalogedDraft(draft.id);
     return "sent";
   } catch (e) {
+    if (await pausedByConnection(e)) {
+      await pauseDraft(draft.id, e);
+      return "paused";
+    }
     await failDraft(draft.id, e);
     return "failed";
   }
@@ -554,23 +612,29 @@ async function uploadAppendSession(ctx: SyncCtx, queued: LotDraft): Promise<LotO
  * Two lots upload at once; within a lot, 3 photos at a time on Wi‑Fi and 1 on cellular.
  * Pass the ``WebsiteIndex`` the caller already built so one Sync reads it once.
  * ``manual`` = the user tapped Sync: transient failures skip their backoff wait.
+ * ``mediaAllowed`` false (Upload on Wi‑Fi only, on cellular): website checks only — no photo
+ * or video bytes. A dropped connection pauses the run (``paused``); lots resume next Sync.
  */
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void,
   websiteIndex?: WebsiteIndex,
-  opts: { manual?: boolean } = {}
+  opts: { manual?: boolean; mediaAllowed?: boolean } = {}
 ): Promise<{
   uploaded: number;
   failed: number;
   reconciled: number;
   archived: number;
   healthSummary?: string | null;
+  paused?: boolean;
+  /** Lots left queued because Upload on Wi‑Fi only is on. */
+  waitingForWifi?: number;
 }> {
   const net = await NetInfo.fetch();
-  if (!net.isConnected) {
-    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0, healthSummary: null };
+  if (classifyNet(net, false) === "offline") {
+    return { uploaded: 0, failed: 0, reconciled: 0, archived: 0, healthSummary: null, paused: true };
   }
+  const mediaAllowed = opts.mediaAllowed !== false;
 
   let uploaded = 0;
   let failed = 0;
@@ -585,11 +649,15 @@ export async function syncPendingLots(
   const ctx: SyncCtx = {
     token: authToken,
     manual,
+    mediaAllowed,
     concurrency: uploadConcurrencyFor(net.type),
     index,
     sent: [],
     onProgress
   };
+
+  const sendClips = (draftId: string, lotId: string) =>
+    mediaAllowed && !uploadPause.paused ? uploadPendingDraftVideos(authToken, draftId, lotId) : Promise.resolve(0);
 
   const jobsBySale = new Map<string, Job[]>();
   /** ``null`` = could not read jobs. Never treat that as "no job" (that re-uploads a live lot). */
@@ -611,7 +679,7 @@ export async function syncPendingLots(
     if (lotId) {
       await rememberServerLot(draft, lotId);
       try {
-        await uploadPendingDraftVideos(authToken, draft.id, lotId);
+        await sendClips(draft.id, lotId);
       } catch {
         /* final attach pass retries */
       }
@@ -627,7 +695,7 @@ export async function syncPendingLots(
       await rememberServerLot(draft, state.lotId);
       if (state.lotId) {
         try {
-          await uploadPendingDraftVideos(authToken, draft.id, state.lotId);
+          await sendClips(draft.id, state.lotId);
         } catch {
           /* leftover clips retry on the next Sync */
         }
@@ -676,7 +744,7 @@ export async function syncPendingLots(
   }
   onProgress?.();
 
-  await attachPendingLotVideos(authToken, index);
+  await attachPendingLotVideos(authToken, index, mediaAllowed);
   const archivedEarly = await sweepArchiveConfirmedDrafts(authToken, index);
   onProgress?.();
 
@@ -767,18 +835,30 @@ export async function syncPendingLots(
     return out;
   }
 
-  for (let round = 0; round < MAX_SYNC_ROUNDS; round++) {
-    const pending = await nextRound();
-    if (!pending.length) break;
-    for (const d of pending) attempted.add(d.id);
-    await mapPool(pending, LOTS_AT_ONCE, async (draft) => {
-      const outcome = draft.append_lot_id
-        ? await uploadAppendSession(ctx, draft)
-        : await uploadNewLot(ctx, draft);
-      if (outcome === "sent") uploaded += 1;
-      else if (outcome === "failed") failed += 1;
-      onProgress?.();
-    });
+  let waitingForWifi = 0;
+  if (!mediaAllowed) {
+    waitingForWifi = (await nextRound()).length;
+  } else {
+    for (let round = 0; round < MAX_SYNC_ROUNDS && !uploadPause.paused; round++) {
+      const pending = await nextRound();
+      if (!pending.length) break;
+      for (const d of pending) attempted.add(d.id);
+      await mapPool(pending, LOTS_AT_ONCE, async (draft) => {
+        if (uploadPause.paused) return;
+        const outcome = draft.append_lot_id
+          ? await uploadAppendSession(ctx, draft)
+          : await uploadNewLot(ctx, draft);
+        if (outcome === "sent") uploaded += 1;
+        else if (outcome === "failed") failed += 1;
+        onProgress?.();
+      });
+    }
+  }
+  if (uploadPause.paused) {
+    // Offline now: the batched confirm and health calls would only time out. Sent lots are
+    // confirmed by the next Sync / follow-up.
+    onProgress?.();
+    return { uploaded, failed, reconciled, archived: archivedEarly, healthSummary: null, paused: true, waitingForWifi };
   }
 
   // One batched status call for every lot sent this Sync (no per-lot polling). Lots still
@@ -800,7 +880,7 @@ export async function syncPendingLots(
           if (resolved) {
             await rememberServerLot(draft, resolved);
             try {
-              await uploadPendingDraftVideos(authToken, draft.id, resolved);
+              await sendClips(draft.id, resolved);
             } catch {
               /* clip upload retries on the next sync */
             }
@@ -817,7 +897,7 @@ export async function syncPendingLots(
     }
   }
 
-  await attachPendingLotVideos(authToken, index);
+  await attachPendingLotVideos(authToken, index, mediaAllowed);
   const archived = archivedEarly + (await sweepArchiveConfirmedDrafts(authToken, index));
 
   const healthSaleIds = [
@@ -843,5 +923,5 @@ export async function syncPendingLots(
     cataloging_count: cataloging,
     stuck_count: stuck
   });
-  return { uploaded, failed, reconciled, archived, healthSummary };
+  return { uploaded, failed, reconciled, archived, healthSummary, waitingForWifi };
 }

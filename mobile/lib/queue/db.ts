@@ -34,6 +34,11 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           FOREIGN KEY (draft_id) REFERENCES lot_drafts(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_lot_photos_draft ON lot_photos(draft_id);
+        CREATE TABLE IF NOT EXISTS app_kv (
+          key TEXT PRIMARY KEY NOT NULL,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
       `);
       const cols = await db.getAllAsync<{ name: string }>("PRAGMA table_info(lot_drafts)");
       if (!cols.some((c) => c.name === "sale_name")) {
@@ -860,4 +865,24 @@ export async function countLotsNeedingWebsiteCheck(): Promise<number> {
      WHERE archived_at IS NULL AND status IN ('queued', 'failed', 'uploading', 'uploaded')`
   );
   return Number(row?.c ?? 0);
+}
+
+/** Small phone-only settings / caches (not secrets — those live in SecureStore). */
+export async function getAppValue(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM app_kv WHERE key = ?", [key]);
+  return row?.value ?? null;
+}
+
+export async function setAppValue(key: string, value: string | null): Promise<void> {
+  const db = await getDb();
+  if (value == null) {
+    await db.runAsync("DELETE FROM app_kv WHERE key = ?", [key]);
+    return;
+  }
+  await db.runAsync(
+    `INSERT INTO app_kv (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [key, value, Date.now()]
+  );
 }

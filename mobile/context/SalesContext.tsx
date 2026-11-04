@@ -12,7 +12,8 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { listSales, syncSalesFromCtSeller } from "@/lib/api";
 import { saleNameNeedsUpdate, saleRowsUnchanged } from "@/lib/lotsReload";
-import { backfillDraftSaleNames } from "@/lib/queue/db";
+import { backfillDraftSaleNames, getAppValue, setAppValue } from "@/lib/queue/db";
+import { SALES_CACHE_KEY, parseSalesCache, serializeSalesCache } from "@/lib/salesCache";
 import type { Sale } from "@/lib/types";
 
 type SalesContextValue = {
@@ -25,13 +26,15 @@ type SalesContextValue = {
 const SalesContext = createContext<SalesContextValue | null>(null);
 
 export function SalesProvider({ children }: { children: ReactNode }) {
-  const { token, selectedSaleId, selectedSaleName, setSelectedSale, signedInRole } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, setSelectedSale, signedInRole, signedInEmail } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
   const selectedSaleIdRef = useRef(selectedSaleId);
   const selectedSaleNameRef = useRef(selectedSaleName);
   selectedSaleIdRef.current = selectedSaleId;
   selectedSaleNameRef.current = selectedSaleName;
+  const signedInEmailRef = useRef(signedInEmail);
+  signedInEmailRef.current = signedInEmail;
   const salesLenRef = useRef(0);
   salesLenRef.current = sales.length;
 
@@ -41,10 +44,17 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (salesLenRef.current === 0) setLoading(true);
+    if (salesLenRef.current === 0) {
+      // Offline start: show the last list right away so staff can still pick a sale.
+      const cached = parseSalesCache(await getAppValue(SALES_CACHE_KEY).catch(() => null), signedInEmailRef.current);
+      if (cached.length) setSales((prev) => (prev.length ? prev : cached));
+    }
     try {
       const rows = await listSales(token);
       const open = rows.filter((s) => !s.closed_at);
       setSales((prev) => (saleRowsUnchanged(prev, open) ? prev : open));
+      const raw = serializeSalesCache(signedInEmailRef.current, open);
+      if (raw) void setAppValue(SALES_CACHE_KEY, raw).catch(() => undefined);
 
       const nameById = new Map(open.map((s) => [s.id, s.name]));
       await backfillDraftSaleNames(nameById);
@@ -67,6 +77,8 @@ export function SalesProvider({ children }: { children: ReactNode }) {
           const synced = Array.isArray(sync.sales) ? sync.sales : await listSales(token);
           const nextOpen = synced.filter((s) => !s.closed_at);
           setSales((prev) => (saleRowsUnchanged(prev, nextOpen) ? prev : nextOpen));
+          const rawNext = serializeSalesCache(signedInEmailRef.current, nextOpen);
+          if (rawNext) void setAppValue(SALES_CACHE_KEY, rawNext).catch(() => undefined);
           const names = new Map(nextOpen.map((s) => [s.id, s.name]));
           await backfillDraftSaleNames(names);
           const still = selectedSaleIdRef.current;
