@@ -6,11 +6,6 @@ import { shouldPrepareAsPhoto } from "./mediaKind";
 /** Keep multipart uploads small enough for field Wi‑Fi / cellular. */
 export const UPLOAD_MAX_EDGE_PX = 1600;
 export const UPLOAD_JPEG_QUALITY = 0.72;
-/**
- * One photo per request. RN ``fetch``+FormData multi-file posts were hanging until
- * our abort timer; native ``uploadAsync`` one-at-a-time is reliable.
- */
-export const UPLOAD_CHUNK_SIZE = 1;
 /** Give native upload plenty of time per photo (not the old 160s multi-file abort). */
 export const UPLOAD_PER_FILE_TIMEOUT_MS = 5 * 60_000;
 const COMPRESS_TIMEOUT_MS = 25_000;
@@ -30,12 +25,6 @@ export function capturedAtMsFromUri(uri: string): number | undefined {
   if (n > 1_000_000_000_000 && n < 20_000_000_000_000) return n;
   return undefined;
 }
-
-export type PreparePhotosResult = {
-  photos: UploadPhotoUri[];
-  skippedIds: string[];
-  skipped: number;
-};
 
 /** Multipart filename the website stores — must stay ``mobile-<draft>-NN.jpg``. */
 export function uploadCacheFileName(fileName: string): string {
@@ -191,40 +180,28 @@ export async function resolveUploadVideoUri(uri: string): Promise<string> {
 }
 
 /**
- * Prepare queue photos for upload.
+ * Upload-ready JPEG for one queue photo, kept at ``destUri`` (named with its upload name) so a
+ * retry or resumed Sync reuses it instead of re-compressing. Null when the photo cannot be read.
  */
-export async function preparePhotosForUpload(
-  photos: { id: string; uri: string; name: string; capturedAtMs?: number }[]
-): Promise<PreparePhotosResult> {
-  const out: UploadPhotoUri[] = [];
-  const skippedIds: string[] = [];
-
-  for (const photo of photos) {
-    if (!shouldPrepareAsPhoto(photo)) {
-      skippedIds.push(photo.id);
-      continue;
-    }
-    const name = photo.name.replace(/\.[^.]+$/, "") + ".jpg";
+export async function prepareCachedUploadJpeg(destUri: string | null, sourceUri: string): Promise<string | null> {
+  if (destUri) {
     try {
-      const uri = await resolveUploadFileUri({ uri: photo.uri, name });
-      out.push({ uri, name, capturedAtMs: photo.capturedAtMs });
+      const info = await FileSystem.getInfoAsync(destUri);
+      if (info.exists && !info.isDirectory && (info.size ?? 0) > 0) return destUri;
     } catch {
-      skippedIds.push(photo.id);
+      /* rebuild below */
     }
   }
-
-  return { photos: out, skippedIds, skipped: skippedIds.length };
-}
-
-export function chunkPhotos<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
+  const made = await materializeUploadJpeg(sourceUri);
+  if (!made || !destUri) return made;
+  try {
+    await FileSystem.makeDirectoryAsync(destUri.slice(0, destUri.lastIndexOf("/") + 1), {
+      intermediates: true
+    }).catch(() => undefined);
+    await FileSystem.deleteAsync(destUri, { idempotent: true }).catch(() => undefined);
+    await FileSystem.moveAsync({ from: made, to: destUri });
+    return destUri;
+  } catch {
+    return made;
   }
-  return chunks;
-}
-
-/** @deprecated Prefer ``UPLOAD_PER_FILE_TIMEOUT_MS``; kept for call sites. */
-export function uploadTimeoutMs(fileCount: number): number {
-  return UPLOAD_PER_FILE_TIMEOUT_MS * Math.max(1, fileCount);
 }

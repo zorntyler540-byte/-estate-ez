@@ -1,41 +1,46 @@
 import NetInfo from "@react-native-community/netinfo";
 
 import {
-  appendFilesToQueuedJob,
+  appendPhotoToJob,
+  createLotJobWithPhoto,
   deleteJob,
+  getJobReceivedFiles,
   getMobileDraftStatuses,
   getSaleUploadHealth,
   listCatalogedMobileDraftsDetailed,
   listJobsForSale,
   listSales,
   runJob,
-  uploadLotVideos,
-  uploadSingleLotJob,
+  uploadLotPhoto,
+  uploadLotVideo,
   type MobileDraftStatus
 } from "../api";
 import { apiErrorStatus, isPermanentClientError } from "../apiError";
+import { CTBIDS_MAX_PHOTOS_PER_LOT } from "../catalogLimits";
 import { formatUploadHealthSummary } from "../formatUploadHealth";
-import {
-  catalogPhotoFileName,
-  isVideoDraftRow,
-  mediaKindFromName,
-  splitDraftMedia
-} from "../mediaKind";
+import { isVideoDraftRow, shouldPrepareAsPhoto, splitDraftMedia } from "../mediaKind";
 import { refreshSessionIfPossible } from "../sessionBridge";
-import type { Job, LotDraft } from "../types";
+import type { Job, LotDraft, LotPhotoRow } from "../types";
 import {
-  UPLOAD_CHUNK_SIZE,
-  chunkPhotos,
-  preparePhotosForUpload
+  prepareCachedUploadJpeg,
+  resolveUploadFileUri,
+  type UploadPhotoUri
 } from "../uploadPrepare";
-import { draftNeedsVideoAttach, videoUploadName } from "./attachVideos";
+import { LOTS_AT_ONCE, mapPool, runUploadPipeline, uploadConcurrencyFor } from "../uploadPool";
+import { draftNeedsVideoAttach } from "./attachVideos";
 import { processPendingCaptures } from "./captureFiles";
 import {
+  archiveCatalogedDraft,
   archiveCatalogedDraftIfReady,
+  assignUploadNames,
+  clearDraftRetry,
+  getLotDraft,
   listDraftPhotos,
   listLotDrafts,
   markDraftMediaBlocked,
   markDraftMediaUploaded,
+  preparedUploadUri,
+  recordDraftFailure,
   setDraftServerJobId,
   setDraftServerLotId,
   setDraftStatus
@@ -51,51 +56,38 @@ import {
   type CatalogedSaleIndex,
   type WebsiteIndex
 } from "./draftConfirm";
-import {
-  decideCatalogConfirm,
-  decideSyncRecovery,
-  findJobForDraft,
-  isTransientSyncError,
-  jobIsLiveOrDone
-} from "./syncRecovery";
+import { namesStillMissing, planResume } from "./resumePlan";
+import { classifyUploadError, retryAllowed } from "./retryPolicy";
+import { decideSyncRecovery, findJobForDraft, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
+import { clipUploadName } from "./uploadNames";
 
-/**
- * After ``/run`` is accepted we confirm the server actually catalogs the lot instead of
- * trusting the HTTP 200 (a dedicated worker can still fail or stall). We poll briefly; lots
- * that are still processing are reconciled by the follow-up check or a later Sync.
- */
-const SERVER_CONFIRM_TIMEOUT_MS = 45_000;
-const SERVER_CONFIRM_INTERVAL_MS = 3_000;
+/** Lots queued while Sync is running are picked up in a later round (bounded). */
+const MAX_SYNC_ROUNDS = 5;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function errorMessage(e: unknown, fallback: string): string {
+  return e instanceof Error && e.message ? e.message : fallback;
 }
 
 /** Clips uploaded for this draft. A clip the website refuses for good is marked blocked. */
 async function uploadPendingDraftVideos(
   token: string,
   draftId: string,
-  lotId: string
+  lotId: string,
+  appendSession = false
 ): Promise<number> {
-  const rows = await listDraftPhotos(draftId);
+  const rows = await assignUploadNames(draftId, appendSession);
   const pending = rows.filter((p) => isVideoDraftRow(p) && !p.uploaded && !p.upload_blocked);
   let sent = 0;
   for (let i = 0; i < pending.length; i++) {
     const row = pending[i]!;
-    // media_kind is the source of truth — a missing suffix used to skip the clip forever.
+    // Stable per-clip name: the server stores (lot, name) once, so a retry is never a second copy.
     const name =
-      mediaKindFromName(row.file_uri) === "video"
-        ? videoUploadName(draftId, row.file_uri, i)
-        : videoUploadName(draftId, `${row.file_uri}.mp4`, i);
+      row.upload_name || clipUploadName(appendSession ? "append" : "mobile", draftId, i + 1, row.file_uri);
     try {
-      await uploadLotVideos(token, lotId, [{ uri: row.file_uri, name }]);
+      await uploadLotVideo(token, lotId, { uri: row.file_uri, name });
     } catch (e) {
       if (!isPermanentClientError(e)) throw e;
-      await markDraftMediaBlocked(
-        draftId,
-        row.id,
-        e instanceof Error ? e.message : "Website refused this clip"
-      );
+      await markDraftMediaBlocked(draftId, row.id, errorMessage(e, "Website refused this clip"));
       continue;
     }
     await markDraftMediaUploaded(draftId, row.id);
@@ -117,8 +109,9 @@ async function rememberServerLot(draft: LotDraft, lotId: string | null): Promise
   }
 }
 
+/** New-lot drafts still on the phone. Add photos sessions have their own upload path. */
 async function activeDrafts(): Promise<LotDraft[]> {
-  return (await listLotDrafts()).filter((d) => !d.archived_at);
+  return (await listLotDrafts()).filter((d) => !d.archived_at && !d.append_lot_id);
 }
 
 export async function attachPendingLotVideos(token: string, index?: WebsiteIndex): Promise<number> {
@@ -247,51 +240,326 @@ export async function lookupDraftStatuses(
   }
 }
 
-type DraftJobLook =
-  | { ok: true; status: string | null; error: string | null; lotId: string | null; cataloged: boolean }
-  | { ok: false };
+type UploadItem = { id: string; uri: string; name: string; capturedAtMs?: number };
 
-/** One draft's job state: batched status endpoint, or ``GET /jobs`` on older deploys. */
-async function lookupDraftJob(
-  token: string,
-  draft: Pick<LotDraft, "id" | "sale_id">,
-  jobId: string
-): Promise<DraftJobLook> {
-  const looked = await lookupDraftStatuses(token, [draft.id]);
-  if (looked.ok) {
-    const row = looked.rows.get(normalizeDraftKey(draft.id));
-    return {
-      ok: true,
-      status: row?.job_status ?? null,
-      error: row?.error_message ?? null,
-      lotId: row?.lot_id ? String(row.lot_id) : null,
-      cataloged: Boolean(row?.cataloged)
-    };
+function uploadItems(rows: LotPhotoRow[]): UploadItem[] {
+  return rows.map((p) => ({
+    id: p.id,
+    uri: p.file_uri,
+    name: p.upload_name!,
+    capturedAtMs: p.captured_at && p.captured_at > 0 ? p.captured_at : undefined
+  }));
+}
+
+/** Compress once into the draft's prepared folder; later attempts reuse that JPEG. */
+async function preparePhoto(draftId: string, item: UploadItem): Promise<UploadPhotoUri | null> {
+  if (!shouldPrepareAsPhoto(item)) return null;
+  const cached = await prepareCachedUploadJpeg(preparedUploadUri(draftId, item.name), item.uri);
+  if (cached) return { uri: cached, name: item.name, capturedAtMs: item.capturedAtMs };
+  try {
+    const uri = await resolveUploadFileUri({ uri: item.uri, name: item.name });
+    return { uri, name: item.name, capturedAtMs: item.capturedAtMs };
+  } catch {
+    return null;
   }
-  if (!looked.endpointMissing) return { ok: false };
-  const fallback = await fetchServerJobChecked(token, draft.sale_id, jobId);
-  if (!fallback.ok) return { ok: false };
-  return {
-    ok: true,
-    status: fallback.job?.status ?? null,
-    error: fallback.job?.error_message ?? null,
-    lotId: null,
-    cataloged: fallback.job?.status === "completed"
+}
+
+type SyncCtx = {
+  token: string;
+  manual: boolean;
+  concurrency: number;
+  index: WebsiteIndex;
+  /** Lots whose ``/run`` was accepted this Sync — confirmed in one batched call at the end. */
+  sent: LotDraft[];
+  onProgress?: () => void;
+};
+
+type LotOutcome = "sent" | "failed" | "skipped";
+
+async function failDraft(draftId: string, e: unknown): Promise<void> {
+  const kind = classifyUploadError(e);
+  const msg = errorMessage(e, "Upload failed");
+  await recordDraftFailure(
+    draftId,
+    kind === "transient" && isTransientSyncError(msg)
+      ? "Website was busy — Sync retries automatically. Do not Resend if the lot is already online."
+      : msg,
+    kind
+  );
+}
+
+/** The server's batch for this job, or null when it is gone / unreadable on this API. */
+async function receivedForJob(
+  token: string,
+  jobId: string
+): Promise<{ status: string; names: string[]; folderMissing: boolean } | null> {
+  try {
+    const res = await getJobReceivedFiles(token, jobId);
+    return { status: res.status, names: res.names, folderMissing: res.folder_missing };
+  } catch (e) {
+    if (apiErrorStatus(e) === 404) return null;
+    throw e;
+  }
+}
+
+async function dropJob(token: string, draftId: string, jobId: string): Promise<void> {
+  try {
+    await deleteJob(jobId, token);
+  } catch {
+    /* already gone — server stale reconcile handles the rest */
+  }
+  await setDraftServerJobId(draftId, null);
+}
+
+/**
+ * Send one new lot: resume its ``receiving`` batch when the server still has a clean subset,
+ * create the job with the first photo, then upload the rest in parallel while the next photo
+ * compresses. ``/run`` only after the server reports every photo. No wait for catalog here.
+ */
+async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome> {
+  const draft = await getLotDraft(queued.id);
+  // Staff may have reopened the lot (Add photos) since this round was planned.
+  if (!draft || draft.status !== "queued" || draft.archived_at) return "skipped";
+  const { token } = ctx;
+
+  await processPendingCaptures(draft.id).catch(() => 0);
+  const rows = await assignUploadNames(draft.id, false);
+  const { images } = splitDraftMedia(rows);
+  if (!images.length) {
+    if (draft.server_lot_id) {
+      try {
+        await uploadPendingDraftVideos(token, draft.id, draft.server_lot_id);
+        await clearDraftRetry(draft.id);
+        await setDraftStatus(draft.id, "uploaded", null);
+        return "sent";
+      } catch (e) {
+        await failDraft(draft.id, e);
+        return "failed";
+      }
+    }
+    await recordDraftFailure(
+      draft.id,
+      "Snap at least one photo — videos attach after the lot is cataloged.",
+      "permanent"
+    );
+    return "failed";
+  }
+  if (images.length > CTBIDS_MAX_PHOTOS_PER_LOT) {
+    await recordDraftFailure(
+      draft.id,
+      `This lot has ${images.length} photos; CT Bids allows at most ${CTBIDS_MAX_PHOTOS_PER_LOT}. Delete ${
+        images.length - CTBIDS_MAX_PHOTOS_PER_LOT
+      } on this phone, then tap Retry.`,
+      "permanent"
+    );
+    return "failed";
+  }
+
+  const items = uploadItems(images);
+  const expected = items.map((i) => i.name);
+  const total = items.length;
+  let jobId = draft.server_job_id;
+  /** Union of every name the server reported; null = this API does not report names. */
+  let received: Set<string> | null = null;
+  const sentHere = new Set<string>();
+  const unreadable = new Set<string>();
+  const missing = () =>
+    items.filter((i) => !received?.has(i.name) && !sentHere.has(i.name) && !unreadable.has(i.name));
+  const doneCount = () => expected.filter((n) => received?.has(n) || sentHere.has(n)).length;
+  const progress = async (text: string) => {
+    await setDraftStatus(draft.id, "uploading", text);
+    ctx.onProgress?.();
   };
+
+  try {
+    await progress(`Preparing ${total} photo${total === 1 ? "" : "s"}…`);
+
+    if (jobId) {
+      const batch = await receivedForJob(token, jobId);
+      if (batch && jobIsLiveOrDone(batch.status)) {
+        await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
+        ctx.sent.push(draft);
+        return "sent";
+      }
+      const plan =
+        batch && batch.status === "receiving"
+          ? planResume({ expected, received: batch.names, folderMissing: batch.folderMissing })
+          : null;
+      if (plan?.action === "resume") {
+        received = new Set(plan.received);
+      } else {
+        await dropJob(token, draft.id, jobId);
+        jobId = null;
+      }
+    }
+
+    // The first photo creates the job (or lands in this draft's existing receiving job).
+    for (let attempt = 0; !jobId && attempt < 2; attempt++) {
+      let first: UploadPhotoUri | null = null;
+      for (const item of missing()) {
+        first = await preparePhoto(draft.id, item);
+        if (first) break;
+        unreadable.add(item.name);
+      }
+      if (!first) {
+        throw new Error(
+          "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
+        );
+      }
+      await progress(`Sending photo 1 of ${total}…`);
+      const job = await createLotJobWithPhoto({
+        saleId: draft.sale_id,
+        token,
+        manualSku: draft.manual_sku ?? undefined,
+        listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
+        clientDraftId: draft.id,
+        photo: first
+      });
+      jobId = job.id;
+      await setDraftServerJobId(draft.id, jobId);
+      sentHere.add(first.name);
+      if (job.received_files) {
+        const plan = planResume({ expected, received: job.received_files });
+        if (plan.action === "restart") {
+          // The server reused an older batch holding a photo since deleted on this phone.
+          await dropJob(token, draft.id, jobId);
+          jobId = null;
+          sentHere.clear();
+          received = null;
+          continue;
+        }
+        received = new Set(plan.received);
+      }
+    }
+    if (!jobId) throw new Error("The website kept an old copy of this lot — tap Sync to retry.");
+
+    const liveJobId = jobId;
+    const result = await runUploadPipeline({
+      items: missing(),
+      concurrency: ctx.concurrency,
+      prepare: (item) => preparePhoto(draft.id, item),
+      upload: async (photo) => {
+        const job = await appendPhotoToJob(token, liveJobId, photo, draft.id);
+        sentHere.add(photo.name);
+        if (job.received_files && received) {
+          for (const name of job.received_files) received.add(name);
+        }
+        await progress(`On server ${doneCount()}/${total}…`);
+      }
+    });
+    for (const item of result.skipped) unreadable.add(item.name);
+    const sendable = expected.filter((n) => !unreadable.has(n));
+    if (!sendable.length) {
+      throw new Error(
+        "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
+      );
+    }
+    const stillMissing = namesStillMissing(sendable, received ? [...received] : null);
+    if (stillMissing?.length) {
+      throw new Error(
+        `${stillMissing.length} photo${stillMissing.length === 1 ? "" : "s"} did not reach the website — Sync will resume.`
+      );
+    }
+
+    await progress(`Starting catalog (${sendable.length} photos) — Lots appear when AI finishes`);
+    await runJob(liveJobId, token);
+    // Sent as soon as catalog is queued; the batched status check below and the follow-up
+    // timer confirm it. Waiting here is what made a killed Sync start a second AI job.
+    await clearDraftRetry(draft.id);
+    await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
+    ctx.sent.push(draft);
+    return "sent";
+  } catch (e) {
+    // If /run already queued catalog, keep that job and treat the lot as sent — deleting it
+    // used to start a duplicate. A receiving job is kept so the next Sync resumes it.
+    if (jobId) {
+      const looked = await fetchServerJobChecked(token, draft.sale_id, jobId);
+      if (!looked.ok || (looked.job && jobIsLiveOrDone(looked.job.status))) {
+        await setDraftStatus(
+          draft.id,
+          "uploaded",
+          looked.ok ? "On server — cataloging…" : "On server — check the website"
+        );
+        if (looked.ok) ctx.sent.push(draft);
+        return "sent";
+      }
+      if (!looked.job) {
+        await setDraftServerJobId(draft.id, null);
+      } else if (looked.job.status === "failed") {
+        await dropJob(token, draft.id, jobId);
+      }
+    }
+    await failDraft(draft.id, e);
+    return "failed";
+  }
+}
+
+/**
+ * Add photos session: send each new shot to the website lot under its stable name and mark
+ * it uploaded, then clips. The server skips names it already has, so a retry never duplicates.
+ */
+async function uploadAppendSession(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome> {
+  const draft = await getLotDraft(queued.id);
+  if (!draft || draft.status !== "queued" || draft.archived_at || !draft.append_lot_id) return "skipped";
+  const lotId = draft.append_lot_id;
+  const { token } = ctx;
+  try {
+    await processPendingCaptures(draft.id).catch(() => 0);
+    const rows = await assignUploadNames(draft.id, true);
+    const { images, videos } = splitDraftMedia(rows);
+    if (!images.length && !videos.length) {
+      await archiveCatalogedDraft(draft.id);
+      return "skipped";
+    }
+    const pending = images.filter((p) => !p.uploaded && !p.upload_blocked);
+    const total = pending.length;
+    let done = 0;
+    await setDraftStatus(draft.id, "uploading", total ? `Sending ${total} photo${total === 1 ? "" : "s"} to the lot…` : "Sending videos to the lot…");
+    ctx.onProgress?.();
+    const result = await runUploadPipeline({
+      items: uploadItems(pending),
+      concurrency: ctx.concurrency,
+      prepare: (item) => preparePhoto(draft.id, item),
+      upload: async (photo, item) => {
+        await uploadLotPhoto(token, lotId, photo);
+        await markDraftMediaUploaded(draft.id, item.id);
+        done += 1;
+        await setDraftStatus(draft.id, "uploading", `Added ${done}/${total} to the lot…`);
+        ctx.onProgress?.();
+      }
+    });
+    if (result.skipped.length) {
+      throw new Error(
+        `${result.skipped.length} photo${result.skipped.length === 1 ? " is" : "s are"} not readable on this phone — open this lot, delete ${
+          result.skipped.length === 1 ? "it" : "them"
+        }, then tap Retry.`
+      );
+    }
+    await uploadPendingDraftVideos(token, draft.id, lotId, true);
+    await clearDraftRetry(draft.id);
+    await setDraftServerLotId(draft.id, lotId);
+    await setDraftStatus(draft.id, "uploaded", null);
+    await archiveCatalogedDraft(draft.id);
+    return "sent";
+  } catch (e) {
+    await failDraft(draft.id, e);
+    return "failed";
+  }
 }
 
 /**
  * Upload queued/failed lot drafts when online.
- * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them.
- * Persists ``server_job_id`` so a killed Sync can delete the orphan ``receiving`` job
- * before retrying the full lot (avoids dashboard jobs stuck forever mid-upload).
- * One photo per request; catalog ``run`` only after the full lot is on the server.
+ * Also recovers lots stuck in "uploading" (app killed mid-sync) by re-queuing them; their
+ * ``receiving`` job is kept and resumed (only the missing photos are sent).
+ * Two lots upload at once; within a lot, 3 photos at a time on Wi‑Fi and 1 on cellular.
  * Pass the ``WebsiteIndex`` the caller already built so one Sync reads it once.
+ * ``manual`` = the user tapped Sync: transient failures skip their backoff wait.
  */
 export async function syncPendingLots(
   token: string,
   onProgress?: () => void,
-  websiteIndex?: WebsiteIndex
+  websiteIndex?: WebsiteIndex,
+  opts: { manual?: boolean } = {}
 ): Promise<{
   uploaded: number;
   failed: number;
@@ -310,9 +578,18 @@ export async function syncPendingLots(
   let authToken = token;
   const refreshed = await refreshSessionIfPossible();
   if (refreshed) authToken = refreshed;
+  const manual = Boolean(opts.manual);
 
   const drafts = await activeDrafts();
   const index = websiteIndex ?? (await loadWebsiteIndex(authToken, drafts));
+  const ctx: SyncCtx = {
+    token: authToken,
+    manual,
+    concurrency: uploadConcurrencyFor(net.type),
+    index,
+    sent: [],
+    onProgress
+  };
 
   const jobsBySale = new Map<string, Job[]>();
   /** ``null`` = could not read jobs. Never treat that as "no job" (that re-uploads a live lot). */
@@ -339,6 +616,7 @@ export async function syncPendingLots(
         /* final attach pass retries */
       }
     }
+    await clearDraftRetry(draft.id);
     await setDraftStatus(draft.id, "uploaded", null);
   }
 
@@ -356,6 +634,7 @@ export async function syncPendingLots(
       }
       if (draft.status !== "uploaded" || draft.error_message || draft.server_job_id) {
         await setDraftServerJobId(draft.id, null);
+        await clearDraftRetry(draft.id);
         await setDraftStatus(draft.id, "uploaded", null);
         reconciled += 1;
       }
@@ -382,12 +661,17 @@ export async function syncPendingLots(
       if (job.id !== draft.server_job_id) {
         await setDraftServerJobId(draft.id, job.id);
       }
-      await setDraftStatus(draft.id, "failed", serverFailMessage(job));
+      if (draft.status !== "failed") {
+        await recordDraftFailure(draft.id, serverFailMessage(job), "transient");
+      }
     } else if (jobIsLiveOrDone(job.status)) {
       if (job.id !== draft.server_job_id) {
         await setDraftServerJobId(draft.id, job.id);
       }
       await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
+    } else if (job.status === "receiving" && job.id !== draft.server_job_id) {
+      // Half-sent batch from a killed Sync: remember it so the upload resumes instead of restarting.
+      await setDraftServerJobId(draft.id, job.id);
     }
   }
   onProgress?.();
@@ -396,8 +680,15 @@ export async function syncPendingLots(
   const archivedEarly = await sweepArchiveConfirmedDrafts(authToken, index);
   onProgress?.();
 
+  const now = Date.now();
   for (const draft of await activeDrafts()) {
     if (draft.status !== "uploading" && draft.status !== "failed" && draft.status !== "queued") {
+      continue;
+    }
+    if (
+      draft.status === "failed" &&
+      !retryAllowed({ errorKind: draft.error_kind, nextAttemptAt: draft.next_attempt_at, now, manual })
+    ) {
       continue;
     }
     const state = resolveDraftOnServer(draft, index);
@@ -430,251 +721,98 @@ export async function syncPendingLots(
         }
         continue;
       }
-      // Only delete a job that never cataloged (receiving) or already failed. Never delete
-      // queued/processing — that left the first AI run alive and started a second one.
-      if (job && (job.status === "receiving" || job.status === "failed")) {
-        try {
-          await deleteJob(job.id, authToken);
-        } catch {
-          /* job may already be gone */
-        }
+      // A failed job is cleared and the lot sent again. A receiving job is kept: the upload
+      // resumes it. Never delete queued/processing — that started a second AI run.
+      if (job?.status === "failed") {
+        await dropJob(authToken, draft.id, job.id);
+      } else if (job?.status === "receiving") {
+        if (job.id !== draft.server_job_id) await setDraftServerJobId(draft.id, job.id);
+      } else {
+        await setDraftServerJobId(draft.id, null);
       }
-      await setDraftServerJobId(draft.id, null);
     }
-    if (draft.status === "uploading" || draft.status === "failed") {
-      await setDraftStatus(draft.id, "queued", null);
-    } else if (draft.error_message) {
+    if (draft.status !== "queued" || draft.error_message) {
       await setDraftStatus(draft.id, "queued", null);
     }
   }
   onProgress?.();
 
-  const pending: LotDraft[] = [];
-  for (const d of await activeDrafts()) {
-    if (d.status !== "queued") continue;
-    const state = resolveDraftOnServer(d, index);
-    // Unknown server state (catalog list or jobs unreadable) waits for the next Sync.
-    if (state.lookupFailed) continue;
-    const saleJobs = await jobsForSale(d.sale_id);
-    if (saleJobs === null) continue;
-    const liveJob = findJobForDraft(saleJobs, d.id, d.server_job_id);
-    if (
-      shouldSkipReupload({
-        confirmedOnServer: state.confirmed,
-        catalogLookupFailed: state.lookupFailed,
-        hasServerLotId: Boolean(d.server_lot_id),
-        matchingJobLiveOrDone: jobIsLiveOrDone(liveJob?.status)
-      })
-    ) {
-      continue;
-    }
-    pending.push(d);
-  }
-
-  for (const draft of pending) {
-    // Raw shots from a killed capture session get their orientation/crop before upload.
-    await processPendingCaptures(draft.id).catch(() => 0);
-    const photos = await listDraftPhotos(draft.id);
-    const { images } = splitDraftMedia(photos);
-    if (!images.length) {
-      if (draft.server_lot_id) {
-        try {
-          await uploadPendingDraftVideos(authToken, draft.id, draft.server_lot_id);
-          await setDraftStatus(draft.id, "uploaded", null);
-          uploaded += 1;
-        } catch (e) {
-          await setDraftStatus(
-            draft.id,
-            "failed",
-            e instanceof Error ? e.message : "Could not upload videos"
-          );
-          failed += 1;
-        }
-        onProgress?.();
+  const attempted = new Set<string>();
+  async function nextRound(): Promise<LotDraft[]> {
+    const out: LotDraft[] = [];
+    for (const d of await listLotDrafts()) {
+      if (d.archived_at || d.status !== "queued" || attempted.has(d.id)) continue;
+      if (d.append_lot_id) {
+        out.push(d);
         continue;
       }
-      await setDraftStatus(
-        draft.id,
-        "failed",
-        "Snap at least one photo — videos attach after the lot is cataloged."
-      );
-      failed += 1;
-      onProgress?.();
-      continue;
+      const state = resolveDraftOnServer(d, index);
+      // Unknown server state (catalog list or jobs unreadable) waits for the next Sync.
+      if (state.lookupFailed) continue;
+      const saleJobs = await jobsForSale(d.sale_id);
+      if (saleJobs === null) continue;
+      const liveJob = findJobForDraft(saleJobs, d.id, d.server_job_id);
+      if (
+        shouldSkipReupload({
+          confirmedOnServer: state.confirmed,
+          catalogLookupFailed: state.lookupFailed,
+          hasServerLotId: Boolean(d.server_lot_id),
+          matchingJobLiveOrDone: jobIsLiveOrDone(liveJob?.status)
+        })
+      ) {
+        continue;
+      }
+      out.push(d);
     }
+    return out;
+  }
 
-    const total = images.length;
-    let jobId: string | null = null;
-    let uploadedCount = 0;
-
-    try {
-      await setDraftStatus(draft.id, "uploading", `Preparing photos (0/${total})…`);
+  for (let round = 0; round < MAX_SYNC_ROUNDS; round++) {
+    const pending = await nextRound();
+    if (!pending.length) break;
+    for (const d of pending) attempted.add(d.id);
+    await mapPool(pending, LOTS_AT_ONCE, async (draft) => {
+      const outcome = draft.append_lot_id
+        ? await uploadAppendSession(ctx, draft)
+        : await uploadNewLot(ctx, draft);
+      if (outcome === "sent") uploaded += 1;
+      else if (outcome === "failed") failed += 1;
       onProgress?.();
+    });
+  }
 
-      const rows = images.map((p, i) => ({
-        id: p.id,
-        uri: p.file_uri,
-        name: catalogPhotoFileName(draft.id, i),
-        capturedAtMs: p.captured_at && p.captured_at > 0 ? p.captured_at : undefined
-      }));
-      const rowChunks = chunkPhotos(rows, UPLOAD_CHUNK_SIZE);
-
-      for (let c = 0; c < rowChunks.length; c++) {
-        const chunk = rowChunks[c]!;
-        const from = uploadedCount + 1;
-        await setDraftStatus(
-          draft.id,
-          "uploading",
-          `Preparing photo ${from} of ${total}…`
-        );
-        onProgress?.();
-
-        const prepared = await preparePhotosForUpload(chunk);
-        if (!prepared.photos.length) {
-          if (uploadedCount === 0) {
-            throw new Error(
-              "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
-            );
+  // One batched status call for every lot sent this Sync (no per-lot polling). Lots still
+  // cataloging are left to the follow-up timer.
+  if (ctx.sent.length) {
+    const looked = await lookupDraftStatuses(
+      authToken,
+      ctx.sent.map((d) => d.id)
+    );
+    if (looked.ok) {
+      for (const draft of ctx.sent) {
+        const row = looked.rows.get(normalizeDraftKey(draft.id));
+        if (!row) continue;
+        const lotId = row.lot_id ? String(row.lot_id) : null;
+        if (row.cataloged || lotId || row.job_status === "completed") {
+          noteDraftConfirmed(index, draft.id, lotId);
+          await setDraftServerJobId(draft.id, null);
+          const resolved = resolveDraftOnServer(draft, index).lotId;
+          if (resolved) {
+            await rememberServerLot(draft, resolved);
+            try {
+              await uploadPendingDraftVideos(authToken, draft.id, resolved);
+            } catch {
+              /* clip upload retries on the next sync */
+            }
           }
-          break;
-        }
-
-        await setDraftStatus(
-          draft.id,
-          "uploading",
-          `Sending photo ${from} of ${total}…`
-        );
-        onProgress?.();
-
-        if (!jobId) {
-          const job = await uploadSingleLotJob({
-            saleId: draft.sale_id,
-            token: authToken,
-            manualSku: draft.manual_sku ?? undefined,
-            listingChannel: draft.listing_channel === "facebook" ? "facebook" : "ctseller",
-            photoUris: prepared.photos,
-            clientDraftId: draft.id
-          });
-          jobId = job.id;
-          await setDraftServerJobId(draft.id, jobId);
-        } else {
-          await appendFilesToQueuedJob(authToken, jobId, prepared.photos, draft.id);
-        }
-        uploadedCount += prepared.photos.length;
-        await setDraftStatus(
-          draft.id,
-          "uploading",
-          `On server ${uploadedCount}/${total} — Jobs may show receiving until catalog starts`
-        );
-        onProgress?.();
-      }
-
-      if (!jobId || uploadedCount === 0) {
-        throw new Error(
-          "Could not open any photos for this lot — open a thumb to confirm it loads, then re-snap if needed."
-        );
-      }
-
-      await setDraftStatus(
-        draft.id,
-        "uploading",
-        `Starting catalog (${uploadedCount} photos) — Lots appear when AI finishes`
-      );
-      onProgress?.();
-
-      await runJob(jobId, authToken);
-      // Mark sent as soon as catalog is queued. Staying on "uploading" until the 45s
-      // confirm window ended is what made a killed Sync start a second AI job.
-      await setDraftStatus(draft.id, "uploaded", "On server — cataloging…");
-      onProgress?.();
-
-      // Confirm the server actually catalogs it (don't trust the /run 200 alone).
-      const deadline = Date.now() + SERVER_CONFIRM_TIMEOUT_MS;
-      let outcome: "completed" | "failed" | "pending" = "pending";
-      let serverError: string | null = null;
-      let confirmedLotId: string | null = null;
-      for (;;) {
-        const look = await lookupDraftJob(authToken, draft, jobId);
-        if (look.ok) {
-          if (look.lotId) confirmedLotId = look.lotId;
-          outcome = decideCatalogConfirm({
-            jobStatus: look.cataloged ? "completed" : look.status,
-            lotId: look.lotId
-          });
-          if (outcome === "failed") serverError = serverFailMessage({ error_message: look.error });
-          if (outcome !== "pending") break;
-        }
-        if (Date.now() + SERVER_CONFIRM_INTERVAL_MS > deadline) break;
-        await sleep(SERVER_CONFIRM_INTERVAL_MS);
-      }
-
-      if (outcome === "failed") {
-        // Keep server_job_id so the next sync's recovery pass clears the failed job before retrying.
-        await setDraftStatus(draft.id, "failed", serverError);
-        failed += 1;
-      } else if (outcome === "completed") {
-        await setDraftServerJobId(draft.id, null);
-        if (!confirmedLotId) {
-          // Older API (no status endpoint): refresh just this sale's exact draft mapping.
-          setSaleIndex(index, draft.sale_id, await catalogedSaleIndex(authToken, draft.sale_id));
-        }
-        noteDraftConfirmed(index, draft.id, confirmedLotId);
-        const { lotId } = resolveDraftOnServer(draft, index);
-        if (lotId) {
-          await rememberServerLot(draft, lotId);
-          try {
-            await uploadPendingDraftVideos(authToken, draft.id, lotId);
-          } catch {
-            /* clip upload retries on the next sync */
-          }
-        }
-        await setDraftStatus(draft.id, "uploaded", null);
-        uploaded += 1;
-      } else {
-        await setDraftStatus(draft.id, "uploaded", "Still cataloging on server…");
-        uploaded += 1;
-      }
-      onProgress?.();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Upload failed";
-
-      // Only delete a receiving/failed job. If /run already queued catalog, keep that job
-      // and treat the lot as sent — deleting it (or ignoring a 409) used to start a duplicate.
-      // If we cannot read job status (website busy / timeout), do not delete and do not
-      // mark failed — the worker may still be cataloging.
-      if (jobId) {
-        const looked = await fetchServerJobChecked(authToken, draft.sale_id, jobId);
-        if (!looked.ok || (looked.job && jobIsLiveOrDone(looked.job.status))) {
-          await setDraftStatus(
-            draft.id,
-            "uploaded",
-            looked.ok ? "On server — cataloging…" : "On server — check the website"
-          );
-          onProgress?.();
-          uploaded += 1;
-          continue;
-        }
-        const existing = looked.job;
-        if (!existing || existing.status === "receiving" || existing.status === "failed") {
-          try {
-            await deleteJob(jobId, authToken);
-          } catch {
-            /* leave orphan rather than mask the real error — server stale reconcile will fail it */
-          }
+          await setDraftStatus(draft.id, "uploaded", null);
+        } else if (row.job_status === "failed") {
+          // Keep server_job_id so the next sync's recovery pass clears the failed job before retrying.
+          await recordDraftFailure(draft.id, serverFailMessage({ error_message: row.error_message ?? null }), "transient");
+          uploaded -= 1;
+          failed += 1;
         }
       }
-      await setDraftServerJobId(draft.id, null);
-
-      if (isTransientSyncError(msg)) {
-        await setDraftStatus(
-          draft.id,
-          "failed",
-          "Website was busy — tap Sync to confirm. Do not Resend if the lot is already online."
-        );
-      } else {
-        await setDraftStatus(draft.id, "failed", msg);
-      }
-      failed += 1;
       onProgress?.();
     }
   }
@@ -682,7 +820,14 @@ export async function syncPendingLots(
   await attachPendingLotVideos(authToken, index);
   const archived = archivedEarly + (await sweepArchiveConfirmedDrafts(authToken, index));
 
-  const healthSaleIds = [...new Set((await listLotDrafts()).map((d) => d.sale_id).filter(Boolean))];
+  const healthSaleIds = [
+    ...new Set(
+      (await listLotDrafts())
+        .filter((d) => !d.append_lot_id)
+        .map((d) => d.sale_id)
+        .filter(Boolean)
+    )
+  ];
   let cataloging = 0;
   let stuck = 0;
   for (const saleId of healthSaleIds) {

@@ -34,6 +34,7 @@ import {
   syncPendingLots
 } from "@/lib/queue/sync";
 import { sweepImageCache } from "@/lib/queue/captureFiles";
+import { SyncGate, type SyncRequest } from "@/lib/syncGate";
 
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
 const CACHE_SWEEP_INTERVAL_MS = 60 * 60_000;
@@ -57,8 +58,12 @@ type SyncRefreshValue = {
 
 type SyncStateValue = SyncStatusValue & SyncRefreshValue;
 
+/** ``manual`` = the user asked (Sync now / Retry / Resend): transient failures skip their backoff. */
+export type SyncNowOptions = SyncRequest;
+
 type SyncActionsValue = {
-  syncNow: () => Promise<SyncResult | null>;
+  /** ``null`` when Sync could not start — including "already running" (a rerun is then queued). */
+  syncNow: (opts?: SyncNowOptions) => Promise<SyncResult | null>;
   setSyncPaused: (paused: boolean) => void;
 };
 
@@ -79,6 +84,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const syncInProgressRef = useRef(false);
+  const gateRef = useRef(new SyncGate());
+  const syncNowRef = useRef<(opts?: SyncNowOptions) => Promise<SyncResult | null>>(async () => null);
   const syncPausedRef = useRef(false);
   const lastSyncAtRef = useRef(0);
   const lastCacheSweepAtRef = useRef(0);
@@ -94,12 +101,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (wasPaused && !paused) setFollowUpWake((k) => k + 1);
   }, []);
 
-  const syncNow = useCallback(async (): Promise<SyncResult | null> => {
+  const syncNow = useCallback(async (opts?: SyncNowOptions): Promise<SyncResult | null> => {
     if (!token) return null;
 
-    if (syncInProgressRef.current) {
-      return null;
-    }
+    if (!gateRef.current.begin(opts)) return null;
 
     syncInProgressRef.current = true;
     lastSyncAtRef.current = Date.now();
@@ -151,7 +156,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         () => {
           setRefreshKey((k) => k + 1);
         },
-        websiteIndex
+        websiteIndex,
+        { manual: Boolean(opts?.manual) }
       );
       result.archived = (result.archived || 0) + archivedFirst;
       setLastMessage(formatSyncMessage(result));
@@ -168,8 +174,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         lastCacheSweepAtRef.current = Date.now();
         void sweepImageCache().catch(() => 0);
       }
+      const rerun = gateRef.current.end();
+      if (rerun) setTimeout(() => void syncNowRef.current(rerun), 0);
     }
   }, [token]);
+  syncNowRef.current = syncNow;
 
   const tryAutoSync = useCallback(() => {
     if (syncPausedRef.current) return;

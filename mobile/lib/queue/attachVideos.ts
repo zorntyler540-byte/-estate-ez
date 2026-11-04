@@ -1,13 +1,5 @@
 /** Pure helpers for attaching lot clips after catalog. Not sent through Gemini. */
 
-export function videoUploadName(draftId: string, fileUri: string, index: number): string {
-  const match = String(fileUri || "")
-    .toLowerCase()
-    .match(/\.(mp4|mov|m4v|webm)(?:\?|$)/);
-  const ext = match?.[1] ? `.${match[1]}` : ".mp4";
-  return `mobile-${draftId}-vid-${String(index + 1).padStart(2, "0")}${ext}`;
-}
-
 export function draftNeedsVideoAttach(opts: {
   hasPendingLocalVideos: boolean;
   lotId?: string | null;
