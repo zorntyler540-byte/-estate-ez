@@ -12,14 +12,26 @@ import {
 import { AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
-import { CATALOG_FOLLOWUP_MS } from "@/lib/queue/catalogFollowUp";
 import {
-  countLotsNeedingCatalogFollowUp,
+  advanceFollowUp,
+  followUpNeedsSync,
+  planFollowUp,
+  stopFollowUp,
+  type FollowUpPlan
+} from "@/lib/queue/catalogFollowUp";
+import {
   countLotsNeedingPhotoUpload,
-  countLotsNeedingWebsiteCheck
+  countLotsNeedingWebsiteCheck,
+  listFollowUpDrafts
 } from "@/lib/queue/db";
 import { formatSyncOutcome } from "@/lib/queue/queueStatus";
-import { attachPendingLotVideos, sweepArchiveConfirmedDrafts, syncPendingLots } from "@/lib/queue/sync";
+import {
+  attachPendingLotVideos,
+  loadWebsiteIndex,
+  lookupDraftStatuses,
+  sweepArchiveConfirmedDrafts,
+  syncPendingLots
+} from "@/lib/queue/sync";
 
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
 
@@ -68,9 +80,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const lastSyncAtRef = useRef(0);
   const wasConnectedRef = useRef<boolean | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const [appActive, setAppActive] = useState(AppState.currentState === "active");
+  const followUpPlanRef = useRef<FollowUpPlan | null>(null);
+  const [followUpWake, setFollowUpWake] = useState(0);
 
   const setSyncPaused = useCallback((paused: boolean) => {
+    const wasPaused = syncPausedRef.current;
     syncPausedRef.current = paused;
+    if (wasPaused && !paused) setFollowUpWake((k) => k + 1);
   }, []);
 
   const syncNow = useCallback(async (): Promise<SyncResult | null> => {
@@ -92,14 +109,16 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       }
 
       setLastMessage("Checking the website for lots already cataloged…");
-      const videosAttached = await attachPendingLotVideos(token);
+      // One website index per Sync, shared by every phase below.
+      const websiteIndex = await loadWebsiteIndex(token);
+      const videosAttached = await attachPendingLotVideos(token, websiteIndex);
       if (videosAttached) {
         setRefreshKey((k) => k + 1);
         setLastMessage(
           `Uploaded ${videosAttached} leftover video${videosAttached === 1 ? "" : "s"} to the website.`
         );
       }
-      const archivedFirst = await sweepArchiveConfirmedDrafts(token);
+      const archivedFirst = await sweepArchiveConfirmedDrafts(token, websiteIndex);
       if (archivedFirst) {
         setRefreshKey((k) => k + 1);
         setLastMessage(
@@ -123,9 +142,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       } else {
         setLastMessage("Checking leftover lots on the website…");
       }
-      const result = await syncPendingLots(token, () => {
-        setRefreshKey((k) => k + 1);
-      });
+      const result = await syncPendingLots(
+        token,
+        () => {
+          setRefreshKey((k) => k + 1);
+        },
+        websiteIndex
+      );
       result.archived = (result.archived || 0) + archivedFirst;
       setLastMessage(formatSyncMessage(result));
       setRefreshKey((k) => k + 1);
@@ -170,7 +193,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     const appSub = AppState.addEventListener("change", (nextState) => {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
+      setAppActive(nextState === "active");
       if (prev.match(/inactive|background/) && nextState === "active") {
+        // Back in the app: give still-cataloging lots a fresh, bounded follow-up window.
+        followUpPlanRef.current = null;
         tryAutoSync();
       }
     });
@@ -181,30 +207,74 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     };
   }, [token, tryAutoSync]);
 
+  // Bounded follow-up while lots catalog: one batched status call per tick, backing off
+  // 8s → 5 min, giving up after 30 min. A full Sync runs only when the server has news.
+  // No timer while the app is backgrounded or Sync is paused (capture session).
   useEffect(() => {
-    if (!token) return;
+    if (!token || !appActive) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = () => {
-      void countLotsNeedingCatalogFollowUp().then((n) => {
-        if (cancelled || n <= 0) return;
-        timer = setTimeout(() => {
-          if (cancelled || syncPausedRef.current) return;
-          if (syncInProgressRef.current) {
-            schedule();
-            return;
-          }
-          lastSyncAtRef.current = 0;
-          void syncNow();
-        }, CATALOG_FOLLOWUP_MS);
-      });
+
+    const schedule = async () => {
+      const drafts = await listFollowUpDrafts();
+      if (cancelled) return;
+      const { plan, delayMs } = planFollowUp(
+        followUpPlanRef.current,
+        drafts.map((d) => d.id),
+        Date.now()
+      );
+      followUpPlanRef.current = plan;
+      if (delayMs == null) return;
+      timer = setTimeout(() => void tick(), delayMs);
     };
-    schedule();
+
+    const runFullSync = async () => {
+      lastSyncAtRef.current = 0;
+      await syncNow();
+      if (!cancelled) await schedule();
+    };
+
+    const tick = async () => {
+      if (cancelled || syncPausedRef.current || appStateRef.current !== "active") return;
+      if (syncInProgressRef.current) {
+        await schedule();
+        return;
+      }
+      const plan = followUpPlanRef.current;
+      if (!plan) return;
+      followUpPlanRef.current = advanceFollowUp(plan);
+      const drafts = await listFollowUpDrafts();
+      if (cancelled || !drafts.length) return;
+      const looked = await lookupDraftStatuses(
+        token,
+        drafts.map((d) => d.id)
+      );
+      if (cancelled) return;
+      if (looked.ok) {
+        if (followUpNeedsSync(drafts, looked.rows)) {
+          await runFullSync();
+        } else {
+          await schedule();
+        }
+        return;
+      }
+      if (looked.endpointMissing) {
+        await runFullSync();
+        return;
+      }
+      if (looked.permanent) {
+        followUpPlanRef.current = stopFollowUp(followUpPlanRef.current!);
+        return;
+      }
+      await schedule();
+    };
+
+    void schedule();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [token, refreshKey, syncNow]);
+  }, [token, appActive, refreshKey, followUpWake, syncNow]);
 
   const statusValue = useMemo(
     () => ({ syncing, lastMessage }),
