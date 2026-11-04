@@ -13,6 +13,7 @@ import {
   watcherPathBlocked,
   type AccountAccess
 } from "../lib/plans";
+import { isNavRouteHidden } from "../lib/navVisibility";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
 
 type AppShellProps = {
@@ -130,8 +131,17 @@ type NavGroup = {
   }>;
 };
 
+function filterHiddenNavGroups(groups: readonly NavGroup[]): NavGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !isNavRouteHidden(item.href))
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
 function navGroupsFor(access: AccountAccess | null): readonly NavGroup[] {
-  if (!access || !isWatcherPlan(access.plan_code)) return NAV_GROUPS;
+  if (!access || !isWatcherPlan(access.plan_code)) return filterHiddenNavGroups(NAV_GROUPS);
   const items: NavGroup["items"][number][] = [];
   if (access.feature_analytics !== false) {
     items.push({
@@ -147,7 +157,7 @@ function navGroupsFor(access: AccountAccess | null): readonly NavGroup[] {
     icon: Settings,
     match: (p: string) => p.startsWith("/account")
   });
-  return [{ label: "Auction Watcher", items }];
+  return filterHiddenNavGroups([{ label: "Auction Watcher", items }]);
 }
 
 type ShellNavLinksProps = {
