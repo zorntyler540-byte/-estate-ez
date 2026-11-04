@@ -15,6 +15,9 @@ import { StableUriImage } from "@/components/StableUriImage";
 import { useAuth } from "@/context/AuthContext";
 import { getSaleHeroBackground, listLots, listSaleLotCoverUrls, startSaleHeroBackground } from "@/lib/api";
 import {
+  LOTS_MAX_PAGES,
+  LOTS_PAGE_SIZE,
+  fetchAllLotPages,
   lotIdsWithChangedPhotoCount,
   lotListSignature,
   lotRowsUnchanged,
@@ -24,6 +27,7 @@ import {
 } from "@/lib/lotsReload";
 import type { Lot } from "@/lib/types";
 import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 
 function lotSubtitle(lot: Lot): string {
   const parts: string[] = [];
@@ -43,6 +47,7 @@ export default function LotsScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [capped, setCapped] = useState(false);
   const [query, setQuery] = useState("");
   const [heroColor, setHeroColor] = useState<"studio" | "white" | "gray">("studio");
   const [heroBusy, setHeroBusy] = useState(false);
@@ -73,11 +78,11 @@ export default function LotsScreen() {
       setError("");
       try {
         // Show the list immediately — do not wait on cover signing.
-        const rows = await listLots(token, selectedSaleId, {
-          sort: "sku_asc",
-          limit: 500,
-          listingChannel: "ctseller"
-        });
+        const saleId = selectedSaleId;
+        const { rows, capped: hitCap } = await fetchAllLotPages((offset, limit) =>
+          listLots(token, saleId, { sort: "sku_asc", limit, offset, listingChannel: "ctseller" })
+        );
+        setCapped(hitCap);
         const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
         const refreshCovers =
@@ -238,7 +243,12 @@ export default function LotsScreen() {
     return (
       <View style={styles.root}>
         <Text style={styles.lead}>Select a sale to browse its catalog listings.</Text>
-        <Pressable style={styles.primary} onPress={() => router.push("/(tabs)/sale")}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose sale"
+          style={styles.primary}
+          onPress={() => router.push("/(tabs)/sale")}
+        >
           <Text style={styles.primaryText}>Choose sale</Text>
         </Pressable>
       </View>
@@ -262,6 +272,9 @@ export default function LotsScreen() {
           ] as const
         ).map(([id, label]) => (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Background ${label}`}
+            accessibilityState={{ selected: heroColor === id, disabled: heroBusy }}
             key={id}
             style={[styles.heroChip, heroColor === id && styles.heroChipOn]}
             disabled={heroBusy}
@@ -270,7 +283,14 @@ export default function LotsScreen() {
             <Text style={[styles.heroChipText, heroColor === id && styles.heroChipTextOn]}>{label}</Text>
           </Pressable>
         ))}
-        <Pressable style={[styles.heroGo, heroBusy && styles.heroGoBusy]} disabled={heroBusy || lots.length === 0} onPress={askHeroBackground}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Run AI background on first photos"
+          accessibilityState={{ disabled: heroBusy || lots.length === 0, busy: heroBusy }}
+          style={[styles.heroGo, heroBusy && styles.heroGoBusy]}
+          disabled={heroBusy || lots.length === 0}
+          onPress={askHeroBackground}
+        >
           <Text style={styles.heroGoText}>{heroBusy ? "Working…" : "AI on first photos"}</Text>
         </Pressable>
       </View>
@@ -288,6 +308,12 @@ export default function LotsScreen() {
       />
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {capped ? (
+        <Text style={styles.heroNote}>
+          Showing the first {(LOTS_PAGE_SIZE * LOTS_MAX_PAGES).toLocaleString()} listings. Find the rest on the
+          website.
+        </Text>
+      ) : null}
 
       {loading && !lots.length ? (
         <ActivityIndicator style={{ marginTop: 24 }} color={theme.primary} />
@@ -313,7 +339,12 @@ export default function LotsScreen() {
             const signed = coverUrls[item.id];
             return (
               <View style={styles.row}>
-                <Pressable style={styles.rowMain} onPress={() => router.push(`/lot/${item.id}`)}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open lot ${item.sku?.trim() || item.auction_title?.trim() || ""}`.trim()}
+                  style={styles.rowMain}
+                  onPress={() => router.push(`/lot/${item.id}`)}
+                >
                   <View style={styles.thumbWrap}>
                     {signed ? (
                       <StableUriImage uri={signed} style={styles.thumb} recyclingKey={item.id} />
@@ -345,6 +376,8 @@ export default function LotsScreen() {
                   </View>
                 </Pressable>
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add photos to ${item.sku?.trim() || "this lot"}`}
                   style={styles.addBtn}
                   onPress={() =>
                     router.push({
@@ -381,12 +414,14 @@ const styles = StyleSheet.create({
     borderColor: theme.borderStrong,
     borderRadius: 8,
     paddingHorizontal: 10,
-    paddingVertical: 8
+    paddingVertical: 8,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   heroChipOn: { backgroundColor: theme.primary, borderColor: theme.primary },
   heroChipText: { color: theme.textSoft, fontSize: 13 },
   heroChipTextOn: { color: theme.onPrimary, fontWeight: "700" },
-  heroGo: { backgroundColor: theme.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  heroGo: { backgroundColor: theme.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, minHeight: MIN_TAP_PX, justifyContent: "center" },
   heroGoBusy: { opacity: 0.7 },
   heroGoText: { color: theme.onPrimary, fontWeight: "700", fontSize: 13 },
   heroNote: { color: theme.textMuted, fontSize: 13, marginBottom: 8 },
@@ -430,7 +465,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.primary,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 64
+    minWidth: 64,
+    minHeight: MIN_TAP_PX
   },
   addBtnText: { color: theme.onPrimary, fontSize: 11, fontWeight: "700", textAlign: "center", lineHeight: 14 },
   thumbWrap: { width: 72, height: 72, borderRadius: 8, overflow: "hidden", backgroundColor: theme.surface },

@@ -1,4 +1,4 @@
-import { formatSyncOutcome, canResendQueueRow, queueRowTitle, queueRowView } from "./queueStatus";
+import { blockedClipLine, formatSyncOutcome, canResendQueueRow, queueRowTitle, queueRowView } from "./queueStatus";
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
@@ -53,7 +53,30 @@ const busy = queueRowView({
 });
 assert(busy.label === "Needs a check", "transient failed");
 assert(busy.showResend === false, "transient hides Resend");
-assert(busy.detail === null, "transient no duplicate detail");
+assert(
+  busy.detail === "Website was busy — tap Sync to confirm. Do not Resend if the lot is already online.",
+  "transient failure still shows its own error on the row"
+);
+
+const silentFail = queueRowView({ status: "failed", photo_count: 2 });
+assert(silentFail.label === "Needs a check", "failed without error");
+assert(Boolean(silentFail.detail), "failed row never has an empty error line");
+
+const sentBusy = queueRowView({
+  status: "uploaded",
+  photo_count: 2,
+  error_message: "Network request failed"
+});
+assert(sentBusy.detail === "Network request failed", "sent + transient shows the error");
+
+assert(blockedClipLine([]) === null, "no blocked clips, no line");
+assert(blockedClipLine([null, "  "]) === null, "blank reasons ignored");
+const oneBlocked = blockedClipLine(["Video is too large (max 80 MB)"]);
+assert(oneBlocked?.startsWith("1 video was not accepted"), "single blocked clip");
+assert(oneBlocked?.includes("too large"), "blocked reason is shown");
+const twoBlocked = blockedClipLine(["Lot was deleted", "Lot was deleted"]);
+assert(twoBlocked?.startsWith("2 videos"), "counts every blocked clip");
+assert(twoBlocked?.split("Lot was deleted").length === 2, "repeated reason shown once");
 
 const gemini = queueRowView({
   status: "failed",
@@ -82,4 +105,4 @@ assert(
   "empty queue mentions archive"
 );
 
-console.log("queueStatus selftest ok (19 cases)");
+console.log("queueStatus selftest ok (28 cases)");

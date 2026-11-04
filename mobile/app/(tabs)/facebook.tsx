@@ -14,10 +14,12 @@ import { Text } from "@/components/AppText";
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { theme } from "@/constants/theme";
+import { MIN_TAP_PX } from "@/lib/a11y";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
 import { listLots, listSaleLotCoverUrls } from "@/lib/api";
 import {
+  fetchAllLotPages,
   lotIdsWithChangedPhotoCount,
   lotListSignature,
   lotRowsUnchanged,
@@ -78,11 +80,10 @@ export default function FacebookScreen() {
       else if (mode === "pull") setRefreshing(true);
       setError("");
       try {
-        const rows = await listLots(token, selectedSaleId, {
-          sort: "created_desc",
-          limit: 500,
-          listingChannel: "facebook"
-        });
+        const saleId = selectedSaleId;
+        const { rows } = await fetchAllLotPages((offset, limit) =>
+          listLots(token, saleId, { sort: "created_desc", limit, offset, listingChannel: "facebook" })
+        );
         const prevSig = lastSignatureRef.current;
         const nextSig = lotListSignature(rows);
         const refreshCovers = shouldRefreshCoverUrls(prevSig, nextSig, coverCountRef.current);
@@ -147,7 +148,12 @@ export default function FacebookScreen() {
         <Text style={styles.meta}>Sale: {getSaleName(selectedSaleId, selectedSaleName)}</Text>
       )}
 
-      <Pressable style={styles.primary} onPress={startCapture}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Add Facebook item"
+        style={styles.primary}
+        onPress={startCapture}
+      >
         <Text style={styles.primaryText}>Add Facebook item</Text>
       </Pressable>
 
@@ -194,7 +200,12 @@ export default function FacebookScreen() {
                     </Text>
                   </View>
                 </View>
-                <Pressable style={styles.secondary} onPress={() => void shareListing(item)}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Share Marketplace text"
+                  style={styles.secondary}
+                  onPress={() => void shareListing(item)}
+                >
                   <Text style={styles.secondaryText}>Share Marketplace text</Text>
                 </Pressable>
               </View>
@@ -254,7 +265,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: theme.surface
+    backgroundColor: theme.surface,
+    minHeight: MIN_TAP_PX,
+    justifyContent: "center"
   },
   secondaryText: { color: theme.text, fontSize: 13, fontWeight: "600" }
 });

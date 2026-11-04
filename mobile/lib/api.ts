@@ -194,12 +194,14 @@ export async function listLots(
   opts?: {
     sort?: "created_desc" | "created_asc" | "sku_asc";
     limit?: number;
+    offset?: number;
     listingChannel?: "ctseller" | "facebook";
   }
 ): Promise<Lot[]> {
   const params = new URLSearchParams({ sale_id: saleId });
   if (opts?.sort) params.set("sort", opts.sort);
   if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
   if (opts?.listingChannel) params.set("listing_channel", opts.listingChannel);
   return apiFetch<Lot[]>(`/lots?${params}`, token);
 }

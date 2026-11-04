@@ -1,5 +1,6 @@
 import {
   coverUrlsEqual,
+  fetchAllLotPages,
   lotDetailSnapshot,
   lotIdsWithChangedPhotoCount,
   lotListSignature,
@@ -120,4 +121,33 @@ assert(
   "queue status change"
 );
 
-console.log("lotsReload.selftest ok");
+void (async () => {
+  const all = Array.from({ length: 1203 }, (_, i) => ({ id: `lot-${i}` }));
+  const offsets: number[] = [];
+  const full = await fetchAllLotPages(async (offset, limit) => {
+    offsets.push(offset);
+    return all.slice(offset, offset + limit);
+  });
+  assert(full.rows.length === 1203 && !full.capped, "reads past the 500-row API cap");
+  assert(offsets.join(",") === "0,500,1000", "pages by offset until a short page");
+
+  const exact = await fetchAllLotPages(async (offset, limit) => all.slice(0, 1000).slice(offset, offset + limit));
+  assert(exact.rows.length === 1000 && !exact.capped, "an empty last page ends the read");
+
+  const capped = await fetchAllLotPages(async (offset, limit) => all.slice(offset, offset + limit), {
+    pageSize: 100,
+    maxPages: 3
+  });
+  assert(capped.rows.length === 300 && capped.capped, "stops at maxPages and reports it");
+
+  const shifted = await fetchAllLotPages(
+    async (offset) => (offset === 0 ? [{ id: "a" }, { id: "b" }] : [{ id: "b" }]),
+    { pageSize: 2 }
+  );
+  assert(shifted.rows.map((r) => r.id).join(",") === "a,b", "a row repeated across pages is kept once");
+
+  console.log("lotsReload.selftest ok");
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
