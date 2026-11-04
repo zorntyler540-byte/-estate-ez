@@ -152,6 +152,16 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `photo_role=tape`. Tape stays in the Estate-Ez gallery for SKU reference. Lots that were
   already posted keep whatever photos are on CT Bids until someone edits that item there;
   do not Resend all. Posting is dashboard-only — there is no browser extension.
+- **Watcher snapshots only prune when `complete: true`.** `POST /integrations/engagement/snapshots`
+ upserts the posted items; lots missing from the body are dropped (and their engagement cleared,
+ which cancels their scheduled Push-calendar Page posts) only when the Watcher says it sent every
+ live lot. Old clients send no `complete`, so they never prune. A body whose `captured_at` is
+ older than the newest stored one for that sale returns `ignored: true` and writes nothing.
+ Ingest is serialized per sale (in-process lock + Postgres `pg_advisory_xact_lock`). The
+ Facebook calendar follow-up runs in a daemon thread (`app/engagement_tasks.py`), coalesced per
+ sale; tests run it inline via the autouse fixture in `tests/conftest.py`.
+ `POST /integrations/ctseller/session` never holds a DB connection during CT Seller HTTP and
+ takes a per-account in-process lock so a burst of Watcher mints makes one refresh/login.
 - **Find groups is public groups only (Facebook tab).** `POST /lots/{id}/audience-hunt` and
   `POST /sales/{id}/audience-hunt` use Gemini Pro + Google Search (`tools=[GoogleSearch()]`),
   then a separate structured JSON call (schema + search tools 400 together). That is how real
