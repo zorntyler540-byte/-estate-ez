@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     worker_child_rss_mb: int = Field(default=3000, ge=0, le=8192, alias="WORKER_CHILD_RSS_MB")
     # Hard virtual-size cap on the child (MB) via RLIMIT_AS. Sized with the RSS cap. 0 disables.
     worker_child_as_mb: int = Field(default=3000, ge=0, le=8192, alias="WORKER_CHILD_AS_MB")
+    # After the job row is persisted, the child must os._exit within this many seconds.
+    worker_child_exit_seconds: float = Field(
+        default=15.0, ge=1.0, le=120.0, alias="WORKER_CHILD_EXIT_SECONDS"
+    )
+    # Parent SIGKILLs a child that is still alive this long after the job is completed/failed.
+    worker_child_done_kill_seconds: float = Field(
+        default=30.0, ge=1.0, le=600.0, alias="WORKER_CHILD_DONE_KILL_SECONDS"
+    )
     # Per-account catalog spend brakes (Gemini runs on the shared operator key).
     catalog_max_queued_jobs_per_account: int = Field(
         default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"

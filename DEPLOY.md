@@ -160,7 +160,11 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
    - `GEMINI_GLOBAL_CONCURRENCY=8` — cross-process Gemini HTTP cap (advisory locks)
    - `WORKER_CHILD_CRASH_RETRIES=3` — isolated-child OOM/crash cap; then the job is failed and listed by `/jobs/stuck`
    - `WORKER_CHILD_RSS_MB=3000` — parent SIGKILLs a runaway child (do **not** use 1200; a 3-photo lot already exceeded 1.2 GB)
+   - `WORKER_CHILD_EXIT_SECONDS=15` — after the job row is saved, the child must `os._exit` even if cleanup hangs
+   - `WORKER_CHILD_DONE_KILL_SECONDS=30` — parent SIGKILLs a child still alive after the job is completed/failed
    - `WORKER_CHILD_AS_MB=3000` — child `RLIMIT_AS` in MB, sized with the RSS cap (0 disables)
+   - `WORKER_CHILD_EXIT_SECONDS=15` — after the job row is saved, the child must `os._exit` even if cleanup hangs
+   - `WORKER_CHILD_DONE_KILL_SECONDS=30` — parent SIGKILLs a child still alive after the job is completed/failed
    - `WORKER_POLL_SECONDS=2`
 6. **Memory limits (required for cost):** Railway bills RAM while the replica is sized large. Cataloging used to spike to 20–32 GB. Cap services so one location does not cost ~$10/GB-month:
 
