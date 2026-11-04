@@ -1,4 +1,6 @@
+import type { ConnectionPhase } from "../connectivity";
 import { formatMediaCounts } from "../mediaKind";
+import { isPausedMessage } from "../uploadPause";
 import { isStillCatalogingMessage } from "./archiveCataloged";
 import { formatRetryWait } from "./retryPolicy";
 import { isTransientSyncError } from "./syncRecovery";
@@ -30,6 +32,8 @@ export type QueueRowInput = {
   video_count?: number;
   manual_sku?: string | null;
   online?: boolean | null;
+  /** Auto-upload state (offline / waiting for a stable connection / Wi‑Fi only …). */
+  connection?: ConnectionPhase | null;
   syncing?: boolean;
   /** ``permanent`` / ``transient`` from the last failed attempt (null on older rows). */
   error_kind?: string | null;
@@ -115,6 +119,39 @@ export function removeNeedsSecondConfirm(item: {
 }): boolean {
   if (item.archived_at || item.server_lot_id || item.append_lot_id) return false;
   return item.status === "uploaded" || item.status === "uploading";
+}
+
+/** Lots on this phone still to send — what "Offline, N lots waiting" counts. */
+export function countWaitingLots(
+  rows: readonly { status: string; archived_at?: number | null; error_kind?: string | null }[]
+): number {
+  return rows.filter(
+    (r) =>
+      !r.archived_at &&
+      (r.status === "queued" ||
+        r.status === "uploading" ||
+        (r.status === "failed" && r.error_kind !== "permanent"))
+  ).length;
+}
+
+function queuedHint(item: QueueRowInput): string {
+  if (item.syncing) return "In line — Sync is sending lots now.";
+  const phase = item.connection ?? (item.online === false ? "offline" : null);
+  switch (phase) {
+    case "offline":
+      return "Will send when you're back online.";
+    case "waiting_stable":
+    case "checking":
+      return "Waiting for a stable connection, then uploads on its own.";
+    case "unreachable":
+      return "Website is not answering — uploads on its own when it does.";
+    case "wifi_required":
+      return "Waiting for Wi‑Fi (Upload on Wi‑Fi only is on).";
+    case "ready":
+      return "Uploads on its own — or tap Sync now.";
+    default:
+      return "Tap Sync now to send.";
+  }
 }
 
 export function queueRowView(item: QueueRowInput): QueueRowView {
@@ -210,19 +247,36 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
         ...remove
       };
     case "queued":
+      if (isPausedMessage(error)) {
+        return {
+          label: "Paused",
+          hint: `${queuedHint(item)} Photos already sent are not sent again.`,
+          tone: "progress",
+          detail: error,
+          showResend: false,
+          ...remove
+        };
+      }
       return {
         label: "Ready to upload",
-        hint: item.syncing
-          ? "In line — Sync is sending lots now."
-          : item.online === false
-            ? "Will send when you're back online."
-            : "Tap Sync now to send.",
+        hint: queuedHint(item),
         tone: "progress",
         detail: null,
         showResend: false,
         ...remove
       };
     case "uploading":
+      if (item.syncing === false) {
+        // App was killed (or the phone restarted) mid-upload: nothing is sending this right now.
+        return {
+          label: "Interrupted",
+          hint: `${queuedHint(item)} Photos already sent are not sent again.`,
+          tone: "progress",
+          detail: null,
+          showResend: false,
+          ...remove
+        };
+      }
       return {
         label: "Uploading…",
         hint: "Sending to the server. The website listing appears after catalog finishes.",
@@ -307,6 +361,32 @@ export function formatSyncOutcome(
     reconciled: number;
     archived?: number;
     healthSummary?: string | null;
+    paused?: boolean;
+    waitingForWifi?: number;
+  },
+  online?: boolean | null
+): string {
+  const wifi = result.waitingForWifi || 0;
+  const wifiTail = wifi
+    ? ` ${wifi} lot${wifi === 1 ? "" : "s"} waiting for Wi‑Fi (Upload on Wi‑Fi only is on).`
+    : "";
+  if (result.paused) {
+    const sent = result.uploaded
+      ? `Sent ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, then paused`
+      : "Paused";
+    return `${sent} — the connection dropped. Uploads pick up where they left off once the connection is stable.`;
+  }
+  return formatSyncOutcomeCore(result, online) + wifiTail;
+}
+
+function formatSyncOutcomeCore(
+  result: {
+    uploaded: number;
+    failed: number;
+    reconciled: number;
+    archived?: number;
+    healthSummary?: string | null;
+    waitingForWifi?: number;
   },
   online?: boolean | null
 ): string {
@@ -340,5 +420,6 @@ export function formatSyncOutcome(
   if (online === false) {
     return "Offline — connect to Wi‑Fi or cellular to sync.";
   }
+  if (result.waitingForWifi) return "Checked the website.";
   return "Nothing queued to upload. Cataloged lots stay in Phone archive.";
 }

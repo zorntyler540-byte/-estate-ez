@@ -1,5 +1,7 @@
+import { UPLOAD_PAUSED_MESSAGE, UploadPausedError } from "../uploadPause";
 import {
   blockedClipLine,
+  countWaitingLots,
   formatSyncOutcome,
   canResendQueueRow,
   queueRowTitle,
@@ -165,4 +167,60 @@ assert(
   "append delete copy"
 );
 
-console.log("queueStatus selftest ok (45 cases)");
+// Offline queueing / auto-upload copy.
+{
+  const q = (connection: Parameters<typeof queueRowView>[0]["connection"], extra = {}) =>
+    queueRowView({ status: "queued", photo_count: 3, connection, syncing: false, ...extra });
+  assert(q("offline").hint === "Will send when you're back online.", "queued offline hint");
+  assert(q("waiting_stable").hint.startsWith("Waiting for a stable connection"), "queued waiting hint");
+  assert(q("checking").hint.startsWith("Waiting for a stable connection"), "queued checking hint");
+  assert(q("wifi_required").hint.includes("Upload on Wi‑Fi only"), "queued Wi-Fi only hint");
+  assert(q("unreachable").hint.startsWith("Website is not answering"), "queued unreachable hint");
+  assert(q("ready").hint.startsWith("Uploads on its own"), "queued ready hint");
+  assert(q("ready", { syncing: true }).hint.startsWith("In line"), "queued while syncing");
+  assert(queueRowView({ status: "queued", online: false }).hint === "Will send when you're back online.", "legacy online flag");
+
+  const paused = q("waiting_stable", { error_message: UPLOAD_PAUSED_MESSAGE });
+  assert(paused.label === "Paused", "paused label");
+  assert(paused.hint.includes("not sent again"), "paused says sent photos are kept");
+  assert(paused.tone === "progress", "paused is not an error");
+  const wifiPaused = q("wifi_required", { error_message: new UploadPausedError("wifi_only").message });
+  assert(wifiPaused.label === "Paused" && wifiPaused.hint.includes("Wi‑Fi"), "Wi-Fi only pause");
+
+  const interrupted = queueRowView({ status: "uploading", photo_count: 3, syncing: false, connection: "offline" });
+  assert(interrupted.label === "Interrupted", "killed mid-upload shows Interrupted, not Uploading…");
+  assert(interrupted.hint.startsWith("Will send when you're back online."), "interrupted offline hint");
+  assert(
+    queueRowView({ status: "uploading", photo_count: 3, syncing: true }).label === "Uploading…",
+    "live upload stays Uploading…"
+  );
+
+  assert(
+    countWaitingLots([
+      { status: "queued" },
+      { status: "uploading" },
+      { status: "failed", error_kind: "transient" },
+      { status: "failed", error_kind: "permanent" },
+      { status: "draft" },
+      { status: "uploaded" },
+      { status: "queued", archived_at: 1 }
+    ]) === 3,
+    "waiting = queued + interrupted + will-retry"
+  );
+
+  assert(
+    formatSyncOutcome({ uploaded: 0, failed: 0, reconciled: 0, paused: true }).startsWith("Paused — the connection dropped"),
+    "paused Sync copy"
+  );
+  assert(
+    formatSyncOutcome({ uploaded: 2, failed: 0, reconciled: 0, paused: true }).startsWith("Sent 2 lots, then paused"),
+    "partial then paused"
+  );
+  assert(
+    formatSyncOutcome({ uploaded: 0, failed: 0, reconciled: 0, waitingForWifi: 2 }) ===
+      "Checked the website. 2 lots waiting for Wi‑Fi (Upload on Wi‑Fi only is on).",
+    "Wi-Fi only Sync copy"
+  );
+}
+
+console.log("queueStatus selftest ok (66 cases)");
