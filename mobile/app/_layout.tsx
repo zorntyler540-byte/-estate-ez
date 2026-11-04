@@ -2,6 +2,10 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { SalesProvider } from "@/context/SalesContext";
 import { SyncProvider } from "@/context/SyncContext";
 import { theme } from "@/constants/theme";
+import { SourceSans3_400Regular } from "@expo-google-fonts/source-sans-3/400Regular";
+import { SourceSans3_600SemiBold } from "@expo-google-fonts/source-sans-3/600SemiBold";
+import { SourceSans3_700Bold } from "@expo-google-fonts/source-sans-3/700Bold";
+import { SourceSans3_800ExtraBold } from "@expo-google-fonts/source-sans-3/800ExtraBold";
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack, useRouter, useSegments } from "expo-router";
@@ -9,6 +13,8 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
 import { StatusBar } from "expo-status-bar";
+
+import { FONT_FAMILY } from "@/lib/typography";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -24,23 +30,30 @@ const EstateTheme = {
     text: theme.text,
     border: theme.border,
     notification: theme.primary
+  },
+  fonts: {
+    regular: { fontFamily: FONT_FAMILY.regular, fontWeight: "normal" as const },
+    medium: { fontFamily: FONT_FAMILY.semibold, fontWeight: "normal" as const },
+    bold: { fontFamily: FONT_FAMILY.bold, fontWeight: "normal" as const },
+    heavy: { fontFamily: FONT_FAMILY.extrabold, fontWeight: "normal" as const }
   }
 };
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf")
+    [FONT_FAMILY.regular]: SourceSans3_400Regular,
+    [FONT_FAMILY.semibold]: SourceSans3_600SemiBold,
+    [FONT_FAMILY.bold]: SourceSans3_700Bold,
+    [FONT_FAMILY.extrabold]: SourceSans3_800ExtraBold
   });
+  // A font that fails to load falls back to the system face — never block sign-in on it.
+  const ready = loaded || Boolean(error);
 
   useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+    if (ready) SplashScreen.hideAsync();
+  }, [ready]);
 
-  useEffect(() => {
-    if (loaded) SplashScreen.hideAsync();
-  }, [loaded]);
-
-  if (!loaded) return null;
+  if (!ready) return null;
 
   return (
     <AuthProvider>
@@ -78,6 +91,8 @@ function RootNav() {
         screenOptions={{
           headerStyle: { backgroundColor: theme.bgElevated },
           headerTintColor: theme.text,
+          headerTitleStyle: { fontFamily: FONT_FAMILY.semibold },
+          headerLargeTitleStyle: { fontFamily: FONT_FAMILY.bold },
           contentStyle: { backgroundColor: theme.bg },
           headerShadowVisible: false
         }}

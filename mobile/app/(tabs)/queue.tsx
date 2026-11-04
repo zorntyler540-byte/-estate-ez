@@ -7,9 +7,9 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
-  Text,
   View
 } from "react-native";
+import { Text } from "@/components/AppText";
 import NetInfo from "@react-native-community/netinfo";
 
 import { PhotoPreviewModal } from "@/components/DraftPhotos";
@@ -25,6 +25,7 @@ import { deleteArchivedDrafts, deleteLotDraft, listDraftPhotos, listLotDrafts, s
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
+import { theme } from "@/constants/theme";
 type DraftRow = LotDraft & { photoUris: string[] };
 
 /** Subscribes to sync ticks without making the Queue list re-render on every lot upload. */
@@ -371,7 +372,7 @@ export default function QueueScreen() {
 
       <Pressable style={[styles.primary, syncing && styles.disabled]} disabled={syncing} onPress={() => void syncAll()}>
         {syncing ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={theme.onPrimary} />
         ) : (
           <Text style={styles.primaryText}>Sync now</Text>
         )}
@@ -403,7 +404,7 @@ export default function QueueScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            tintColor="#ff4d1a"
+            tintColor={theme.primary}
             onRefresh={() => {
               void (async () => {
                 setRefreshing(true);
@@ -512,73 +513,73 @@ export default function QueueScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 16, gap: 12, backgroundColor: "#070708" },
-  status: { color: "#a8a29e", fontSize: 14 },
-  hint: { color: "#78716c", fontSize: 13 },
-  message: { color: "#d6d3d1", fontSize: 14 },
+  root: { flex: 1, padding: 16, gap: 12, backgroundColor: theme.bg },
+  status: { color: theme.textMuted, fontSize: 14 },
+  hint: { color: theme.textSubtle, fontSize: 13 },
+  message: { color: theme.textSoft, fontSize: 14 },
   primary: {
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center"
   },
-  primaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  primaryText: { color: theme.onPrimary, fontWeight: "600", fontSize: 16 },
   archiveBtn: {
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#3f3f46",
-    backgroundColor: "#141416"
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surface
   },
-  archiveBtnText: { color: "#e7e5e4", fontWeight: "600", fontSize: 15 },
+  archiveBtnText: { color: theme.textSoft, fontWeight: "600", fontSize: 15 },
   disabled: { opacity: 0.6 },
-  empty: { color: "#78716c", marginTop: 24, textAlign: "center", lineHeight: 22 },
+  empty: { color: theme.textSubtle, marginTop: 24, textAlign: "center", lineHeight: 22 },
   card: {
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#141416",
+    borderColor: theme.border,
     gap: 6
   },
   cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  cardTitle: { color: "#f5f5f4", fontWeight: "700", fontSize: 16, flex: 1 },
+  cardTitle: { color: theme.text, fontWeight: "700", fontSize: 16, flex: 1 },
   deleteBtn: {
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#7f1d1d",
-    backgroundColor: "#450a0a"
+    borderColor: theme.errorBorder,
+    backgroundColor: theme.errorBg
   },
-  deleteBtnText: { color: "#fecaca", fontSize: 12, fontWeight: "600" },
-  cardStatus: { color: "#ff4d1a", fontSize: 14, fontWeight: "600" },
-  cardStatusOk: { color: "#86efac", fontSize: 14, fontWeight: "600" },
-  cardStatusWarn: { color: "#fdba74", fontSize: 14, fontWeight: "600" },
-  cardStatusError: { color: "#fca5a5", fontSize: 14, fontWeight: "600" },
-  cardSale: { color: "#a8a29e", fontSize: 13, fontWeight: "600" },
-  cardSaleOther: { color: "#fcd34d" },
-  cardHint: { color: "#a8a29e", fontSize: 13, lineHeight: 18 },
-  cardMeta: { color: "#78716c", fontSize: 12, marginTop: 2 },
-  error: { color: "#fca5a5", fontSize: 12 },
-  progress: { color: "#fdba74", fontSize: 12, marginTop: 4 },
+  deleteBtnText: { color: theme.error, fontSize: 12, fontWeight: "600" },
+  cardStatus: { color: theme.primary, fontSize: 14, fontWeight: "600" },
+  cardStatusOk: { color: theme.success, fontSize: 14, fontWeight: "600" },
+  cardStatusWarn: { color: theme.warning, fontSize: 14, fontWeight: "600" },
+  cardStatusError: { color: theme.error, fontSize: 14, fontWeight: "600" },
+  cardSale: { color: theme.textMuted, fontSize: 13, fontWeight: "600" },
+  cardSaleOther: { color: theme.warning },
+  cardHint: { color: theme.textMuted, fontSize: 13, lineHeight: 18 },
+  cardMeta: { color: theme.textSubtle, fontSize: 12, marginTop: 2 },
+  error: { color: theme.error, fontSize: 12 },
+  progress: { color: theme.warning, fontSize: 12, marginTop: 4 },
   draftActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   continueBtn: {
     alignSelf: "flex-start",
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#ff4d1a"
+    backgroundColor: theme.primary
   },
-  continueBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  continueBtnText: { color: theme.onPrimary, fontSize: 13, fontWeight: "700" },
   secondary: {
     alignSelf: "flex-start",
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#141416"
+    backgroundColor: theme.surface
   },
-  secondaryText: { color: "#e7e5e4", fontSize: 13, fontWeight: "600" }
+  secondaryText: { color: theme.textSoft, fontSize: 13, fontWeight: "600" }
 });

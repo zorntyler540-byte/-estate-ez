@@ -7,11 +7,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
   type StyleProp,
   type ImageStyle
 } from "react-native";
+import { Text } from "@/components/AppText";
 
 import { ZoomablePreview } from "@/components/ZoomablePreview";
 
@@ -28,6 +28,7 @@ import {
 import { playVideoUri } from "@/lib/playVideo";
 import { lotDetailSnapshot, mediaIdsKey, shouldSkipLotsFocusReload } from "@/lib/lotsReload";
 import type { Lot, LotPhoto, LotVideo } from "@/lib/types";
+import { theme } from "@/constants/theme";
 
 function Field({ label, value }: { label: string; value: string }) {
   if (!value.trim()) return null;
@@ -215,7 +216,7 @@ export default function LotDetailScreen() {
       <Stack.Screen options={{ title: lot?.sku?.trim() || "Lot" }} />
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
         {loading && !lot ? (
-          <ActivityIndicator style={{ marginTop: 32 }} color="#ff4d1a" />
+          <ActivityIndicator style={{ marginTop: 32 }} color={theme.primary} />
         ) : error && !lot ? (
           <>
             <Text style={styles.error}>{error}</Text>
@@ -346,21 +347,21 @@ export default function LotDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#070708" },
+  root: { flex: 1, backgroundColor: theme.bg },
   content: { padding: 16, paddingBottom: 40, gap: 10 },
-  error: { color: "#fca5a5", marginTop: 24 },
+  error: { color: theme.error, marginTop: 24 },
   heroWrap: {
     width: "100%",
     aspectRatio: 4 / 3,
     overflow: "hidden",
-    backgroundColor: "#141416",
+    backgroundColor: theme.surface,
     marginBottom: 4,
     borderRadius: 12
   },
   hero: { width: "100%", height: "100%" },
   heroEmpty: { alignItems: "center", justifyContent: "center" },
-  heroEmptyText: { color: "#78716c", fontWeight: "600" },
-  title: { color: "#f5f5f4", fontSize: 20, fontWeight: "700" },
+  heroEmptyText: { color: theme.textSubtle, fontWeight: "600" },
+  title: { color: theme.text, fontSize: 20, fontWeight: "700" },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   badge: {
     fontSize: 12,
@@ -370,37 +371,37 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: "hidden"
   },
-  badgePosted: { color: "#140500", backgroundColor: "#ff4d1a" },
-  badgeDraft: { color: "#e7e5e4", backgroundColor: "#3f3f46" },
-  badgeDone: { color: "#ecfdf5", backgroundColor: "#047857" },
+  badgePosted: { color: theme.onPrimary, backgroundColor: theme.primary },
+  badgeDraft: { color: theme.textSoft, backgroundColor: theme.borderStrong },
+  badgeDone: { color: theme.onSuccess, backgroundColor: theme.successBg },
   field: { gap: 4, marginTop: 4 },
-  fieldLabel: { color: "#78716c", fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
-  fieldValue: { color: "#e7e5e4", fontSize: 15, lineHeight: 22 },
-  section: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", marginTop: 12 },
+  fieldLabel: { color: theme.textSubtle, fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
+  fieldValue: { color: theme.textSoft, fontSize: 15, lineHeight: 22 },
+  section: { color: theme.text, fontSize: 16, fontWeight: "700", marginTop: 12 },
   photoRow: { gap: 8, paddingVertical: 4 },
-  photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: "#141416" },
-  muted: { color: "#78716c" },
+  photo: { width: 96, height: 96, borderRadius: 8, backgroundColor: theme.surface },
+  muted: { color: theme.textSubtle },
   videoList: { gap: 8 },
   videoRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "#141416",
+    backgroundColor: theme.surface,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 12
   },
-  videoPlay: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  videoName: { color: "#e7e5e4", fontSize: 14, flex: 1 },
+  videoPlay: { color: theme.text, fontSize: 16, fontWeight: "700" },
+  videoName: { color: theme.textSoft, fontSize: 14, flex: 1 },
   addPhotosBtn: {
     marginTop: 12,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center"
   },
-  addPhotosBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  addPhotosHint: { color: "#78716c", fontSize: 13, lineHeight: 18 },
+  addPhotosBtnText: { color: theme.onPrimary, fontSize: 16, fontWeight: "700" },
+  addPhotosHint: { color: theme.textSubtle, fontSize: 13, lineHeight: 18 },
   previewBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",
@@ -408,28 +409,28 @@ const styles = StyleSheet.create({
     padding: 16
   },
   previewCard: { gap: 10 },
-  previewTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  previewHint: { color: "#a8a29e", fontSize: 13, textAlign: "center" },
+  previewTitle: { color: theme.textSoft, fontSize: 16, fontWeight: "600", textAlign: "center" },
+  previewHint: { color: theme.textMuted, fontSize: 13, textAlign: "center" },
   previewImageWrap: { width: "100%", height: "68%", overflow: "hidden", borderRadius: 12 },
-  previewImage: { width: "100%", height: "100%", backgroundColor: "#0e0e10" },
+  previewImage: { width: "100%", height: "100%", backgroundColor: theme.bgElevated },
   previewNav: { flexDirection: "row", gap: 10 },
   previewNavBtn: {
     flex: 1,
-    backgroundColor: "#292524",
+    backgroundColor: theme.surfaceRaised,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#44403c"
+    borderColor: theme.borderStrong
   },
   previewNavBtnDisabled: { opacity: 0.35 },
-  previewNavText: { color: "#f5f5f4", fontWeight: "700", fontSize: 16 },
+  previewNavText: { color: theme.text, fontWeight: "700", fontSize: 16 },
   previewClose: {
     alignSelf: "center",
-    backgroundColor: "#3f3f46",
+    backgroundColor: theme.borderStrong,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 28
   },
-  previewCloseText: { color: "#f5f5f4", fontWeight: "600", fontSize: 16 }
+  previewCloseText: { color: theme.text, fontWeight: "600", fontSize: 16 }
 });

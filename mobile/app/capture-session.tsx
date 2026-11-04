@@ -10,13 +10,12 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   useWindowDimensions,
   View,
   type AppStateStatus,
   type GestureResponderEvent
 } from "react-native";
+import { Text, TextInput } from "@/components/AppText";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DraftPhotoStrip, PhotoPreviewModal } from "@/components/DraftPhotos";
@@ -26,7 +25,6 @@ import {
   CAMERA_ASPECT_PRESETS,
   aspectPresetById,
   centeredAspectRect,
-  maybeCropToAspect,
   type CameraAspectId
 } from "@/lib/cameraAspect";
 import { uploadLotPhotos, uploadLotVideos } from "@/lib/api";
@@ -51,6 +49,20 @@ import {
   setDraftStatus,
   updateDraftManualSku
 } from "@/lib/queue/db";
+import {
+  captureFileOps,
+  captureQueue,
+  moveCaptureIntoPlace,
+  processPendingCaptures,
+  queueDraftPhotoProcessing
+} from "@/lib/queue/captureFiles";
+import {
+  encodeProcessRatio,
+  processCapture,
+  rawCaptureUri,
+  type CaptureResult
+} from "@/lib/queue/captureProcessing";
+import { theme } from "@/constants/theme";
 
 /** Pinch spread doubling ≈ this much extra zoom (0–1 native zoom range). */
 const PINCH_ZOOM_SENSITIVITY = 0.6;
@@ -147,6 +159,9 @@ export default function CaptureSessionScreen() {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [manualSku, setManualSku] = useState("");
   const [thumbs, setThumbs] = useState<string[]>([]);
+  /** Latest thumbs for background jobs (state in their closure would be stale). */
+  const thumbsRef = useRef<string[]>([]);
+  thumbsRef.current = thumbs;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
@@ -273,6 +288,17 @@ export default function CaptureSessionScreen() {
         if (cancelled) return;
         if (draft) {
           await applyDraft(draft.id, draft.manual_sku, true);
+          const resumedId = draft.id;
+          // Raw shots left by a killed session: finish them in the background.
+          void processPendingCaptures(resumedId)
+            .then((n) => {
+              if (n > 0 && !cancelled && draftIdRef.current === resumedId) {
+                return listDraftPhotos(resumedId).then((photos) =>
+                  setThumbs(photos.map((p) => p.file_uri))
+                );
+              }
+            })
+            .catch(() => undefined);
         }
       } catch (e) {
         if (!cancelled) {
@@ -402,6 +428,57 @@ export default function CaptureSessionScreen() {
     }
   }
 
+  function applyProcessedUri(rawUri: string, result: CaptureResult) {
+    if (result.status !== "processed") return;
+    setThumbs((prev) => prev.map((u) => (u === rawUri ? result.uri : u)));
+    setPreviewUri((cur) => (cur === rawUri ? result.uri : cur));
+  }
+
+  function queueDraftProcessing(
+    photoId: string,
+    rawUri: string,
+    ratio: number | null,
+    size: { width?: number; height?: number }
+  ) {
+    void queueDraftPhotoProcessing(photoId, rawUri, ratio, size)
+      .then(async (result) => {
+        applyProcessedUri(rawUri, result);
+        if (result.status !== "gone") await mirrorToPhotoLibrary(result.uri);
+      })
+      .catch(() => undefined);
+  }
+
+  function queueAppendProcessing(
+    rawUri: string,
+    ratio: number | null,
+    size: { width?: number; height?: number }
+  ) {
+    void captureQueue
+      .enqueue(() =>
+        processCapture(
+          {
+            rawUri,
+            ratio,
+            size,
+            isPending: async () => thumbsRef.current.includes(rawUri),
+            commit: async (newUri) => {
+              if (!thumbsRef.current.includes(rawUri)) return false;
+              if (newUri) {
+                thumbsRef.current = thumbsRef.current.map((u) => (u === rawUri ? newUri : u));
+              }
+              return true;
+            }
+          },
+          captureFileOps
+        )
+      )
+      .then(async (result) => {
+        applyProcessedUri(rawUri, result);
+        if (result.status !== "gone") await mirrorToPhotoLibrary(result.uri);
+      })
+      .catch(() => undefined);
+  }
+
   async function snap() {
     if (!cameraRef.current || busy || !cameraReady || !sessionReady) return;
     const photoCount = thumbs.filter((u) => !isVideoUri(u)).length;
@@ -424,28 +501,26 @@ export default function CaptureSessionScreen() {
         return;
       }
       const ratio = aspectPresetById(aspectId).ratio;
-      const croppedUri = await maybeCropToAspect(photo.uri, photo.width, photo.height, ratio);
+      const size = { width: photo.width, height: photo.height };
+      // Durable first (move + SQLite row), then free the shutter. Orientation/crop
+      // re-encode and the Photos copy run on the background queue.
       if (isAppendMode && appendLotId) {
-        const dir = appendDir();
-        await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-        const dest = `${dir}${Date.now()}.jpg`;
-        await FileSystem.copyAsync({ from: croppedUri, to: dest });
-        setThumbs((prev) => [...prev, dest]);
-        await mirrorToPhotoLibrary(dest);
+        const raw = rawCaptureUri(appendDir(), Date.now());
+        await moveCaptureIntoPlace(photo.uri, raw);
+        setThumbs((prev) => [...prev, raw]);
+        queueAppendProcessing(raw, ratio, size);
         return;
       }
       const id = await ensureDraft();
       if (!id) return;
-      const dir = `${FileSystem.documentDirectory}lot-captures/${id}/`;
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-      const dest = `${dir}${Date.now()}.jpg`;
-      await FileSystem.copyAsync({ from: croppedUri, to: dest });
-      await addPhotoToDraft(id, dest);
-      const photos = await listDraftPhotos(id);
-      const uris = photos.map((p) => p.file_uri);
-      setThumbs(uris);
+      const raw = rawCaptureUri(`${FileSystem.documentDirectory}lot-captures/${id}/`, Date.now());
+      await moveCaptureIntoPlace(photo.uri, raw);
+      const photoId = await addPhotoToDraft(id, raw, "image", {
+        processRatio: encodeProcessRatio(ratio)
+      });
+      setThumbs((prev) => (prev.includes(raw) ? prev : [...prev, raw]));
       setResumedNotice("");
-      await mirrorToPhotoLibrary(dest);
+      queueDraftProcessing(photoId, raw, ratio, size);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Capture failed");
     } finally {
@@ -475,7 +550,7 @@ export default function CaptureSessionScreen() {
       const dest = `${dir}${Date.now()}${ext}`;
       await FileSystem.copyAsync({ from: uri, to: dest });
       setThumbs((prev) => [...prev, dest]);
-      await mirrorToPhotoLibrary(dest);
+      void captureQueue.enqueue(() => mirrorToPhotoLibrary(dest)).catch(() => undefined);
       return;
     }
     const id = await ensureDraft();
@@ -485,10 +560,9 @@ export default function CaptureSessionScreen() {
     const dest = `${dir}${Date.now()}${ext}`;
     await FileSystem.copyAsync({ from: uri, to: dest });
     await addPhotoToDraft(id, dest, "video");
-    const photos = await listDraftPhotos(id);
-    setThumbs(photos.map((p) => p.file_uri));
+    setThumbs((prev) => (prev.includes(dest) ? prev : [...prev, dest]));
     setResumedNotice("");
-    await mirrorToPhotoLibrary(dest);
+    void captureQueue.enqueue(() => mirrorToPhotoLibrary(dest)).catch(() => undefined);
   }
 
   async function recordVideo() {
@@ -548,7 +622,7 @@ export default function CaptureSessionScreen() {
     return uris;
   }
 
-  async function removePhoto(uri: string, fromPreview: boolean) {
+  async function removePhoto(uri: string) {
     if (!isAppendMode && !draftId) return;
 
     async function performDelete() {
@@ -595,23 +669,24 @@ export default function CaptureSessionScreen() {
       }
     }
 
-    if (fromPreview) {
-      Alert.alert("Delete photo?", "Remove this photo from the lot?", [
+    const isClip = isVideoUri(uri);
+    Alert.alert(
+      isClip ? "Delete video?" : "Delete photo?",
+      isClip ? "Remove this video from the lot?" : "Remove this photo from the lot?",
+      [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => void performDelete() }
-      ]);
-    } else {
-      await performDelete();
-    }
+      ]
+    );
   }
 
   function deleteFromStrip(uri: string, _index: number) {
-    void removePhoto(uri, false);
+    void removePhoto(uri);
   }
 
   function deleteFromPreview() {
     if (!previewUri) return;
-    void removePhoto(previewUri, true);
+    void removePhoto(previewUri);
   }
 
   function onSkuChange(text: string) {
@@ -690,7 +765,9 @@ export default function CaptureSessionScreen() {
     setBusy(true);
     setError("");
     try {
-      const { images, videos } = splitMediaUris(thumbs);
+      await captureQueue.idle();
+      const files = thumbsRef.current.slice();
+      const { images, videos } = splitMediaUris(files);
       if (images.length) {
         await uploadLotPhotos(
           token,
@@ -712,7 +789,7 @@ export default function CaptureSessionScreen() {
           })
         );
       }
-      const uploaded = thumbs.slice();
+      const uploaded = files;
       setThumbs([]);
       await cleanupAppendFiles(uploaded);
       Alert.alert(
@@ -729,6 +806,13 @@ export default function CaptureSessionScreen() {
 
   async function finishLot() {
     if (!draftId || !thumbs.length) return;
+    setBusy(true);
+    try {
+      // Let orientation/crop finish so Sync uploads the final files (it also re-checks).
+      await captureQueue.idle();
+    } finally {
+      setBusy(false);
+    }
     await updateDraftManualSku(draftId, manualSku);
     await setDraftStatus(draftId, "queued", null);
     void syncNow();
@@ -990,9 +1074,9 @@ export default function CaptureSessionScreen() {
               }}
             >
               {busy && !recording ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={theme.onPrimary} />
               ) : (
-                <Text style={styles.primaryText}>
+                <Text style={[styles.primaryText, recording && styles.primaryTextOnDanger]}>
                   {captureMode === "video"
                     ? recording
                       ? "Stop"
@@ -1019,7 +1103,7 @@ export default function CaptureSessionScreen() {
           {!isAppendMode ? (
             <TextInput
               placeholder={isFacebook ? "Asking price note (optional)" : "Manual SKU (optional)"}
-              placeholderTextColor="#78716c"
+              placeholderTextColor={theme.textSubtle}
               style={[styles.input, landscape && styles.inputLandscape]}
               value={manualSku}
               autoCapitalize={isFacebook ? "sentences" : "characters"}
@@ -1073,7 +1157,7 @@ export default function CaptureSessionScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#000" },
+  root: { flex: 1, backgroundColor: theme.black },
   rootLandscape: { flexDirection: "row", alignItems: "stretch" },
   cameraWrap: { flex: 1, minHeight: 320, position: "relative" },
   cameraWrapLandscape: { flex: 1, minHeight: 0, minWidth: 0 },
@@ -1089,7 +1173,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(168, 162, 158, 0.35)"
   },
-  closeFabText: { color: "#f5f5f4", fontSize: 16, fontWeight: "700", lineHeight: 18 },
+  closeFabText: { color: theme.text, fontSize: 16, fontWeight: "700", lineHeight: 18 },
   cameraControls: {
     position: "absolute",
     left: 10,
@@ -1105,12 +1189,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: "#141416",
+    backgroundColor: theme.surface,
     borderRadius: 10,
     paddingHorizontal: 4,
     paddingVertical: 3,
     borderWidth: 1,
-    borderColor: "#1f1f22"
+    borderColor: theme.border
   },
   aspectBtn: {
     flex: 1,
@@ -1121,9 +1205,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "transparent"
   },
-  aspectBtnActive: { backgroundColor: "#ff4d1a" },
-  aspectBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
-  aspectBtnTextActive: { color: "#fff" },
+  aspectBtnActive: { backgroundColor: theme.primary },
+  aspectBtnText: { color: theme.textSoft, fontSize: 12, fontWeight: "700" },
+  aspectBtnTextActive: { color: theme.onPrimary },
   zoomTorchRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1147,9 +1231,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "transparent"
   },
-  zoomBtnActive: { backgroundColor: "#ff4d1a" },
-  zoomBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
-  zoomBtnTextActive: { color: "#fff" },
+  zoomBtnActive: { backgroundColor: theme.primary },
+  zoomBtnText: { color: theme.textSoft, fontSize: 12, fontWeight: "700" },
+  zoomBtnTextActive: { color: theme.onPrimary },
   torchBtn: {
     backgroundColor: "rgba(14, 14, 16, 0.78)",
     borderRadius: 999,
@@ -1158,9 +1242,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(168, 162, 158, 0.35)"
   },
-  torchBtnActive: { backgroundColor: "#facc15", borderColor: "#facc15" },
-  torchBtnText: { color: "#e7e5e4", fontSize: 12, fontWeight: "700" },
-  torchBtnTextActive: { color: "#1c1917" },
+  torchBtnActive: { backgroundColor: theme.warning, borderColor: theme.warning },
+  torchBtnText: { color: theme.textSoft, fontSize: 12, fontWeight: "700" },
+  torchBtnTextActive: { color: theme.warningText },
   maskBar: {
     position: "absolute",
     backgroundColor: "rgba(0,0,0,0.45)"
@@ -1176,8 +1260,8 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: "#fde047",
-    shadowColor: "#000",
+    borderColor: theme.warning,
+    shadowColor: theme.black,
     shadowOpacity: 0.4,
     shadowRadius: 2,
     zIndex: 3
@@ -1186,9 +1270,9 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     flexShrink: 0,
     maxHeight: "40%",
-    backgroundColor: "#0e0e10",
+    backgroundColor: theme.bgElevated,
     borderTopWidth: 1,
-    borderTopColor: "#141416"
+    borderTopColor: theme.border
   },
   panelLandscape: {
     flexGrow: 0,
@@ -1199,7 +1283,7 @@ const styles = StyleSheet.create({
     maxHeight: "100%",
     borderTopWidth: 0,
     borderLeftWidth: 1,
-    borderLeftColor: "#141416",
+    borderLeftColor: theme.border,
     alignSelf: "stretch"
   },
   panelControls: {
@@ -1227,26 +1311,26 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#141416"
+    borderBottomColor: theme.border
   },
   sessionMetaLandscape: {
     marginBottom: 0,
     paddingBottom: 4
   },
-  sessionMetaLabel: { color: "#f5f5f4", fontSize: 13, fontWeight: "600" },
+  sessionMetaLabel: { color: theme.text, fontSize: 13, fontWeight: "600" },
   sessionMetaLabelLandscape: { fontSize: 13 },
-  sessionMetaResumed: { color: "#86efac", fontSize: 12, fontWeight: "600" },
-  sessionMetaSale: { color: "#ff7347", fontSize: 12, fontWeight: "600" },
-  sectionTitle: { color: "#f5f5f4", fontSize: 14, fontWeight: "700" },
-  sectionHint: { color: "#a8a29e", fontSize: 12, marginTop: -4 },
-  sectionHintLandscape: { color: "#a8a29e", fontSize: 11, fontWeight: "600" },
+  sessionMetaResumed: { color: theme.success, fontSize: 12, fontWeight: "600" },
+  sessionMetaSale: { color: theme.primaryHover, fontSize: 12, fontWeight: "600" },
+  sectionTitle: { color: theme.text, fontSize: 14, fontWeight: "700" },
+  sectionHint: { color: theme.textMuted, fontSize: 12, marginTop: -4 },
+  sectionHintLandscape: { color: theme.textMuted, fontSize: 11, fontWeight: "600" },
   input: {
     borderWidth: 1,
-    borderColor: "#3f3f46",
+    borderColor: theme.borderStrong,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    color: "#f5f5f4"
+    color: theme.text
   },
   inputLandscape: {
     paddingVertical: 8,
@@ -1258,11 +1342,11 @@ const styles = StyleSheet.create({
   modeRow: {
     flexDirection: "row",
     gap: 6,
-    backgroundColor: "#141416",
+    backgroundColor: theme.surface,
     borderRadius: 10,
     padding: 3,
     borderWidth: 1,
-    borderColor: "#1f1f22"
+    borderColor: theme.border
   },
   modeBtn: {
     flex: 1,
@@ -1270,9 +1354,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center"
   },
-  modeBtnActive: { backgroundColor: "#ff4d1a" },
-  modeBtnText: { color: "#e7e5e4", fontSize: 13, fontWeight: "700" },
-  modeBtnTextActive: { color: "#fff" },
+  modeBtnActive: { backgroundColor: theme.primary },
+  modeBtnText: { color: theme.textSoft, fontSize: 13, fontWeight: "700" },
+  modeBtnTextActive: { color: theme.onPrimary },
   recBadge: {
     position: "absolute",
     top: 12,
@@ -1283,11 +1367,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     zIndex: 6
   },
-  recBadgeText: { color: "#fff", fontSize: 13, fontWeight: "800", letterSpacing: 0.4 },
-  snapRecording: { backgroundColor: "#b91c1c" },
+  recBadgeText: { color: theme.text, fontSize: 13, fontWeight: "800", letterSpacing: 0.4 },
+  snapRecording: { backgroundColor: theme.errorBtn },
   snap: {
     flex: 1,
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -1304,7 +1388,7 @@ const styles = StyleSheet.create({
   },
   primary: {
     flex: 1,
-    backgroundColor: "#3f3f46",
+    backgroundColor: theme.borderStrong,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
@@ -1317,12 +1401,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12
   },
   secondary: { paddingVertical: 12, paddingHorizontal: 10 },
-  secondaryText: { color: "#a8a29e" },
-  primaryText: { color: "#fff", fontWeight: "600" },
+  secondaryText: { color: theme.textMuted },
+  primaryText: { color: theme.onPrimary, fontWeight: "600" },
+  primaryTextOnDanger: { color: theme.text },
   disabled: { opacity: 0.45 },
-  error: { color: "#fca5a5", fontSize: 13 },
-  libraryHint: { color: "#a8a29e", fontSize: 12, textAlign: "center" },
-  libraryNote: { color: "#fcd34d", fontSize: 12, textAlign: "center" },
+  error: { color: theme.error, fontSize: 13 },
+  libraryHint: { color: theme.textMuted, fontSize: 12, textAlign: "center" },
+  libraryNote: { color: theme.warning, fontSize: 12, textAlign: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 16 },
-  text: { color: "#d6d3d1", textAlign: "center" }
+  text: { color: theme.textSoft, textAlign: "center" }
 });

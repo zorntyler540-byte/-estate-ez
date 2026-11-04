@@ -8,9 +8,9 @@ import {
   RefreshControl,
   Share,
   StyleSheet,
-  Text,
   View
 } from "react-native";
+import { Text } from "@/components/AppText";
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { theme } from "@/constants/theme";

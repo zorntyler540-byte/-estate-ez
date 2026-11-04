@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Text } from "@/components/AppText";
 
 import { StableUriImage } from "@/components/StableUriImage";
 import { ZoomablePreview } from "@/components/ZoomablePreview";
@@ -8,6 +9,7 @@ import { isVideoUri } from "@/lib/mediaKind";
 import { playVideoUri } from "@/lib/playVideo";
 import { stepCaptureIndex } from "@/lib/queue/previewOrder";
 import { queueRowView } from "@/lib/queue/queueStatus";
+import { theme } from "@/constants/theme";
 
 type DraftPhotoStripProps = {
   uris: string[];
@@ -215,19 +217,19 @@ const styles = StyleSheet.create({
   row: { gap: 10, paddingVertical: 8, paddingTop: 10, paddingRight: 6 },
   emptyBox: {
     borderWidth: 1,
-    borderColor: "#3f3f46",
+    borderColor: theme.borderStrong,
     borderStyle: "dashed",
     borderRadius: 10,
     paddingVertical: 18,
     alignItems: "center"
   },
-  emptyText: { color: "#78716c", fontSize: 14 },
+  emptyText: { color: theme.textSubtle, fontSize: 14 },
   thumbWrap: {
     borderRadius: 10,
     overflow: "visible",
-    backgroundColor: "#141416",
+    backgroundColor: theme.surface,
     borderWidth: 2,
-    borderColor: "#3f3f46"
+    borderColor: theme.borderStrong
   },
   thumbPress: { flex: 1, borderRadius: 8, overflow: "hidden" },
   thumbImage: { width: "100%", height: "100%" },
@@ -238,13 +240,13 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: "#b91c1c",
+    backgroundColor: theme.errorBtn,
     borderWidth: 2,
-    borderColor: "#0e0e10",
+    borderColor: theme.bgElevated,
     alignItems: "center",
     justifyContent: "center"
   },
-  stripDeleteText: { color: "#fff", fontSize: 18, fontWeight: "700", lineHeight: 20, marginTop: -1 },
+  stripDeleteText: { color: theme.text, fontSize: 18, fontWeight: "700", lineHeight: 20, marginTop: -1 },
   badge: {
     position: "absolute",
     top: 6,
@@ -257,20 +259,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 6
   },
-  badgeText: { color: "#f5f5f4", fontSize: 12, fontWeight: "700" },
-  videoThumb: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
-  videoThumbMark: { color: "#fff", fontSize: 22, fontWeight: "700" },
-  videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: "#1c1917" },
-  videoPreviewMark: { color: "#fff", fontSize: 48, fontWeight: "700" },
-  videoPreviewHint: { color: "#a8a29e", marginTop: 12, fontSize: 15, fontWeight: "600" },
-  videoPreviewError: { color: "#fca5a5", marginTop: 10, fontSize: 13, textAlign: "center" },
+  badgeText: { color: theme.text, fontSize: 12, fontWeight: "700" },
+  videoThumb: { alignItems: "center", justifyContent: "center", backgroundColor: theme.surfaceRaised },
+  videoThumbMark: { color: theme.text, fontSize: 22, fontWeight: "700" },
+  videoPreview: { alignItems: "center", justifyContent: "center", backgroundColor: theme.surfaceRaised },
+  videoPreviewMark: { color: theme.text, fontSize: 48, fontWeight: "700" },
+  videoPreviewHint: { color: theme.textMuted, marginTop: 12, fontSize: 15, fontWeight: "600" },
+  videoPreviewError: { color: theme.error, marginTop: 10, fontSize: 13, textAlign: "center" },
   modalPlay: {
-    backgroundColor: "#ff4d1a",
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 20
   },
-  modalPlayText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  modalPlayText: { color: theme.onPrimary, fontWeight: "700", fontSize: 16 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(7, 7, 8, 0.92)",
@@ -278,36 +280,36 @@ const styles = StyleSheet.create({
     padding: 16
   },
   modalCard: { gap: 12 },
-  modalTitle: { color: "#e7e5e4", fontSize: 16, fontWeight: "600", textAlign: "center" },
-  modalZoomHint: { color: "#a8a29e", fontSize: 13, textAlign: "center" },
+  modalTitle: { color: theme.textSoft, fontSize: 16, fontWeight: "600", textAlign: "center" },
+  modalZoomHint: { color: theme.textMuted, fontSize: 13, textAlign: "center" },
   modalImageWrap: { width: "100%", height: "68%", overflow: "hidden", borderRadius: 12 },
-  modalImage: { width: "100%", height: "100%", borderRadius: 12, backgroundColor: "#0e0e10" },
+  modalImage: { width: "100%", height: "100%", borderRadius: 12, backgroundColor: theme.bgElevated },
   modalNav: { flexDirection: "row", gap: 10 },
   modalNavBtn: {
     flex: 1,
-    backgroundColor: "#292524",
+    backgroundColor: theme.surfaceRaised,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#44403c"
+    borderColor: theme.borderStrong
   },
-  modalNavBtnNext: { backgroundColor: "#1c1917" },
+  modalNavBtnNext: { backgroundColor: theme.surfaceRaised },
   modalNavBtnDisabled: { opacity: 0.35 },
-  modalNavText: { color: "#f5f5f4", fontWeight: "700", fontSize: 16 },
+  modalNavText: { color: theme.text, fontWeight: "700", fontSize: 16 },
   modalActions: { flexDirection: "row", justifyContent: "center", gap: 12 },
   modalDelete: {
-    backgroundColor: "#7f1d1d",
+    backgroundColor: theme.errorBorder,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 20
   },
-  modalDeleteText: { color: "#fecaca", fontWeight: "600", fontSize: 16 },
+  modalDeleteText: { color: theme.error, fontWeight: "600", fontSize: 16 },
   modalClose: {
-    backgroundColor: "#3f3f46",
+    backgroundColor: theme.borderStrong,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 28
   },
-  modalCloseText: { color: "#f5f5f4", fontWeight: "600", fontSize: 16 }
+  modalCloseText: { color: theme.text, fontWeight: "600", fontSize: 16 }
 });

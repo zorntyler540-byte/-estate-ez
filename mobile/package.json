@@ -5,6 +5,7 @@
   "private": true,
   "license": "UNLICENSED",
   "dependencies": {
+    "@expo-google-fonts/source-sans-3": "^0.4.2",
     "@react-native-community/netinfo": "11.4.1",
     "@react-navigation/native": "^7.1.33",
     "expo": "^54.0.0",

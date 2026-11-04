@@ -6,10 +6,9 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
-  TextInput,
   View
 } from "react-native";
+import { Text, TextInput } from "@/components/AppText";
 
 import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";

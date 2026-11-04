@@ -29,6 +29,7 @@ import {
   preparePhotosForUpload
 } from "../uploadPrepare";
 import { draftNeedsVideoAttach, videoUploadName } from "./attachVideos";
+import { processPendingCaptures } from "./captureFiles";
 import {
   archiveCatalogedDraftIfReady,
   listDraftPhotos,
@@ -471,6 +472,8 @@ export async function syncPendingLots(
   }
 
   for (const draft of pending) {
+    // Raw shots from a killed capture session get their orientation/crop before upload.
+    await processPendingCaptures(draft.id).catch(() => 0);
     const photos = await listDraftPhotos(draft.id);
     const { images } = splitDraftMedia(photos);
     if (!images.length) {
