@@ -100,6 +100,7 @@ from app.schemas import (
     RestorePlainBackgroundIn,
     HealthResponse,
     JobOut,
+    JobReceivedFilesOut,
     JobSseTicketOut,
     LoginRequest,
     MergeLotsIn,
@@ -316,13 +317,15 @@ from app.appraisal_storage import persist_appraisal_photo_bytes, resolve_apprais
 from app.services.image_preprocess import compress_upload_bytes_if_image
 from app.services.photo_captured_at import captured_at_from_epoch_ms, captured_at_from_path
 from app.services.photo_rotate import rotate_image_bytes
-from app.upload_storage import UPLOAD_ROOT, new_batch_dir, save_uploaded_files
+from app.upload_storage import UPLOAD_ROOT, new_batch_dir, received_file_names, save_uploaded_files
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
+    MAX_VIDEO_BYTES,
     assert_account_catalog_quota,
     count_catalog_image_files,
     ctbids_lot_photo_delta_error,
     is_catalog_video_filename,
+    job_photo_cap,
     job_photo_count_error,
     list_catalog_image_files_sorted,
     lot_video_delta_error,
@@ -661,7 +664,7 @@ def _lot_out_with_runtime(
     return out.model_copy(update=updates)
 
 
-def _job_out(job: ProcessingJob) -> JobOut:
+def _job_out(job: ProcessingJob, *, received_files: list[str] | None = None) -> JobOut:
     return JobOut(
         id=job.id,
         account_id=job.account_id,
@@ -680,6 +683,7 @@ def _job_out(job: ProcessingJob) -> JobOut:
         progress_done=int(getattr(job, "progress_done", 0) or 0),
         progress_total=int(getattr(job, "progress_total", 0) or 0),
         progress_file_name=getattr(job, "progress_file_name", None),
+        received_files=received_files,
     )
 
 
@@ -4078,11 +4082,39 @@ def list_lot_photos(
     return lot_photos_out(shown, lot_id=lot_id, anchor_photos=photos)
 
 
+# Phone uploads carry stable names; a retried name already on the lot is the same photo.
+_STABLE_PHONE_PHOTO_NAME = re.compile(r"^(?:mobile|append)-[A-Za-z0-9-]+-\d+\.jpe?g$", re.IGNORECASE)
+
+
+def _lot_upload_context(lot_id: str, current: User) -> tuple[str, set[str], int]:
+    """Validate the lot (short session) and return ``(sale_id, stored names, photo count)``."""
+    with SessionLocal() as db:
+        row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lot not found")
+        if is_client_role(current.role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+        names = {
+            (n or "")
+            for (n,) in db.query(Photo.original_name)
+            .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+            .all()
+        }
+        n_existing = int(
+            db.query(func.count())
+            .select_from(Photo)
+            .where(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+            .scalar()
+            or 0
+        )
+        return row.sale_id, names, n_existing
+
+
 @app.post("/lots/{lot_id}/photos/upload", response_model=list[LotPhotoOut])
 async def upload_lot_photos(
     lot_id: str,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_upload),
     files: list[UploadFile] = File(),
     captured_at_ms: str | None = Form(None),
 ) -> list[LotPhotoOut]:
@@ -4090,28 +4122,28 @@ async def upload_lot_photos(
     Append new catalog images to an existing lot (same sale must be open).
 
     Files are stored under a new upload batch, compressed like ``/jobs/upload``, then linked in gallery order
-    after existing photos.
+    after existing photos. Phone names (``append-<session>-NN.jpg``) already on the lot are skipped, so a
+    retried upload never duplicates a photo. No pooled connection is held while the body is received.
     """
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Lot not found")
-    if is_client_role(current.role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
-    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
-    existing = (
-        db.query(func.count())
-        .select_from(Photo)
-        .where(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
-        .scalar()
-    )
-    n_existing = int(existing or 0)
-    if err := ctbids_lot_photo_delta_error(current=n_existing, delta=len(files)):
+    sale_id, stored_names, n_existing = _lot_upload_context(lot_id, current)
+    fresh = [
+        f
+        for f in files
+        if not (
+            _STABLE_PHONE_PHOTO_NAME.match(Path(f.filename or "").name)
+            and Path(f.filename or "").name in stored_names
+        )
+    ]
+    if not fresh:
+        with SessionLocal() as db:
+            return _lot_photos_out_for(db, lot_id, current.account_id)
+    if err := ctbids_lot_photo_delta_error(current=n_existing, delta=len(fresh)):
         raise HTTPException(status_code=400, detail=err)
     dest = new_batch_dir(current.account_id)
     try:
-        await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
+        await save_uploaded_files(dest, fresh, captured_at=captured_at_from_epoch_ms(captured_at_ms))
         paths = list_catalog_image_files_sorted(dest)
         if not paths:
             raise HTTPException(
@@ -4121,6 +4153,9 @@ async def upload_lot_photos(
         # Multipart ``len(files)`` can disagree with saved image count; enforce on real paths (closes over-40 bypass).
         if err := ctbids_lot_photo_delta_error(current=n_existing, delta=len(paths)):
             raise HTTPException(status_code=400, detail=err)
+        persisted = [
+            await asyncio.to_thread(persist_catalog_photo, current.account_id, path) for path in paths
+        ]
     except HTTPException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
@@ -4128,35 +4163,51 @@ async def upload_lot_photos(
         shutil.rmtree(dest, ignore_errors=True)
         raise
 
-    mx = (
-        db.query(func.max(Photo.sort_order))
-        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
-        .scalar()
-    )
-    base = (int(mx) if mx is not None else -1) + 1
-    for i, path in enumerate(paths):
-        photo_id, storage_path = persist_catalog_photo(current.account_id, path)
-        db.add(
-            Photo(
-                id=photo_id,
-                account_id=current.account_id,
-                user_id=current.id,
-                lot_id=lot_id,
-                original_name=path.name,
-                storage_path=storage_path,
-                sort_order=base + i,
-                captured_at=captured_at_from_path(path) or captured_at_from_epoch_ms(captured_at_ms),
-            )
+    with SessionLocal() as db:
+        taken = {
+            (n or "")
+            for (n,) in db.query(Photo.original_name)
+            .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+            .all()
+        }
+        mx = (
+            db.query(func.max(Photo.sort_order))
+            .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+            .scalar()
         )
-    renormalize_photo_sort_orders(db, lot_id, current.account_id)
-    _reconcile_lot_photo_count(db, lot_id, current.account_id)
-    db.commit()
-    recompute_sku_sanity_flags_for_sale(db, row.sale_id, current.account_id)
-    db.commit()
+        base = (int(mx) if mx is not None else -1) + 1
+        added = 0
+        for path, (photo_id, storage_path) in zip(paths, persisted):
+            if _STABLE_PHONE_PHOTO_NAME.match(path.name) and path.name in taken:
+                # A concurrent retry landed first.
+                delete_catalog_photo(storage_path)
+                continue
+            db.add(
+                Photo(
+                    id=photo_id,
+                    account_id=current.account_id,
+                    user_id=current.id,
+                    lot_id=lot_id,
+                    original_name=path.name,
+                    storage_path=storage_path,
+                    sort_order=base + added,
+                    captured_at=captured_at_from_path(path) or captured_at_from_epoch_ms(captured_at_ms),
+                )
+            )
+            taken.add(path.name)
+            added += 1
+        renormalize_photo_sort_orders(db, lot_id, current.account_id)
+        _reconcile_lot_photo_count(db, lot_id, current.account_id)
+        db.commit()
+        recompute_sku_sanity_flags_for_sale(db, sale_id, current.account_id)
+        db.commit()
+        return _lot_photos_out_for(db, lot_id, current.account_id)
 
+
+def _lot_photos_out_for(db: Session, lot_id: str, account_id: str) -> list[LotPhotoOut]:
     photos = (
         db.query(Photo)
-        .filter(Photo.lot_id == lot_id, Photo.account_id == current.account_id)
+        .filter(Photo.lot_id == lot_id, Photo.account_id == account_id)
         .order_by(Photo.sort_order.asc(), Photo.created_at.asc(), Photo.id.asc())
         .all()
     )
@@ -4181,22 +4232,65 @@ def list_lot_videos(
     return [lot_video_out(v, lot_id=lot_id) for v in videos]
 
 
+_VIDEO_STREAM_CHUNK = 1024 * 1024
+
+
+async def _stream_upload_to_temp(upload: UploadFile, *, suffix: str, max_bytes: int) -> tuple[Path, int]:
+    """Copy a multipart part to a temp file in 1 MB chunks; stop as soon as it is over ``max_bytes``."""
+    fd, raw_path = tempfile.mkstemp(suffix=suffix)
+    path = Path(raw_path)
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = await upload.read(_VIDEO_STREAM_CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    break
+                out.write(chunk)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return path, size
+
+
 @app.post("/lots/{lot_id}/videos/upload", response_model=list[LotVideoOut])
 async def upload_lot_videos(
     lot_id: str,
-    current: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_upload),
     files: list[UploadFile] = File(),
 ) -> list[LotVideoOut]:
-    """Attach short clips to a catalog lot. Not sent through Gemini or posted to CT Bids."""
-    row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Lot not found")
-    _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+    """
+    Attach short clips to a catalog lot. Not sent through Gemini or posted to CT Bids.
+
+    Clips stream to disk (never fully in RAM) and no pooled connection is held during the
+    transfer. A name already on this lot is the same clip arriving again and is skipped.
+    """
     if not files:
         raise HTTPException(status_code=400, detail="No videos uploaded")
+    with SessionLocal() as db:
+        row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lot not found")
+        _assert_sale_editable_for_lot_moves(db, row.sale_id, current)
+        stored_names = {
+            (n or "")
+            for (n,) in db.query(LotVideo.original_name)
+            .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+            .all()
+        }
+        n_existing = int(
+            db.query(func.count())
+            .select_from(LotVideo)
+            .where(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+            .scalar()
+            or 0
+        )
 
-    payloads: list[tuple[str, bytes]] = []
+    fresh: list[tuple[str, UploadFile]] = []
+    seen: set[str] = set()
     for file in files:
         name = Path(file.filename or "clip.mp4").name
         if not is_catalog_video_filename(name):
@@ -4204,55 +4298,76 @@ async def upload_lot_videos(
                 status_code=400,
                 detail=f"{name} is not a video (use MP4, MOV, M4V, or WebM).",
             )
-        raw = await file.read()
-        if err := lot_video_size_error(len(raw)):
-            raise HTTPException(status_code=400, detail=f"{name}: {err}")
-        payloads.append((name, raw))
-
-    existing = (
-        db.query(func.count())
-        .select_from(LotVideo)
-        .where(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
-        .scalar()
-    )
-    n_existing = int(existing or 0)
-    if err := lot_video_delta_error(current=n_existing, delta=len(payloads)):
+        if name in stored_names or name in seen:
+            continue
+        seen.add(name)
+        fresh.append((name, file))
+    if err := lot_video_delta_error(current=n_existing, delta=len(fresh)):
         raise HTTPException(status_code=400, detail=err)
 
-    mx = (
-        db.query(func.max(LotVideo.sort_order))
-        .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
-        .scalar()
-    )
-    base = (int(mx) if mx is not None else -1) + 1
-    for i, (name, raw) in enumerate(payloads):
-        tmp_path = Path(tempfile.mkstemp(suffix=Path(name).suffix or ".mp4")[1])
-        try:
-            tmp_path.write_bytes(raw)
-            video_id, storage_path = persist_catalog_video(current.account_id, tmp_path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-        db.add(
-            LotVideo(
-                id=video_id,
-                account_id=current.account_id,
-                user_id=current.id,
-                lot_id=lot_id,
-                original_name=name,
-                storage_path=storage_path,
-                content_type=video_content_type(name),
-                byte_size=len(raw),
-                sort_order=base + i,
+    saved: list[tuple[str, str, str, int]] = []
+    try:
+        for name, file in fresh:
+            tmp_path, size = await _stream_upload_to_temp(
+                file, suffix=Path(name).suffix or ".mp4", max_bytes=MAX_VIDEO_BYTES
             )
+            try:
+                if err := lot_video_size_error(size):
+                    raise HTTPException(status_code=400, detail=f"{name}: {err}")
+                video_id, storage_path = await asyncio.to_thread(
+                    persist_catalog_video, current.account_id, tmp_path
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"{name}: {exc}") from exc
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            saved.append((name, video_id, storage_path, size))
+    except Exception:
+        for _name, _vid, storage_path, _size in saved:
+            delete_catalog_photo(storage_path)
+        raise
+
+    with SessionLocal() as db:
+        taken = {
+            (n or "")
+            for (n,) in db.query(LotVideo.original_name)
+            .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+            .all()
+        }
+        mx = (
+            db.query(func.max(LotVideo.sort_order))
+            .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+            .scalar()
         )
-    db.commit()
-    videos = (
-        db.query(LotVideo)
-        .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
-        .order_by(LotVideo.sort_order.asc(), LotVideo.created_at.asc(), LotVideo.id.asc())
-        .all()
-    )
-    return [lot_video_out(v, lot_id=lot_id) for v in videos]
+        base = (int(mx) if mx is not None else -1) + 1
+        added = 0
+        for name, video_id, storage_path, size in saved:
+            if name in taken:
+                delete_catalog_photo(storage_path)
+                continue
+            db.add(
+                LotVideo(
+                    id=video_id,
+                    account_id=current.account_id,
+                    user_id=current.id,
+                    lot_id=lot_id,
+                    original_name=name,
+                    storage_path=storage_path,
+                    content_type=video_content_type(name),
+                    byte_size=size,
+                    sort_order=base + added,
+                )
+            )
+            taken.add(name)
+            added += 1
+        db.commit()
+        videos = (
+            db.query(LotVideo)
+            .filter(LotVideo.lot_id == lot_id, LotVideo.account_id == current.account_id)
+            .order_by(LotVideo.sort_order.asc(), LotVideo.created_at.asc(), LotVideo.id.asc())
+            .all()
+        )
+        return [lot_video_out(v, lot_id=lot_id) for v in videos]
 
 
 @app.post("/lots/{lot_id}/videos/delete", response_model=LotOut)
@@ -5764,20 +5879,64 @@ async def create_job_from_upload(
     single = bool(single_lot_mode)
     channel = normalize_listing_channel(listing_channel)
     _manual_sku = (single_lot_manual_sku or "").strip() or None
+    draft_key = job_tasks.normalize_client_draft_id(client_draft_id)
+    reuse_job_id: str | None = None
+    reuse_folder: Path | None = None
     with SessionLocal() as db:
         sale = _sale_for_user(sale_id, current, db)
         _require_open_sale(sale)
         sale_pk = sale.id
-        photo_err = job_photo_count_error(current=0, delta=len(files), single_lot_mode=single)
-        if photo_err:
-            raise HTTPException(status_code=400, detail=photo_err)
-        assert_account_catalog_quota(
-            db, account_id, extra_jobs=1, extra_photos=len(files)
-        )
-    dest = new_batch_dir(account_id)
+        if draft_key:
+            # Phone retried after a lost response: keep filling the same receiving job
+            # instead of opening a second one (which would catalog the lot twice).
+            prior = (
+                db.query(ProcessingJob)
+                .filter(
+                    ProcessingJob.account_id == account_id,
+                    ProcessingJob.sale_id == sale_pk,
+                    ProcessingJob.client_draft_id == draft_key,
+                    ProcessingJob.status == JobStatus.receiving,
+                )
+                .order_by(ProcessingJob.created_at.desc())
+                .first()
+            )
+            folder = _receiving_job_folder_or_none(account_id, prior) if prior else None
+            if prior is not None and folder is not None:
+                reuse_job_id, reuse_folder = prior.id, folder
+        if reuse_folder is not None:
+            have = set(received_file_names(reuse_folder))
+            new_n = sum(1 for f in files if Path(f.filename or "").name not in have)
+            photo_err = job_photo_count_error(
+                current=len(have), delta=new_n, single_lot_mode=single
+            )
+            if photo_err:
+                raise HTTPException(status_code=400, detail=photo_err)
+            assert_account_catalog_quota(db, account_id, extra_jobs=0, extra_photos=new_n)
+        else:
+            photo_err = job_photo_count_error(current=0, delta=len(files), single_lot_mode=single)
+            if photo_err:
+                raise HTTPException(status_code=400, detail=photo_err)
+            assert_account_catalog_quota(
+                db, account_id, extra_jobs=1, extra_photos=len(files)
+            )
+    dest = reuse_folder if reuse_folder is not None else new_batch_dir(account_id)
     # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O
     # (auth used a short-lived session so multipart receive also does not hold a connection).
-    await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
+    await save_uploaded_files(
+        dest,
+        files,
+        captured_at=captured_at_from_epoch_ms(captured_at_ms),
+        skip_existing=bool(draft_key),
+    )
+    if reuse_job_id is not None:
+        with SessionLocal() as db_reuse:
+            job = _owned_processing_job(db_reuse, reuse_job_id, account_id)
+            if not job:
+                raise HTTPException(status_code=404, detail="Job not found")
+            job.updated_at = datetime.now(timezone.utc)
+            db_reuse.commit()
+            db_reuse.refresh(job)
+            return _job_out(job, received_files=received_file_names(dest))
     with SessionLocal() as db2:
         job = ProcessingJob(
             account_id=account_id,
@@ -5819,6 +5978,14 @@ def _queued_job_upload_folder(account_id: str, job: ProcessingJob) -> Path:
     return folder
 
 
+def _receiving_job_folder_or_none(account_id: str, job: ProcessingJob) -> Path | None:
+    """The job's upload folder when it is still on this host's disk, else ``None``."""
+    try:
+        return _queued_job_upload_folder(account_id, job)
+    except HTTPException:
+        return None
+
+
 @app.post("/jobs/{job_id}/upload-files", response_model=JobOut)
 async def append_files_to_queued_job(
     job_id: str,
@@ -5846,19 +6013,31 @@ async def append_files_to_queued_job(
                 detail="Job must still be receiving uploads to add files (wait if it is processing, or cancel first).",
             )
         dest = _queued_job_upload_folder(current.account_id, job)
-        existing = count_catalog_image_files(dest)
+        stable_names = bool(
+            job_tasks.normalize_client_draft_id(client_draft_id) or getattr(job, "client_draft_id", None)
+        )
+        have = set(received_file_names(dest))
+        # A retried phone photo (same stable name) is not a new photo for the cap or quota.
+        new_n = (
+            sum(1 for f in files if Path(f.filename or "").name not in have) if stable_names else len(files)
+        )
         photo_err = job_photo_count_error(
-            current=existing,
-            delta=len(files),
+            current=len(have),
+            delta=new_n,
             single_lot_mode=bool(getattr(job, "single_lot_mode", False)),
         )
         if photo_err:
             raise HTTPException(status_code=400, detail=photo_err)
         assert_account_catalog_quota(
-            db, current.account_id, extra_jobs=0, extra_photos=len(files)
+            db, current.account_id, extra_jobs=0, extra_photos=new_n
         )
     # Compress + R2 per photo while the phone is still shooting — no pool connection during body I/O.
-    await save_uploaded_files(dest, files, captured_at=captured_at_from_epoch_ms(captured_at_ms))
+    await save_uploaded_files(
+        dest,
+        files,
+        captured_at=captured_at_from_epoch_ms(captured_at_ms),
+        skip_existing=stable_names,
+    )
     with SessionLocal() as db2:
         job = _owned_processing_job(db2, job_id, account_id)
         if not job:
@@ -5870,7 +6049,26 @@ async def append_files_to_queued_job(
             job.client_draft_id = stored_draft
         db2.commit()
         db2.refresh(job)
-        return _job_out(job)
+        return _job_out(job, received_files=received_file_names(dest))
+
+
+@app.get("/jobs/{job_id}/received-files", response_model=JobReceivedFilesOut)
+def job_received_files(
+    job_id: str,
+    current: User = Depends(get_current_user_upload),
+) -> JobReceivedFilesOut:
+    """Stills already stored for a receiving job, so a phone resumes instead of re-sending a lot."""
+    with SessionLocal() as db:
+        job = _owned_processing_job(db, job_id, current.account_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        _assert_client_job(current, job)
+        status_value = job.status.value
+        folder = _receiving_job_folder_or_none(current.account_id, job)
+    if folder is None:
+        # Disk was replaced (redeploy) — the phone must start this lot over.
+        return JobReceivedFilesOut(job_id=job_id, status=status_value, names=[], folder_missing=True)
+    return JobReceivedFilesOut(job_id=job_id, status=status_value, names=received_file_names(folder))
 
 
 @app.post("/jobs", response_model=JobOut)
@@ -6117,6 +6315,23 @@ def run_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     _assert_client_job(current, job)
+    # Parallel appends each check the cap against a count that can be stale; this is the
+    # single check that sees every file before Gemini is paid for.
+    if bool(getattr(job, "single_lot_mode", False)):
+        from app.job_batch_storage import confined_job_folder as _confined_for_cap
+
+        cap_folder = _confined_for_cap(Path(job.input_folder), current.account_id)
+        cap = job_photo_cap(single_lot_mode=True)
+        if cap is not None and cap_folder is not None and cap_folder.is_dir():
+            n_photos = count_catalog_image_files(cap_folder)
+            if n_photos > cap:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"This lot has {n_photos} photos; CT Bids allows at most {cap} per listing. "
+                        "Remove photos on the phone, then Sync again."
+                    ),
+                )
     if job.status == JobStatus.failed:
         job.error_message = None
         job.cancel_requested = False

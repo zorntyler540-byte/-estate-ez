@@ -818,6 +818,15 @@ class JobOut(BaseModel):
     progress_done: int = 0
     progress_total: int = 0
     progress_file_name: str | None = None
+    # Stills already stored for this job (upload responses only) so a phone can resume.
+    received_files: list[str] | None = None
+
+
+class JobReceivedFilesOut(BaseModel):
+    job_id: str
+    status: str
+    names: list[str]
+    folder_missing: bool = False
 
 
 class StuckJobOut(BaseModel):
