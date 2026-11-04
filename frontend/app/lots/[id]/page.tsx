@@ -616,6 +616,12 @@ export default function LotDetailPage() {
     let cancelled = false;
     void (async () => {
       try {
+        const st = (await apiFetch("/integrations/ctseller", token)) as { connected?: boolean };
+        if (cancelled) return;
+        if (!st.connected) {
+          setCtSellerRemoteSales([]);
+          return;
+        }
         const rows = (await apiFetch("/integrations/ctseller/sales", token)) as CTSellerRemoteSale[];
         if (cancelled) return;
         setCtSellerRemoteSales(Array.isArray(rows) ? rows : []);

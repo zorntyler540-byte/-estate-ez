@@ -188,3 +188,80 @@ def test_sync_endpoint_without_credentials_is_noop(tmp_path) -> None:
     finally:
         app.dependency_overrides.clear()
         db.close()
+
+
+def test_ctseller_sales_without_credentials_is_empty_list(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import get_db
+    from app.main import app
+
+    Session = _session(tmp_path)
+    db = Session()
+    _account, user = _seed(db)
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.get("/integrations/ctseller/sales")
+        assert res.status_code == 200, res.text
+        assert res.json() == []
+        status = client.get("/integrations/ctseller")
+        assert status.status_code == 200
+        assert status.json()["connected"] is False
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_ctseller_sales_lists_open_auctions_when_connected(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.db import get_db
+    from app.main import app
+    from app.services.ctseller import seal_secret
+
+    Session = _session(tmp_path)
+    db = Session()
+    account, user = _seed(db)
+    account.ctseller_username = "seller"
+    account.ctseller_password_enc = seal_secret("secret")
+    db.add(account)
+    db.commit()
+
+    class FakeClient:
+        def list_open_sales(self):
+            return [CTSellerSaleRow(id=47921, title="Latina Estate", status="Open")]
+
+    monkeypatch.setattr("app.main._ctseller_client_for_account", lambda *a, **k: FakeClient())
+
+    def override_db():
+        inner = Session()
+        try:
+            yield inner
+        finally:
+            inner.close()
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    client = TestClient(app)
+    try:
+        res = client.get("/integrations/ctseller/sales")
+        assert res.status_code == 200, res.text
+        rows = res.json()
+        assert len(rows) == 1
+        assert rows[0]["id"] == 47921
+        assert rows[0]["title"] == "Latina Estate"
+    finally:
+        app.dependency_overrides.clear()
+        db.close()

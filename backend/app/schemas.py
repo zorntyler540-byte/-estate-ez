@@ -812,6 +812,30 @@ class StuckJobsOut(BaseModel):
     jobs: list[StuckJobOut]
 
 
+class CatalogStatusSaleOut(BaseModel):
+    """Active catalog-job counts for one sale (receiving / queued / processing)."""
+
+    sale_id: str
+    receiving: int = 0
+    queued: int = 0
+    processing: int = 0
+    stuck_count: int = 0
+
+
+class CatalogStatusOut(BaseModel):
+    """Account-wide catalog activity plus optional full lists for one sale.
+
+    Dashboard polling uses this instead of one ``GET /jobs`` + ``GET /jobs/stuck``
+    per sale. ``GET /jobs`` stays unchanged for the mobile app.
+    """
+
+    has_active: bool
+    active_job_count: int = 0
+    sales: list[CatalogStatusSaleOut] = Field(default_factory=list)
+    jobs: list[JobOut] = Field(default_factory=list)
+    stuck: StuckJobsOut = Field(default_factory=lambda: StuckJobsOut(count=0, jobs=[]))
+
+
 class RetryFailedJobsOut(BaseModel):
     retried: int
     skipped: int
