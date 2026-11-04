@@ -1,5 +1,5 @@
 import { parseApiError } from "./apiError";
-import { API_BASE } from "./config";
+import { API_BASE, apiUrl } from "./config";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import { teamActivityQuery } from "./teamActivity";
 import { videoMimeType } from "./mediaKind";
@@ -47,7 +47,7 @@ export async function apiFetch<T>(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetch(apiUrl(path), {
       ...init,
       headers,
       signal: init?.signal ?? abortSignalFor(60_000)
@@ -326,7 +326,7 @@ async function nativeMultipartUpload(opts: {
   }
   uploadUri = await uriWithUploadFileName(uploadUri, opts.fileName);
 
-  const url = `${API_BASE}${opts.path}`;
+  const url = apiUrl(opts.path);
   let result: FileSystem.FileSystemUploadResult;
   try {
     result = await withTimeout(

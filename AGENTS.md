@@ -38,8 +38,10 @@ cloud-specific gotchas; do not duplicate standard docs.
 - **`backend/.env` is required for local dev** and is git-ignored. If missing, recreate it
   (SQLite `DATABASE_URL`, `ENVIRONMENT=development`, empty `GOOGLE_API_KEY`). Pydantic loads
   the cwd `.env` first then `backend/.env`, so run the API from `backend/`.
-- **Frontend `NEXT_PUBLIC_API_BASE` is read at build/start time**, defaulting to
-  `http://localhost:8000`. Set it in the shell before `npm run dev` if the API is elsewhere.
+- **Frontend `NEXT_PUBLIC_API_BASE` is read at build/start time.** `npm run dev` defaults to
+  `http://localhost:8000`. `npm run build` **fails** unless it is set to an https URL (or
+  `http://localhost…` for a local production build). There is no production fallback URL.
+  Railway's web service sets it as a service variable, which `Dockerfile.web` takes as a required build arg.
 - **Gemini AI cataloging needs `GOOGLE_API_KEY`.** Without it the API/worker still start and
   all non-AI flows (auth, sales, lots, exports) work; only actual photo-analysis jobs are
   no-ops. The key is provided as a Cursor Cloud injected secret (an OS env var), which
@@ -124,9 +126,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   Cursor secret with a freshly created token (do not put it in git or chat). Then:
   `cd mobile && EXPO_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app eas update --channel production --non-interactive --message "…"`.
   **`eas.json` `build.env` is not applied to `eas update`.** SDK 54 reads local `mobile/.env`.
-  Always set `EXPO_PUBLIC_API_BASE` to the Railway API in the same command. Release bundles
-  (`__DEV__ === false`) also drop localhost in `mobile/lib/config.ts` so a leftover `.env`
-  cannot ship `http://localhost:8000` to field phones again.
+  Always set `EXPO_PUBLIC_API_BASE` to the Railway API in the same command. There is no
+  fallback URL: `mobile/app.config.js` makes `eas update` / release `eas build` **fail** when
+  the URL is missing, invalid, non-https, or localhost (e.g. a leftover `.env`). Only the
+  `production` EAS profile has the URL in `eas.json`; `preview` / `development` must be given
+  one explicitly. A release bundle that somehow lacks it shows an "App setup error" on sign-in
+  and makes no requests.
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.
