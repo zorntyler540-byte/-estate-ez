@@ -100,6 +100,11 @@ def test_worker_slot_capacity_reads_setting(monkeypatch) -> None:
     assert worker.worker_slot_capacity() == 4
 
 
+def test_parse_self_test_complex_hang() -> None:
+    assert worker.parse_self_test_complex_hang(["app.worker", "--self-test-complex-hang"]) is True
+    assert worker.parse_self_test_complex_hang(["app.worker"]) is False
+
+
 def test_child_rss_cap_defaults_above_measured_peak() -> None:
     # Open PR #204 proposed 1200; today's 3-photo job went over 1.2 GB.
     assert worker.child_rss_cap_mb() >= 3000

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -296,11 +297,28 @@ def _single_lot_batch_already_cataloged(
     return _names_already_on_one_lot(db, job, names, same_sale=same_sale)
 
 
+def _note_isolated_job_persisted(job: ProcessingJob, *, lots: int) -> None:
+    """Log the job-complete line and arm the child exit watchdog as soon as the row is saved."""
+    if os.environ.get("WORKER_ISOLATED_CHILD") != "1":
+        return
+    from app.services.worker_child_lifecycle import note_job_persisted
+
+    status = str(getattr(job.status, "value", job.status) or "unknown")
+    note_job_persisted(
+        job_id=str(job.id),
+        account_id=str(job.account_id),
+        status=status,
+        lots=int(lots),
+        photos=int(job.analyzed_photos or 0),
+    )
+
+
 def _finish_job_completed(db: Session, job: ProcessingJob) -> None:
     job.status = JobStatus.completed
     job.cancel_requested = False
     job.error_message = None
     db.commit()
+    _note_isolated_job_persisted(job, lots=1 if getattr(job, "single_lot_mode", False) else 0)
     _emit_job(job, {"type": "status", "status": "completed"})
 
 
@@ -871,8 +889,7 @@ def _process_job_batch_pipeline(
     job.status = JobStatus.completed
     job.cancel_requested = False
     db.commit()
-    _verify_job_catalog_files_on_disk(db, job)
-    _emit_job(job, {"type": "status", "status": "completed"})
+    _note_isolated_job_persisted(job, lots=lots_saved)
     _LOG.info(
         "batch pipeline completed job_id=%s photos=%d lots=%d segments=%d",
         job.id,
@@ -880,6 +897,8 @@ def _process_job_batch_pipeline(
         lots_saved,
         len(segments),
     )
+    _verify_job_catalog_files_on_disk(db, job)
+    _emit_job(job, {"type": "status", "status": "completed"})
 
 
 def _process_job_single_lot_pipeline(
@@ -1005,14 +1024,16 @@ def _process_job_single_lot_pipeline(
     job.status = JobStatus.completed
     job.cancel_requested = False
     db.commit()
-    _verify_job_catalog_files_on_disk(db, job)
-    _emit_job(job, {"type": "status", "status": "completed"})
+    lots_n = 1 if finalized is not None else 0
+    _note_isolated_job_persisted(job, lots=lots_n)
     _LOG.info(
         "single-lot pipeline completed job_id=%s photos=%d lots=%d",
         job.id,
         total_photos,
-        1 if finalized is not None else 0,
+        lots_n,
     )
+    _verify_job_catalog_files_on_disk(db, job)
+    _emit_job(job, {"type": "status", "status": "completed"})
 
 
 def process_job(
@@ -1174,32 +1195,32 @@ LOT_AI_REGENERATE_MAX_PHOTOS = 80
 
 
 def _verify_job_catalog_files_on_disk(db: Session, job: ProcessingJob) -> None:
-    """Log when this job's upload batch has catalog rows pointing at files not on disk."""
-    folder = Path(job.input_folder).resolve()
-    if not folder.is_dir():
-        return
-    rows = (
-        db.query(Photo.id, Photo.storage_path)
-        .filter(Photo.account_id == job.account_id)
-        .all()
+    """Log when this job's new catalog rows point at files that are not readable.
+
+    Must not call ``resolve_catalog_storage_path`` — that downloads every missing
+    object from R2. On a real franchise catalog that hung the isolated child for
+    minutes after the lot was already saved (job db5b42d2, 2026-11-04).
+    """
+    created_after = job.created_at
+    q = db.query(Photo.id, Photo.storage_path).filter(Photo.account_id == job.account_id)
+    if created_after is not None:
+        q = q.filter(Photo.created_at >= created_after)
+    rows = q.all()
+    _LOG.info(
+        "catalog file check start job_id=%s photos=%s",
+        job.id,
+        len(rows),
     )
-    in_batch: list[tuple[str, str]] = []
-    for pid, path in rows:
-        try:
-            resolve_catalog_storage_path(path).relative_to(folder)
-        except (ValueError, OSError):
-            continue
-        in_batch.append((pid, path))
-    missing = [pid for pid, path in in_batch if not catalog_photo_file_on_disk(path)]
+    missing = [pid for pid, path in rows if not catalog_photo_file_on_disk(path)]
     if missing:
         _LOG.warning(
-            "job=%s completed but %s/%s catalog photo file(s) missing on disk under %s "
+            "job=%s completed but %s/%s catalog photo file(s) missing "
             "(check upload volume, cwd, or multiple API replicas without shared storage)",
             job.id,
             len(missing),
-            len(in_batch),
-            folder,
+            len(rows),
         )
+    _LOG.info("catalog file check end job_id=%s missing=%s", job.id, len(missing))
 
 
 def _sync_lot_photo_count(db: Session, lot_id: str, account_id: str) -> None:

@@ -861,6 +861,12 @@ def run_single_lot_pipeline(
         manifest_tag=manifest_tag,
     )
     pipeline_result["sku_source_filenames"] = sku_sources
+    logger.info(
+        "Pipeline post-author finishing complex=%s sku=%s tape_candidates=%d",
+        complex_lot,
+        lot.sku or "",
+        len(sku_sources),
+    )
 
     _inject_measurement_specs_from_triage(lot, triage_rows)
 

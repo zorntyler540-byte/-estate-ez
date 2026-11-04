@@ -185,6 +185,8 @@ Common optional variables:
 | `WORKER_MAX_CONCURRENT_JOBS` | Isolated catalog children per worker (default 3) |
 | `WORKER_CHILD_CRASH_RETRIES` | Child OOM/crash cap before the job is failed (default 3) |
 | `WORKER_CHILD_RSS_MB` | Parent kills a runaway child over this RSS (default 3000; 1200 is too low) |
+| `WORKER_CHILD_EXIT_SECONDS` | Child must `os._exit` this long after the job row is saved (default 15) |
+| `WORKER_CHILD_DONE_KILL_SECONDS` | Parent SIGKILLs a child still alive after the job is done (default 30) |
 | `WORKER_CHILD_AS_MB` | Child `RLIMIT_AS` in MB, sized with the RSS cap (default 3000; 0 disables) |
 | `CATALOG_JOB_MAX_CONCURRENT` | Per-account catalog cap (default 1) |
 | `GEMINI_GLOBAL_CONCURRENCY` | Cross-process Gemini HTTP cap (default 8) |

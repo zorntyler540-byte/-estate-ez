@@ -92,6 +92,11 @@ def parse_self_test_parent_jobs(argv: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def parse_self_test_complex_hang(argv: list[str]) -> bool:
+    """``--self-test-complex-hang`` — persist-complete then hang in cleanup (watchdog must exit)."""
+    return len(argv) >= 2 and argv[1] == "--self-test-complex-hang"
+
+
 def _poll_seconds() -> float:
     raw = os.environ.get("WORKER_POLL_SECONDS", "2")
     try:
@@ -106,6 +111,31 @@ def worker_slot_capacity() -> int:
 
 def child_rss_cap_mb() -> int:
     return max(0, int(getattr(settings, "worker_child_rss_mb", 0) or 0))
+
+
+def child_done_kill_seconds() -> float:
+    return max(1.0, float(getattr(settings, "worker_child_done_kill_seconds", 30.0) or 30.0))
+
+
+def _job_is_terminal(job_id: str, account_id: str) -> str | None:
+    """Return completed/failed when the DB row is already persisted (child may still be hung)."""
+    if job_id.startswith("self-test") or account_id == "self-test":
+        return None
+    try:
+        with SessionLocal() as db:
+            row = (
+                db.query(ProcessingJob.status)
+                .filter(ProcessingJob.id == job_id, ProcessingJob.account_id == account_id)
+                .first()
+            )
+        if row is None:
+            return None
+        status = str(getattr(row[0], "value", row[0]) or "")
+        if status in ("completed", "failed"):
+            return status
+    except Exception:  # noqa: BLE001
+        _LOG.debug("terminal-status probe failed job_id=%s", job_id, exc_info=True)
+    return None
 
 
 def _requeue_orphaned_processing(*, min_age_seconds: int | None = None) -> int:
@@ -270,20 +300,21 @@ def run_isolated_job(job_id: str, account_id: str) -> int:
         return 3
     _LOG.info("Isolated catalog job running job_id=%s account_id=%s", job_id, account_id)
     while job_tasks.is_job_running(job_id):
+        if _job_is_terminal(job_id, account_id):
+            break
         time.sleep(0.5)
     duration = time.monotonic() - started
     status, photos, lots = _job_finish_stats(job_id, account_id)
-    rss = process_rss_mb()
-    _LOG.info(
-        "Isolated catalog job complete job_id=%s account_id=%s status=%s lots=%s photos=%s "
-        "duration=%.1fs child_rss_mb=%.0f",
-        job_id,
-        account_id,
-        status,
-        lots,
-        photos,
-        duration,
-        rss if rss is not None else -1,
+    from app.services.worker_child_lifecycle import log_isolated_job_complete
+
+    log_isolated_job_complete(
+        job_id=job_id,
+        account_id=account_id,
+        status=status,
+        lots=lots,
+        photos=photos,
+        duration_s=duration,
+        rss_mb=process_rss_mb(),
     )
     return 0
 
@@ -302,6 +333,35 @@ def run_self_test_alloc(mb: int) -> int:
     _LOG.info("self-test-alloc-mb done mb=%s rss_mb=%.0f", mb, process_rss_mb() or -1)
     del blob
     del _pool
+    return 0
+
+
+def run_self_test_complex_hang() -> int:
+    """Reproduce the complex/Pro-author hang: lot is persisted, cleanup never returns."""
+    os.environ["WORKER_ISOLATED_CHILD"] = "1"
+    os.environ.setdefault("WORKER_CHILD_EXIT_SECONDS", "2")
+    from app.services.worker_child_lifecycle import note_job_persisted, shutdown_isolated_child_runtime
+
+    _LOG.info("Pipeline complex lot — skipping Flash listing (5 photos, 2 OCR lines); Pro author")
+    _LOG.info("Pipeline Pro author succeeded model=gemini-2.5-pro complex=True listing_calls=0")
+    _LOG.info(
+        'HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/'
+        'gemini-flash-latest:generateContent "HTTP/1.1 200 OK"'
+    )
+    note_job_persisted(
+        job_id="db5b42d2-self-test",
+        account_id="acct-test",
+        status="completed",
+        lots=1,
+        photos=5,
+        duration_s=1.0,
+    )
+    # Hang the same way production did: post-complete work never returns.
+    try:
+        shutdown_isolated_child_runtime()
+    except Exception:  # noqa: BLE001
+        pass
+    time.sleep(120)
     return 0
 
 
@@ -363,6 +423,38 @@ def _spawn_isolated_job_async(job_id: str, account_id: str) -> subprocess.Popen:
     return subprocess.Popen(cmd, env=env, start_new_session=True, close_fds=True)
 
 
+def _maybe_kill_idle_done_child(job_id: str, slot: IsolatedChild) -> None:
+    """If the job is already completed/failed but the child is still alive, SIGKILL it."""
+    grace = child_done_kill_seconds()
+    status = _job_is_terminal(job_id, slot.account_id)
+    if not status:
+        return
+    now = time.monotonic()
+    seen = slot.extra.get("done_mono")
+    if seen is None:
+        slot.extra["done_mono"] = now
+        _LOG.warning(
+            "Job already persisted but isolated child still live job_id=%s status=%s — "
+            "will SIGKILL after %.0fs",
+            job_id,
+            status,
+            grace,
+        )
+        return
+    if now - float(seen) < grace:
+        return
+    _LOG.error(
+        "Killing isolated child idle after job done job_id=%s status=%s waited=%.1fs",
+        job_id,
+        status,
+        now - float(seen),
+    )
+    try:
+        slot.proc.kill()
+    except OSError:
+        pass
+
+
 def _sample_child_rss(job_id: str, slot: IsolatedChild) -> None:
     pid = getattr(slot.proc, "pid", None)
     if not pid:
@@ -394,6 +486,7 @@ def _reap_isolated_children(children: dict[str, IsolatedChild]) -> None:
         code = proc.poll()
         if code is None:
             _sample_child_rss(job_id, slot)
+            _maybe_kill_idle_done_child(job_id, slot)
             continue
         done.append(job_id)
         # poll() already reaped; wait() is idempotent and closes the handle.
@@ -603,6 +696,9 @@ def main(argv: list[str] | None = None) -> None:
     alloc_mb = parse_self_test_alloc_mb(argv)
     if alloc_mb is not None:
         code = run_self_test_alloc(alloc_mb)
+        exit_isolated_child(code)
+    if parse_self_test_complex_hang(argv):
+        code = run_self_test_complex_hang()
         exit_isolated_child(code)
     parent_jobs = parse_self_test_parent_jobs(argv)
     if parent_jobs is not None:
