@@ -23,11 +23,18 @@ cloud-specific gotchas; do not duplicate standard docs.
   no auto-activation.
 - **`main.py` at the repo root is a legacy CLI scanner, NOT the API.** The FastAPI app is
   `app.main:app` and must be started from inside `backend/` (its package is `app`).
-- **DB defaults to SQLite in dev** (`backend/app.db`). No Postgres is required locally;
-  tables auto-create on API startup (`Base.metadata.create_all`), so Alembic migrations are
-  optional in dev. Existing SQLite files get additive ALTERs in `startup()` (sale zip `kind`,
-  lot audience columns, photo listing-sort fields). `ENVIRONMENT=production` would reject
-  SQLite — keep it `development`.
+- **DB defaults to SQLite in dev** (`backend/app.db`). No Postgres is required locally.
+  **Alembic owns the schema; API startup runs no DDL.** Before the first API start (and after
+  pulling new revisions) run `cd backend && .venv/bin/python -m alembic upgrade head`.
+  Startup only logs `Schema check:` warnings when the DB is behind. A pre-Alembic dev
+  `app.db` (built by the old startup `create_all`) has no `alembic_version`; delete it or run
+  `alembic stamp 0049_client_invites && alembic upgrade head`. `ENVIRONMENT=production` would
+  reject SQLite — keep it `development`.
+- **Schema changes go in a new `backend/alembic/versions/` revision**, written idempotently
+  (inspect, then add) like 0041–0050. Never add `create_all` / `ALTER` back to `startup()`.
+  Railway's API runs `alembic upgrade head` before uvicorn (Railpack uses the root `Procfile`;
+  `Dockerfile.api` does the same). `env.py` takes a Postgres advisory lock so concurrent
+  upgrades serialize. The worker never migrates.
 - **`backend/.env` is required for local dev** and is git-ignored. If missing, recreate it
   (SQLite `DATABASE_URL`, `ENVIRONMENT=development`, empty `GOOGLE_API_KEY`). Pydantic loads
   the cwd `.env` first then `backend/.env`, so run the API from `backend/`.

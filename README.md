@@ -92,7 +92,7 @@ Repo-root `main.py` is a **legacy desktop CLI scanner**, not the API. The FastAP
 - Node.js 20+
 - A [Google AI Studio](https://aistudio.google.com/apikey) key for cataloging (optional for auth/CRUD)
 
-Postgres is **not** required locally. The API creates SQLite tables on startup (`backend/app.db`). Alembic is optional in development.
+Postgres is **not** required locally; SQLite (`backend/app.db`) is the default. Alembic creates and upgrades the schema. The API does not create tables on startup.
 
 ### 1. Backend API
 
@@ -108,9 +108,12 @@ cp .env.example .env
 `SECRET_KEY` must be at least 32 characters and must not be `change-me`. `ENVIRONMENT=development` keeps SQLite allowed.
 
 ```bash
-# from backend/
+# from backend/ — create or upgrade the schema first (rerun after pulling new revisions)
+.venv/bin/python -m alembic upgrade head
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
+
+If startup logs `Schema check:` warnings, the database is behind the code. Run the upgrade above.
 
 Health check: [http://localhost:8000/health](http://localhost:8000/health).
 
