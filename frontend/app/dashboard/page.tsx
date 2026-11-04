@@ -35,6 +35,7 @@ import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import { catalogPollIntervalMs, catalogStatusPath } from "../../lib/catalogPoll";
 import { isClientRole, isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
+import { isNavRouteHidden } from "../../lib/navVisibility";
 import {
   clearStagingDraft,
   loadStagingDraft,
@@ -8555,7 +8556,7 @@ export default function DashboardPage() {
                 : "Post selected to Facebook Page"}
             </button>
           ) : null}
-          {isAccountOwner ? (
+          {isAccountOwner && !isNavRouteHidden("/facebook") ? (
             <Link
               href="/facebook"
               className="ct-btn"

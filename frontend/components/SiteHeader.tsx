@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { isNavRouteHidden } from "../lib/navVisibility";
 
 type SiteHeaderProps = {
   /** Right-side actions (e.g. Account, Log out). */
@@ -10,7 +11,7 @@ type SiteHeaderProps = {
 };
 
 /**
- * Sticky top bar: brand + Catalog / Appraiser nav; actions supplied by each page.
+ * Sticky top bar: brand + Catalog nav; actions supplied by each page.
  */
 export function SiteHeader({ actions }: SiteHeaderProps) {
   const pathname = usePathname() || "";
@@ -30,12 +31,14 @@ export function SiteHeader({ actions }: SiteHeaderProps) {
             >
               Catalog
             </Link>
-            <Link
-              href="/appraiser"
-              className={`ct-site-header__nav-link${pathname.startsWith("/appraiser") ? " ct-site-header__nav-link--active" : ""}`}
-            >
-              Appraiser
-            </Link>
+            {!isNavRouteHidden("/appraiser") ? (
+              <Link
+                href="/appraiser"
+                className={`ct-site-header__nav-link${pathname.startsWith("/appraiser") ? " ct-site-header__nav-link--active" : ""}`}
+              >
+                Appraiser
+              </Link>
+            ) : null}
           </nav>
         </div>
         <nav className="ct-site-header__actions" aria-label="Account navigation">
