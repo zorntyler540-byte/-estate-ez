@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import zlib
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import EngagementSnapshot, Lot, Photo
@@ -20,6 +24,7 @@ from app.schemas import (
     SocialCalendarPost,
 )
 from app.services.engagement import (
+    EngagementReading,
     assign_push_ranks,
     build_social_calendar,
     display_bucket,
@@ -29,6 +34,8 @@ from app.services.engagement import (
 from app.services.photo_order import listing_photo_sort_key
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.sale_zip_export import pick_lot_hero_photo
+
+_LOG = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -154,52 +161,175 @@ def _clear_lot_engagement(db: Session, account_id: str, lot_id: str | None) -> N
         lot.engagement_json = "{}"
 
 
+def _as_utc(moment: datetime | None) -> datetime | None:
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+_ingest_locks: dict[tuple[str, int], threading.Lock] = {}
+_ingest_locks_guard = threading.Lock()
+
+
+def _sale_ingest_lock(account_id: str, sale_id: int) -> threading.Lock:
+    key = (str(account_id), int(sale_id))
+    with _ingest_locks_guard:
+        lock = _ingest_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ingest_locks[key] = lock
+        return lock
+
+
+def _lock_sale_rows(db: Session, account_id: str, sale_id: int) -> None:
+    """Serialize ingests for one sale across API replicas (released on commit / rollback)."""
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    key = zlib.crc32(f"engagement:{account_id}:{int(sale_id)}".encode("utf-8")) & 0x7FFFFFFF
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
+
+
+def _stored_reading(row: EngagementSnapshot) -> EngagementReading:
+    return EngagementReading(
+        views=int(row.views or 0),
+        watchers=int(row.watchers or 0),
+        bids=int(row.bids or 0),
+        price=float(row.price or 0),
+        reserve=float(row.reserve or 0),
+        engagement_score=row.engagement_score or "",
+        momentum=row.momentum or "",
+        notes=row.notes or "",
+        rescue_candidate=bool(row.rescue_candidate),
+        late_surge=row.late_surge or "",
+        trajectory=row.trajectory or "",
+        bucket=row.bucket or "",
+        push_rank=None,
+    )
+
+
 def apply_engagement_snapshot(
     db: Session,
     *,
     account_id: str,
     payload: EngagementSnapshotIn,
 ) -> EngagementIngestOut:
-    captured = payload.captured_at or _utcnow()
-    if captured.tzinfo is None:
-        captured = captured.replace(tzinfo=timezone.utc)
+    """Upsert one sale's counts. Only ``complete`` snapshots drop lots that are missing.
+
+    A snapshot captured before the stored one for this sale is ignored, so a slow
+    request cannot roll fresher counts back.
+    """
     sale_id = int(payload.ctseller_sale_id)
+    with _sale_ingest_lock(account_id, sale_id):
+        try:
+            out, changed = _apply_snapshot_locked(db, account_id=account_id, payload=payload)
+        except IntegrityError:
+            # Another replica inserted the same item between our read and commit.
+            db.rollback()
+            out, changed = _apply_snapshot_locked(db, account_id=account_id, payload=payload)
+    if changed:
+        try:
+            from app.engagement_tasks import schedule_facebook_calendar_sync
+
+            schedule_facebook_calendar_sync(db.get_bind(), account_id, sale_id)
+        except Exception:
+            _LOG.exception(
+                "Could not queue Facebook calendar sync account=%s sale=%s",
+                account_id,
+                sale_id,
+            )
+    return out
+
+
+def _apply_snapshot_locked(
+    db: Session,
+    *,
+    account_id: str,
+    payload: EngagementSnapshotIn,
+) -> tuple[EngagementIngestOut, bool]:
+    captured = _as_utc(payload.captured_at) or _utcnow()
+    sale_id = int(payload.ctseller_sale_id)
+    complete = bool(payload.complete)
     deduped: dict[int, EngagementItemIn] = {}
     for item in payload.items:
         deduped[int(item.ctseller_item_id)] = item
     items = list(deduped.values())
+    _lock_sale_rows(db, account_id, sale_id)
     existing = (
         db.query(EngagementSnapshot)
         .filter(
             EngagementSnapshot.account_id == account_id,
             EngagementSnapshot.ctseller_sale_id == sale_id,
         )
+        .populate_existing()
         .all()
     )
+    stored_at = max(
+        (_as_utc(row.captured_at) for row in existing if row.captured_at is not None),
+        default=None,
+    )
+    if stored_at is not None and captured < stored_at:
+        stored_counts = _bucket_counts(existing)
+        db.rollback()
+        return (
+            EngagementIngestOut(
+                ctseller_sale_id=sale_id,
+                item_count=len(items),
+                matched_lots=0,
+                ignored=True,
+                complete=complete,
+                pruned=0,
+                captured_at=stored_at,
+                **stored_counts,
+            ),
+            False,
+        )
     by_item = {int(row.ctseller_item_id): row for row in existing}
     incoming_ids = set(deduped)
-    for row in existing:
-        if int(row.ctseller_item_id) not in incoming_ids:
-            _clear_lot_engagement(db, account_id, row.lot_id)
-            db.delete(row)
-            by_item.pop(int(row.ctseller_item_id), None)
+    pruned = 0
+    if complete:
+        for row in existing:
+            if int(row.ctseller_item_id) not in incoming_ids:
+                _clear_lot_engagement(db, account_id, row.lot_id)
+                db.delete(row)
+                by_item.pop(int(row.ctseller_item_id), None)
+                pruned += 1
+    retained = [row for item_id, row in by_item.items() if item_id not in incoming_ids]
 
-    scored_items: list[tuple[EngagementItemIn, object]] = []
-    readings = []
-    for item in items:
-        reading = score_item(
+    # Rank across the whole sale so a partial snapshot cannot hand out a push_rank
+    # that a lot it did not mention already holds. Ties keep the previous rank order,
+    # so a partial refresh does not shuffle calendar slots between equal lots.
+    fresh = [
+        score_item(
             views=item.views,
             watchers=item.watchers,
             bids=item.bids,
             price=item.price,
             reserve=item.reserve,
         )
-        scored_items.append((item, reading))
-        readings.append(reading)
-    ranked = assign_push_ranks(readings)
+        for item in items
+    ]
+    entries: list[tuple[int | None, EngagementReading]] = []
+    for item, reading in zip(items, fresh):
+        prior = by_item.get(int(item.ctseller_item_id))
+        entries.append((prior.push_rank if prior is not None else None, reading))
+    for row in retained:
+        entries.append((row.push_rank, _stored_reading(row)))
+    order = sorted(
+        range(len(entries)),
+        key=lambda index: (entries[index][0] is None, entries[index][0] or 0),
+    )
+    ranked_in_order = assign_push_ranks([entries[index][1] for index in order])
+    ranked_all: list[EngagementReading] = list(fresh) + [reading for _, reading in entries[len(items) :]]
+    for position, index in enumerate(order):
+        ranked_all[index] = ranked_in_order[position]
+    ranked = ranked_all[: len(items)]
+    retained_ranks = ranked_all[len(items) :]
     matched = 0
     seen_lots: set[str] = set()
-    for (item, _reading), reading in zip(scored_items, ranked):
+    final_rows: list[EngagementSnapshot] = []
+    for item, reading in zip(items, ranked):
         row = by_item.get(int(item.ctseller_item_id))
         if row is None:
             row = EngagementSnapshot(
@@ -239,29 +369,34 @@ def apply_engagement_snapshot(
         row.sale_ends_at = payload.sale_ends_at
         row.captured_at = captured
         row.lot_id = lot.id if lot is not None else None
+        final_rows.append(row)
         if lot is not None and lot.id not in seen_lots:
             _write_lot_engagement(lot, row)
             seen_lots.add(lot.id)
             matched += 1
+    for row, reading in zip(retained, retained_ranks):
+        final_rows.append(row)
+        if row.push_rank == reading.push_rank:
+            continue
+        row.push_rank = reading.push_rank
+        if row.lot_id and row.lot_id not in seen_lots:
+            lot = db.query(Lot).filter(Lot.id == row.lot_id, Lot.account_id == account_id).first()
+            if lot is not None:
+                _write_lot_engagement(lot, row)
+                seen_lots.add(lot.id)
     db.commit()
-    try:
-        from app.services.facebook_calendar import sync_facebook_calendar_after_snapshot
-
-        sync_facebook_calendar_after_snapshot(db, account_id, sale_id)
-    except Exception:
-        import logging
-
-        logging.getLogger(__name__).exception(
-            "Facebook calendar sync after snapshot failed account=%s sale=%s",
-            account_id,
-            sale_id,
-        )
-    counts = _bucket_counts(ranked)
-    return EngagementIngestOut(
-        ctseller_sale_id=sale_id,
-        item_count=len(items),
-        matched_lots=matched,
-        **counts,
+    return (
+        EngagementIngestOut(
+            ctseller_sale_id=sale_id,
+            item_count=len(items),
+            matched_lots=matched,
+            ignored=False,
+            complete=complete,
+            pruned=pruned,
+            captured_at=captured,
+            **_bucket_counts(final_rows),
+        ),
+        True,
     )
 
 

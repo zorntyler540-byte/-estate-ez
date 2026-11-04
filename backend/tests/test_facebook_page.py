@@ -961,6 +961,87 @@ def test_push_calendar_reschedule_and_removal(tmp_path, monkeypatch) -> None:
         _clear_overrides()
 
 
+def test_partial_snapshot_does_not_cancel_scheduled_page_posts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "meta_app_id", "app-id")
+    monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
+    client, db, account, user, lot = _client(tmp_path, connected=True)
+    other = _add_push_lot(db, account, user, lot, lot_id="lot-other", sku="AA101", item_id=101)
+    updates: list[int] = []
+    deletes: list[str] = []
+
+    def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
+        return "111_keep"
+
+    def fake_update(*, post_id, page_token, scheduled_unix):
+        updates.append(int(scheduled_unix))
+
+    def fake_delete(*, post_id, page_token):
+        deletes.append(post_id)
+
+    body = _future_push_body(lot)
+    other_item = {
+        **body["items"][0],
+        "ctseller_item_id": 101,
+        "sku": other.sku,
+        "title": other.auction_title,
+        "item_url": "https://ctbids.com/estate-sale/12/item/101",
+    }
+    captured = datetime.fromisoformat(body["captured_at"])
+    try:
+        full = {**body, "items": [body["items"][0], other_item], "complete": True}
+        assert client.post("/integrations/engagement/snapshots", json=full).status_code == 200
+        slot = next(
+            row
+            for row in client.get("/engagement/sales/12/calendar").json()
+            if row["platform"] == "Facebook" and row["lot_id"] == lot.id
+        )
+        with (
+            patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"),
+            patch("app.services.facebook_page.upload_unpublished_photo", return_value="m"),
+            patch("app.services.facebook_page.create_page_feed_post", fake_feed),
+        ):
+            approved = client.post(
+                "/engagement/sales/12/calendar/facebook",
+                json={"confirm": True, "slot_keys": [slot["slot_key"]]},
+            )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["results"][0]["status"] == "scheduled"
+
+        # The Watcher only re-read the other lot this pass (no ``complete``).
+        partial = {
+            **body,
+            "captured_at": (captured + timedelta(minutes=5)).isoformat(),
+            "items": [other_item],
+        }
+        with (
+            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
+            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
+        ):
+            res = client.post("/integrations/engagement/snapshots", json=partial)
+        assert res.status_code == 200, res.text
+        assert res.json()["pruned"] == 0
+        assert deletes == []
+        stored = db.query(FacebookPagePost).one()
+        db.refresh(stored)
+        assert stored.status == "scheduled"
+        assert stored.facebook_post_id == "111_keep"
+
+        # A complete pass that no longer lists the lot does cancel it.
+        complete = {**partial, "captured_at": (captured + timedelta(minutes=10)).isoformat(), "complete": True}
+        with (
+            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
+            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
+        ):
+            done = client.post("/integrations/engagement/snapshots", json=complete)
+        assert done.status_code == 200, done.text
+        assert done.json()["pruned"] == 1
+        assert deletes == ["111_keep"]
+        db.refresh(stored)
+        assert stored.status == "cancelled"
+    finally:
+        _clear_overrides()
+
+
 def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> None:
     from app import facebook_post_tasks
 
