@@ -533,7 +533,7 @@ export async function setDraftStatus(
   );
 }
 
-/** Remember the server ``receiving`` job so a killed Sync can delete the orphan and retry cleanly. */
+/** Remember the server ``receiving`` job so a killed Sync can resume it (send only missing photos). */
 export async function setDraftServerJobId(draftId: string, serverJobId: string | null): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE lot_drafts SET server_job_id = ?, updated_at = ? WHERE id = ?", [
@@ -768,7 +768,7 @@ export async function countUploadPending(): Promise<number> {
   // Also include leftover "uploaded" notices (timeout / still-cataloging copy) so Phase 0
   // can clear fake errors even when nothing is queued.
   // Unsent local videos must keep Sync alive after photos already look uploaded —
-  // catalog usually finishes after the 45s confirm window, and clips attach then.
+  // catalog usually finishes after Sync's batched status check, and clips attach then.
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c FROM lot_drafts
      WHERE archived_at IS NULL

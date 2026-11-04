@@ -278,15 +278,6 @@ export function lotPhotoThumbnailSource(
   };
 }
 
-export type UploadLotJobOptions = {
-  saleId: string;
-  token: string;
-  manualSku?: string;
-  listingChannel?: "ctseller" | "facebook";
-  photoUris: UploadPhotoUri[];
-  clientDraftId?: string;
-};
-
 function uploadTimeoutMessage(): string {
   return `Upload timed out after ${Math.round(UPLOAD_PER_FILE_TIMEOUT_MS / 1000)}s — photos are still on this phone; tap Sync to retry.`;
 }
@@ -483,36 +474,6 @@ export async function getJobReceivedFiles(token: string, jobId: string): Promise
   };
 }
 
-/** Same contract as web dashboard ``/jobs/upload`` (single lot mode). */
-export async function uploadSingleLotJob(opts: UploadLotJobOptions): Promise<Job> {
-  if (!opts.photoUris.length) {
-    throw new Error("No photos to upload");
-  }
-  const [first, ...rest] = opts.photoUris;
-  let job = await createLotJobWithPhoto({ ...opts, photo: first! });
-  for (const photo of rest) {
-    job = await appendPhotoToJob(opts.token, job.id, photo, opts.clientDraftId);
-  }
-  return job;
-}
-
-/** Append more images to a queued upload job (one photo per request). */
-export async function appendFilesToQueuedJob(
-  token: string,
-  jobId: string,
-  photoUris: UploadPhotoUri[],
-  clientDraftId?: string
-): Promise<Job> {
-  if (!photoUris.length) {
-    throw new Error("No photos to append");
-  }
-  let job: Job | null = null;
-  for (const photo of photoUris) {
-    job = await appendPhotoToJob(token, jobId, photo, clientDraftId);
-  }
-  return job!;
-}
-
 function listFromUploadResponse<T>(text: string, what: string): T[] {
   const raw = text ? (JSON.parse(text) as unknown) : null;
   if (Array.isArray(raw)) return raw as T[];
@@ -535,20 +496,6 @@ export async function uploadLotPhoto(token: string, lotId: string, photo: Upload
   return listFromUploadResponse<LotPhoto>(text, "photo");
 }
 
-/** Append photos to an existing catalog lot (same as web lot page “Add photos”). */
-export async function uploadLotPhotos(
-  token: string,
-  lotId: string,
-  photoUris: UploadPhotoUri[]
-): Promise<LotPhoto[]> {
-  if (!photoUris.length) {
-    throw new Error("No photos to upload");
-  }
-  let out: LotPhoto[] = [];
-  for (const photo of photoUris) out = await uploadLotPhoto(token, lotId, photo);
-  return out;
-}
-
 /** One clip onto a catalog lot (skips Gemini / CT Bids). The same name twice is stored once. */
 export async function uploadLotVideo(token: string, lotId: string, video: UploadPhotoUri): Promise<LotVideo[]> {
   const text = await nativeMultipartUpload({
@@ -559,20 +506,6 @@ export async function uploadLotVideo(token: string, lotId: string, video: Upload
     mimeType: videoMimeType(video.name)
   });
   return listFromUploadResponse<LotVideo>(text, "video");
-}
-
-/** Attach clips to an existing catalog lot (skips Gemini / CT Bids). */
-export async function uploadLotVideos(
-  token: string,
-  lotId: string,
-  videoUris: UploadPhotoUri[]
-): Promise<LotVideo[]> {
-  if (!videoUris.length) {
-    throw new Error("No videos to upload");
-  }
-  let out: LotVideo[] = [];
-  for (const video of videoUris) out = await uploadLotVideo(token, lotId, video);
-  return out;
 }
 
 export async function getLotVideoPlayUrl(
