@@ -102,6 +102,19 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   tasks. Failures are `permanent` (4xx except 401/408/429 → Queue **Retry**) or `transient`
   (backoff 30s doubling to 30 min; manual Sync skips the wait). Add photos sessions are SQLite
   drafts with `append_lot_id` that Sync uploads to the lot; never treat them as new lots.
+- **Automatic uploads wait for a stable connection** (`mobile/lib/connectivity.ts`). NetInfo must be
+  connected with `isInternetReachable !== false`, steady for 12s (up to 60s when flapping), then
+  `GET /health/ping` must answer (<500). Do not start Sync straight from NetInfo events or from
+  "lot queued" — call `requestUpload()`; only staff taps (Sync now / Retry) call `syncNow({manual})`.
+  A drop lasting 3s pauses the running Sync (`uploadPause`): in-flight upload tasks are cancelled,
+  the lot goes back to `queued` with a "Paused —" note, no attempt is counted, and the next Sync
+  resumes from `received-files`. **Upload on Wi‑Fi only** (Queue switch, SQLite `app_kv`, default
+  off) holds photo *and* video bytes on cellular; website checks still run. The open-sales list is
+  cached in `app_kv` so capture works after an offline restart.
+- **Background resume** uses `expo-background-task` + `expo-task-manager` (task defined in
+  `mobile/lib/backgroundUpload.ts`, imported by `app/_layout.tsx`). It needs a **new native build**;
+  the JS checks `requireOptionalNativeModule` first, so the same OTA is safe on older `1.1.0`
+  binaries (they just skip background resume). The app and the task share `sharedSyncGate`.
 - **Queue leftover “failed / didn’t finish” notices are often false.** A full DB pool can time out
   the phone after `/run` while the worker still catalogs. Sync Phase 0 calls
   `GET /sales/{id}/cataloged-mobile-drafts` and marks matching drafts **uploaded** (clears the
