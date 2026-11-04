@@ -1,5 +1,6 @@
 import { formatMediaCounts } from "../mediaKind";
 import { isStillCatalogingMessage } from "./archiveCataloged";
+import { formatRetryWait } from "./retryPolicy";
 import { isTransientSyncError } from "./syncRecovery";
 
 export type QueueRowTone = "ok" | "progress" | "warn" | "error";
@@ -11,9 +12,13 @@ export type QueueRowView = {
   /** Extra line only when it adds facts the label/hint do not already cover. */
   detail: string | null;
   showResend: boolean;
+  /** Permanent failure: Sync stopped retrying until staff tap Retry. */
+  showRetry: boolean;
   removeLabel: "Delete" | "Remove";
   removeTitle: string;
   removeBody: string;
+  /** Set when Remove needs a second "are you sure" (photos sent, website not confirmed yet). */
+  removeConfirm: { title: string; body: string } | null;
 };
 
 export type QueueRowInput = {
@@ -26,6 +31,13 @@ export type QueueRowInput = {
   manual_sku?: string | null;
   online?: boolean | null;
   syncing?: boolean;
+  /** ``permanent`` / ``transient`` from the last failed attempt (null on older rows). */
+  error_kind?: string | null;
+  next_attempt_at?: number | null;
+  /** Add-photos session for a lot already on the website. */
+  append_lot_id?: string | null;
+  append_label?: string | null;
+  now?: number;
 };
 
 /**
@@ -50,9 +62,15 @@ export function queueRowTitle(item: {
   photo_count?: number;
   video_count?: number;
   manual_sku?: string | null;
+  append_lot_id?: string | null;
+  append_label?: string | null;
 }): string {
   const sku = (item.manual_sku || "").trim();
   const media = mediaWord(item);
+  if (item.append_lot_id) {
+    const label = (item.append_label || "").trim() || "website lot";
+    return item.archived_at ? `${media} added to ${label}` : `Add ${media} to ${label}`;
+  }
   if (item.archived_at) {
     return sku ? `${sku} · ${media} · on website` : `${media} · on website`;
   }
@@ -66,8 +84,9 @@ export function canResendQueueRow(item: {
   photo_count?: number;
   server_lot_id?: string | null;
   error_message?: string | null;
+  append_lot_id?: string | null;
 }): boolean {
-  if (item.archived_at) return false;
+  if (item.archived_at || item.append_lot_id) return false;
   if ((item.photo_count || 0) <= 0) return false;
   if (item.status !== "uploaded") return false;
   if (item.server_lot_id) return false;
@@ -84,6 +103,20 @@ function detailIfUseful(error: string | null | undefined, hint: string, hide: bo
   return text;
 }
 
+/**
+ * Sent, but the website has not confirmed the lot. If catalog later fails, the phone copy is the
+ * only copy left — so Remove asks twice.
+ */
+export function removeNeedsSecondConfirm(item: {
+  status: string;
+  archived_at?: number | null;
+  server_lot_id?: string | null;
+  append_lot_id?: string | null;
+}): boolean {
+  if (item.archived_at || item.server_lot_id || item.append_lot_id) return false;
+  return item.status === "uploaded" || item.status === "uploading";
+}
+
 export function queueRowView(item: QueueRowInput): QueueRowView {
   const archived = Boolean(item.archived_at);
   const error = (item.error_message || "").trim() || null;
@@ -92,20 +125,57 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
   const transient = isTransientSyncError(error);
   const showResend = canResendQueueRow(item);
   const phoneOnlyRemove = archived || item.status === "uploaded" || linked;
+  const now = item.now ?? Date.now();
 
-  const remove = phoneOnlyRemove
-    ? {
-        removeLabel: "Remove" as const,
-        removeTitle: "Remove from this phone?",
-        removeBody: archived
-          ? "This listing stays on the website. This only removes the phone archive row."
-          : `${mediaWord(item)} already sent. This only removes the copy on this phone — the website listing stays.`
-      }
-    : {
-        removeLabel: "Delete" as const,
-        removeTitle: "Delete local lot?",
-        removeBody: `Delete ${mediaWord(item)} from this phone? This cannot be undone.`
-      };
+  const remove = {
+    ...(phoneOnlyRemove
+      ? {
+          removeLabel: "Remove" as const,
+          removeTitle: "Remove from this phone?",
+          removeBody: archived
+            ? "This listing stays on the website. This only removes the phone archive row."
+            : `${mediaWord(item)} already sent. This only removes the copy on this phone — the website listing stays.`
+        }
+      : {
+          removeLabel: "Delete" as const,
+          removeTitle: item.append_lot_id ? "Delete these new shots?" : "Delete local lot?",
+          removeBody: item.append_lot_id
+            ? `Delete ${mediaWord(item)} from this phone? They have not all reached the website lot yet. This cannot be undone.`
+            : `Delete ${mediaWord(item)} from this phone? This cannot be undone.`
+        }),
+    showRetry: false,
+    removeConfirm: removeNeedsSecondConfirm(item)
+      ? {
+          title: "Website has not confirmed this lot",
+          body: "Catalog has not finished yet. If it fails, the photos on this phone are the only copy. Remove anyway?"
+        }
+      : null
+  };
+
+  if (!archived && item.status === "failed" && item.error_kind === "permanent") {
+    return {
+      label: "Needs attention",
+      hint: "The website refused this lot, so Sync stopped retrying. Fix the problem below, then tap Retry.",
+      tone: "error",
+      detail: error || "The website refused this upload.",
+      showResend: false,
+      ...remove,
+      showRetry: true
+    };
+  }
+  if (!archived && item.status === "failed" && item.error_kind === "transient") {
+    const wait = formatRetryWait(item.next_attempt_at, now);
+    return {
+      label: "Will retry",
+      hint: wait
+        ? `${wait}. Sync now retries right away. Do not Resend if the lot is already on the website.`
+        : "Retries on the next Sync. Do not Resend if the lot is already on the website.",
+      tone: "warn",
+      detail: error,
+      showResend: false,
+      ...remove
+    };
+  }
 
   if (archived) {
     return {

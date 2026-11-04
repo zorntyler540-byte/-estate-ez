@@ -1,4 +1,11 @@
-import { blockedClipLine, formatSyncOutcome, canResendQueueRow, queueRowTitle, queueRowView } from "./queueStatus";
+import {
+  blockedClipLine,
+  formatSyncOutcome,
+  canResendQueueRow,
+  queueRowTitle,
+  queueRowView,
+  removeNeedsSecondConfirm
+} from "./queueStatus";
 
 function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
@@ -105,4 +112,57 @@ assert(
   "empty queue mentions archive"
 );
 
-console.log("queueStatus selftest ok (28 cases)");
+// Permanent failures stop auto-retry and offer Retry.
+const refused = queueRowView({
+  status: "failed",
+  photo_count: 41,
+  error_kind: "permanent",
+  error_message: "This lot has 41 photos; CT Bids allows at most 40 per listing."
+});
+assert(refused.label === "Needs attention", "permanent label");
+assert(refused.showRetry === true, "permanent shows Retry");
+assert(refused.tone === "error", "permanent tone");
+assert(refused.detail?.includes("41 photos"), "permanent shows server reason");
+
+const backoff = queueRowView({
+  status: "failed",
+  photo_count: 3,
+  error_kind: "transient",
+  error_message: "Network request failed",
+  next_attempt_at: 1_000_000 + 90_000,
+  now: 1_000_000
+});
+assert(backoff.label === "Will retry", "transient label");
+assert(backoff.showRetry === false, "transient retries itself");
+assert(backoff.hint.startsWith("Retrying in 2 min"), "transient shows wait");
+assert(backoff.detail === "Network request failed", "transient shows error");
+
+// Remove on a sent-but-unconfirmed lot asks twice.
+const unconfirmed = queueRowView({ status: "uploaded", photo_count: 3 });
+assert(unconfirmed.removeConfirm !== null, "unconfirmed asks twice");
+assert(removeNeedsSecondConfirm({ status: "uploading" }) === true, "uploading asks twice");
+assert(queueRowView({ status: "uploaded", photo_count: 3, server_lot_id: "lot" }).removeConfirm === null, "linked once");
+assert(queueRowView({ status: "uploaded", archived_at: 1 }).removeConfirm === null, "archived once");
+assert(queueRowView({ status: "draft", photo_count: 3 }).removeConfirm === null, "local draft once");
+assert(queueRowView({ status: "failed", photo_count: 3 }).removeConfirm === null, "failed once");
+
+// Add-photos sessions.
+assert(
+  queueRowTitle({ photo_count: 2, append_lot_id: "lot-1", append_label: "LV101" }) === "Add 2 photos to LV101",
+  "append title"
+);
+assert(
+  queueRowTitle({ photo_count: 2, archived_at: 1, append_lot_id: "lot-1", append_label: "LV101" }) ===
+    "2 photos added to LV101",
+  "append archived title"
+);
+assert(
+  canResendQueueRow({ status: "uploaded", photo_count: 2, append_lot_id: "lot-1" }) === false,
+  "append never Resends"
+);
+assert(
+  queueRowView({ status: "draft", photo_count: 2, append_lot_id: "lot-1" }).removeTitle === "Delete these new shots?",
+  "append delete copy"
+);
+
+console.log("queueStatus selftest ok (45 cases)");

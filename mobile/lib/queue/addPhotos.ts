@@ -69,3 +69,17 @@ export function pickCatalogLotForDraft(opts: {
 export function queueAddPhotosIsLocal(status: string): boolean {
   return status === "draft" || status === "queued" || status === "failed";
 }
+
+/**
+ * Add photos on a lot that is still on the phone resumes *that* lot. A queued or failed lot goes
+ * back to ``draft`` so the camera can add to it (it used to open a different, new lot). Not while
+ * Sync runs — it may be sending that lot right now.
+ */
+export function reopenForCapture(
+  status: string,
+  opts: { syncing?: boolean } = {}
+): "keep" | "reopen" | "blocked" {
+  if (status === "draft") return "keep";
+  if (status === "queued" || status === "failed") return opts.syncing ? "blocked" : "reopen";
+  return "blocked";
+}

@@ -207,6 +207,10 @@ export function queueRowFingerprint(row: {
   sale_id?: string;
   manual_sku?: string | null;
   archived_at?: number | null;
+  server_lot_id?: string | null;
+  error_kind?: string | null;
+  next_attempt_at?: number | null;
+  append_label?: string | null;
 }): string {
   return [
     row.id,
@@ -217,6 +221,10 @@ export function queueRowFingerprint(row: {
     row.sale_id ?? "",
     row.manual_sku ?? "",
     row.archived_at ?? "",
+    row.server_lot_id ?? "",
+    row.error_kind ?? "",
+    row.next_attempt_at ?? "",
+    row.append_label ?? "",
     (row.photoUris || []).join(",")
   ].join("|");
 }
