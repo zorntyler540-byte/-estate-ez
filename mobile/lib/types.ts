@@ -85,6 +85,8 @@ export type LotDraft = {
   created_at: number;
   updated_at: number;
   photo_count: number;
+  /** Local clips. Not counted in ``photo_count``. */
+  video_count: number;
   /** Set after the server confirmed catalog — local JPEGs were removed. */
   archived_at: number | null;
 };
@@ -99,6 +101,8 @@ export type LotPhotoRow = {
   media_kind: LotMediaKind;
   uploaded: boolean;
   captured_at?: number;
+  /** Website refused this clip permanently (e.g. too large); Sync stops re-sending it. */
+  upload_blocked?: string | null;
 };
 
 export type LotVideo = {

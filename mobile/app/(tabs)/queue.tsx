@@ -13,6 +13,7 @@ import {
 import NetInfo from "@react-native-community/netinfo";
 
 import { PhotoPreviewModal } from "@/components/DraftPhotos";
+import { formatMediaCounts } from "@/lib/mediaKind";
 import { formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
@@ -188,7 +189,7 @@ export default function QueueScreen() {
         );
         return;
       }
-      if (item.server_lot_id !== picked.lotId) {
+      if (picked.match === "exact" && item.server_lot_id !== picked.lotId) {
         await setDraftServerLotId(item.id, picked.lotId);
       }
       let photoCount = picked.photoCount;
@@ -203,6 +204,19 @@ export default function QueueScreen() {
         /* cached mapping is enough to open the camera */
       }
       setMessage("");
+      if (picked.match === "sku") {
+        // SKU numbers repeat across sales and typos happen — never append without a human check.
+        const lotId = picked.lotId;
+        Alert.alert(
+          "Possible match",
+          `The website has ${sku ? `SKU ${sku}` : "a listing"}${title ? ` — ${title}` : ""}. Add photos to that listing?`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Add photos", onPress: () => openAppendCamera(lotId, photoCount, sku, title) }
+          ]
+        );
+        return;
+      }
       openAppendCamera(picked.lotId, photoCount, sku, title);
     } catch (e) {
       setMessage("");
@@ -325,7 +339,7 @@ export default function QueueScreen() {
   }
 
   async function reviewDraftPhotos(item: DraftRow) {
-    if (item.archived_at || !item.photo_count) return;
+    if (item.archived_at || !(item.photo_count || item.video_count)) return;
     try {
       const photos = await listDraftPhotos(item.id);
       const uris = photos.map((p) => p.file_uri).filter(Boolean);
@@ -452,10 +466,10 @@ export default function QueueScreen() {
               ) : null}
               {item.status !== "uploading" ? (
                 <View style={styles.draftActions}>
-                  {!archived && item.photo_count > 0 ? (
+                  {!archived && (item.photo_count > 0 || item.video_count > 0) ? (
                     <Pressable style={styles.secondary} onPress={() => void reviewDraftPhotos(item)}>
                       <Text style={styles.secondaryText}>
-                        Review {item.photo_count} photo{item.photo_count === 1 ? "" : "s"}
+                        Review {formatMediaCounts(item.photo_count, item.video_count)}
                       </Text>
                     </Pressable>
                   ) : null}

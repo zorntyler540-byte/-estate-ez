@@ -7,6 +7,7 @@ import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, L
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
+import { LotVideoThumb } from "../../../components/LotVideoThumb";
 import { MoveLotsToSale, type MoveSaleOption } from "../../../components/MoveLotsToSale";
 import { AppShell } from "../../../components/AppShell";
 import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
@@ -16,6 +17,7 @@ import {
   audienceHuntStepPercent
 } from "../../../components/AudienceHuntProgress";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
+import { photosForEditorGrid } from "../../../lib/lotMediaGallery";
 import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
 
@@ -46,6 +48,7 @@ type LotVideo = {
   sort_order?: number;
   content_type?: string;
   byte_size?: number;
+  file_on_disk?: boolean;
 };
 
 type LotPhoto = {
@@ -341,11 +344,12 @@ export default function LotDetailPage() {
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
 
+  const editorPhotos = useMemo(() => photosForEditorGrid(catalogPhotos), [catalogPhotos]);
   const photoFileHealth = useMemo(() => {
-    const total = catalogPhotos.length;
-    const missing = catalogPhotos.filter((p) => p.file_on_disk === false).length;
+    const total = editorPhotos.length;
+    const missing = editorPhotos.filter((p) => p.file_on_disk === false).length;
     return { total, missing, allMissing: total > 0 && missing === total, someMissing: missing > 0 };
-  }, [catalogPhotos]);
+  }, [editorPhotos]);
   const showAiRegenProgress = useMemo(
     () => aiRegenerating || Boolean(lot?.ai_regenerating),
     [aiRegenerating, lot?.ai_regenerating]
@@ -2679,9 +2683,9 @@ export default function LotDetailPage() {
           ) : null}
           <div
             className="ct-lot-detail-photo-grid-wrap"
-            style={catalogPhotos.length > 0 ? { marginTop: "0.65rem" } : undefined}
+            style={editorPhotos.length > 0 || catalogVideos.length > 0 ? { marginTop: "0.65rem" } : undefined}
           >
-        {catalogPhotos.length === 0 && !photosError ? (
+        {editorPhotos.length === 0 && catalogVideos.length === 0 && !photosError ? (
           <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
             <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={720} />
             <p className="ct-lot-hero-note" style={{ margin: 0 }}>
@@ -2698,7 +2702,7 @@ export default function LotDetailPage() {
               gap: "0.85rem"
             }}
           >
-            {catalogPhotos.map((p, index) => (
+            {editorPhotos.map((p, index) => (
               <figure
                 key={p.id}
                 onDragOver={(e) => {
@@ -2711,8 +2715,9 @@ export default function LotDetailPage() {
                   dragPhotoIdRef.current = null;
                   if (!fromId) return;
                   const fromIndex = catalogPhotos.findIndex((x) => x.id === fromId);
-                  if (fromIndex < 0) return;
-                  applyPhotoReorder(fromIndex, index);
+                  const toIndex = catalogPhotos.findIndex((x) => x.id === p.id);
+                  if (fromIndex < 0 || toIndex < 0) return;
+                  applyPhotoReorder(fromIndex, toIndex);
                 }}
                 style={{
                   margin: 0,
@@ -2880,7 +2885,10 @@ export default function LotDetailPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => openPhotoViewer(index)}
+                    onClick={() => {
+                      const viewerAt = catalogPhotos.findIndex((x) => x.id === p.id);
+                      openPhotoViewer(viewerAt >= 0 ? viewerAt : index);
+                    }}
                     title={`Open ${p.original_name} — crop and fine-tune`}
                     style={{
                       all: "unset",
@@ -2930,6 +2938,72 @@ export default function LotDetailPage() {
                 </figcaption>
               </figure>
             ))}
+            {catalogVideos.map((video, index) => (
+              <figure
+                key={`vid-${video.id}`}
+                style={{
+                  margin: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.35rem"
+                }}
+              >
+                <div style={{ position: "relative" }}>
+                  <span
+                    className="ct-muted"
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      left: 6,
+                      zIndex: 1,
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      background: "rgba(12, 15, 18, 0.82)",
+                      color: "var(--ct-primary)",
+                      padding: "0.12rem 0.4rem",
+                      borderRadius: 6,
+                      border: "1px solid var(--ct-border)"
+                    }}
+                  >
+                    {editorPhotos.length + index + 1}
+                    <span style={{ fontWeight: 600, marginLeft: "0.28rem", opacity: 0.9 }}>Video</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void playLotVideo(video.id)}
+                    title={`Play ${video.original_name}`}
+                    style={{
+                      all: "unset",
+                      cursor: "pointer",
+                      display: "block",
+                      width: "100%"
+                    }}
+                  >
+                    <LotVideoThumb
+                      lotId={lot.id}
+                      videoId={video.id}
+                      token={token}
+                      label={video.original_name}
+                      maxHeight={420}
+                      minHeight={200}
+                      fileOnDisk={video.file_on_disk !== false}
+                    />
+                  </button>
+                </div>
+                <figcaption
+                  className="ct-muted"
+                  style={{
+                    fontSize: "0.72rem",
+                    lineHeight: 1.35,
+                    wordBreak: "break-word",
+                    margin: 0
+                  }}
+                  title={video.original_name}
+                >
+                  {video.original_name}
+                </figcaption>
+              </figure>
+            ))}
           </div>
         )}
           </div>
@@ -2945,7 +3019,8 @@ export default function LotDetailPage() {
             ) : null}
           </h2>
           <p className="ct-upload-intro">
-            Short walk-around clips from the phone app. Post to CT Seller sends them to the item
+            Short walk-around clips from the phone app. They also appear in the photo grid above
+            with a Video badge (first-frame preview). Post to CT Seller sends them to the item
             media tab after the photos. They are not sent through AI catalog.
           </p>
           <input

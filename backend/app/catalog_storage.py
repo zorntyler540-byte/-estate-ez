@@ -6,7 +6,12 @@ import uuid
 from pathlib import Path
 
 from app import object_storage
-from app.catalog_limits import is_catalog_video_filename, video_content_type
+from app.catalog_limits import (
+    is_catalog_video_filename,
+    looks_like_video_bytes,
+    looks_like_video_file,
+    video_content_type,
+)
 
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 _CATALOG_SUBDIR = "catalog"
@@ -32,6 +37,8 @@ def persist_catalog_photo(account_id: str, source: Path, *, photo_id: str | None
     """
     if not source.is_file():
         raise FileNotFoundError(f"Catalog source not found: {source}")
+    if looks_like_video_file(source):
+        raise ValueError("Catalog photos must be still images, not video clips")
     pid = (photo_id or "").strip() or str(uuid.uuid4())
     suffix = source.suffix.lower()
     if suffix not in _IMAGE_SUFFIXES:
@@ -66,6 +73,13 @@ def persist_catalog_video(account_id: str, source: Path, *, video_id: str | None
         raise FileNotFoundError(f"Catalog video source not found: {source}")
     if not is_catalog_video_filename(source.name):
         raise ValueError("Video must be MP4, MOV, M4V, or WebM")
+    try:
+        with source.open("rb") as fh:
+            head = fh.read(16)
+    except OSError as exc:
+        raise ValueError("Video file is not readable") from exc
+    if not looks_like_video_bytes(head):
+        raise ValueError("Video file is not a playable MP4, MOV, M4V, or WebM clip")
     vid = (video_id or "").strip() or str(uuid.uuid4())
     suffix = source.suffix.lower()
     dest_dir = (upload_root() / _CATALOG_SUBDIR / account_id / "videos").resolve()

@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../lib/api";
+import { nextThumbStep, thumbFailedMessage, type ThumbStep } from "../lib/lotPhotoThumbLoad";
 
 type Props = {
   lotId: string;
@@ -24,7 +25,8 @@ type MediaUrlOut = { url: string; expires_in?: number; kind?: string };
 
 /**
  * Prefer a signed R2 URL (browser loads from Cloudflare — no Railway image egress).
- * Fall back to authenticated ``/thumbnail`` blob when R2 is unavailable.
+ * Fall back to authenticated ``/thumbnail`` blob when R2 is unavailable or the
+ * signed object is not a displayable still (a clip stored as ``.jpg``).
  */
 function LotPhotoThumbInner({
   lotId,
@@ -40,6 +42,7 @@ function LotPhotoThumbInner({
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const urlRef = useRef<string | null>(null);
+  const stepRef = useRef<ThumbStep>("idle");
 
   useEffect(() => {
     if (!fileOnDisk) {
@@ -55,14 +58,50 @@ function LotPhotoThumbInner({
 
     let cancelled = false;
     const ac = new AbortController();
+    stepRef.current = "idle";
 
-    void (async () => {
-      setFailed(false);
-      setSrc(null);
+    const forgetBlob = () => {
       if (urlRef.current?.startsWith("blob:")) {
         URL.revokeObjectURL(urlRef.current);
         urlRef.current = null;
       }
+    };
+
+    const loadThumbnail = async () => {
+      stepRef.current = nextThumbStep(stepRef.current, "signed-fail");
+      const res = await fetch(
+        `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal: ac.signal
+        }
+      );
+      if (!res.ok || cancelled) {
+        if (!cancelled) {
+          stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+          setFailed(true);
+        }
+        return;
+      }
+      const blob = await res.blob();
+      if (cancelled) return;
+      if (!blob.type.startsWith("image/")) {
+        stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+        setFailed(true);
+        return;
+      }
+      forgetBlob();
+      const u = URL.createObjectURL(blob);
+      urlRef.current = u;
+      stepRef.current = nextThumbStep(stepRef.current, "thumb-ok");
+      setSrc(u);
+    };
+
+    void (async () => {
+      setFailed(false);
+      setSrc(null);
+      forgetBlob();
       try {
         const mediaRes = await fetch(
           `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/media-url?max_px=${maxPx}&generate_if_missing=false&v=${encodeURIComponent(String(cacheBust))}`,
@@ -76,43 +115,74 @@ function LotPhotoThumbInner({
           const data = (await mediaRes.json()) as MediaUrlOut;
           if (!cancelled && data?.url) {
             urlRef.current = null;
+            stepRef.current = nextThumbStep(stepRef.current, "signed-ok");
             setSrc(data.url);
             return;
           }
         }
 
-        const res = await fetch(
-          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: "no-store",
-            signal: ac.signal
-          }
-        );
-        if (!res.ok || cancelled) {
-          if (!cancelled) setFailed(true);
-          return;
-        }
-        const blob = await res.blob();
-        if (cancelled) return;
-        if (urlRef.current?.startsWith("blob:")) URL.revokeObjectURL(urlRef.current);
-        const u = URL.createObjectURL(blob);
-        urlRef.current = u;
-        setSrc(u);
+        await loadThumbnail();
       } catch {
-        if (!cancelled) setFailed(true);
+        if (!cancelled) {
+          try {
+            await loadThumbnail();
+          } catch {
+            if (!cancelled) {
+              stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+              setFailed(true);
+            }
+          }
+        }
       }
     })();
 
     return () => {
       cancelled = true;
       ac.abort();
-      if (urlRef.current?.startsWith("blob:")) {
-        URL.revokeObjectURL(urlRef.current);
-        urlRef.current = null;
-      }
+      forgetBlob();
     };
   }, [lotId, photoId, token, maxPx, fileOnDisk, cacheBust]);
+
+  const onImgError = () => {
+    const next = nextThumbStep(stepRef.current, "img-error");
+    stepRef.current = next;
+    if (next === "failed") {
+      setSrc(null);
+      setFailed(true);
+      return;
+    }
+    setSrc(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/lots/${encodeURIComponent(lotId)}/photos/${encodeURIComponent(photoId)}/thumbnail?max_px=${maxPx}&v=${encodeURIComponent(String(cacheBust))}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store"
+          }
+        );
+        if (!res.ok) {
+          stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+          setFailed(true);
+          return;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+          setFailed(true);
+          return;
+        }
+        if (urlRef.current?.startsWith("blob:")) URL.revokeObjectURL(urlRef.current);
+        const u = URL.createObjectURL(blob);
+        urlRef.current = u;
+        stepRef.current = nextThumbStep(stepRef.current, "thumb-ok");
+        setSrc(u);
+      } catch {
+        stepRef.current = nextThumbStep(stepRef.current, "thumb-fail");
+        setFailed(true);
+      }
+    })();
+  };
 
   const shell: CSSProperties = {
     borderRadius: "var(--ct-radius-sm)",
@@ -139,7 +209,7 @@ function LotPhotoThumbInner({
             textAlign: "center"
           }}
         >
-          {fileOnDisk ? "Could not load" : "Missing on server"}
+          {thumbFailedMessage(fileOnDisk)}
         </div>
       </div>
     );
@@ -162,6 +232,7 @@ function LotPhotoThumbInner({
         alt={label}
         title={label}
         draggable={false}
+        onError={onImgError}
         style={
           {
             width: "100%",

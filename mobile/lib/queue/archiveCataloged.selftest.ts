@@ -105,22 +105,12 @@ assert(
   shouldSkipReupload({ confirmedOnServer: false, matchingJobLiveOrDone: true }) === true,
   "skip reupload when a live job already has this client_draft_id"
 );
-assert(
-  shouldArchiveCatalogedDraft({
-    status: "uploaded",
-    confirmedOnServer: false,
-    uniqueSkuMatch: true
-  }) === true,
-  "unique SKU on the website archives a sent lot"
-);
-assert(
-  shouldArchiveCatalogedDraft({
-    status: "draft",
-    confirmedOnServer: false,
-    uniqueSkuMatch: true
-  }) === false,
-  "draft does not archive on SKU alone"
-);
+for (const status of ["uploaded", "queued", "failed", "uploading", "draft"]) {
+  assert(
+    shouldArchiveCatalogedDraft({ status, errorMessage: null, confirmedOnServer: false }) === false,
+    `${status} never archives without an exact server confirm (a SKU match is not one)`
+  );
+}
 assert(
   shouldArchiveCatalogedDraft({
     status: "draft",
@@ -153,4 +143,4 @@ assert(
   "short prefix does not guess when two lots share a stem"
 );
 
-console.log("archiveCataloged selftest ok (27 cases)");
+console.log("archiveCataloged selftest ok");

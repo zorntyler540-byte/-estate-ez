@@ -1,6 +1,8 @@
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 
+import { shouldPrepareAsPhoto } from "./mediaKind";
+
 /** Keep multipart uploads small enough for field Wi‑Fi / cellular. */
 export const UPLOAD_MAX_EDGE_PX = 1600;
 export const UPLOAD_JPEG_QUALITY = 0.72;
@@ -198,6 +200,10 @@ export async function preparePhotosForUpload(
   const skippedIds: string[] = [];
 
   for (const photo of photos) {
+    if (!shouldPrepareAsPhoto(photo)) {
+      skippedIds.push(photo.id);
+      continue;
+    }
     const name = photo.name.replace(/\.[^.]+$/, "") + ".jpg";
     try {
       const uri = await resolveUploadFileUri({ uri: photo.uri, name });

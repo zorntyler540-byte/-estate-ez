@@ -274,6 +274,71 @@ def test_job_outcome_matches_client_draft_id_without_folder(tmp_path: Path) -> N
     assert job_tasks.job_outcome_already_on_sale(db, leftover) is True
 
 
+def test_cataloged_drafts_map_completed_job_without_sku(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'nosku-job.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
+    draft = "1c86c230-a1c1-4433-b64e-5c2957e79027"
+    db.add(
+        Lot(
+            id="lot-1",
+            account_id="acct-1",
+            user_id="user-1",
+            sale_id="sale-1",
+            auction_title="Mixer",
+            sku=None,
+            photo_count=4,
+        )
+    )
+    db.add(
+        Photo(
+            id="p1",
+            account_id="acct-1",
+            user_id="user-1",
+            lot_id="lot-1",
+            original_name=f"mobile-{draft}-01.jpg",
+            storage_path="/catalog/a1.jpg",
+            sort_order=0,
+        )
+    )
+    when = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db.add(
+        ProcessingJob(
+            id="job-1",
+            account_id="acct-1",
+            user_id="user-1",
+            sale_id="sale-1",
+            status=JobStatus.completed,
+            input_folder="/tmp/batch",
+            single_lot_mode=True,
+            client_draft_id=draft,
+            created_at=when,
+            updated_at=when,
+        )
+    )
+    db.commit()
+    lots = cataloged_mobile_draft_lots(db, "acct-1", "sale-1")
+    assert len(lots) == 1
+    assert lots[0].lot_id == "lot-1"
+    assert lots[0].draft_id == draft
+    assert job_tasks.sale_active_cataloging_count(db, "acct-1", "sale-1") == 0
+    leftover = ProcessingJob(
+        id="job-leftover",
+        account_id="acct-1",
+        user_id="user-1",
+        sale_id="sale-1",
+        status=JobStatus.queued,
+        input_folder="/tmp/left",
+        single_lot_mode=True,
+        client_draft_id=draft,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(leftover)
+    db.commit()
+    assert job_tasks.sale_active_cataloging_count(db, "acct-1", "sale-1") == 0
+
+
 def test_upload_health_counts_and_draft_jobs(tmp_path, monkeypatch) -> None:
     client, Session = _client(tmp_path, monkeypatch)
     try:

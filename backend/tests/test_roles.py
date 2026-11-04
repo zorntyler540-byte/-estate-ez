@@ -74,6 +74,8 @@ def test_client_http_allowlist_is_upload_only() -> None:
     assert client_http_allowed("DELETE", "/jobs/job-1")
     assert client_http_allowed("GET", "/sales/sale-1/cataloged-mobile-drafts")
     assert client_http_allowed("GET", "/sales/sale-1/upload-health")
+    assert client_http_allowed("POST", "/mobile/drafts/status")
+    assert not client_http_allowed("GET", "/mobile/drafts/status")
     assert not client_http_allowed("POST", "/sales")
     assert not client_http_allowed("GET", "/ops/jobs")
     assert not client_http_allowed("POST", "/ops/jobs")

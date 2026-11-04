@@ -37,3 +37,54 @@ export function splitMediaUris(uris: string[]): { images: string[]; videos: stri
   }
   return { images, videos };
 }
+
+/** Draft row is a clip when staff marked it video **or** the file URI is a clip. */
+export function isVideoDraftRow(row: { media_kind?: string | null; file_uri?: string | null }): boolean {
+  return String(row.media_kind || "") === "video" || isVideoUri(row.file_uri);
+}
+
+export function splitDraftMedia<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): { images: T[]; videos: T[] } {
+  const images: T[] = [];
+  const videos: T[] = [];
+  for (const row of rows) {
+    if (isVideoDraftRow(row)) videos.push(row);
+    else images.push(row);
+  }
+  return { images, videos };
+}
+
+/** Clips must not go through ImageManipulator — that produced a gray ``.jpg`` tile. */
+export function shouldPrepareAsPhoto(photo: { uri: string; name: string }): boolean {
+  return !isVideoUri(photo.uri) && !isVideoUri(photo.name);
+}
+
+export function countDraftMedia<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): { photoCount: number; videoCount: number } {
+  const { images, videos } = splitDraftMedia(rows);
+  return { photoCount: images.length, videoCount: videos.length };
+}
+
+/** Queue card / Review button: never count a clip as a photo. */
+export function formatMediaCounts(photoCount: number, videoCount: number): string {
+  const photos = Math.max(0, photoCount);
+  const videos = Math.max(0, videoCount);
+  const photoWord = `${photos} photo${photos === 1 ? "" : "s"}`;
+  if (videos <= 0) return photoWord;
+  const videoWord = `${videos} video${videos === 1 ? "" : "s"}`;
+  if (photos <= 0) return videoWord;
+  return `${photoWord} · ${videoWord}`;
+}
+
+/** Still-photo multipart name. Videos must not take a slot in this sequence. */
+export function catalogPhotoFileName(draftId: string, indexFromZero: number): string {
+  return `mobile-${draftId}-${String(indexFromZero + 1).padStart(2, "0")}.jpg`;
+}
+
+export function catalogUploadPhotoRows<T extends { media_kind?: string | null; file_uri?: string | null }>(
+  rows: T[]
+): T[] {
+  return splitDraftMedia(rows).images;
+}

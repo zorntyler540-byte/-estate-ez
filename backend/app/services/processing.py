@@ -46,6 +46,7 @@ from app.services.photo_roles import (
 from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
+from app.catalog_limits import looks_like_video_file
 from app.catalog_storage import (
     catalog_photo_file_on_disk,
     persist_catalog_photo,
@@ -1137,7 +1138,10 @@ def _process_job_body(
         if key not in seen_paths:
             seen_paths.add(key)
             photos.append(np)
-    photos = sorted(photos, key=lambda p: str(p).lower())
+    photos = sorted(
+        [p for p in photos if not looks_like_video_file(p)],
+        key=lambda p: str(p).lower(),
+    )
     if not photos:
         job.status = JobStatus.failed
         job.error_message = "No supported images found in that folder (JPEG, PNG, WebP, HEIC)"

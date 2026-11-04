@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models import JobStatus, Lot, Photo, ProcessingJob
+from app.models import JobStatus, Lot, LotVideo, Photo, ProcessingJob
 
-# ``mobile-<uuid>-NN.jpg`` as written by mobile/lib/queue/sync.ts
+# ``mobile-<uuid>-NN.jpg`` (stills) and ``mobile-<uuid>-vid-NN.mp4`` (clips).
 _MOBILE_DRAFT_NAME = re.compile(
-    r"^mobile-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-\d+\.",
+    r"^mobile-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(?:vid-)?\d+\.",
     re.IGNORECASE,
 )
+
+# Single-lot jobs without a unique SKU: the new lot is created around the job clock.
+_SINGLE_LOT_SKEW = timedelta(minutes=2)
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,14 @@ def mobile_draft_id_from_original_name(name: str | None) -> str | None:
     return m.group(1).lower() if m else None
 
 
+def _aware(ts: datetime | None) -> datetime | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
 def _lot_row_to_draft(
     draft_id: str, lot_id: str, sku: str | None, photo_count: int | None, auction_title: str | None
 ) -> CatalogedMobileDraftLot:
@@ -44,18 +57,38 @@ def _lot_row_to_draft(
     )
 
 
+def _map_media_name(
+    by_draft: dict[str, CatalogedMobileDraftLot],
+    lots_by_id: dict[str, tuple],
+    lot_id: str,
+    original_name: str | None,
+    sku: str | None,
+    photo_count: int | None,
+    auction_title: str | None,
+) -> None:
+    draft_id = mobile_draft_id_from_original_name(original_name)
+    if not draft_id or draft_id in by_draft:
+        return
+    if str(lot_id) not in lots_by_id:
+        return
+    by_draft[draft_id] = _lot_row_to_draft(draft_id, str(lot_id), sku, photo_count, auction_title)
+
+
 def cataloged_mobile_draft_lots(
     db: Session, account_id: str, sale_id: str
 ) -> list[CatalogedMobileDraftLot]:
     """Phone drafts that already have catalog photos on this sale, with the lot they became.
 
     Prefer ``ProcessingJob.client_draft_id`` (new app builds). Fall back to
-    ``mobile-<draft>-NN.jpg`` photo names for jobs cataloged before that column existed.
+    ``mobile-<draft>-NN.jpg`` / ``mobile-<draft>-vid-NN`` names. Video-only lots
+    (or lots whose stills lost the mobile filename) still map via the clip name.
+    A completed single-lot job with no unique SKU maps to the one new lot created
+    around that job — Queue used to stay on "Cataloging…" when staff left SKU blank.
     """
     by_draft: dict[str, CatalogedMobileDraftLot] = {}
 
     lots = (
-        db.query(Lot.id, Lot.sku, Lot.photo_count, Lot.auction_title)
+        db.query(Lot.id, Lot.sku, Lot.photo_count, Lot.auction_title, Lot.created_at)
         .filter(Lot.account_id == account_id, Lot.sale_id == sale_id)
         .all()
     )
@@ -70,7 +103,12 @@ def cataloged_mobile_draft_lots(
         sku_to_lot[sku] = row
 
     completed_jobs = (
-        db.query(ProcessingJob.client_draft_id, ProcessingJob.single_lot_manual_sku)
+        db.query(
+            ProcessingJob.client_draft_id,
+            ProcessingJob.single_lot_manual_sku,
+            ProcessingJob.single_lot_mode,
+            ProcessingJob.created_at,
+        )
         .filter(
             ProcessingJob.account_id == account_id,
             ProcessingJob.sale_id == sale_id,
@@ -79,13 +117,16 @@ def cataloged_mobile_draft_lots(
         )
         .all()
     )
-    for client_draft_id, job_sku in completed_jobs:
+    unmatched_jobs: list[tuple[str, datetime | None]] = []
+    for client_draft_id, job_sku, single_lot_mode, created_at in completed_jobs:
         draft_id = (client_draft_id or "").strip().lower()
         if not draft_id or draft_id in by_draft:
             continue
         sku_key = (str(job_sku).strip().lower() if job_sku else "")
         lot_row = sku_to_lot.get(sku_key) if sku_key and sku_counts.get(sku_key) == 1 else None
         if lot_row is None:
+            if single_lot_mode:
+                unmatched_jobs.append((draft_id, _aware(created_at)))
             continue
         by_draft[draft_id] = _lot_row_to_draft(
             draft_id, str(lot_row[0]), lot_row[1], lot_row[2], lot_row[3]
@@ -102,12 +143,41 @@ def cataloged_mobile_draft_lots(
         .all()
     )
     for lot_id, original_name, sku, photo_count, auction_title in photo_rows:
-        draft_id = mobile_draft_id_from_original_name(original_name)
-        if not draft_id or draft_id in by_draft:
+        _map_media_name(by_draft, lots_by_id, str(lot_id), original_name, sku, photo_count, auction_title)
+
+    video_rows = (
+        db.query(LotVideo.lot_id, LotVideo.original_name, Lot.sku, Lot.photo_count, Lot.auction_title)
+        .join(Lot, LotVideo.lot_id == Lot.id)
+        .filter(
+            Lot.account_id == account_id,
+            Lot.sale_id == sale_id,
+            LotVideo.original_name.isnot(None),
+        )
+        .all()
+    )
+    for lot_id, original_name, sku, photo_count, auction_title in video_rows:
+        _map_media_name(by_draft, lots_by_id, str(lot_id), original_name, sku, photo_count, auction_title)
+
+    mapped_lot_ids = {row.lot_id for row in by_draft.values()}
+    for draft_id, job_created in unmatched_jobs:
+        if draft_id in by_draft:
             continue
-        if str(lot_id) not in lots_by_id:
+        candidates = []
+        for row in lots:
+            lot_id = str(row[0])
+            if lot_id in mapped_lot_ids:
+                continue
+            lot_created = _aware(row[4])
+            if job_created is not None and lot_created is not None and lot_created < job_created - _SINGLE_LOT_SKEW:
+                continue
+            candidates.append(row)
+        if len(candidates) != 1:
             continue
-        by_draft[draft_id] = _lot_row_to_draft(draft_id, str(lot_id), sku, photo_count, auction_title)
+        lot_row = candidates[0]
+        by_draft[draft_id] = _lot_row_to_draft(
+            draft_id, str(lot_row[0]), lot_row[1], lot_row[2], lot_row[3]
+        )
+        mapped_lot_ids.add(str(lot_row[0]))
     return sorted(by_draft.values(), key=lambda row: row.draft_id)
 
 
@@ -132,3 +202,126 @@ def cataloged_mobile_draft_ids(db: Session, account_id: str, sale_id: str) -> li
         if draft_id:
             ids.add(draft_id)
     return sorted(ids)
+
+
+_DRAFT_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# completed wins over a leftover receiving/failed row for the same draft (matches the phone).
+_JOB_STATUS_RANK = {
+    JobStatus.completed: 0,
+    JobStatus.processing: 1,
+    JobStatus.queued: 2,
+    JobStatus.receiving: 3,
+    JobStatus.failed: 4,
+}
+
+MOBILE_DRAFT_STATUS_MAX_IDS = 200
+
+
+@dataclass(frozen=True)
+class MobileDraftStatus:
+    draft_id: str
+    sale_id: str | None
+    job_id: str | None
+    job_status: str | None
+    error_message: str | None
+    lot_id: str | None
+    cataloged: bool
+
+
+def normalize_draft_ids(raw_ids: list[str]) -> list[str]:
+    """Lowercase UUID draft ids, de-duplicated in request order. Anything else is dropped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_ids:
+        key = str(raw or "").strip().lower()
+        if not _DRAFT_UUID.match(key) or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _job_sort_key(job: ProcessingJob) -> tuple[int, float]:
+    created = _aware(getattr(job, "created_at", None))
+    return (_JOB_STATUS_RANK.get(job.status, 9), -(created.timestamp() if created else 0.0))
+
+
+def mobile_draft_statuses(
+    db: Session,
+    account_id: str,
+    draft_ids: list[str],
+    *,
+    client_sale_id: str | None = None,
+    client_user_id: str | None = None,
+) -> list[MobileDraftStatus]:
+    """Job + lot state for specific phone drafts, without scanning every photo in every sale.
+
+    Lots map by exact ``mobile-<draft>-…`` media names. A completed job whose lot has no
+    phone filename falls back to the per-sale mapping for that sale only. Client logins
+    only see their own jobs on their assigned sale.
+    """
+    ids = normalize_draft_ids(draft_ids)[:MOBILE_DRAFT_STATUS_MAX_IDS]
+    if not ids:
+        return []
+
+    job_q = db.query(ProcessingJob).filter(
+        ProcessingJob.account_id == account_id,
+        ProcessingJob.client_draft_id.in_(ids),
+    )
+    if client_sale_id is not None:
+        job_q = job_q.filter(
+            ProcessingJob.sale_id == client_sale_id,
+            ProcessingJob.user_id == client_user_id,
+        )
+    best_job: dict[str, ProcessingJob] = {}
+    for job in job_q.all():
+        key = (job.client_draft_id or "").strip().lower()
+        current = best_job.get(key)
+        if current is None or _job_sort_key(job) < _job_sort_key(current):
+            best_job[key] = job
+
+    lot_by_draft: dict[str, tuple[str, str]] = {}
+    patterns = [f"mobile-{draft_id}-%" for draft_id in ids]
+    for model in (Photo, LotVideo):
+        q = (
+            db.query(model.lot_id, model.original_name, Lot.sale_id)
+            .join(Lot, model.lot_id == Lot.id)
+            .filter(Lot.account_id == account_id, or_(*[model.original_name.like(p) for p in patterns]))
+        )
+        if client_sale_id is not None:
+            q = q.filter(Lot.sale_id == client_sale_id)
+        for lot_id, original_name, sale_id in q.all():
+            draft_id = mobile_draft_id_from_original_name(original_name)
+            if draft_id and draft_id not in lot_by_draft and lot_id:
+                lot_by_draft[draft_id] = (str(lot_id), str(sale_id))
+
+    needs_sale_map = {
+        job.sale_id
+        for key, job in best_job.items()
+        if job.status == JobStatus.completed and key not in lot_by_draft and job.sale_id
+    }
+    for sale_id in needs_sale_map:
+        for row in cataloged_mobile_draft_lots(db, account_id, sale_id):
+            if row.draft_id in ids and row.draft_id not in lot_by_draft:
+                lot_by_draft[row.draft_id] = (row.lot_id, sale_id)
+
+    out: list[MobileDraftStatus] = []
+    for draft_id in ids:
+        job = best_job.get(draft_id)
+        lot = lot_by_draft.get(draft_id)
+        status = job.status.value if job is not None and hasattr(job.status, "value") else (
+            str(job.status) if job is not None else None
+        )
+        out.append(
+            MobileDraftStatus(
+                draft_id=draft_id,
+                sale_id=(lot[1] if lot else None) or (job.sale_id if job is not None else None),
+                job_id=job.id if job is not None else None,
+                job_status=status,
+                error_message=(job.error_message or None) if job is not None else None,
+                lot_id=lot[0] if lot else None,
+                cataloged=bool(lot) or (job is not None and job.status == JobStatus.completed),
+            )
+        )
+    return out

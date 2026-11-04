@@ -18,8 +18,8 @@ assert(
   pickCatalogLotForDraft({
     draftId: "1c86c230-a1c1-4433-b64e-5c2957e79027",
     mapped
-  })?.lotId === "lot-1",
-  "maps draft id to catalog lot"
+  })?.match === "exact",
+  "maps draft id to catalog lot as an exact match"
 );
 
 assert(
@@ -39,6 +39,16 @@ assert(
     lotsBySku: [{ id: "lot-sku", sku: "lv101", photo_count: 3, auction_title: "Lamp" } as never]
   })?.lotId === "lot-sku",
   "falls back to a unique SKU match"
+);
+
+assert(
+  pickCatalogLotForDraft({
+    draftId: "other",
+    manualSku: "LV101",
+    mapped: [],
+    lotsBySku: [{ id: "lot-sku", sku: "lv101", photo_count: 3, auction_title: "Lamp" } as never]
+  })?.match === "sku",
+  "SKU fallback is only a suggestion"
 );
 
 assert(

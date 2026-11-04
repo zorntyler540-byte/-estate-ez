@@ -976,6 +976,26 @@ class CatalogedMobileDraftsOut(BaseModel):
     lots: list[CatalogedMobileDraftLotOut] = []
 
 
+class MobileDraftStatusIn(BaseModel):
+    """Phone draft UUIDs to check (Queue follow-up). Unknown or malformed ids are ignored."""
+
+    draft_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class MobileDraftStatusRowOut(BaseModel):
+    draft_id: str
+    sale_id: str | None = None
+    job_id: str | None = None
+    job_status: str | None = None
+    error_message: str | None = None
+    lot_id: str | None = None
+    cataloged: bool = False
+
+
+class MobileDraftStatusOut(BaseModel):
+    drafts: list[MobileDraftStatusRowOut] = []
+
+
 class ReorderLotPhotosIn(BaseModel):
     """Every catalog photo id for this lot exactly once, in desired display order (left-to-right, then rows)."""
 

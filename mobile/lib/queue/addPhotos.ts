@@ -8,6 +8,14 @@ export type CatalogLotRef = {
   title?: string | null;
 };
 
+export type PickedCatalogLot = CatalogLotRef & {
+  /**
+   * ``exact`` = this draft's own lot (verified id or the server's draft map).
+   * ``sku`` = only a suggestion: ask staff to confirm and never save it on the draft.
+   */
+  match: "exact" | "sku";
+};
+
 export function normalizeDraftId(id: string | null | undefined): string {
   return String(id || "").trim().toLowerCase();
 }
@@ -18,7 +26,8 @@ export function normalizeSku(sku: string | null | undefined): string {
 
 /**
  * Find the website lot for a Queue draft so Add photos can append (not Resend).
- * Prefer a cached lot id, then the sale's mobile-draft map, then a unique SKU match.
+ * Prefer the verified lot id, then the sale's mobile-draft map, then a unique SKU
+ * *suggestion* (two sales can reuse SKU numbers, so that one needs a human confirm).
  */
 export function pickCatalogLotForDraft(opts: {
   draftId: string;
@@ -26,21 +35,22 @@ export function pickCatalogLotForDraft(opts: {
   cachedLotId?: string | null;
   mapped: CatalogLotRef[];
   lotsBySku?: Lot[];
-}): CatalogLotRef | null {
+}): PickedCatalogLot | null {
   const cached = String(opts.cachedLotId || "").trim();
   if (cached) {
     const hit = opts.mapped.find((row) => row.lotId === cached);
-    if (hit) return hit;
+    if (hit) return { ...hit, match: "exact" };
     return {
       lotId: cached,
       sku: opts.manualSku ?? null,
-      photoCount: 0
+      photoCount: 0,
+      match: "exact"
     };
   }
 
   const draftId = normalizeDraftId(opts.draftId);
   const fromMap = opts.mapped.find((row) => normalizeDraftId(row.draftId) === draftId);
-  if (fromMap) return fromMap;
+  if (fromMap) return { ...fromMap, match: "exact" };
 
   const sku = normalizeSku(opts.manualSku);
   if (!sku || !opts.lotsBySku?.length) return null;
@@ -51,7 +61,8 @@ export function pickCatalogLotForDraft(opts: {
     lotId: lot.id,
     sku: lot.sku,
     photoCount: lot.photo_count,
-    title: lot.auction_title
+    title: lot.auction_title,
+    match: "sku"
   };
 }
 

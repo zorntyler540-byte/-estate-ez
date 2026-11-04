@@ -1,6 +1,33 @@
 const PROXY_BUSY =
   /upstream error|no healthy upstream|application failed to respond|bad gateway|\b502\b|\b503\b|\b504\b/i;
 
+/** HTTP failure with the response status kept, so callers can tell permanent from transient. */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function apiErrorStatus(e: unknown): number | null {
+  if (e instanceof ApiError) return e.status;
+  const status = (e as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
+ * 4xx the same request will keep getting (too large, forbidden, gone, invalid).
+ * 401 (credential refresh), 408 (timeout) and 429 (rate limit) can succeed later.
+ */
+export function isPermanentClientError(e: unknown): boolean {
+  const status = apiErrorStatus(e);
+  if (status == null || status < 400 || status >= 500) return false;
+  return status !== 401 && status !== 408 && status !== 429;
+}
+
 export function isProxyBusyError(message: string | null | undefined): boolean {
   return PROXY_BUSY.test((message || "").trim());
 }

@@ -177,6 +177,9 @@ from app.schemas import (
     ReorderLotPhotosIn,
     CatalogedMobileDraftLotOut,
     CatalogedMobileDraftsOut,
+    MobileDraftStatusIn,
+    MobileDraftStatusOut,
+    MobileDraftStatusRowOut,
     SalePhotoHealthOut,
     SaleUploadHealthOut,
     SaleUploadHealthJobOut,
@@ -236,7 +239,11 @@ from app.services.photo_order import (
     renormalize_photo_sort_orders,
     reorder_photos_for_listing,
 )
-from app.services.mobile_drafts import cataloged_mobile_draft_ids, cataloged_mobile_draft_lots
+from app.services.mobile_drafts import (
+    cataloged_mobile_draft_ids,
+    cataloged_mobile_draft_lots,
+    mobile_draft_statuses,
+)
 from app.services.photo_roles import normalize_catalog_photo_role, photos_for_ctbids_listing
 from app.services.sale_covers import (
     SALE_COVER_SLOT_COUNT,
@@ -2198,6 +2205,45 @@ def sale_cataloged_mobile_drafts(
     )
 
 
+@app.post("/mobile/drafts/status", response_model=MobileDraftStatusOut)
+def mobile_drafts_status(
+    payload: MobileDraftStatusIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MobileDraftStatusOut:
+    """Job + lot state for specific phone drafts (phone Queue follow-up).
+
+    One query per table for the requested ids instead of the phone scanning every open
+    sale's ``cataloged-mobile-drafts``.
+    """
+    client_sale_id: str | None = None
+    if is_client_role(current.role):
+        client_sale_id = _client_assigned_sale_id(current)
+        if not client_sale_id:
+            return MobileDraftStatusOut(drafts=[])
+    rows = mobile_draft_statuses(
+        db,
+        current.account_id,
+        payload.draft_ids,
+        client_sale_id=client_sale_id,
+        client_user_id=current.id if client_sale_id else None,
+    )
+    return MobileDraftStatusOut(
+        drafts=[
+            MobileDraftStatusRowOut(
+                draft_id=row.draft_id,
+                sale_id=row.sale_id,
+                job_id=row.job_id,
+                job_status=row.job_status,
+                error_message=row.error_message,
+                lot_id=row.lot_id,
+                cataloged=row.cataloged,
+            )
+            for row in rows
+        ]
+    )
+
+
 @app.get("/sales/{sale_id}/upload-health", response_model=SaleUploadHealthOut)
 def sale_upload_health(
     sale_id: str,
@@ -2224,7 +2270,7 @@ def sale_upload_health(
         for row in job_tasks.jobs_with_client_draft_id(db, current.account_id, sale_id)
         if row.client_draft_id
     ]
-    cataloging = int(counts.get("queued", 0) or 0) + int(counts.get("processing", 0) or 0)
+    cataloging = job_tasks.sale_active_cataloging_count(db, current.account_id, sale_id)
     return SaleUploadHealthOut(
         sale_id=sale_id,
         counts=counts,
