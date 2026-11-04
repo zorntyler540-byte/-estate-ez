@@ -262,12 +262,23 @@ def test_snapshot_scores_matches_lots_and_rejects_bidder_fields(tmp_path) -> Non
         assert engagement["watchers"] == 8
         assert engagement["ctseller_item_id"] == 5667527
 
-        # A later refresh that drops the uncataloged lot removes it.
-        shrunk = client.post(
+        # A partial refresh (old clients send no ``complete``) keeps the missing lot.
+        partial = client.post(
             "/integrations/engagement/snapshots",
             json={**body, "items": body["items"][:2]},
         )
+        assert partial.status_code == 200, partial.text
+        assert partial.json()["pruned"] == 0
+        kept = client.get("/engagement/sales/48212").json()
+        assert {row["sku"] for row in kept["items"]} == {"TG368AD", "TG400SK", "NOLOT"}
+
+        # A complete refresh that drops the uncataloged lot removes it.
+        shrunk = client.post(
+            "/integrations/engagement/snapshots",
+            json={**body, "items": body["items"][:2], "complete": True},
+        )
         assert shrunk.status_code == 200, shrunk.text
+        assert shrunk.json()["pruned"] == 1
         again = client.get("/engagement/sales/48212").json()
         assert {row["sku"] for row in again["items"]} == {"TG368AD", "TG400SK"}
     finally:
@@ -409,3 +420,241 @@ def test_calendar_fills_needs_eyes_lightly_and_keeps_keys_unique() -> None:
         sale_ends_at=datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc),
     )
     assert no_interest_posts == []
+
+
+def _item(item_id: int, sku: str, *, watchers: int, bids: int, price: float = 5, reserve: float = 5) -> dict:
+    return {
+        "ctseller_item_id": item_id,
+        "sku": sku,
+        "title": sku,
+        "views": 25,
+        "watchers": watchers,
+        "bids": bids,
+        "price": price,
+        "reserve": reserve,
+        "item_url": f"https://ctbids.com/estate-sale/48212/item/{item_id}",
+        "item_status": "Ready",
+    }
+
+
+def _body(items: list[dict], *, captured_at: str | None, **extra) -> dict:
+    body = {
+        "ctseller_sale_id": 48212,
+        "sale_title": "Primitive sale",
+        "auction_url": "https://ctbids.com/estate-sale/48212/",
+        "sale_ends_at": "2026-10-20T18:00:00-07:00",
+        "items": items,
+        **extra,
+    }
+    if captured_at is not None:
+        body["captured_at"] = captured_at
+    return body
+
+
+def test_snapshot_older_than_stored_is_ignored(tmp_path) -> None:
+    client, db = _client(tmp_path)
+    cards = _item(5667527, "TG368AD", watchers=8, bids=2)
+    try:
+        first = client.post("/integrations/engagement/snapshots", json=_body([cards], captured_at="2026-10-15T16:00:00-07:00"))
+        assert first.status_code == 200, first.text
+        assert first.json()["ignored"] is False
+
+        older = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body(
+                [{**cards, "watchers": 1, "bids": 0}],
+                captured_at="2026-10-15T15:00:00-07:00",
+                complete=True,
+            ),
+        )
+        assert older.status_code == 200, older.text
+        out = older.json()
+        assert out["ignored"] is True
+        assert out["pruned"] == 0
+        assert out["push"] == 1
+        assert datetime.fromisoformat(out["captured_at"].replace("Z", "+00:00")) == datetime(
+            2026, 10, 15, 23, 0, tzinfo=timezone.utc
+        )
+        stored = client.get("/engagement/sales/48212").json()["items"][0]
+        assert stored["watchers"] == 8
+        assert stored["bids"] == 2
+
+        same = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body([{**cards, "watchers": 9}], captured_at="2026-10-15T23:00:00+00:00"),
+        )
+        assert same.json()["ignored"] is False
+        assert client.get("/engagement/sales/48212").json()["items"][0]["watchers"] == 9
+
+        # Old clients send neither ``captured_at`` nor ``complete``: server time, never prunes.
+        legacy = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body([{**cards, "watchers": 10}], captured_at=None),
+        )
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["ignored"] is False
+        assert legacy.json()["complete"] is False
+        assert client.get("/engagement/sales/48212").json()["items"][0]["watchers"] == 10
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_partial_snapshot_keeps_missing_lots_and_ranks_the_whole_sale(tmp_path) -> None:
+    client, db = _client(tmp_path)
+    cards = _item(5667527, "TG368AD", watchers=8, bids=2)
+    necklace = _item(5628417, "TG400SK", watchers=4, bids=1, price=1, reserve=15)
+    loose = _item(999, "NOLOT", watchers=0, bids=0, price=0, reserve=10)
+    try:
+        full = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body([cards, necklace, loose], captured_at="2026-10-15T16:00:00-07:00", complete=True),
+        )
+        assert full.status_code == 200, full.text
+        before = {row["sku"]: row for row in client.get("/engagement/sales/48212").json()["items"]}
+        assert before["TG368AD"]["push_rank"] == 1
+        assert before["TG400SK"]["push_rank"] == 2
+
+        partial = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body(
+                [{**necklace, "watchers": 30, "views": 90}],
+                captured_at="2026-10-15T17:00:00-07:00",
+            ),
+        )
+        assert partial.status_code == 200, partial.text
+        out = partial.json()
+        assert out["item_count"] == 1
+        assert out["pruned"] == 0
+        assert out["complete"] is False
+        assert out["push"] == 2
+        assert out["no_interest"] == 1
+
+        after = {row["sku"]: row for row in client.get("/engagement/sales/48212").json()["items"]}
+        assert set(after) == {"TG368AD", "TG400SK", "NOLOT"}
+        assert after["TG368AD"]["watchers"] == 8
+        assert after["TG400SK"]["watchers"] == 30
+        assert after["TG400SK"]["push_rank"] == 1
+        assert after["TG368AD"]["push_rank"] == 2
+        lot = client.get("/lots/lot-matched").json()["engagement"]
+        assert lot["bucket"] == "Push"
+        assert lot["push_rank"] == 2
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_concurrent_ingests_for_a_new_sale_do_not_500(tmp_path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.models import EngagementSnapshot
+
+    client, db = _client(tmp_path)
+    items = [
+        _item(5667527, "TG368AD", watchers=8, bids=2),
+        _item(5628417, "TG400SK", watchers=4, bids=1, price=1, reserve=15),
+        _item(999, "NOLOT", watchers=0, bids=0, price=0, reserve=10),
+    ]
+    body = _body(items, captured_at="2026-10-15T16:00:00-07:00", complete=True)
+    try:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(
+                pool.map(lambda _i: client.post("/integrations/engagement/snapshots", json=body), range(6))
+            )
+        assert [r.status_code for r in results] == [200] * 6, [r.text for r in results]
+        assert db.query(EngagementSnapshot).count() == 3
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_ingest_retries_when_another_writer_inserts_the_same_item(tmp_path, monkeypatch) -> None:
+    from app.models import EngagementSnapshot
+    from app.services import engagement_store
+
+    client, db = _client(tmp_path)
+    Session = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, future=True)
+    real_match = engagement_store._match_lot
+    raced: list[bool] = []
+
+    def racing_match(*args, **kwargs):
+        if not raced:
+            raced.append(True)
+            other = Session()
+            other.add(
+                EngagementSnapshot(
+                    account_id="acct-e",
+                    ctseller_sale_id=48212,
+                    ctseller_item_id=5667527,
+                    sku="TG368AD",
+                    captured_at=datetime(2026, 10, 15, 22, 0, tzinfo=timezone.utc),
+                )
+            )
+            other.commit()
+            other.close()
+        return real_match(*args, **kwargs)
+
+    monkeypatch.setattr(engagement_store, "_match_lot", racing_match)
+    try:
+        res = client.post(
+            "/integrations/engagement/snapshots",
+            json=_body([_item(5667527, "TG368AD", watchers=8, bids=2)], captured_at="2026-10-15T16:00:00-07:00"),
+        )
+        assert res.status_code == 200, res.text
+        assert raced == [True]
+        rows = db.query(EngagementSnapshot).all()
+        assert len(rows) == 1
+        assert rows[0].watchers == 8
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_facebook_calendar_sync_runs_off_the_request_thread(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from app import engagement_tasks
+    from app.services import facebook_calendar
+
+    started = threading.Semaphore(0)
+    release = threading.Event()
+    calls: list[tuple[str, int, str]] = []
+
+    def slow_sync(sync_db, account_id, sale_id, **kwargs):
+        calls.append((account_id, sale_id, threading.current_thread().name))
+        assert sync_db.get_bind() is not None
+        started.release()
+        assert release.wait(5)
+
+    def real_thread(target, name):
+        threading.Thread(target=target, daemon=True, name=name).start()
+
+    monkeypatch.setattr(engagement_tasks, "_start_thread", real_thread)
+    monkeypatch.setattr(facebook_calendar, "sync_facebook_calendar_after_snapshot", slow_sync)
+    client, db = _client(tmp_path)
+    cards = _item(5667527, "TG368AD", watchers=8, bids=2)
+    try:
+        first = client.post("/integrations/engagement/snapshots", json=_body([cards], captured_at=None))
+        assert first.status_code == 200, first.text
+        assert started.acquire(timeout=5)
+        # Returned while the Graph-side sync is still blocked.
+        assert not release.is_set()
+        second = client.post("/integrations/engagement/snapshots", json=_body([{**cards, "watchers": 9}], captured_at=None))
+        assert second.status_code == 200, second.text
+        third = client.post("/integrations/engagement/snapshots", json=_body([{**cards, "watchers": 10}], captured_at=None))
+        assert third.status_code == 200, third.text
+        release.set()
+        # Two queued while running coalesce into one more pass.
+        assert started.acquire(timeout=5)
+        for _ in range(50):
+            with engagement_tasks._lock:
+                if not engagement_tasks._running:
+                    break
+            threading.Event().wait(0.05)
+        assert len(calls) == 2
+        assert all(name.startswith("fb-cal-sync-48212") for _a, _s, name in calls)
+        assert all((a, s) == ("acct-e", 48212) for a, s, _n in calls)
+    finally:
+        release.set()
+        app.dependency_overrides.clear()
+        db.close()

@@ -1240,7 +1240,11 @@ class EngagementSnapshotIn(BaseModel):
     sale_title: str = ""
     auction_url: str = ""
     sale_ends_at: datetime | None = None
+    # When the Watcher read these counts. Older than what is stored for the sale → ignored.
     captured_at: datetime | None = None
+    # True only when ``items`` is every live lot in the sale. Lots missing from a
+    # complete snapshot are dropped; a partial (default) snapshot leaves them alone.
+    complete: bool = False
     items: list[EngagementItemIn] = Field(min_length=1, max_length=2000)
 
 
@@ -1331,6 +1335,11 @@ class EngagementIngestOut(BaseModel):
     ctseller_sale_id: int
     item_count: int
     matched_lots: int
+    # True when the snapshot was older than the stored one and nothing was written.
+    ignored: bool = False
+    complete: bool = False
+    pruned: int = 0
+    captured_at: datetime | None = None
     no_interest: int = 0
     needs_eyes: int = 0
     rescue: int = 0

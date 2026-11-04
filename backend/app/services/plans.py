@@ -26,11 +26,21 @@ _ALWAYS = {
     ("GET", "/auth/me"),
     ("PATCH", "/auth/password"),
     ("POST", "/auth/logout-all"),
+    # Reading CT Seller status and removing the stored login stay open even
+    # when the Push queue switch is off.
+    ("GET", "/integrations/ctseller"),
+    ("DELETE", "/integrations/ctseller/credentials"),
 }
 
+# The desktop Watcher reads live counts with the CT Seller session minted from
+# this account, so connecting CT Seller belongs to the Push queue switch.
 _ANALYTICS_EXACT = {
     ("POST", "/integrations/engagement/snapshots"),
     ("GET", "/engagement/sales"),
+    ("POST", "/integrations/ctseller/session"),
+    ("PUT", "/integrations/ctseller/credentials"),
+    ("POST", "/integrations/ctseller/mfa/send"),
+    ("POST", "/integrations/ctseller/mfa/verify"),
 }
 
 _FACEBOOK_EXACT = {
@@ -93,6 +103,13 @@ def watcher_route_feature(method: str, path: str) -> str | None:
             return "facebook"
         if rest == ["calendar", "facebook", "cancel"] and verb == "POST":
             return "facebook"
+        return None
+    if verb == "GET" and parts and parts[0] == "lots" and parts[-1] == "thumbnail":
+        # Push-queue thumbs: /lots/{id}/thumbnail and /lots/{id}/photos/{photo_id}/thumbnail.
+        if len(parts) == 3 and parts[1]:
+            return "analytics"
+        if len(parts) == 5 and parts[1] and parts[2] == "photos" and parts[3]:
+            return "analytics"
         return None
     if (
         verb == "GET"
