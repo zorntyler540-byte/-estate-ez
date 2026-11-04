@@ -164,7 +164,7 @@ export default function CaptureSessionScreen() {
   const captureModes = captureModesFor(signedInRole);
   const listingChannel = !clientLogin && params.channel === "facebook" ? "facebook" : "ctseller";
   const isFacebook = listingChannel === "facebook";
-  const { syncNow, setSyncPaused } = useSyncActions();
+  const { requestUpload, setSyncPaused } = useSyncActions();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const landscape = windowWidth > windowHeight;
@@ -208,8 +208,8 @@ export default function CaptureSessionScreen() {
   const draftIdRef = useRef<string | null>(null);
   /** Queued/failed lot reopened here; it goes back in the queue when this screen closes. */
   const reopenedDraftRef = useRef<string | null>(null);
-  const syncNowRef = useRef(syncNow);
-  syncNowRef.current = syncNow;
+  const requestUploadRef = useRef(requestUpload);
+  requestUploadRef.current = requestUpload;
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const applyZoom = useCallback((next: number) => {
@@ -368,7 +368,7 @@ export default function CaptureSessionScreen() {
           const draft = await getLotDraft(reopened);
           if (draft?.status === "draft" && draft.photo_count + (draft.video_count || 0) > 0) {
             await requeueDraft(reopened, "queued");
-            void syncNowRef.current();
+            requestUploadRef.current();
           }
         })().catch(() => undefined);
       }
@@ -763,11 +763,11 @@ export default function CaptureSessionScreen() {
     } finally {
       setBusy(false);
     }
-    void syncNow();
+    requestUpload();
     const label = appendSku || appendTitle || "this lot";
     Alert.alert(
       "Queued for upload",
-      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} will be added to ${label}. They stay on this phone (Queue tab) until the website has them.`,
+      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} will be added to ${label}. They stay on this phone (Queue tab) until the website has them, and upload on their own once the connection is steady.`,
       [{ text: "OK", onPress: () => router.back() }]
     );
   }
@@ -821,10 +821,10 @@ export default function CaptureSessionScreen() {
     }
     await updateDraftManualSku(draftId, manualSku);
     await requeueDraft(draftId, "queued");
-    void syncNow();
+    requestUpload();
     Alert.alert(
       "Lot queued",
-      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}.\n\nPhotos catalog first; videos attach after the lot is on the website.`,
+      `${thumbs.length} file${thumbs.length === 1 ? "" : "s"} queued for ${selectedSaleName ? `"${selectedSaleName}"` : "this sale"}. Saved on this phone — it uploads on its own once the connection is steady, even if you are offline now.\n\nPhotos catalog first; videos attach after the lot is on the website.`,
       [{ text: "OK", onPress: () => router.back() }]
     );
   }

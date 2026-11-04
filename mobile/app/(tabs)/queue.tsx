@@ -7,17 +7,30 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
+  Switch,
   View
 } from "react-native";
 import { Text } from "@/components/AppText";
-import NetInfo from "@react-native-community/netinfo";
 
 import { PhotoPreviewModal } from "@/components/DraftPhotos";
 import { formatMediaCounts } from "@/lib/mediaKind";
-import { blockedClipLine, formatSyncOutcome, queueRowTitle, queueRowView } from "@/lib/queue/queueStatus";
+import { connectionStatusLine } from "@/lib/connectivity";
+import {
+  blockedClipLine,
+  countWaitingLots,
+  formatSyncOutcome,
+  queueRowTitle,
+  queueRowView
+} from "@/lib/queue/queueStatus";
 import { useAuth } from "@/context/AuthContext";
 import { useSales } from "@/context/SalesContext";
-import { useSyncActions, useSyncRefreshKey, useSyncStatus, type SyncResult } from "@/context/SyncContext";
+import {
+  useConnectionStatus,
+  useSyncActions,
+  useSyncRefreshKey,
+  useSyncStatus,
+  type SyncResult
+} from "@/context/SyncContext";
 import { getLot, listCatalogedMobileDraftsDetailed, listLots } from "@/lib/api";
 import { fetchAllLotPages, queueRowsUnchanged } from "@/lib/lotsReload";
 import { pickCatalogLotForDraft, queueAddPhotosIsLocal } from "@/lib/queue/addPhotos";
@@ -70,9 +83,11 @@ export default function QueueScreen() {
   const clientLogin = (signedInRole || "").toLowerCase() === "client";
   const { getSaleName } = useSales();
   const { syncing, lastMessage } = useSyncStatus();
-  const { syncNow } = useSyncActions();
+  const { syncNow, requestUpload, setWifiOnly } = useSyncActions();
+  const connection = useConnectionStatus();
+  const online = connection.phase !== "offline";
   const [rows, setRows] = useState<DraftRow[]>([]);
-  const [online, setOnline] = useState<boolean | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [message, setMessage] = useState("");
   const [previewUris, setPreviewUris] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -86,16 +101,14 @@ export default function QueueScreen() {
     try {
       // Text-only first. Loading every JPEG URI and decoding thumbs is what
       // hard-killed the pink iPhone when this tab opened.
-      const [drafts, net, blocked] = await Promise.all([
+      const [drafts, blocked] = await Promise.all([
         listLotDrafts(),
-        NetInfo.fetch(),
         listBlockedClipReasons().catch(() => new Map<string, string[]>())
       ]);
       const enriched = queueRowsFromDrafts(drafts);
       setBlockedByDraft(blocked);
       setRows((prev) => (queueRowsUnchanged(prev, enriched) ? prev : enriched));
-      setOnline(net.isConnected ?? false);
-      if (opts?.archive !== false && token && !syncing) {
+      if (opts?.archive !== false && token && !syncing && online) {
         try {
           const n = await sweepArchiveConfirmedDrafts(token);
           if (n > 0) {
@@ -113,7 +126,15 @@ export default function QueueScreen() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load Queue");
     }
-  }, [token, syncing]);
+  }, [token, syncing, online]);
+
+  // Countdown for "Waiting for stable connection (~Ns)" — only while that line is showing.
+  useEffect(() => {
+    if (!focused || (connection.phase !== "waiting_stable" && connection.phase !== "unreachable")) return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [focused, connection.phase]);
 
   useFocusEffect(
     useCallback(() => {
@@ -130,7 +151,7 @@ export default function QueueScreen() {
   async function queueDraft(id: string) {
     await requeueDraft(id, "queued");
     await refresh();
-    void syncNow({ manual: true });
+    requestUpload();
   }
 
   /** Needs attention: staff fixed the problem (or want another try) — send it again now. */
@@ -315,9 +336,9 @@ export default function QueueScreen() {
     const result = await syncNow({ manual: true });
     if (result) {
       setMessage(formatQueueSyncMessage(result, online));
-    } else if (!syncing) {
-      setMessage(lastMessage ?? "Sync skipped.");
     }
+    // No result (offline, or a Sync was already running): the banner falls back to the live
+    // Sync message ("Offline, N lots waiting…") instead of a stale copy captured at tap time.
     await refresh();
   }
 
@@ -443,14 +464,48 @@ export default function QueueScreen() {
   }
 
   const banner = syncing ? lastMessage || message : message || lastMessage;
+  const waitingLots = countWaitingLots(activeRows);
+  const statusLine = connectionStatusLine({
+    phase: connection.phase,
+    waiting: waitingLots,
+    syncing,
+    retryAt: connection.retryAt,
+    now: clock
+  });
+  const showCellularOverride =
+    connection.phase === "wifi_required" && waitingLots > 0 && !syncing && !showArchive;
+
+  async function uploadOnCellularOnce() {
+    setMessage("");
+    const result = await syncNow({ manual: true, allowCellular: true });
+    if (result) setMessage(formatQueueSyncMessage(result, online));
+    await refresh();
+  }
 
   return (
     <View style={styles.root}>
       <QueueDraftRefresh enabled={focused} onRefresh={() => void refresh({ archive: false })} />
-      <Text style={styles.status}>
-        Network: {online === null ? "…" : online ? "Online" : "Offline"}
-        {syncing ? " · Syncing…" : ""}
+      <Text
+        style={[
+          styles.status,
+          statusLine.tone === "warn" ? styles.statusWarn : statusLine.tone === "ok" ? styles.statusOk : null
+        ]}
+        accessibilityLiveRegion="polite"
+      >
+        {statusLine.text}
       </Text>
+      <View style={styles.settingRow}>
+        <View style={styles.settingText}>
+          <Text style={styles.settingLabel}>Upload on Wi‑Fi only</Text>
+          <Text style={styles.hint}>Photos and videos wait for Wi‑Fi. Off = cellular is fine.</Text>
+        </View>
+        <Switch
+          accessibilityLabel="Upload on Wi‑Fi only"
+          value={connection.wifiOnly}
+          onValueChange={(on) => void setWifiOnly(on)}
+          trackColor={{ true: theme.primary, false: theme.borderStrong }}
+        />
+      </View>
       <Text style={styles.hint}>
         {showArchive
           ? "Phone archive only — these listings stay on the website. Photos are already off this phone. Clear Archive when you are done."
@@ -476,6 +531,16 @@ export default function QueueScreen() {
           <Text style={styles.primaryText}>Sync now</Text>
         )}
       </Pressable>
+
+      {showCellularOverride ? (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.archiveBtn}
+          onPress={() => void uploadOnCellularOnce()}
+        >
+          <Text style={styles.archiveBtnText}>Upload now on cellular (this time only)</Text>
+        </Pressable>
+      ) : null}
 
       {archiveRows.length > 0 || showArchive ? (
         <Pressable
@@ -535,7 +600,9 @@ export default function QueueScreen() {
           const view = queueRowView({
             ...item,
             online,
-            syncing
+            connection: connection.phase,
+            syncing,
+            now: clock
           });
           const otherSale = Boolean(selectedSaleId && item.sale_id !== selectedSaleId);
           const blockedReasons = archived ? [] : blockedByDraft.get(item.id) ?? [];
@@ -667,6 +734,16 @@ export default function QueueScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, padding: 16, gap: 12, backgroundColor: theme.bg },
   status: { color: theme.textMuted, fontSize: 14 },
+  statusWarn: { color: theme.warning, fontWeight: "600" },
+  statusOk: { color: theme.success },
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minHeight: MIN_TAP_PX
+  },
+  settingText: { flex: 1, gap: 2 },
+  settingLabel: { color: theme.text, fontSize: 15, fontWeight: "600" },
   hint: { color: theme.textSubtle, fontSize: 13 },
   message: { color: theme.textSoft, fontSize: 14 },
   primary: {

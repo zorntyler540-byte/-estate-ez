@@ -12,6 +12,9 @@ import {
 import { AccessibilityInfo, AppState, type AppStateStatus } from "react-native";
 
 import { useAuth } from "@/context/AuthContext";
+import { pingApi } from "@/lib/api";
+import { setBackgroundUploadEnabled } from "@/lib/backgroundUpload";
+import { ConnectionController, type ConnectionPhase } from "@/lib/connectivity";
 import {
   advanceFollowUp,
   followUpNeedsSync,
@@ -19,33 +22,20 @@ import {
   stopFollowUp,
   type FollowUpPlan
 } from "@/lib/queue/catalogFollowUp";
-import {
-  countLotsNeedingPhotoUpload,
-  countLotsNeedingWebsiteCheck,
-  listFollowUpDrafts
-} from "@/lib/queue/db";
+import { countLotsNeedingPhotoUpload, listFollowUpDrafts } from "@/lib/queue/db";
 import { nextAnnouncement } from "@/lib/a11y";
-import { formatSyncOutcome } from "@/lib/queue/queueStatus";
-import {
-  attachPendingLotVideos,
-  loadWebsiteIndex,
-  lookupDraftStatuses,
-  sweepArchiveConfirmedDrafts,
-  syncPendingLots
-} from "@/lib/queue/sync";
+import { lookupDraftStatuses } from "@/lib/queue/sync";
+import { runSyncPass, type SyncResult } from "@/lib/queue/syncRunner";
 import { sweepImageCache } from "@/lib/queue/captureFiles";
-import { SyncGate, type SyncRequest } from "@/lib/syncGate";
+import { sharedSyncGate, type SyncRequest } from "@/lib/syncGate";
+import { uploadPause } from "@/lib/uploadPause";
+import { getUploadOnWifiOnly, setUploadOnWifiOnly } from "@/lib/uploadSettings";
 
+/** Automatic Syncs with nothing to upload (website checks only) run at most this often. */
 const AUTO_SYNC_COOLDOWN_MS = 45_000;
 const CACHE_SWEEP_INTERVAL_MS = 60 * 60_000;
 
-export type SyncResult = {
-  uploaded: number;
-  failed: number;
-  reconciled: number;
-  archived?: number;
-  healthSummary?: string | null;
-};
+export type { SyncResult };
 
 type SyncStatusValue = {
   syncing: boolean;
@@ -56,15 +46,29 @@ type SyncRefreshValue = {
   refreshKey: number;
 };
 
+type ConnectionValue = {
+  /** offline / wifi_required / waiting_stable / checking / unreachable / ready */
+  phase: ConnectionPhase;
+  /** When the current wait ends (stability window or next health ping), for countdown copy. */
+  retryAt: number | null;
+  wifiOnly: boolean;
+};
+
 type SyncStateValue = SyncStatusValue & SyncRefreshValue;
 
-/** ``manual`` = the user asked (Sync now / Retry / Resend): transient failures skip their backoff. */
+/**
+ * ``manual`` = the user asked (Sync now / Retry / Resend): runs now, skips retry backoff.
+ * ``allowCellular`` = send photos/videos over cellular this once despite Upload on Wi‑Fi only.
+ */
 export type SyncNowOptions = SyncRequest;
 
 type SyncActionsValue = {
   /** ``null`` when Sync could not start — including "already running" (a rerun is then queued). */
   syncNow: (opts?: SyncNowOptions) => Promise<SyncResult | null>;
+  /** New lot queued: upload once the connection is verified stable (never mid-flap). */
+  requestUpload: () => void;
   setSyncPaused: (paused: boolean) => void;
+  setWifiOnly: (on: boolean) => Promise<void>;
 };
 
 type SyncContextValue = SyncStateValue & SyncActionsValue;
@@ -72,157 +76,166 @@ type SyncContextValue = SyncStateValue & SyncActionsValue;
 const SyncStatusContext = createContext<SyncStatusValue | null>(null);
 const SyncRefreshContext = createContext<SyncRefreshValue | null>(null);
 const SyncActionsContext = createContext<SyncActionsValue | null>(null);
-
-function formatSyncMessage(result: SyncResult): string {
-  return formatSyncOutcome(result);
-}
+const ConnectionContext = createContext<ConnectionValue | null>(null);
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();
   const [syncing, setSyncing] = useState(false);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [connection, setConnection] = useState<{ phase: ConnectionPhase; retryAt: number | null }>({
+    phase: "offline",
+    retryAt: null
+  });
+  const [wifiOnly, setWifiOnlyState] = useState(false);
 
-  const syncInProgressRef = useRef(false);
-  const gateRef = useRef(new SyncGate());
   const syncNowRef = useRef<(opts?: SyncNowOptions) => Promise<SyncResult | null>>(async () => null);
+  const controllerRef = useRef<ConnectionController | null>(null);
   const syncPausedRef = useRef(false);
+  /** Connection became ready while the camera was open; start when it closes. */
+  const autoPendingRef = useRef(false);
+  /** The running Sync was allowed onto cellular despite Wi‑Fi only. */
+  const runningOnCellularRef = useRef(false);
+  const wifiOnlyRef = useRef(false);
   const lastSyncAtRef = useRef(0);
   const lastCacheSweepAtRef = useRef(0);
-  const wasConnectedRef = useRef<boolean | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
   const followUpPlanRef = useRef<FollowUpPlan | null>(null);
   const [followUpWake, setFollowUpWake] = useState(0);
 
-  const setSyncPaused = useCallback((paused: boolean) => {
-    const wasPaused = syncPausedRef.current;
-    syncPausedRef.current = paused;
-    if (wasPaused && !paused) setFollowUpWake((k) => k + 1);
-  }, []);
-
   const syncNow = useCallback(async (opts?: SyncNowOptions): Promise<SyncResult | null> => {
     if (!token) return null;
+    if (!sharedSyncGate.begin(opts)) return null;
 
-    if (!gateRef.current.begin(opts)) return null;
-
-    syncInProgressRef.current = true;
+    runningOnCellularRef.current = Boolean(opts?.allowCellular);
     lastSyncAtRef.current = Date.now();
     setSyncing(true);
-
     try {
-      const net = await NetInfo.fetch();
-      if (!net.isConnected) {
-        setLastMessage("Offline — lots will upload when you're back online.");
-        return null;
-      }
-
-      setLastMessage("Checking the website for lots already cataloged…");
-      // One website index per Sync, shared by every phase below.
-      const websiteIndex = await loadWebsiteIndex(token);
-      const videosAttached = await attachPendingLotVideos(token, websiteIndex);
-      if (videosAttached) {
-        setRefreshKey((k) => k + 1);
-        setLastMessage(
-          `Uploaded ${videosAttached} leftover video${videosAttached === 1 ? "" : "s"} to the website.`
-        );
-      }
-      const archivedFirst = await sweepArchiveConfirmedDrafts(token, websiteIndex);
-      if (archivedFirst) {
-        setRefreshKey((k) => k + 1);
-        setLastMessage(
-          `Moved ${archivedFirst} cataloged lot${archivedFirst === 1 ? "" : "s"} to Phone archive — photos were removed from this phone. Website listings stay.`
-        );
-      }
-
-      const needingUpload = await countLotsNeedingPhotoUpload();
-      const needingCheck = await countLotsNeedingWebsiteCheck();
-      if (needingCheck === 0) {
-        if (!archivedFirst && !videosAttached) {
-          setLastMessage("Nothing queued to upload. Cataloged lots stay in Phone archive.");
-        }
-        return { uploaded: videosAttached, failed: 0, reconciled: 0, archived: archivedFirst };
-      }
-
-      if (needingUpload > 0) {
-        setLastMessage(
-          `Uploading ${needingUpload} lot${needingUpload === 1 ? "" : "s"} not on the website yet…`
-        );
-      } else {
-        setLastMessage("Checking leftover lots on the website…");
-      }
-      const result = await syncPendingLots(
-        token,
-        () => {
-          setRefreshKey((k) => k + 1);
-        },
-        websiteIndex,
-        { manual: Boolean(opts?.manual) }
-      );
-      result.archived = (result.archived || 0) + archivedFirst;
-      setLastMessage(formatSyncMessage(result));
+      const result = await runSyncPass(token, {
+        manual: Boolean(opts?.manual),
+        allowCellular: Boolean(opts?.allowCellular),
+        onMessage: setLastMessage,
+        onProgress: () => setRefreshKey((k) => k + 1)
+      });
       setRefreshKey((k) => k + 1);
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Sync failed";
-      setLastMessage(msg);
+      setLastMessage(e instanceof Error ? e.message : "Sync failed");
       return null;
     } finally {
-      syncInProgressRef.current = false;
+      runningOnCellularRef.current = false;
       setSyncing(false);
       if (Date.now() - lastCacheSweepAtRef.current >= CACHE_SWEEP_INTERVAL_MS) {
         lastCacheSweepAtRef.current = Date.now();
         void sweepImageCache().catch(() => 0);
       }
-      const rerun = gateRef.current.end();
-      if (rerun) setTimeout(() => void syncNowRef.current(rerun), 0);
+      sharedSyncGate.finish();
     }
   }, [token]);
   syncNowRef.current = syncNow;
 
-  const tryAutoSync = useCallback(() => {
-    if (syncPausedRef.current) return;
-    if (syncInProgressRef.current) return;
-    if (Date.now() - lastSyncAtRef.current < AUTO_SYNC_COOLDOWN_MS) return;
-    void syncNow();
-  }, [syncNow]);
+  useEffect(() => {
+    sharedSyncGate.setRerunHandler((req) => {
+      setTimeout(() => void syncNowRef.current(req), 0);
+    });
+    return () => sharedSyncGate.setRerunHandler(null);
+  }, []);
+
+  /** Connection verified (stable + health ping). Uploads start here, not on raw NetInfo flips. */
+  const autoStart = useCallback(async () => {
+    if (syncPausedRef.current) {
+      autoPendingRef.current = true;
+      return;
+    }
+    const waiting = await countLotsNeedingPhotoUpload().catch(() => 0);
+    if (!waiting && Date.now() - lastSyncAtRef.current < AUTO_SYNC_COOLDOWN_MS) return;
+    // Mid-Sync this queues one rerun, so a lot finished during the upload is not left waiting.
+    void syncNowRef.current();
+  }, []);
+
+  const requestUpload = useCallback(() => {
+    controllerRef.current?.kick();
+  }, []);
+
+  const setSyncPaused = useCallback((paused: boolean) => {
+    const wasPaused = syncPausedRef.current;
+    syncPausedRef.current = paused;
+    if (wasPaused && !paused) {
+      setFollowUpWake((k) => k + 1);
+      if (autoPendingRef.current) {
+        autoPendingRef.current = false;
+        controllerRef.current?.kick();
+      }
+    }
+  }, []);
+
+  const setWifiOnly = useCallback(async (on: boolean) => {
+    wifiOnlyRef.current = on;
+    setWifiOnlyState(on);
+    controllerRef.current?.setWifiOnly(on);
+    await setUploadOnWifiOnly(on);
+  }, []);
+
+  useEffect(() => {
+    void getUploadOnWifiOnly().then((on) => {
+      wifiOnlyRef.current = on;
+      setWifiOnlyState(on);
+      controllerRef.current?.setWifiOnly(on);
+    });
+  }, []);
+
+  useEffect(() => {
+    void setBackgroundUploadEnabled(Boolean(token));
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
 
-    void NetInfo.fetch().then((state) => {
-      wasConnectedRef.current = state.isConnected ?? false;
-      if (wasConnectedRef.current) {
-        tryAutoSync();
-      }
+    const controller = new ConnectionController({
+      now: () => Date.now(),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+      ping: () => pingApi(),
+      onReady: () => void autoStart(),
+      onDrop: (use) => {
+        if (!sharedSyncGate.busy) return;
+        if (use === "wifi_required") {
+          if (!runningOnCellularRef.current) uploadPause.pause("wifi_only");
+          return;
+        }
+        uploadPause.pause("offline");
+      },
+      onPhase: (phase, retryAt) => setConnection({ phase, retryAt })
     });
+    controller.setWifiOnly(wifiOnlyRef.current);
+    controllerRef.current = controller;
 
-    const netSub = NetInfo.addEventListener((state) => {
-      const connected = state.isConnected ?? false;
-      const wasConnected = wasConnectedRef.current;
-      wasConnectedRef.current = connected;
-
-      if (connected && wasConnected === false) {
-        tryAutoSync();
-      }
-    });
+    void NetInfo.fetch().then((state) => controller.observe(state));
+    const netSub = NetInfo.addEventListener((state) => controller.observe(state));
 
     const appSub = AppState.addEventListener("change", (nextState) => {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
       setAppActive(nextState === "active");
       if (prev.match(/inactive|background/) && nextState === "active") {
-        // Back in the app: give still-cataloging lots a fresh, bounded follow-up window.
+        // Back in the app: give still-cataloging lots a fresh, bounded follow-up window, and
+        // re-read the network (events can be missed while suspended) before uploading.
         followUpPlanRef.current = null;
-        tryAutoSync();
+        void NetInfo.fetch().then((state) => {
+          controller.observe(state);
+          controller.kick();
+        });
       }
     });
 
     return () => {
       netSub();
       appSub.remove();
+      controller.dispose();
+      if (controllerRef.current === controller) controllerRef.current = null;
     };
-  }, [token, tryAutoSync]);
+  }, [token, autoStart]);
 
   // Bounded follow-up while lots catalog: one batched status call per tick, backing off
   // 8s → 5 min, giving up after 30 min. A full Sync runs only when the server has news.
@@ -253,12 +266,18 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
     const tick = async () => {
       if (cancelled || syncPausedRef.current || appStateRef.current !== "active") return;
-      if (syncInProgressRef.current) {
+      if (sharedSyncGate.busy) {
         await schedule();
         return;
       }
       const plan = followUpPlanRef.current;
       if (!plan) return;
+      // Offline: do not burn the follow-up window on calls that cannot answer.
+      const phase = controllerRef.current?.phase;
+      if (phase === "offline") {
+        await schedule();
+        return;
+      }
       followUpPlanRef.current = advanceFollowUp(plan);
       const drafts = await listFollowUpDrafts();
       if (cancelled || !drafts.length) return;
@@ -312,15 +331,21 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     [syncing, lastMessage]
   );
   const refreshValue = useMemo(() => ({ refreshKey }), [refreshKey]);
+  const connectionValue = useMemo(
+    () => ({ phase: connection.phase, retryAt: connection.retryAt, wifiOnly }),
+    [connection, wifiOnly]
+  );
   const actionsValue = useMemo(
-    () => ({ syncNow, setSyncPaused }),
-    [syncNow, setSyncPaused]
+    () => ({ syncNow, requestUpload, setSyncPaused, setWifiOnly }),
+    [syncNow, requestUpload, setSyncPaused, setWifiOnly]
   );
 
   return (
     <SyncActionsContext.Provider value={actionsValue}>
       <SyncStatusContext.Provider value={statusValue}>
-        <SyncRefreshContext.Provider value={refreshValue}>{children}</SyncRefreshContext.Provider>
+        <ConnectionContext.Provider value={connectionValue}>
+          <SyncRefreshContext.Provider value={refreshValue}>{children}</SyncRefreshContext.Provider>
+        </ConnectionContext.Provider>
       </SyncStatusContext.Provider>
     </SyncActionsContext.Provider>
   );
@@ -335,6 +360,12 @@ export function useSyncActions(): SyncActionsValue {
 export function useSyncStatus(): SyncStatusValue {
   const ctx = useContext(SyncStatusContext);
   if (!ctx) throw new Error("useSyncStatus must be used within SyncProvider");
+  return ctx;
+}
+
+export function useConnectionStatus(): ConnectionValue {
+  const ctx = useContext(ConnectionContext);
+  if (!ctx) throw new Error("useConnectionStatus must be used within SyncProvider");
   return ctx;
 }
 
