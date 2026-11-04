@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import settings
+from app.config import google_api_key
 from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_link_line
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -303,13 +302,6 @@ def group_post_copy(
     return "\n\n".join(parts).strip()
 
 
-def _ensure_gemini_env() -> None:
-    key = (settings.google_api_key or "").strip()
-    if key:
-        os.environ.setdefault("GOOGLE_API_KEY", key)
-        os.environ.setdefault("GEMINI_API_KEY", key)
-
-
 def draft_facebook_caption(
     *,
     title: str,
@@ -337,7 +329,7 @@ def draft_facebook_caption(
         angle=angle,
         sale_url=sale_url,
     )
-    if not (settings.google_api_key or "").strip():
+    if not google_api_key():
         return fallback
     try:
         return _draft_with_gemini(
@@ -379,7 +371,6 @@ def _draft_with_gemini(
     from pipeline.gemini_schema import pydantic_model_to_gemini_schema
     from pipeline.pipeline import GEMINI_FLASH_MODEL, _get_client
 
-    _ensure_gemini_env()
     client = _get_client()
     close_s = _format_close_time_portable(close_at) or "(close time unknown)"
     hook = (

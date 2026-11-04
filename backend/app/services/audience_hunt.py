@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from collections.abc import Callable
@@ -532,16 +531,6 @@ def audience_research_prompt(lot: Lot, *, location: str = "") -> str:
     )
 
 
-def _ensure_gemini_env() -> None:
-    """Pipeline client reads os.environ; copy the same key catalog jobs use from settings/.env."""
-    from app.config import settings
-
-    key = (settings.google_api_key or "").strip()
-    if key:
-        os.environ.setdefault("GOOGLE_API_KEY", key)
-        os.environ.setdefault("GEMINI_API_KEY", key)
-
-
 def run_audience_research_and_structure(
     lot: Lot,
     usage: dict[str, int] | None = None,
@@ -555,7 +544,6 @@ def run_audience_research_and_structure(
     from pipeline.schemas import AudienceHuntResult
 
     bag = usage if usage is not None else empty_hunt_usage()
-    _ensure_gemini_env()
     client = _get_client()
     location = location_for_lot(lot)
     listing = _lot_research_text(lot, location=location)

@@ -37,7 +37,10 @@ cloud-specific gotchas; do not duplicate standard docs.
   all non-AI flows (auth, sales, lots, exports) work; only actual photo-analysis jobs are
   no-ops. The key is provided as a Cursor Cloud injected secret (an OS env var), which
   pydantic-settings reads with higher priority than `backend/.env`, so no manual wiring is
-  needed — just start the API from a shell that has the env var. The photo pipeline entry
+  needed — just start the API from a shell that has the env var. Every Gemini caller reads it
+  through `app.config.google_api_key()` / `require_google_api_key()`; never copy the key into
+  `os.environ`. `GEMINI_API_KEY` is a deprecated alias (startup warning; refuses to start if
+  it differs from `GOOGLE_API_KEY`). The photo pipeline entry
   point is `app.core.gemini.analyze_photo_from_bytes` (image bytes -> structured
   `InventoryTableEntry` row).
 - **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
@@ -162,8 +165,6 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   never a filter. It does not scrape members, harvest emails, or auto-post. **United States
   groups only** (drop UK/Canada/EU/worldwide clubs). Everyday household lots skip the model unless
   `force=true`. `audience_hold` makes single/bulk CT Seller post skip the lot until staff un-holds.
-  Hunt copies `GOOGLE_API_KEY` from app settings into `os.environ` (same as catalog jobs) because
-  `pipeline._get_client` does not read `.env` itself.
   UI: Facebook tab **Find groups** (sale-wide sequential hunt). Lot page and dashboard link there.
   Sale-wide progress is `GET /sales/{id}/audience-hunt` (in-memory in the API process; poll ~1.5s).
   Lot rows include `audience_hunting` + `audience_hunt_phase` (`queued` / `searching` / `structuring`).

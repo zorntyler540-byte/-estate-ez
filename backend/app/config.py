@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_LOG = logging.getLogger(__name__)
 
 _WEAK_SECRET_KEYS = frozenset({"", "change-me", "change-me-dev-secret"})
 
@@ -54,6 +57,8 @@ class Settings(BaseSettings):
         return u
 
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
+    # Deprecated alias. Read only to copy into ``google_api_key``; call ``google_api_key()`` instead.
+    deprecated_gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY", repr=False)
     gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
     gemini_api_version: str = Field(default="v1beta", alias="GEMINI_API_VERSION")
     # Estimated Gemini pricing used for admin analytics (USD per 1M tokens).
@@ -311,6 +316,27 @@ class Settings(BaseSettings):
         return out
 
     @model_validator(mode="after")
+    def resolve_gemini_key_alias(self) -> Self:
+        primary = (self.google_api_key or "").strip()
+        legacy = (self.deprecated_gemini_api_key or "").strip()
+        if not legacy:
+            return self
+        if primary and primary != legacy:
+            raise ValueError(
+                "GOOGLE_API_KEY and the deprecated GEMINI_API_KEY are both set to different values. "
+                "Remove GEMINI_API_KEY and keep only GOOGLE_API_KEY."
+            )
+        if primary:
+            _LOG.warning(
+                "GEMINI_API_KEY is deprecated and ignored because GOOGLE_API_KEY has the same value. "
+                "Remove GEMINI_API_KEY."
+            )
+        else:
+            _LOG.warning("GEMINI_API_KEY is deprecated. Rename it to GOOGLE_API_KEY.")
+            self.google_api_key = legacy
+        return self
+
+    @model_validator(mode="after")
     def runtime_must_be_safe(self) -> Self:
         if not self.is_test:
             sk = (self.secret_key or "").strip()
@@ -338,6 +364,18 @@ def secret_key_is_weak(secret_key: str) -> bool:
 
 
 settings = Settings()
+
+
+def google_api_key() -> str:
+    """The Gemini API key every SDK and REST call uses (``GOOGLE_API_KEY``)."""
+    return (settings.google_api_key or "").strip()
+
+
+def require_google_api_key() -> str:
+    key = google_api_key()
+    if not key:
+        raise RuntimeError("GOOGLE_API_KEY is not configured on the server.")
+    return key
 
 
 def cors_allow_origins() -> list[str]:

@@ -64,11 +64,7 @@ _PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
 
 
 def _sync_pipeline_env_from_settings() -> None:
-    """Ensure the isolated pipeline reads the same API key and model knobs as the app."""
-    key = (settings.google_api_key or "").strip()
-    if key:
-        os.environ.setdefault("GOOGLE_API_KEY", key)
-        os.environ.setdefault("GEMINI_API_KEY", key)
+    """Ensure the isolated pipeline reads the same model knobs as the app."""
     os.environ["GEMINI_FLASH_MODEL"] = settings.gemini_flash_model
     os.environ["GEMINI_PRO_MODEL"] = settings.gemini_pro_model
     os.environ["LISTING_FLASH_MAX_FRAMES"] = str(settings.listing_flash_max_frames)
