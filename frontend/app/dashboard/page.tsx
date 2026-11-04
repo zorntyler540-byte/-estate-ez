@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Archive,
   ChevronDown,
@@ -15,6 +15,7 @@ import {
   FolderOpen,
   ImagePlus,
   Images,
+  MoreHorizontal,
   Minus,
   Pencil,
   Plus,
@@ -1078,6 +1079,99 @@ type AdminUsageSummary = {
   by_account: AdminUsageAccount[];
 };
 
+type DashboardTab = "overview" | "upload" | "lots" | "admin" | "exports";
+type LotsSortKey = "sku" | "title" | "price" | "status" | "photos";
+type AdminSortKey = "name" | "plan" | "status" | "usage";
+type SortDir = "asc" | "desc";
+
+type DashboardToastTone = "success" | "error" | "info";
+type DashboardToast = {
+  id: string;
+  tone: DashboardToastTone;
+  message: string;
+};
+
+const DASHBOARD_TAB_QUERY_KEY = "tab";
+const DASHBOARD_TOAST_TTL_MS = 4200;
+
+const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string; ownerOnly?: boolean }> = [
+  { id: "overview", label: "Overview" },
+  { id: "upload", label: "Upload" },
+  { id: "lots", label: "Lots" },
+  { id: "admin", label: "Admin", ownerOnly: true },
+  { id: "exports", label: "Exports" }
+];
+
+function parseDashboardTab(raw: string | null, canSeeAdmin: boolean): DashboardTab {
+  if (!raw) return "overview";
+  const value = raw.toLowerCase();
+  if (value === "admin" && !canSeeAdmin) return "overview";
+  if (value === "overview" || value === "upload" || value === "lots" || value === "admin" || value === "exports") {
+    return value;
+  }
+  return "overview";
+}
+
+function compareLotsForSort(
+  a: Lot,
+  b: Lot,
+  key: LotsSortKey,
+  dir: SortDir,
+  remoteSales: CTSellerRemoteSale[]
+): number {
+  const order = dir === "asc" ? 1 : -1;
+  if (key === "price") {
+    const ap = a.starting_price ?? -1;
+    const bp = b.starting_price ?? -1;
+    if (ap !== bp) return (ap - bp) * order;
+  } else if (key === "photos") {
+    if (a.photo_count !== b.photo_count) return (a.photo_count - b.photo_count) * order;
+  } else if (key === "status") {
+    const as = lotPostedStatusLabel(a, remoteSales).toLowerCase();
+    const bs = lotPostedStatusLabel(b, remoteSales).toLowerCase();
+    const statusCmp = as.localeCompare(bs, undefined, { sensitivity: "base", numeric: true });
+    if (statusCmp) return statusCmp * order;
+  } else if (key === "title") {
+    const at = (a.auction_title || "").toLowerCase();
+    const bt = (b.auction_title || "").toLowerCase();
+    const titleCmp = at.localeCompare(bt, undefined, { sensitivity: "base", numeric: true });
+    if (titleCmp) return titleCmp * order;
+  } else {
+    const skuCmp = lotSkuSortKey(a.sku).join("|").localeCompare(lotSkuSortKey(b.sku).join("|"), undefined, {
+      sensitivity: "base",
+      numeric: true
+    });
+    if (skuCmp) return skuCmp * order;
+  }
+  return (a.auction_title || "").localeCompare(b.auction_title || "", undefined, {
+    sensitivity: "base",
+    numeric: true
+  });
+}
+
+function compareAdminAccountsForSort(a: AdminAccount, b: AdminAccount, key: AdminSortKey, dir: SortDir): number {
+  const order = dir === "asc" ? 1 : -1;
+  if (key === "plan") {
+    const cmp = (a.plan_code || "").localeCompare(b.plan_code || "", undefined, { sensitivity: "base" });
+    if (cmp) return cmp * order;
+  } else if (key === "status") {
+    const av = a.is_active ? 1 : 0;
+    const bv = b.is_active ? 1 : 0;
+    if (av !== bv) return (av - bv) * order;
+  } else if (key === "usage") {
+    const aScore = (a.lot_count || 0) * 1000 + (a.job_count || 0);
+    const bScore = (b.lot_count || 0) * 1000 + (b.job_count || 0);
+    if (aScore !== bScore) return (aScore - bScore) * order;
+  } else {
+    const cmp = (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+    if (cmp) return cmp * order;
+  }
+  return (a.owner_email || "").localeCompare(b.owner_email || "", undefined, {
+    sensitivity: "base",
+    numeric: true
+  });
+}
+
 type Lot = {
   id: string;
   sale_id: string;
@@ -1952,8 +2046,142 @@ function StagingFilePreviewImage({
   return <img src={src} alt={alt} style={imgStyle} onError={() => setPhase("failed")} />;
 }
 
+function DashboardTabBar({
+  activeTab,
+  tabs,
+  onSelect
+}: {
+  activeTab: DashboardTab;
+  tabs: Array<{ id: DashboardTab; label: string }>;
+  onSelect: (tab: DashboardTab) => void;
+}) {
+  return (
+    <div className="ct-seg ct-dash-tabs" role="tablist" aria-label="Dashboard sections">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === tab.id}
+          disabled={activeTab === tab.id}
+          onClick={() => onSelect(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DashboardSortHeader({
+  label,
+  active,
+  dir,
+  onToggle,
+  numeric
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onToggle: () => void;
+  numeric?: boolean;
+}) {
+  return (
+    <th className={numeric ? "ct-table__num" : undefined} aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="ct-table-sort" onClick={onToggle}>
+        <span className="ct-table-sort__label">{label}</span>
+        <span className="ct-table-sort__mark" aria-hidden="true">
+          {active ? (dir === "asc" ? "▲" : "▼") : ""}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+function RowOverflowMenu({
+  label = "Row actions",
+  children
+}: {
+  label?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  return (
+    <div className="ct-row-menu" ref={ref}>
+      <button
+        type="button"
+        className="ct-btn ct-btn--ghost ct-row-menu__trigger"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={label}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <MoreHorizontal size={16} aria-hidden />
+      </button>
+      {open ? (
+        <div className="ct-row-menu__panel" role="menu" onClick={() => setOpen(false)}>
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DashboardToastViewport({
+  toasts,
+  onDismiss
+}: {
+  toasts: DashboardToast[];
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <div className="ct-toast-viewport" aria-live="polite" aria-atomic="true">
+      {toasts.map((toast) => (
+        <div key={toast.id} className={`ct-toast ct-toast--${toast.tone}`}>
+          <p>{toast.message}</p>
+          <button type="button" className="ct-toast__close" aria-label="Dismiss notification" onClick={() => onDismiss(toast.id)}>
+            <X size={14} aria-hidden />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DashboardPanelSkeleton({ title, rows = 3 }: { title: string; rows?: number }) {
+  return (
+    <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true" aria-label={`${title} loading`}>
+      <h2 className="ct-dash-panel__title">{title}</h2>
+      <div className="ct-skeleton-lines">
+        {Array.from({ length: rows }).map((_, i) => (
+          <span key={i} className={`ct-skeleton-line${i === 0 ? " is-wide" : ""}`} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const [tabQuery, setTabQuery] = useState<string | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
   /** Next file-picker result: normal batch vs one combined lot. */
@@ -2059,6 +2287,8 @@ export default function DashboardPage() {
   const [adminError, setAdminError] = useState("");
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
   const [adminSearch, setAdminSearch] = useState("");
+  const [adminSortKey, setAdminSortKey] = useState<AdminSortKey>("name");
+  const [adminSortDir, setAdminSortDir] = useState<SortDir>("asc");
   const [adminNameDraftById, setAdminNameDraftById] = useState<Record<string, string>>({});
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
   const [adminAnalyticsDraftById, setAdminAnalyticsDraftById] = useState<Record<string, boolean>>({});
@@ -2109,6 +2339,8 @@ export default function DashboardPage() {
   const [lotPostedSaleFilter, setLotPostedSaleFilter] = useState<
     "all" | "picked" | "other" | "unposted" | "sold" | "unsold" | "live"
   >("all");
+  const [lotsSortKey, setLotsSortKey] = useState<LotsSortKey>("sku");
+  const [lotsSortDir, setLotsSortDir] = useState<SortDir>("asc");
   const [ctSellerPostedRefreshBusy, setCtSellerPostedRefreshBusy] = useState(false);
   const [ctSellerRemoteSales, setCtSellerRemoteSales] = useState<CTSellerRemoteSale[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
@@ -2166,10 +2398,81 @@ export default function DashboardPage() {
   } | null>(null);
   /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
   const [jobSseSession, setJobSseSession] = useState(0);
+  const [toasts, setToasts] = useState<DashboardToast[]>([]);
   const sseRetryAfterErrorRef = useRef(0);
   /** Dashboard progress table + SSE follow this upload's job, not an older concurrent run. */
   const liveProgressJobIdRef = useRef<string | null>(null);
   const [liveProgressJobId, setLiveProgressJobId] = useState<string | null>(null);
+
+  const dashboardTabs = useMemo(
+    () => DASHBOARD_TABS.filter((tab) => !tab.ownerOnly || isMasterAdmin).map(({ id, label }) => ({ id, label })),
+    [isMasterAdmin]
+  );
+  const activeTab = useMemo(
+    () => parseDashboardTab(tabQuery, isMasterAdmin),
+    [tabQuery, isMasterAdmin]
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      setTabQuery(params.get(DASHBOARD_TAB_QUERY_KEY));
+    };
+    syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
+  }, []);
+  const selectDashboardTab = useCallback(
+    (tab: DashboardTab) => {
+      const next = parseDashboardTab(tab, isMasterAdmin);
+      const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+      if (next === "overview") params.delete(DASHBOARD_TAB_QUERY_KEY);
+      else params.set(DASHBOARD_TAB_QUERY_KEY, next);
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      setTabQuery(next === "overview" ? null : next);
+    },
+    [isMasterAdmin, pathname, router]
+  );
+
+  const addToast = useCallback((message: string, tone: DashboardToastTone = "info") => {
+    if (!message.trim()) return;
+    setToasts((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, tone, message }]);
+  }, []);
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }, []);
+  useEffect(() => {
+    if (!toasts.length) return;
+    const timers = toasts.map((toast) =>
+      window.setTimeout(() => {
+        dismissToast(toast.id);
+      }, DASHBOARD_TOAST_TTL_MS)
+    );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [toasts, dismissToast]);
+
+  const toggleLotsSort = useCallback((key: LotsSortKey) => {
+    setLotsSortKey((prevKey) => {
+      if (prevKey === key) {
+        setLotsSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setLotsSortDir(key === "price" || key === "photos" ? "desc" : "asc");
+      return key;
+    });
+  }, []);
+  const toggleAdminSort = useCallback((key: AdminSortKey) => {
+    setAdminSortKey((prevKey) => {
+      if (prevKey === key) {
+        setAdminSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setAdminSortDir(key === "usage" ? "desc" : "asc");
+      return key;
+    });
+  }, []);
+
   folderPickRef.current = folderPick;
   selectedSaleIdRef.current = selectedSaleId;
   lotCameraOpenRef.current = lotCameraOpen;
@@ -2371,12 +2674,17 @@ export default function DashboardPage() {
       rows = lots;
     }
     if (lotPostedSaleFilter === "sold" || lotPostedSaleFilter === "unsold") {
-      return [...rows].sort(compareLotsBySkuPrefix);
+      if (lotsSortKey === "sku" && lotsSortDir === "asc") {
+        return [...rows].sort(compareLotsBySkuPrefix);
+      }
+      if (lotsSortKey === "sku" && lotsSortDir === "desc") {
+        return [...rows].sort((a, b) => compareLotsBySkuPrefix(b, a));
+      }
     }
-    return rows;
-  }, [lots, lotPostedSaleFilter, pickedCtBidsSaleId]);
+    return [...rows].sort((a, b) => compareLotsForSort(a, b, lotsSortKey, lotsSortDir, ctSellerRemoteSales));
+  }, [lots, lotPostedSaleFilter, pickedCtBidsSaleId, lotsSortKey, lotsSortDir, ctSellerRemoteSales]);
   const groupLotsBySkuPrefix =
-    lotPostedSaleFilter === "sold" || lotPostedSaleFilter === "unsold";
+    (lotPostedSaleFilter === "sold" || lotPostedSaleFilter === "unsold") && lotsSortKey === "sku";
   const skuPrefixCounts = useMemo(() => {
     const counts = new Map<string, number>();
     if (!groupLotsBySkuPrefix) return counts;
@@ -2398,14 +2706,16 @@ export default function DashboardPage() {
   }, [lots, completedJobs.length]);
   const filteredAdminAccounts = useMemo(() => {
     const q = adminSearch.trim().toLowerCase();
-    if (!q) return adminAccounts;
-    return adminAccounts.filter((a) => {
+    const filtered = !q
+      ? adminAccounts
+      : adminAccounts.filter((a) => {
       const name = (a.name || "").toLowerCase();
       const email = (a.owner_email || "").toLowerCase();
       const id = (a.id || "").toLowerCase();
       return name.includes(q) || email.includes(q) || id.includes(q);
     });
-  }, [adminAccounts, adminSearch]);
+    return [...filtered].sort((a, b) => compareAdminAccountsForSort(a, b, adminSortKey, adminSortDir));
+  }, [adminAccounts, adminSearch, adminSortDir, adminSortKey]);
 
   const geminiAnalyzedCount = useMemo(() => {
     if (!photoPendingSlots.length) return { done: 0, total: 0 };
@@ -2413,6 +2723,30 @@ export default function DashboardPage() {
     const done = photoPendingSlots.filter((s) => s.status === "analyzed").length;
     return { done, total };
   }, [photoPendingSlots]);
+
+  useEffect(() => {
+    if (!error) return;
+    addToast(error, "error");
+    setError("");
+  }, [error, addToast]);
+
+  useEffect(() => {
+    if (!stagingSuccess) return;
+    addToast(stagingSuccess, "success");
+    setStagingSuccess("");
+  }, [stagingSuccess, addToast]);
+
+  useEffect(() => {
+    if (!ctSellerBulkMsg) return;
+    addToast(ctSellerBulkMsg, "success");
+    setCtSellerBulkMsg("");
+  }, [ctSellerBulkMsg, addToast]);
+
+  useEffect(() => {
+    if (!ctSellerBulkErr) return;
+    addToast(ctSellerBulkErr, "error");
+    setCtSellerBulkErr("");
+  }, [ctSellerBulkErr, addToast]);
 
   useEffect(() => {
     try {
@@ -5442,6 +5776,7 @@ export default function DashboardPage() {
     if (!window.confirm("Delete this lot from the database?")) return;
     setError("");
     try {
+      const deleted = lots.find((l) => l.id === lotId);
       await apiFetch(`/lots/${lotId}`, token, { method: "DELETE" });
       setLots((prev) => prev.filter((l) => l.id !== lotId));
       setPhotoHealthMissing((prev) => {
@@ -5450,6 +5785,10 @@ export default function DashboardPage() {
         delete next[lotId];
         return next;
       });
+      addToast(
+        `Deleted ${deleted?.sku ? `lot ${deleted.sku}` : "lot"} from this catalog.`,
+        "success"
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     }
@@ -5792,6 +6131,7 @@ export default function DashboardPage() {
         ...prev,
         [accountId]: updated.name || prev[accountId] || ""
       }));
+      addToast(`Saved account settings for ${updated.name || "this account"}.`, "success");
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : "Could not update account");
     } finally {
@@ -5801,6 +6141,12 @@ export default function DashboardPage() {
 
   async function toggleArchiveAdminAccount(accountId: string, nextActive: boolean) {
     if (!token) return;
+    if (
+      !nextActive &&
+      !window.confirm("Archive this account? Catalog data is kept, but the owner login is disabled until restored.")
+    ) {
+      return;
+    }
     setAdminSavingAccountId(accountId);
     setAdminError("");
     try {
@@ -5813,6 +6159,10 @@ export default function DashboardPage() {
         ...prev,
         [accountId]: updated.plan_code || prev[accountId] || "beta_free"
       }));
+      addToast(
+        `${updated.name || "Account"} ${nextActive ? "restored" : "archived"}.`,
+        "success"
+      );
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : "Could not update archive status");
     } finally {
@@ -5849,6 +6199,7 @@ export default function DashboardPage() {
           by_account: prev.by_account.filter((u) => u.account_id !== accountId)
         };
       });
+      addToast(`Deleted account ${label}.`, "success");
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : "Could not delete account");
     } finally {
@@ -6727,6 +7078,12 @@ export default function DashboardPage() {
     </>
   );
 
+  const isOverviewTab = activeTab === "overview";
+  const isUploadTab = activeTab === "upload";
+  const isLotsTab = activeTab === "lots";
+  const isAdminTab = activeTab === "admin";
+  const isExportsTab = activeTab === "exports";
+
   if (!token) {
     return (
       <AppShell actions={shellActions}>
@@ -6747,9 +7104,15 @@ export default function DashboardPage() {
     return (
       <AppShell topBar={saleTopBar} actions={shellActions} mobileBottomBar={dashboardMobileBottomBar}>
         <div className="ct-dashboard">
-          <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true">
-            <p style={{ margin: 0 }}>Loading dashboard…</p>
-          </section>
+          <DashboardTabBar activeTab={activeTab} tabs={dashboardTabs} onSelect={selectDashboardTab} />
+          <div className="ct-dash-stats-row">
+            <DashboardPanelSkeleton title="Overview" rows={4} />
+            <DashboardPanelSkeleton title="Recent jobs" rows={5} />
+          </div>
+          {activeTab === "admin" ? <DashboardPanelSkeleton title="Master admin" rows={7} /> : null}
+          {activeTab === "upload" ? <DashboardPanelSkeleton title="Upload photos" rows={6} /> : null}
+          {activeTab === "lots" ? <DashboardPanelSkeleton title="Lots" rows={8} /> : null}
+          {activeTab === "exports" ? <DashboardPanelSkeleton title="Exports" rows={5} /> : null}
         </div>
       </AppShell>
     );
@@ -6762,6 +7125,7 @@ export default function DashboardPage() {
       mobileBottomBar={dashboardMobileBottomBar}
     >
       <div id="dashboard-top" className="ct-dashboard">
+        <DashboardToastViewport toasts={toasts} onDismiss={dismissToast} />
         <div className="ct-dash-stats-row">
           <div className="ct-dashboard-hero-band">
             <header className="ct-dashboard-hero">
@@ -6839,6 +7203,33 @@ export default function DashboardPage() {
           ) : null}
         </div>
 
+        <DashboardTabBar activeTab={activeTab} tabs={dashboardTabs} onSelect={selectDashboardTab} />
+
+        {isOverviewTab ? (
+          <section className="ct-dash-panel ct-dash-overview-panel" aria-label="Overview metrics">
+            <h2 className="ct-dash-panel__title">Overview</h2>
+            <div className="ct-dash-overview-grid">
+              <article className="ct-dash-overview-card">
+                <h3>Total lots</h3>
+                <p>{dashboardStats.totalLots}</p>
+              </article>
+              <article className="ct-dash-overview-card">
+                <h3>Ready to post</h3>
+                <p>{ctSellerUnpostedEligible}</p>
+              </article>
+              <article className="ct-dash-overview-card">
+                <h3>Queued jobs</h3>
+                <p>{queuedJobCount}</p>
+              </article>
+              <article className="ct-dash-overview-card">
+                <h3>Completed jobs</h3>
+                <p>{dashboardStats.completedJobCount}</p>
+              </article>
+            </div>
+          </section>
+        ) : null}
+
+        {isOverviewTab ? (
         <section className="ct-dash-panel ct-dash-sale-manage">
           <h2 className="ct-dash-panel__title">Sale</h2>
           <div className="ct-toolbar">
@@ -6959,7 +7350,8 @@ export default function DashboardPage() {
             </p>
           ) : null}
         </section>
-      {(busyProcessing || queuedJobCount > 0) && (
+        ) : null}
+      {(isOverviewTab || isUploadTab || isLotsTab) && (busyProcessing || queuedJobCount > 0) && (
         <div className="ct-banner ct-banner--warning">
           <p style={{ margin: 0 }}>
             <strong>
@@ -7035,14 +7427,12 @@ export default function DashboardPage() {
           </details>
         </div>
       )}
-      {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
-      {stagingSuccess ? <div className="ct-banner ct-banner--success">{stagingSuccess}</div> : null}
-      {uploadProgress ? (
+      {isUploadTab && uploadProgress ? (
         <div className="ct-banner ct-banner--warning" style={{ marginBottom: "0.5rem" }}>
           {uploadProgress}
         </div>
       ) : null}
-      {isMasterAdmin || adminLoading || adminError ? (
+      {isAdminTab && (isMasterAdmin || adminLoading || adminError) ? (
         <section className="ct-dash-panel ct-dash-admin" aria-label="Master admin">
           <h2 className="ct-dash-panel__title">Master admin</h2>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
@@ -7273,14 +7663,46 @@ export default function DashboardPage() {
               <table className="ct-table ct-table--admin">
                 <thead>
                   <tr>
-                    <th>Account</th>
-                    <th>Plan</th>
-                    <th>Status</th>
-                    <th>Usage</th>
+                    <DashboardSortHeader
+                      label="Account"
+                      active={adminSortKey === "name"}
+                      dir={adminSortDir}
+                      onToggle={() => toggleAdminSort("name")}
+                    />
+                    <DashboardSortHeader
+                      label="Plan"
+                      active={adminSortKey === "plan"}
+                      dir={adminSortDir}
+                      onToggle={() => toggleAdminSort("plan")}
+                    />
+                    <DashboardSortHeader
+                      label="Status"
+                      active={adminSortKey === "status"}
+                      dir={adminSortDir}
+                      onToggle={() => toggleAdminSort("status")}
+                    />
+                    <DashboardSortHeader
+                      label="Usage"
+                      active={adminSortKey === "usage"}
+                      dir={adminSortDir}
+                      onToggle={() => toggleAdminSort("usage")}
+                    />
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
+                  {adminLoading && filteredAdminAccounts.length === 0
+                    ? Array.from({ length: 4 }).map((_, idx) => (
+                        <tr key={`admin-skel-${idx}`} className="ct-row-skeleton">
+                          <td colSpan={5}>
+                            <div className="ct-skeleton-lines">
+                              <span className="ct-skeleton-line is-wide" />
+                              <span className="ct-skeleton-line" />
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    : null}
                   {filteredAdminAccounts.map((a) => {
                     const busy = adminSavingAccountId === a.id;
                     const draft = adminPlanDraftById[a.id] ?? a.plan_code ?? "beta_free";
@@ -7372,10 +7794,10 @@ export default function DashboardPage() {
                           ) : null}
                         </td>
                         <td>
-                          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap" }}>
+                          <RowOverflowMenu label={`Actions for ${a.name || "account"}`}>
                             <button
                               type="button"
-                              className="ct-btn"
+                              className="ct-btn ct-row-menu__item"
                               onClick={() => void toggleArchiveAdminAccount(a.id, !a.is_active)}
                               disabled={busy}
                             >
@@ -7383,7 +7805,7 @@ export default function DashboardPage() {
                             </button>
                             <button
                               type="button"
-                              className="ct-btn"
+                              className="ct-btn ct-row-menu__item"
                               onClick={() =>
                                 void patchAdminAccount(a.id, {
                                   name: (nameDraft || "").trim() || a.name
@@ -7395,7 +7817,7 @@ export default function DashboardPage() {
                             </button>
                             <button
                               type="button"
-                              className="ct-btn"
+                              className="ct-btn ct-row-menu__item"
                               onClick={() =>
                                 void patchAdminAccount(a.id, {
                                   plan_code: draft.trim() || "beta_free",
@@ -7409,14 +7831,14 @@ export default function DashboardPage() {
                             </button>
                             <button
                               type="button"
-                              className="ct-btn"
+                              className="ct-btn ct-row-menu__item ct-row-menu__item--danger"
                               onClick={() => void deleteAdminAccount(a.id, a.name || a.id)}
                               disabled={busy}
                               title="Permanently delete this account and all related data"
                             >
                               Delete account
                             </button>
-                          </div>
+                          </RowOverflowMenu>
                         </td>
                       </tr>
                     );
@@ -7436,6 +7858,7 @@ export default function DashboardPage() {
       ) : null}
 
         <div className="ct-dash-grid">
+          {isUploadTab ? (
           <div className="ct-dash-col ct-dash-col--left">
             <section
               className={`ct-dash-panel ct-dash-upload${folderPick ? " ct-dash-upload--active" : ""}`}
@@ -7820,7 +8243,9 @@ export default function DashboardPage() {
             </section>
 
           </div>
+          ) : null}
 
+          {isLotsTab ? (
           <div className="ct-dash-col ct-dash-col--right">
             <section className="ct-dash-panel ct-dash-lots" aria-label="Catalog lots">
       {photoHealthLotCount > 0 ? (
@@ -8221,16 +8646,6 @@ export default function DashboardPage() {
             }}
           />
         ) : null}
-        {ctSellerBulkMsg ? (
-          <div className="ct-banner ct-banner--success" style={{ marginTop: "0.65rem" }}>
-            {ctSellerBulkMsg}
-          </div>
-        ) : null}
-        {ctSellerBulkErr ? (
-          <div className="ct-banner ct-banner--error" style={{ marginTop: "0.65rem" }}>
-            {ctSellerBulkErr}
-          </div>
-        ) : null}
       </header>
       <PhotoAddsPanel
         lots={photoAdds}
@@ -8414,20 +8829,47 @@ export default function DashboardPage() {
               />
             </th>
             <th scope="col">Photo</th>
-            <th scope="col">SKU</th>
-            <th scope="col">Title / Description</th>
-            <th scope="col">Price</th>
+            <DashboardSortHeader
+              label="SKU"
+              active={lotsSortKey === "sku"}
+              dir={lotsSortDir}
+              onToggle={() => toggleLotsSort("sku")}
+            />
+            <DashboardSortHeader
+              label="Title / Description"
+              active={lotsSortKey === "title"}
+              dir={lotsSortDir}
+              onToggle={() => toggleLotsSort("title")}
+            />
+            <DashboardSortHeader
+              label="Price"
+              numeric
+              active={lotsSortKey === "price"}
+              dir={lotsSortDir}
+              onToggle={() => toggleLotsSort("price")}
+            />
             <th scope="col">Condition</th>
-            <th scope="col">Status</th>
-            <th scope="col">Photos</th>
+            <DashboardSortHeader
+              label="Status"
+              active={lotsSortKey === "status"}
+              dir={lotsSortDir}
+              onToggle={() => toggleLotsSort("status")}
+            />
+            <DashboardSortHeader
+              label="Photos"
+              numeric
+              active={lotsSortKey === "photos"}
+              dir={lotsSortDir}
+              onToggle={() => toggleLotsSort("photos")}
+            />
             <th scope="col">Details</th>
-            {isAccountOwner ? <th scope="col">Delete</th> : null}
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
           {visibleLots.length < 1 && (lotPostedSaleFilter === "unsold" || lotPostedSaleFilter === "sold") ? (
             <tr>
-              <td colSpan={isAccountOwner ? 10 : 9} className="ct-lots-table__empty">
+              <td colSpan={10} className="ct-lots-table__empty">
                 {lotPostedSaleFilter === "unsold"
                   ? "Nothing marked not sold on CT Seller yet. After the auction, tap Check CT Bids sales — leftovers then sort by SKU prefix."
                   : "Nothing marked sold on CT Seller yet. Tap Check CT Bids sales after lots hammer."}
@@ -8439,7 +8881,7 @@ export default function DashboardPage() {
             {groupLotsBySkuPrefix &&
             (lotIndex === 0 || lotSkuPrefix(visibleLots[lotIndex - 1].sku) !== lotSkuPrefix(lot.sku)) ? (
               <tr className="ct-lots-prefix-row">
-                <td colSpan={isAccountOwner ? 10 : 9}>
+                <td colSpan={10}>
                   <span className="ct-lots-prefix-heading">
                     {lotSkuPrefix(lot.sku)} · {skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0} lot
                     {(skuPrefixCounts.get(lotSkuPrefix(lot.sku)) || 0) === 1 ? "" : "s"}
@@ -8574,28 +9016,30 @@ export default function DashboardPage() {
                 >
                   Details
                 </Link>
-                <button
-                  type="button"
-                  className="ct-btn ct-lots-table__details-btn"
-                  onClick={() => setPendingMoveLotIds([lot.id])}
-                  disabled={busyProcessing}
-                  title="Move this lot to another sale"
-                >
-                  Move
-                </button>
               </td>
-              {isAccountOwner ? (
-                <td>
+              <td>
+                <RowOverflowMenu label={`Actions for ${lot.sku || lot.auction_title || "lot"}`}>
                   <button
                     type="button"
-                    className="ct-btn ct-btn--danger-outline ct-lots-table__delete-btn"
-                    onClick={() => void deleteLotRow(lot.id)}
+                    className="ct-btn ct-row-menu__item"
+                    onClick={() => setPendingMoveLotIds([lot.id])}
                     disabled={busyProcessing}
+                    title="Move this lot to another sale"
                   >
-                    Delete
+                    Move
                   </button>
-                </td>
-              ) : null}
+                  {isAccountOwner ? (
+                    <button
+                      type="button"
+                      className="ct-btn ct-btn--danger-outline ct-row-menu__item ct-row-menu__item--danger"
+                      onClick={() => void deleteLotRow(lot.id)}
+                      disabled={busyProcessing}
+                    >
+                      Delete
+                    </button>
+                  ) : null}
+                </RowOverflowMenu>
+              </td>
             </tr>
             </Fragment>
           ))}
@@ -8604,7 +9048,9 @@ export default function DashboardPage() {
       </div>
             </section>
           </div>
+          ) : null}
 
+          {isExportsTab ? (
           <section className="ct-dash-panel ct-dash-exports ct-dash-col--exports" aria-label="Sale exports">
             <h2 className="ct-dash-panel__title">Exports</h2>
             <p className="ct-upload-intro">Download catalog data and photos for the selected sale.</p>
@@ -8877,6 +9323,7 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </section>
+          ) : null}
         </div>
 
       <input

@@ -2763,6 +2763,53 @@ select.ct-input option {
   align-items: stretch;
 }
 
+.ct-dash-tabs {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.ct-dash-tabs button {
+  min-height: 2.25rem;
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+.ct-dash-overview-panel {
+  padding-bottom: 1.1rem;
+}
+
+.ct-dash-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.75rem, 1fr));
+  gap: 0.7rem;
+}
+
+.ct-dash-overview-card {
+  background: var(--ct-bg-elevated);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-sm);
+  padding: 0.75rem 0.85rem;
+}
+
+.ct-dash-overview-card h3 {
+  margin: 0;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ct-text-muted);
+}
+
+.ct-dash-overview-card p {
+  margin: 0.35rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
 .ct-dash-panel {
   background: var(--ct-surface);
   border: 1px solid var(--ct-border);
@@ -2857,6 +2904,11 @@ select.ct-input option {
 
 .ct-dash-admin-table.ct-table-wrap {
   margin-bottom: 0;
+  max-height: min(calc(100dvh - 12rem), 960px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-bg-elevated);
 }
 
 .ct-dash-lots-table.ct-table-wrap {
@@ -2869,6 +2921,7 @@ select.ct-input option {
   background: var(--ct-bg-elevated);
 }
 
+.ct-dash-admin-table .ct-table thead th,
 .ct-dash-lots-table .ct-table thead th {
   position: sticky;
   top: 0;
@@ -2876,6 +2929,39 @@ select.ct-input option {
   background: rgba(12, 15, 18, 0.92);
   border-bottom: 1px solid rgba(255, 77, 26, 0.14);
   box-shadow: 0 1px 0 var(--ct-border);
+}
+
+.ct-table--admin {
+  min-width: 980px;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.ct-table--admin th,
+.ct-table--admin td {
+  padding: 0.68rem 0.7rem;
+  font-size: 0.92rem;
+  vertical-align: top;
+}
+
+.ct-table--admin th:nth-child(1),
+.ct-table--admin td:nth-child(1) {
+  width: 20rem;
+}
+
+.ct-table--admin th:nth-child(2),
+.ct-table--admin td:nth-child(2) {
+  width: 13rem;
+}
+
+.ct-table--admin th:nth-child(3),
+.ct-table--admin td:nth-child(3) {
+  width: 6rem;
+}
+
+.ct-table--admin th:nth-child(5),
+.ct-table--admin td:nth-child(5) {
+  width: 4.25rem;
 }
 
 .ct-table--lots tbody tr {
@@ -2894,8 +2980,8 @@ select.ct-input option {
 
 .ct-table--lots th,
 .ct-table--lots td {
-  padding: 0.5rem 0.6rem;
-  font-size: 0.86rem;
+  padding: 0.62rem 0.68rem;
+  font-size: 0.92rem;
 }
 
 .ct-table--lots th.ct-lots-table__select,
@@ -2937,12 +3023,12 @@ select.ct-input option {
 
 .ct-table--lots th:nth-child(5),
 .ct-table--lots td:nth-child(5) {
-  width: 4.25rem;
+  width: 5.5rem;
 }
 
 .ct-table--lots th:nth-child(6),
 .ct-table--lots td:nth-child(6) {
-  width: 5.75rem;
+  width: 6.5rem;
 }
 
 .ct-table--lots th:nth-child(7),
@@ -2959,13 +3045,13 @@ select.ct-input option {
 
 .ct-table--lots th:nth-child(9),
 .ct-table--lots td:nth-child(9) {
-  width: 5.5rem;
-  max-width: 5.5rem;
+  width: 4.5rem;
+  max-width: 4.5rem;
 }
 
 .ct-table--lots th:nth-child(10),
 .ct-table--lots td:nth-child(10) {
-  width: 4.5rem;
+  width: 4rem;
 }
 
 .ct-lots-table__title {
@@ -2982,7 +3068,7 @@ select.ct-input option {
 
 .ct-lots-table__desc {
   margin-top: 0.18rem;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   line-height: 1.35;
   color: var(--ct-text-muted);
   overflow: hidden;
@@ -2999,7 +3085,7 @@ select.ct-input option {
 
 .ct-lots-table__reserve {
   margin-top: 0.15rem;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   color: var(--ct-text-subtle);
 }
 
@@ -3145,7 +3231,7 @@ select.ct-input option {
   max-width: 100%;
   padding: 0.12rem 0.42rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3171,7 +3257,7 @@ select.ct-input option {
   display: inline-block;
   box-sizing: border-box;
   max-width: 100%;
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   padding: 0.22rem 0.4rem;
   gap: 0.32rem;
   white-space: nowrap;
@@ -3201,7 +3287,7 @@ select.ct-input option {
   border: 1px solid rgba(255, 77, 26, 0.35);
   background: var(--ct-primary-muted);
   color: var(--ct-primary);
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
@@ -3211,6 +3297,139 @@ select.ct-input option {
   background: rgba(255, 77, 26, 0.22);
   color: var(--ct-primary-hover);
   text-decoration: none;
+}
+
+.ct-row-menu {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ct-row-menu__trigger {
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.18rem 0.35rem;
+}
+
+.ct-row-menu__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 25;
+  min-width: 10.25rem;
+  padding: 0.4rem;
+  border-radius: var(--ct-radius-sm);
+  border: 1px solid var(--ct-border-strong);
+  background: var(--ct-surface);
+  box-shadow: var(--ct-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ct-row-menu__item {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 0.84rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.ct-row-menu__item--danger {
+  color: var(--ct-error);
+}
+
+.ct-toast-viewport {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.ct-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border-radius: var(--ct-radius-sm);
+  border: 1px solid var(--ct-border-strong);
+  background: var(--ct-bg-elevated);
+  color: var(--ct-text);
+  padding: 0.6rem 0.75rem;
+  box-shadow: var(--ct-shadow-sm);
+  font-size: 0.88rem;
+}
+
+.ct-toast--success {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.ct-toast--error {
+  border-color: var(--ct-error-border);
+}
+
+.ct-toast--info {
+  border-color: rgba(255, 77, 26, 0.32);
+}
+
+.ct-toast__close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ct-text-muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.08rem 0.15rem;
+}
+
+.ct-toast__close:hover {
+  color: var(--ct-text);
+}
+
+.ct-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ct-skeleton-line {
+  display: block;
+  width: 60%;
+  height: 0.7rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.08) 100%
+  );
+  background-size: 200% 100%;
+  animation: ct-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.ct-skeleton-line.is-wide {
+  width: 82%;
+}
+
+.ct-row-skeleton td {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+@keyframes ct-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .ct-lot-mobile-card__main {
