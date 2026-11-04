@@ -278,3 +278,17 @@ def test_lot_video_over_size_cap_is_rejected_while_streaming(tmp_path, monkeypat
         db.close()
     finally:
         _clear()
+
+
+def test_health_ping_is_unauthenticated_and_touches_no_db(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("ping must not open a DB session")
+
+    monkeypatch.setattr(main_mod, "SessionLocal", boom)
+    app.dependency_overrides[get_db] = boom
+    try:
+        res = TestClient(app).get("/health/ping")
+    finally:
+        _clear()
+    assert res.status_code == 200, res.text
+    assert res.json() == {"status": "ok"}

@@ -808,6 +808,12 @@ def _count_catalog_image_files(max_scan: int = 200_000) -> int:
     return n
 
 
+@app.get("/health/ping")
+def health_ping() -> dict[str, str]:
+    """Phone reachability check before auto-upload: no DB, no disk scan, no auth."""
+    return {"status": "ok"}
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     root = upload_root()
