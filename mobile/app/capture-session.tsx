@@ -59,6 +59,7 @@ import {
 import {
   encodeProcessRatio,
   processCapture,
+  processedUriForRaw,
   rawCaptureUri,
   type CaptureResult
 } from "@/lib/queue/captureProcessing";
@@ -163,6 +164,11 @@ export default function CaptureSessionScreen() {
   /** Latest thumbs for background jobs (state in their closure would be stale). */
   const thumbsRef = useRef<string[]>([]);
   thumbsRef.current = thumbs;
+  // Append-mode shots live only in memory. Processing records swaps/deletes here, not in
+  // ``thumbsRef``, because a render between commit and setThumbs would reset that ref to a
+  // raw file that processing already deleted.
+  const appendSwapsRef = useRef(new Map<string, string>());
+  const appendRemovedRef = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
@@ -375,6 +381,7 @@ export default function CaptureSessionScreen() {
   }
 
   async function cleanupAppendFiles(uris: string[]) {
+    for (const uri of uris) appendRemovedRef.current.add(uri);
     for (const uri of uris) {
       try {
         await FileSystem.deleteAsync(uri, { idempotent: true });
@@ -461,12 +468,10 @@ export default function CaptureSessionScreen() {
             rawUri,
             ratio,
             size,
-            isPending: async () => thumbsRef.current.includes(rawUri),
+            isPending: async () => !appendRemovedRef.current.has(rawUri),
             commit: async (newUri) => {
-              if (!thumbsRef.current.includes(rawUri)) return false;
-              if (newUri) {
-                thumbsRef.current = thumbsRef.current.map((u) => (u === rawUri ? newUri : u));
-              }
+              if (appendRemovedRef.current.has(rawUri)) return false;
+              if (newUri) appendSwapsRef.current.set(rawUri, newUri);
               return true;
             }
           },
@@ -474,6 +479,11 @@ export default function CaptureSessionScreen() {
         )
       )
       .then(async (result) => {
+        if (result.status === "processed" && appendRemovedRef.current.has(rawUri)) {
+          // Deleted from the strip after the swap landed.
+          await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => undefined);
+          return;
+        }
         applyProcessedUri(rawUri, result);
         if (result.status !== "gone") await mirrorToPhotoLibrary(result.uri);
       })
@@ -629,13 +639,18 @@ export default function CaptureSessionScreen() {
     async function performDelete() {
       try {
         if (isAppendMode) {
-          try {
-            await FileSystem.deleteAsync(uri, { idempotent: true });
-          } catch {
-            /* file may already be gone */
+          const current = appendSwapsRef.current.get(uri) ?? uri;
+          appendRemovedRef.current.add(uri);
+          appendRemovedRef.current.add(current);
+          for (const target of new Set([uri, current])) {
+            try {
+              await FileSystem.deleteAsync(target, { idempotent: true });
+            } catch {
+              /* file may already be gone */
+            }
           }
           setThumbs((prev) => {
-            const uris = prev.filter((u) => u !== uri);
+            const uris = prev.filter((u) => u !== uri && u !== current);
             if (previewUri === uri) {
               if (!uris.length) {
                 setPreviewUri(null);
@@ -649,11 +664,18 @@ export default function CaptureSessionScreen() {
           });
           return;
         }
-        await deletePhotoFromDraft(draftId!, uri);
-        try {
-          await FileSystem.deleteAsync(uri, { idempotent: true });
-        } catch {
-          /* file may already be gone */
+        // The thumb can still show the raw path for a moment after SQLite moved to the
+        // processed file; delete whichever row this shot has now.
+        const processed = processedUriForRaw(uri);
+        const removed =
+          (await deletePhotoFromDraft(draftId!, uri)) ||
+          (processed ? await deletePhotoFromDraft(draftId!, processed) : false);
+        for (const target of removed && processed ? [uri, processed] : [uri]) {
+          try {
+            await FileSystem.deleteAsync(target, { idempotent: true });
+          } catch {
+            /* file may already be gone */
+          }
         }
         const uris = await reloadThumbs(draftId!);
         if (previewUri === uri) {
@@ -767,7 +789,9 @@ export default function CaptureSessionScreen() {
     setError("");
     try {
       await captureQueue.idle();
-      const files = thumbsRef.current.slice();
+      const files = thumbsRef.current
+        .map((u) => appendSwapsRef.current.get(u) ?? u)
+        .filter((u) => !appendRemovedRef.current.has(u));
       const { images, videos } = splitMediaUris(files);
       if (images.length) {
         await uploadLotPhotos(
