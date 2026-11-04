@@ -12,7 +12,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from app.config import settings
+from app.config import require_google_api_key, settings
 from app.services.plain_background import PLAIN_BG_COLORS, jpeg_bytes_rgb, prepare_jpeg_bytes
 
 # Closest match the image model accepts. Keep the cover's orientation.
@@ -112,9 +112,7 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
     """Ask Gemini to keep the piece and replace the room. Raises RuntimeError on failure."""
     if color_name not in PLAIN_BG_COLORS:
         raise ValueError(f"Unknown background color {color_name}")
-    key = (settings.google_api_key or "").strip()
-    if not key:
-        raise RuntimeError("GOOGLE_API_KEY is not configured on the server.")
+    key = require_google_api_key()
     prepared = prepare_jpeg_bytes(raw)
     with Image.open(BytesIO(prepared)) as im:
         aspect = closest_aspect_ratio(im.size[0], im.size[1])

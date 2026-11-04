@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlalchemy import func, text, update
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.config import google_api_key, settings
 from app.core.catalog_crash import processing_error_message_preserving_crash
 from app.core.gemini import verify_tape_sku
 from app.job_lock import job_advisory_lock_key
@@ -1073,7 +1073,7 @@ def _process_job_body(
     db.commit()
     _emit_job(job, {"type": "status", "status": "processing"})
 
-    if not (settings.google_api_key or "").strip():
+    if not google_api_key():
         job.status = JobStatus.failed
         job.error_message = "GOOGLE_API_KEY is not set in backend/.env"
         job.cancel_requested = False
@@ -1279,7 +1279,7 @@ def run_lot_ai_regenerate_and_save(
     Re-run Gemini on existing catalog files for one lot (or a subset), merge frames like single-lot mode,
     then overwrite listing fields on the existing ``Lot`` row. Does not create or delete ``Photo`` rows.
     """
-    if not (settings.google_api_key or "").strip():
+    if not google_api_key():
         raise ValueError("GOOGLE_API_KEY is not configured on the server.")
 
     row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()

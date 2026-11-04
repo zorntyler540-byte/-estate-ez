@@ -13,7 +13,7 @@ from typing import Any, Callable
 import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.config import settings
+from app.config import google_api_key, settings
 from app.services.ctseller_categories import ct_categories_for_ai
 from app.core.lotting import (
     MERGED_PRO_DESCRIPTION_MAX_CHARS,
@@ -436,7 +436,7 @@ _genai_client: Any = None
 
 def _get_genai_client() -> Any | None:
     global _genai_client
-    key = (settings.google_api_key or "").strip()
+    key = google_api_key()
     if not key or _genai_client: return _genai_client
     from google import genai
     _genai_client = genai.Client(api_key=key)
@@ -497,7 +497,7 @@ def _generate_content(payload: dict[str, Any], timeout: int = 120) -> str | None
     from app.core.gemini_retry import GeminiRetryableError, backoff_seconds, inspect_transient, retry_after_from_headers
     from app.core.gemini_slots import gemini_slot
 
-    headers = {"Content-Type": "application/json", "x-goog-api-key": settings.google_api_key}
+    headers = {"Content-Type": "application/json", "x-goog-api-key": google_api_key()}
     max_attempts = max(1, int(settings.gemini_retry_max_attempts))
     base = float(settings.gemini_retry_base_seconds)
     cap = float(settings.gemini_retry_max_seconds)

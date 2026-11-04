@@ -141,10 +141,9 @@ _genai_client: genai.Client | None = None
 def _get_client() -> genai.Client:
     global _genai_client
     if _genai_client is None:
-        api_key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required for pipeline calls.")
-        _genai_client = genai.Client(api_key=api_key)
+        from app.config import require_google_api_key
+
+        _genai_client = genai.Client(api_key=require_google_api_key())
     return _genai_client
 
 

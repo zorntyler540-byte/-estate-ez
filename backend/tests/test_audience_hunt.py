@@ -391,7 +391,6 @@ def test_run_audience_research_reports_phases(monkeypatch) -> None:
     class _Client:
         models = _Models()
 
-    monkeypatch.setattr(hunt_mod, "_ensure_gemini_env", lambda: None)
     monkeypatch.setattr("pipeline.pipeline._get_client", lambda: _Client())
     monkeypatch.setattr(
         "pipeline.gemini_schema.pydantic_model_to_gemini_schema",
