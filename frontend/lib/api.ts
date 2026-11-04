@@ -29,13 +29,22 @@ export function resolveApiBase(fromEnv: string | undefined, nodeEnv: string | un
 const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_BASE, process.env.NODE_ENV);
 
 /** Turn FastAPI / fetch failures into a short string for banners. */
+function readableApiError(text: string, fallback: string): string {
+  const t = text.trim();
+  if (!t) return fallback;
+  if (/<html/i.test(t) || /<title>\s*403 forbidden/i.test(t)) {
+    return "CT Seller refused the sign-in. Try again in a moment.";
+  }
+  return t.length > 280 ? `${t.slice(0, 277)}…` : t;
+}
+
 export function parseApiErrorMessage(raw: string, fallback = "Request failed"): string {
   const t = raw.trim();
   if (!t) return fallback;
   try {
     const j = JSON.parse(t) as { detail?: unknown };
     const d = j.detail;
-    if (typeof d === "string" && d.trim()) return d.trim();
+    if (typeof d === "string" && d.trim()) return readableApiError(d, fallback);
     if (Array.isArray(d)) {
       const parts = d
         .map((x) => {
@@ -49,7 +58,7 @@ export function parseApiErrorMessage(raw: string, fallback = "Request failed"): 
   } catch {
     /* not JSON */
   }
-  return t.length > 280 ? `${t.slice(0, 277)}…` : t;
+  return readableApiError(t, fallback);
 }
 
 /**

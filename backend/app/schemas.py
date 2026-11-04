@@ -487,6 +487,34 @@ class CTSellerStatusOut(BaseModel):
     username: str | None = None
 
 
+class CTSellerConnectOut(BaseModel):
+    """Password connect, or a one-time-code challenge the Account page finishes in the browser."""
+
+    connected: bool
+    username: str | None = None
+    mfa_required: bool = False
+    mfa_token: str = ""
+    mfa_email: str = ""
+    mfa_mobile: str = ""
+
+
+class CTSellerMfaSendIn(BaseModel):
+    mfa_token: str = Field(min_length=8, max_length=4000)
+    channel: str = Field(default="email", max_length=16)
+    resend: bool = False
+
+
+class CTSellerMfaSentOut(BaseModel):
+    sent: bool = True
+
+
+class CTSellerMfaVerifyIn(BaseModel):
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=200)
+    mfa_token: str = Field(min_length=8, max_length=4000)
+    otp: str = Field(min_length=4, max_length=12)
+
+
 class CTSellerSessionOut(BaseModel):
     """Desktop Watcher session: CT Seller JWTs only — never the CT Seller password."""
 

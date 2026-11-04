@@ -95,6 +95,11 @@ export default function AccountPage() {
   const [ctSellerBusy, setCtSellerBusy] = useState(false);
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
+  const [ctSellerMfaToken, setCtSellerMfaToken] = useState("");
+  const [ctSellerMfaEmail, setCtSellerMfaEmail] = useState("");
+  const [ctSellerMfaMobile, setCtSellerMfaMobile] = useState("");
+  const [ctSellerOtp, setCtSellerOtp] = useState("");
+  const [ctSellerOfferBrowser, setCtSellerOfferBrowser] = useState(false);
   const [facebookConfigured, setFacebookConfigured] = useState(false);
   const [facebookConnected, setFacebookConnected] = useState(false);
   const [facebookNeedsReconnect, setFacebookNeedsReconnect] = useState(false);
@@ -196,11 +201,40 @@ export default function AccountPage() {
       .finally(() => setLoading(false));
   }, [router]);
 
+  function openCtSellerSite() {
+    window.open("https://seller.ctbids.com/", "_blank", "noopener,noreferrer");
+  }
+
+  function ctSellerNeedsBrowser(message: string) {
+    return /code|otp|one-time|mfa/i.test(message);
+  }
+
+  async function sendCtSellerCode(mfaToken: string, channel: "email" | "sms", resend = false) {
+    if (!token || !mfaToken) return;
+    setCtSellerBusy(true);
+    setCtSellerErr("");
+    try {
+      await apiFetch("/integrations/ctseller/mfa/send", token, {
+        method: "POST",
+        body: JSON.stringify({ mfa_token: mfaToken, channel, resend })
+      });
+      setCtSellerMsg(channel === "sms" ? "Code sent by text." : "Code sent by email.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not send the code";
+      setCtSellerErr(msg);
+      setCtSellerOfferBrowser(true);
+    } finally {
+      setCtSellerBusy(false);
+    }
+  }
+
   async function connectCtSeller() {
     if (!token || !ctSellerUserInput.trim() || !ctSellerPassword) return;
     setCtSellerBusy(true);
     setCtSellerErr("");
     setCtSellerMsg("");
+    setCtSellerOfferBrowser(false);
+    let handedOff = false;
     try {
       const res = (await apiFetch("/integrations/ctseller/credentials", token, {
         method: "PUT",
@@ -208,13 +242,66 @@ export default function AccountPage() {
           username: ctSellerUserInput.trim(),
           password: ctSellerPassword
         })
-      })) as { connected?: boolean; username?: string | null };
+      })) as {
+        connected?: boolean;
+        username?: string | null;
+        mfa_required?: boolean;
+        mfa_token?: string;
+        mfa_email?: string;
+        mfa_mobile?: string;
+      };
+      if (res.mfa_required && res.mfa_token) {
+        setCtSellerMfaToken(res.mfa_token);
+        setCtSellerMfaEmail((res.mfa_email || "").trim());
+        setCtSellerMfaMobile((res.mfa_mobile || "").trim());
+        setCtSellerOtp("");
+        setCtSellerOfferBrowser(true);
+        setCtSellerConnected(false);
+        setCtSellerMsg("CT Seller needs a one-time code. Enter it here, or finish it on the CT Seller site.");
+        handedOff = true;
+        void sendCtSellerCode(res.mfa_token, "email");
+        return;
+      }
+      setCtSellerMfaToken("");
       setCtSellerConnected(Boolean(res.connected));
       setCtSellerUsername((res.username || ctSellerUserInput).trim());
       setCtSellerPassword("");
       setCtSellerMsg("Connected to CT Seller. You can post lots from the lot detail page.");
     } catch (e) {
-      setCtSellerErr(e instanceof Error ? e.message : "Could not connect");
+      const msg = e instanceof Error ? e.message : "Could not connect";
+      setCtSellerErr(msg);
+      setCtSellerOfferBrowser(ctSellerNeedsBrowser(msg));
+    } finally {
+      if (!handedOff) setCtSellerBusy(false);
+    }
+  }
+
+  async function verifyCtSellerCode() {
+    if (!token || !ctSellerMfaToken || !ctSellerOtp.trim() || !ctSellerUserInput.trim() || !ctSellerPassword) return;
+    setCtSellerBusy(true);
+    setCtSellerErr("");
+    setCtSellerMsg("");
+    try {
+      const res = (await apiFetch("/integrations/ctseller/mfa/verify", token, {
+        method: "POST",
+        body: JSON.stringify({
+          username: ctSellerUserInput.trim(),
+          password: ctSellerPassword,
+          mfa_token: ctSellerMfaToken,
+          otp: ctSellerOtp.trim()
+        })
+      })) as { connected?: boolean; username?: string | null };
+      setCtSellerConnected(Boolean(res.connected));
+      setCtSellerUsername((res.username || ctSellerUserInput).trim());
+      setCtSellerPassword("");
+      setCtSellerOtp("");
+      setCtSellerMfaToken("");
+      setCtSellerOfferBrowser(false);
+      setCtSellerMsg("Connected to CT Seller. You can post lots from the lot detail page.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "That code was not accepted";
+      setCtSellerErr(msg);
+      setCtSellerOfferBrowser(true);
     } finally {
       setCtSellerBusy(false);
     }
@@ -698,7 +785,8 @@ export default function AccountPage() {
         <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
           Connect seller.ctbids.com once so the dashboard can post lots for you. We store the
           password encrypted and refresh the CT Seller session automatically — you should not need
-          to reconnect unless they change your password. Owners only.
+          to reconnect unless they change your password. If they ask for a one-time code, enter it
+          here or open the CT Seller site in the browser. Owners only.
         </p>
         {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
         {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
@@ -763,6 +851,65 @@ export default function AccountPage() {
             Ask an account owner to connect CT Seller.
           </p>
         )}
+        {me?.role?.toLowerCase() === "owner" && (ctSellerMfaToken || ctSellerOfferBrowser) ? (
+          <div style={{ marginTop: "0.9rem" }}>
+            {ctSellerMfaToken ? (
+              <>
+                <p className="ct-muted" style={{ marginTop: 0 }}>
+                  {ctSellerMfaEmail ? `Code can go to ${ctSellerMfaEmail}. ` : ""}
+                  {ctSellerMfaMobile ? `Text can go to ${ctSellerMfaMobile}. ` : ""}
+                  Enter the code below, or finish sign-in on the CT Seller site and use that same code.
+                </p>
+                <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <input
+                    className="ct-input"
+                    style={{ maxWidth: 180, width: "100%" }}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="One-time code"
+                    value={ctSellerOtp}
+                    onChange={(e) => {
+                      setCtSellerOtp(e.target.value);
+                      setCtSellerErr("");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="ct-btn ct-btn--primary"
+                    disabled={ctSellerBusy || ctSellerOtp.trim().length < 4}
+                    onClick={() => void verifyCtSellerCode()}
+                  >
+                    {ctSellerBusy ? "Checking…" : "Verify code"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    disabled={ctSellerBusy}
+                    onClick={() => void sendCtSellerCode(ctSellerMfaToken, "email", true)}
+                  >
+                    Email the code
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-btn"
+                    disabled={ctSellerBusy}
+                    onClick={() => void sendCtSellerCode(ctSellerMfaToken, "sms", true)}
+                  >
+                    Text the code
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="ct-muted" style={{ marginTop: 0 }}>
+                CT Seller asked for a code. Open the site, finish the code there, then try Connect again.
+              </p>
+            )}
+            <button type="button" className="ct-btn" style={{ marginTop: "0.75rem" }} onClick={openCtSellerSite}>
+              Use the CT Seller site
+            </button>
+          </div>
+        ) : null}
       </section>
       ) : null}
 
