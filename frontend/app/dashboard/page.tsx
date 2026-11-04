@@ -32,6 +32,7 @@ import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
 import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
+import { catalogPollIntervalMs, catalogStatusPath } from "../../lib/catalogPoll";
 import { isClientRole, isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
 import {
   clearStagingDraft,
@@ -2045,6 +2046,8 @@ export default function DashboardPage() {
   const [selectedSaleId, setSelectedSaleId] = useState<string>(readStoredSaleId);
   /** Bumps after bfcache restore or return from lot detail so sales/lots/jobs refetch. */
   const [dataReloadNonce, setDataReloadNonce] = useState(0);
+  /** Bumps after upload / run / retry so catalog status refetches immediately. */
+  const [catalogPollEpoch, setCatalogPollEpoch] = useState(0);
   const selectedSaleIdRef = useRef<string>("");
   const [newSaleName, setNewSaleName] = useState("");
   const [creatingSale, setCreatingSale] = useState(false);
@@ -3249,10 +3252,19 @@ export default function DashboardPage() {
         })
         .catch(() => {
           if (cancelled) return;
-          void apiFetch("/integrations/ctseller/sales", token)
-            .then((rows) => {
+          // Only list remote auctions when CT Seller is connected — missing creds
+          // used to 400 here on every dashboard load.
+          void apiFetch("/integrations/ctseller", token)
+            .then((st) => {
               if (cancelled) return;
-              setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+              if (!(st as { connected?: boolean }).connected) {
+                setCtSellerRemoteSales([]);
+                return;
+              }
+              return apiFetch("/integrations/ctseller/sales", token).then((rows) => {
+                if (cancelled) return;
+                setCtSellerRemoteSales(Array.isArray(rows) ? (rows as CTSellerRemoteSale[]) : []);
+              });
             })
             .catch(() => {
               if (!cancelled) setCtSellerRemoteSales([]);
@@ -3616,18 +3628,13 @@ export default function DashboardPage() {
     setLiveProgressJobId(null);
   }, [processingJobId]);
 
-  /** Poll jobs/lots so field uploads appear on other devices (same account) without a manual refresh. */
+  /** Poll catalog status so field uploads appear without a manual refresh.
+
+  One ``GET /jobs/catalog-status`` covers every sale. Fast while anything is
+  receiving/queued/processing; idle backoff otherwise. Hidden tabs pause.
+  */
   useEffect(() => {
     if (!token || loading || !selectedSaleId) return;
-
-    const pollMs = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return 60000;
-      if (busyProcessing || queuedJobCount > 0) {
-        if (queuedJobCount > 0 && !busyProcessing) return 4000;
-        return busyProcessing ? 2500 : 8000;
-      }
-      return 12000;
-    };
 
     const refreshLotsForSale = (sid: string) => {
       const fq =
@@ -3642,18 +3649,39 @@ export default function DashboardPage() {
     };
 
     let jobsInFlight = false;
+    let hasActive = busyProcessing || queuedJobCount > 0;
+    let intervalId: number | undefined;
+
+    const applyInterval = () => {
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+      intervalId = undefined;
+      const ms = catalogPollIntervalMs({
+        hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+        hasActive
+      });
+      if (ms == null) return;
+      intervalId = window.setInterval(() => void tick(), ms);
+    };
+
     const tick = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       if (jobsInFlight) return;
       jobsInFlight = true;
       try {
         const sid = selectedSaleIdRef.current;
         if (!sid) return;
-        const jlist = (await apiFetch(`/jobs?sale_id=${encodeURIComponent(sid)}`, token)) as Job[];
-        void apiFetch(`/jobs/stuck?sale_id=${encodeURIComponent(sid)}`, token)
-          .then((d) => setStuckJobs(stuckJobsFromResponse(d)))
-          .catch(() => {
-            /* ignore */
-          });
+        const status = (await apiFetch(catalogStatusPath(sid), token)) as {
+          has_active?: boolean;
+          jobs?: Job[];
+          stuck?: unknown;
+        };
+        const jlist = Array.isArray(status.jobs) ? status.jobs : [];
+        setStuckJobs(stuckJobsFromResponse(status.stuck));
+        const nextActive = Boolean(status.has_active);
+        if (nextActive !== hasActive) {
+          hasActive = nextActive;
+          applyInterval();
+        }
         const processing = jlist.filter((j) => j.status === "processing");
         if (processing.length) {
           const trackedId = liveProgressJobIdRef.current;
@@ -3693,18 +3721,23 @@ export default function DashboardPage() {
     };
 
     void tick();
-    let id = setInterval(() => void tick(), pollMs());
-    const onVis = () => {
+    applyInterval();
+    const onWake = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        applyInterval();
+        return;
+      }
       void tick();
-      clearInterval(id);
-      id = setInterval(() => void tick(), pollMs());
+      applyInterval();
     };
-    document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
     return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVis);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
     };
-  }, [token, loading, busyProcessing, queuedJobCount, selectedSaleId, inventorySkuFlagFilter]);
+  }, [token, loading, selectedSaleId, inventorySkuFlagFilter, catalogPollEpoch]);
 
   useEffect(() => {
     return () => {
@@ -5034,6 +5067,7 @@ export default function DashboardPage() {
         })
       });
       setJobs((prev) => [created, ...prev]);
+      setCatalogPollEpoch((n) => n + 1);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to create job";
       if (isAuthFailureMessage(msg)) {
@@ -5209,6 +5243,7 @@ export default function DashboardPage() {
             });
         }
         setJobs((prev) => prev.map((j) => (j.id === running.id ? running : j)));
+        setCatalogPollEpoch((n) => n + 1);
         setUploadProgress("");
         setError("");
         setStagingSuccess(
@@ -5308,6 +5343,7 @@ export default function DashboardPage() {
         );
       }
       await refreshJobsAndStuck();
+      setCatalogPollEpoch((n) => n + 1);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Retry failed";
       if (isAuthFailureMessage(msg)) {
@@ -5349,6 +5385,7 @@ export default function DashboardPage() {
         setStagingSuccess("Catalog started on the server — watch this job for Processing → Completed.");
       }
       setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+      setCatalogPollEpoch((n) => n + 1);
       if (updated.status === "queued") {
         setStagingSuccess(
           "Still queued — the catalog worker may be busy or stuck. Wait a moment and try Run now again, or restart the worker on Railway."

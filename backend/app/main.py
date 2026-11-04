@@ -180,6 +180,8 @@ from app.schemas import (
     SaleUploadHealthOut,
     SaleUploadHealthJobOut,
     RetryFailedJobsOut,
+    CatalogStatusOut,
+    CatalogStatusSaleOut,
     StuckJobOut,
     StuckJobsOut,
     SaleZipExportOut,
@@ -346,6 +348,13 @@ def _sale_out(row: Sale) -> SaleOut:
         ctseller_reserve_price=getattr(row, "ctseller_reserve_price", None),
         created_at=row.created_at,
     )
+
+
+def _ctseller_account_connected(account: Account) -> bool:
+    """True when the account has stored CT Seller username + password."""
+    username = (getattr(account, "ctseller_username", None) or "").strip()
+    password = unseal_secret(getattr(account, "ctseller_password_enc", None))
+    return bool(username and password)
 
 
 def _ctseller_client_for_account(
@@ -2391,9 +2400,7 @@ def sync_sales_from_ctseller(
     account = db.query(Account).filter(Account.id == current.account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    username = (getattr(account, "ctseller_username", None) or "").strip()
-    password = unseal_secret(getattr(account, "ctseller_password_enc", None))
-    if not username or not password:
+    if not _ctseller_account_connected(account):
         return CtsellerSaleSyncOut(
             connected=False,
             sales=_account_sales_out(db, current.account_id),
@@ -3512,6 +3519,10 @@ def ctseller_list_sales(
     account = db.query(Account).filter(Account.id == current.account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    if not _ctseller_account_connected(account):
+        # Not configured is a normal state (new franchise, Watcher-only). Do not 400 —
+        # dashboard/lot pages call this on load and would spam the API log.
+        return []
     try:
         # Auth/token refresh may briefly use this session; release it before listing sales over HTTP.
         client = _ctseller_client_for_account(account, db, probe=False)
@@ -6207,6 +6218,71 @@ def list_jobs(
         return []
     rows = q.order_by(ProcessingJob.created_at.desc()).all()
     return [_job_out(r) for r in rows]
+
+
+@app.get("/jobs/catalog-status", response_model=CatalogStatusOut)
+def catalog_job_status(
+    sale_id: str | None = Query(
+        None,
+        description="When set, also return the full job + stuck lists for this sale.",
+    ),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogStatusOut:
+    """One cheap poll for dashboard catalog activity across every sale.
+
+    Returns which sales have receiving/queued/processing jobs. When ``sale_id`` is
+    set, also includes the same job and stuck payloads as ``GET /jobs`` and
+    ``GET /jobs/stuck`` so the selected sale's UI can refresh in one request.
+    Mobile Sync should keep using ``GET /jobs``.
+    """
+    changed = job_tasks.maybe_reconcile_jobs_for_list(db, current.account_id)
+    if changed:
+        db.commit()
+    job_tasks.kick_queue_if_idle_async(current.account_id)
+
+    empty_stuck = StuckJobsOut(count=0, jobs=[])
+    scoped_all = _scoped_jobs_query(db, current, None)
+    if scoped_all is None:
+        return CatalogStatusOut(has_active=False, active_job_count=0, stuck=empty_stuck)
+
+    active = (JobStatus.receiving, JobStatus.queued, JobStatus.processing)
+    active_rows = scoped_all.filter(ProcessingJob.status.in_(active)).all()
+    by_sale: dict[str, CatalogStatusSaleOut] = {}
+    for row in active_rows:
+        item = by_sale.get(row.sale_id)
+        if item is None:
+            item = CatalogStatusSaleOut(sale_id=row.sale_id)
+            by_sale[row.sale_id] = item
+        if row.status == JobStatus.receiving:
+            item.receiving += 1
+        elif row.status == JobStatus.queued:
+            item.queued += 1
+        elif row.status == JobStatus.processing:
+            item.processing += 1
+        if job_tasks.is_stuck_job(row):
+            item.stuck_count += 1
+
+    sales_out = list(by_sale.values())
+    jobs_out: list[JobOut] = []
+    stuck_out = empty_stuck
+    if sale_id:
+        sale_q = _scoped_jobs_query(db, current, sale_id)
+        if sale_q is not None:
+            sale_rows = sale_q.order_by(ProcessingJob.created_at.desc()).all()
+            jobs_out = [_job_out(r) for r in sale_rows]
+            stuck_rows = [row for row in sale_rows if job_tasks.is_stuck_job(row)]
+            stuck_rows.sort(key=lambda row: job_tasks.job_age_seconds(row), reverse=True)
+            stuck_payload = _stuck_jobs_out(db, stuck_rows)
+            stuck_out = StuckJobsOut(count=len(stuck_payload), jobs=stuck_payload)
+
+    return CatalogStatusOut(
+        has_active=bool(active_rows),
+        active_job_count=len(active_rows),
+        sales=sales_out,
+        jobs=jobs_out,
+        stuck=stuck_out,
+    )
 
 
 @app.get("/jobs/stuck", response_model=StuckJobsOut)

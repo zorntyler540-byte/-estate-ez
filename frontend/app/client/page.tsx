@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, apiUploadFiles } from "../../lib/api";
+import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
 
 const MAX_PHOTOS = 40;
@@ -67,22 +68,47 @@ export default function ClientUploadPage() {
   useEffect(() => {
     if (!token || !me?.assigned_sale_id) return;
     let cancelled = false;
+    let intervalId: number | undefined;
+    const saleId = me.assigned_sale_id;
     const load = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
         const rows = (await apiFetch(
-          `/jobs?sale_id=${encodeURIComponent(me.assigned_sale_id || "")}`,
+          `/jobs?sale_id=${encodeURIComponent(saleId || "")}`,
           token
         )) as JobRow[];
-        if (!cancelled) setJobs(rows);
+        if (cancelled) return;
+        setJobs(rows);
+        const hasActive = rows.some(
+          (j) => j.status === "receiving" || j.status === "queued" || j.status === "processing"
+        );
+        if (intervalId !== undefined) window.clearInterval(intervalId);
+        intervalId = undefined;
+        const ms = catalogPollIntervalMs({
+          hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+          hasActive
+        });
+        if (ms != null) intervalId = window.setInterval(() => void load(), ms);
       } catch {
         /* the upload form still works if the job list is briefly unavailable */
       }
     };
+    const onWake = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        if (intervalId !== undefined) window.clearInterval(intervalId);
+        intervalId = undefined;
+        return;
+      }
+      void load();
+    };
     void load();
-    const timer = window.setInterval(() => void load(), 4000);
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
     };
   }, [token, me?.assigned_sale_id]);
 
@@ -110,6 +136,15 @@ export default function ClientUploadPage() {
       for (const file of files) form.append("files", file, file.name);
       const created = (await apiUploadFiles("/jobs/upload", token, form)) as JobRow;
       await apiFetch(`/jobs/${encodeURIComponent(created.id)}/run`, token, { method: "POST" });
+      try {
+        const rows = (await apiFetch(
+          `/jobs?sale_id=${encodeURIComponent(me.assigned_sale_id || "")}`,
+          token
+        )) as JobRow[];
+        setJobs(rows);
+      } catch {
+        /* poll will pick the new job up */
+      }
       setMessage(
         files.length === 1
           ? "1 photo is uploading into this sale."

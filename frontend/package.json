@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:quote": "node --experimental-strip-types --test lib/quote.test.ts"
+    "test:quote": "node --experimental-strip-types --test lib/quote.test.ts",
+    "test:catalog-poll": "node --experimental-strip-types --test lib/catalogPoll.test.ts"
   },
   "dependencies": {
     "heic2any": "^0.0.4",
