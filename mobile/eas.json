@@ -7,19 +7,13 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development",
-      "env": {
-        "EXPO_PUBLIC_API_BASE": "https://caringtransitions-ai-production.up.railway.app"
-      }
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
       "ios": {
         "simulator": false
-      },
-      "env": {
-        "EXPO_PUBLIC_API_BASE": "https://caringtransitions-ai-production.up.railway.app"
       }
     },
     "production": {

@@ -14,7 +14,7 @@ import {
 import { BrandLogo } from "@/components/BrandLogo";
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
-import { API_BASE } from "@/lib/config";
+import { API_BASE, API_BASE_ERROR } from "@/lib/config";
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
@@ -49,8 +49,8 @@ export default function LoginScreen() {
       <Text style={styles.sub}>
         Sign in with the email and password from your account owner. Photos you take on this phone upload into your sale.
       </Text>
-      <Text style={styles.api} numberOfLines={2}>
-        API: {API_BASE}
+      <Text style={styles.api} numberOfLines={API_BASE_ERROR ? 4 : 2}>
+        {API_BASE_ERROR ? `App setup error: ${API_BASE_ERROR}` : `API: ${API_BASE}`}
       </Text>
 
       <TextInput

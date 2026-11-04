@@ -83,7 +83,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 
 **CTBids Sale Suite (Windows desktop app):** Public download page is **`/desktop`** (no sign-in). Logged-in users also see it under **Desktop tools**. Build the zip with `build_suite.bat` in the sibling Windows Sale Suite project. For a local test, copy `dist\CTBids-Sale-Suite.zip` into `frontend/public/downloads/`. For production, host the zip externally (OneDrive / R2 / S3) and set `NEXT_PUBLIC_SALE_SUITE_DOWNLOAD_URL` at **image build** time — the zip is ~700 MB and should not be committed to git.
 
-On Railway: add `NEXT_PUBLIC_API_BASE` under **Variables**, then enable **“Available at build time”** so the Docker `ARG` receives it during `docker build`. The Dockerfile defaults to the live Railway API and **fails the build** if the value contains `localhost` / `127.0.0.1`.
+On Railway: add `NEXT_PUBLIC_API_BASE` under **Variables**. Railway passes it to the Docker `ARG` during `docker build`. There is **no default**: the build **fails** if it is missing, not `https://`, or contains `localhost` / `127.0.0.1` (and `next build` runs the same check). A failed build leaves the previous deployment serving.
 
 4. **Generate domain** for the web service → this is the link you send testers.
 

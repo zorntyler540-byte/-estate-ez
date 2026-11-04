@@ -78,11 +78,11 @@ eas update --channel production --message "Queue: review all photos in taken ord
 ```
 
 1. `eas login` — browser or email/password for Expo (`vtz1900` / owner in `app.json`).
-2. `eas update --channel production` — TestFlight builds listen to the **`production`** channel (see `eas.json`). Do **not** omit `EXPO_PUBLIC_API_BASE`; the release bundle also ignores localhost, but set the Railway URL anyway.
+2. `eas update --channel production` — TestFlight builds listen to the **`production`** channel (see `eas.json`). `EXPO_PUBLIC_API_BASE` is **required**: without it (or with a localhost / non-https value from `.env`) `eas update` stops with an error before publishing anything.
 3. Wait until the command prints a URL on expo.dev. That means phones can download it.
 4. On each iPhone: **fully quit** Estate-EZ Capture (swipe up from the app switcher) and open it again. Updates check on launch (`ON_LOAD` in `app.json`).
 
-If a phone was installed from an **ad hoc / preview** build instead of TestFlight, use `--channel preview`.
+If a phone was installed from an **ad hoc / preview** build instead of TestFlight, use `--channel preview` with the same explicit `EXPO_PUBLIC_API_BASE`.
 
 **Do not use EAS Update** when you changed native code or added a native dependency (camera, sqlite, expo-updates itself). Those still need `eas build` + `eas submit` + a new TestFlight version.
 
@@ -108,7 +108,7 @@ Scan the QR code with **Expo Go** on your iPhone, or press `a` for Android emula
 | Local backend on PC | `http://YOUR_LAN_IP:8000` (not `localhost` from a phone) |
 | Android emulator | `http://10.0.2.2:8000` |
 
-EAS **build** profiles bake `EXPO_PUBLIC_API_BASE` into the native binary (see `eas.json`). **EAS Update does not read that `env` block** — it uses local `.env` / the shell. Release JS (`__DEV__ === false`) ignores localhost and falls back to the Railway API in `mobile/lib/config.ts`. Local Expo Go (`__DEV__`) still uses `mobile/.env` / localhost.
+Only the **`production`** EAS build profile sets `EXPO_PUBLIC_API_BASE` in `eas.json`. `preview` and `development` have no default: give a `preview` build its URL (add it to that profile's `env`, or an EAS environment variable) or it fails to build. **EAS Update does not read the `eas.json` `env` block** — it uses the shell, then local `.env`. There is no fallback URL. `app.config.js` fails release builds and `eas update` when the URL is missing, invalid, non-https, or localhost. Local Expo Go (`__DEV__`) still uses `mobile/.env`, defaulting to localhost.
 
 ## App flow
 

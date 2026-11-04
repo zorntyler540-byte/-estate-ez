@@ -192,8 +192,8 @@ Common optional variables:
 | `GEMINI_GLOBAL_CONCURRENCY` | Cross-process Gemini HTTP cap (default 8) |
 | `META_APP_ID` / `META_APP_SECRET` | Facebook Page connect/post |
 | `FEEDBACK_TO_EMAIL` + `SMTP_*` | Dashboard suggestion inbox |
-| `NEXT_PUBLIC_API_BASE` | Public API URL for the web client |
-| `EXPO_PUBLIC_API_BASE` | API URL for the phone app |
+| `NEXT_PUBLIC_API_BASE` | Public API URL for the web client. **Required** for `next build` / `Dockerfile.web` (no fallback) |
+| `EXPO_PUBLIC_API_BASE` | API URL for the phone app. **Required** for release builds and `eas update` (no fallback) |
 
 Production deploy, R2 CORS, worker memory caps, and Facebook app setup: [`DEPLOY.md`](DEPLOY.md).
 

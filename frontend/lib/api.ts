@@ -1,29 +1,16 @@
-export const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
+import { checkApiBase } from "./apiBaseRule.mjs";
 
-export function isLocalApiBase(url: string): boolean {
-  const raw = url.trim();
-  if (!raw) return false;
-  try {
-    const host = new URL(raw).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1";
-  } catch {
-    return /localhost|127\.0\.0\.1/i.test(raw);
-  }
-}
+export { isLocalApiBase } from "./apiBaseRule.mjs";
 
 /**
- * Railway/Docker production must never bake localhost. An empty or localhost
- * ``NEXT_PUBLIC_API_BASE`` at image-build time used to ship a site that could
- * not reach the API from phones or other machines.
+ * Production builds fail closed: a missing or invalid ``NEXT_PUBLIC_API_BASE`` throws instead
+ * of silently pointing the site at some other API. ``next.config.mjs`` runs the same check so
+ * ``next build`` stops before shipping. ``Dockerfile.web`` additionally rejects localhost.
  */
 export function resolveApiBase(fromEnv: string | undefined, nodeEnv: string | undefined): string {
-  const raw = (fromEnv || "").trim().replace(/\/$/, "");
-  const production = nodeEnv === "production";
-  if (production) {
-    if (!raw || isLocalApiBase(raw)) return PRODUCTION_API_BASE;
-    return raw;
-  }
-  return raw || "http://localhost:8000";
+  const { url, error } = checkApiBase(fromEnv, { production: nodeEnv === "production" });
+  if (error) throw new Error(error);
+  return url;
 }
 
 const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_BASE, process.env.NODE_ENV);

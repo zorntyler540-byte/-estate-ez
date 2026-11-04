@@ -1,35 +1,33 @@
-/** Live FastAPI — used for TestFlight / EAS Update even if a local ``.env`` says localhost. */
-export const PRODUCTION_API_BASE = "https://caringtransitions-ai-production.up.railway.app";
+import { checkApiBase } from "./apiBaseRule";
 
-export function isLocalApiBase(url: string): boolean {
-  const raw = url.trim();
-  if (!raw) return false;
-  try {
-    const host = new URL(raw).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "10.0.2.2";
-  } catch {
-    return /localhost|127\.0\.0\.1/i.test(raw);
-  }
-}
+export { isLocalApiBase } from "./apiBaseRule";
 
 /**
- * ``eas update`` does **not** read ``eas.json`` ``build.env``. SDK 54 uses local ``.env``,
- * which is often ``http://localhost:8000``. Release bundles (``__DEV__ === false``) must
- * never keep that URL or field phones try to talk to the handset itself.
+ * ``eas update`` does **not** read ``eas.json`` ``build.env``; SDK 54 uses the shell env, then
+ * local ``.env`` (often localhost). Release bundles (``__DEV__ === false``) fail closed on a
+ * missing, invalid, or on-device URL instead of guessing one. ``app.config.js`` runs the same
+ * check, so ``eas update`` / ``eas build`` refuse to produce such a bundle in the first place.
  */
 export function resolveApiBase(fromEnv: string | undefined, isDev: boolean): string {
-  const raw = (fromEnv || "").trim().replace(/\/$/, "");
-  if (!isDev) {
-    if (!raw || isLocalApiBase(raw)) return PRODUCTION_API_BASE;
-    return raw;
-  }
-  return raw || "http://localhost:8000";
+  const { url, error } = checkApiBase(fromEnv, !isDev);
+  if (error) throw new Error(error);
+  return url;
 }
 
-export const API_BASE = resolveApiBase(
+const launch = checkApiBase(
   process.env.EXPO_PUBLIC_API_BASE,
-  Boolean((globalThis as { __DEV__?: boolean }).__DEV__)
+  !(globalThis as { __DEV__?: boolean }).__DEV__
 );
+
+export const API_BASE: string = launch.url;
+
+/** Set only when this bundle shipped without a usable API URL. Requests refuse to run. */
+export const API_BASE_ERROR: string | null = launch.error;
+
+export function apiUrl(path: string): string {
+  if (API_BASE_ERROR) throw new Error(API_BASE_ERROR);
+  return `${API_BASE}${path}`;
+}
 
 export const SELECTED_SALE_KEY = "ct_mobile_selected_sale_id";
 
