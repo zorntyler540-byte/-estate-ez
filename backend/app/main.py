@@ -251,7 +251,12 @@ from app.services.sale_covers import (
     validate_cover_photo_ids,
 )
 from app.services.ctseller_sale_sync import apply_ctseller_catalog_sale_sync
-from app.services.plans import ASSIGNABLE_PLANS, PLAN_WATCHER, features_for_client
+from app.services.plans import (
+    ASSIGNABLE_PLANS,
+    PLAN_WATCHER,
+    enforce_watcher_http,
+    features_for_client,
+)
 from app.services.roles import (
     ASSIGNABLE_ROLES,
     CLIENT_UPLOAD_DETAIL,
@@ -407,6 +412,83 @@ def _ctseller_after_expired_session(account_id: str) -> CTSellerClient:
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         return _ctseller_client_for_account(account, db2, force=True)
+
+
+_ctseller_mint_locks: dict[str, threading.Lock] = {}
+_ctseller_mint_locks_guard = threading.Lock()
+
+
+def _ctseller_mint_lock(account_id: str) -> threading.Lock:
+    with _ctseller_mint_locks_guard:
+        lock = _ctseller_mint_locks.get(account_id)
+        if lock is None:
+            lock = threading.Lock()
+            _ctseller_mint_locks[account_id] = lock
+        return lock
+
+
+def _mint_ctseller_session(account_id: str) -> CTSellerSessionOut:
+    """``probe=False`` token mint that never holds a DB connection during CT Seller HTTP.
+
+    Callers hold ``_ctseller_mint_lock(account_id)`` so a burst of Watcher mints for
+    one account makes at most one refresh/login; the rest re-read the fresh JWT.
+    """
+    with SessionLocal() as db:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        access = unseal_secret(getattr(account, "ctseller_access_token_enc", None))
+        refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
+        username = (getattr(account, "ctseller_username", None) or "").strip()
+        password = unseal_secret(getattr(account, "ctseller_password_enc", None))
+    if not username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect your CT Seller account on Account → CT Seller first",
+        )
+    if access and not access_token_should_refresh(access):
+        return CTSellerSessionOut(
+            access_token=access,
+            refresh_token=refresh or "",
+            username=username,
+            connected=True,
+        )
+    client = CTSellerClient()
+    tokens = None
+    if refresh:
+        try:
+            tokens = client.refresh_tokens(refresh)
+        except CTSellerError:
+            tokens = None
+    if tokens is None:
+        try:
+            tokens = client.login(username, password, keep_logged_in=True)
+        except CTSellerError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc) or "CT Seller login failed — update credentials on Account",
+            ) from exc
+    if not (tokens.access_token or "").strip():
+        raise HTTPException(status_code=400, detail="CT Seller did not return a session")
+    with SessionLocal() as db:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        persist_ctseller_tokens(account, tokens)
+        db.add(account)
+        db.commit()
+    return CTSellerSessionOut(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token or refresh or "",
+        username=username,
+        connected=True,
+    )
+
+
+def _enforce_watcher_media(db: Session, user: User, path: str) -> None:
+    """Bearer-only media routes skip ``get_current_user``; apply the watcher plan gate here."""
+    account = db.query(Account).filter(Account.id == user.account_id).first()
+    enforce_watcher_http(account, "GET", path)
 
 
 def _client_assigned_sale_id(current: User) -> str:
@@ -3367,6 +3449,7 @@ def ctseller_status(
 
 @app.post("/integrations/ctseller/session", response_model=CTSellerSessionOut)
 def ctseller_desktop_session(
+    response: Response,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CTSellerSessionOut:
@@ -3376,26 +3459,13 @@ def ctseller_desktop_session(
     CT Seller password. Access JWTs are short-lived; Watcher should persist
     the refresh token and call this again if refresh fails.
     """
-    account = db.query(Account).filter(Account.id == current.account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    client = _ctseller_client_for_account(account, db)
-    access = (client.access_token or "").strip() or unseal_secret(
-        getattr(account, "ctseller_access_token_enc", None)
-    )
-    refresh = unseal_secret(getattr(account, "ctseller_refresh_token_enc", None))
-    if not access:
-        raise HTTPException(
-            status_code=400,
-            detail="Connect your CT Seller account on Account → CT Seller first",
-        )
-    username = (getattr(account, "ctseller_username", None) or "").strip() or None
-    return CTSellerSessionOut(
-        access_token=access,
-        refresh_token=refresh or "",
-        username=username,
-        connected=True,
-    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    account_id = current.account_id
+    # Release the pool connection before waiting on the per-account lock or CT Seller HTTP.
+    db.close()
+    with _ctseller_mint_lock(account_id):
+        return _mint_ctseller_session(account_id)
 
 
 def _save_ctseller_login(account: Account, username: str, password: str, tokens) -> None:
@@ -4222,6 +4292,7 @@ def lot_thumbnail(
         user = user_from_access_token(token, db)
         if is_client_role(user.role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        _enforce_watcher_media(db, user, f"/lots/{lot_id}/thumbnail")
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
@@ -5091,6 +5162,7 @@ def lot_photo_thumbnail(
         user = user_from_access_token(token, db)
         if is_client_role(user.role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+        _enforce_watcher_media(db, user, f"/lots/{lot_id}/photos/{photo_id}/thumbnail")
         row = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == user.account_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Lot not found")
