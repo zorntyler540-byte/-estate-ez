@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import { TeamActivitySection } from "../../components/TeamActivitySection";
 import { apiFetch } from "../../lib/api";
 import { isOwnerRole } from "../../lib/roles";
@@ -75,16 +76,7 @@ export default function TeamActivityPage() {
 
   return (
     <AppShell
-      actions={
-        <>
-          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
+      actions={<ShellActions onLogout={logout} />}
     >
       <div className="ct-dashboard" style={{ maxWidth: 1400 }}>
         <header className="ct-page-header">

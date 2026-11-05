@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Download, Monitor } from "lucide-react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import { saleSuiteDownloadAnchorProps, saleSuiteDownloadUrl } from "../../lib/saleSuiteDownload";
 
 export default function ToolsPage() {
@@ -39,16 +40,7 @@ export default function ToolsPage() {
 
   return (
     <AppShell
-      actions={
-        <>
-          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
+      actions={<ShellActions onLogout={logout} />}
     >
       <div className="ct-dashboard" style={{ maxWidth: 720 }}>
         <header className="ct-page-header">

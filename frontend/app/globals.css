@@ -1,3 +1,40 @@
+/* Tailwind utilities only. Preflight is omitted so existing .ct-* pages keep their reset. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "./**/*.{js,ts,jsx,tsx}";
+@source "../components/**/*.{js,ts,jsx,tsx}";
+@source "../lib/**/*.{js,ts,jsx,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-source-sans-3), "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
 /* Design tokens — deep black shell, Zortron neon-orange accent */
 :root {
   --ct-bg: #070708;
@@ -34,6 +71,28 @@
   --ct-glow: 0 0 24px rgba(255, 77, 26, 0.22);
   --ct-max: 1120px;
   --ct-max-narrow: 440px;
+
+  /* shadcn aliases of the tokens above. Do not retune the palette here. */
+  --background: var(--ct-bg);
+  --foreground: var(--ct-text);
+  --card: var(--ct-surface);
+  --card-foreground: var(--ct-text);
+  --popover: var(--ct-surface);
+  --popover-foreground: var(--ct-text);
+  --primary: var(--ct-primary);
+  --primary-foreground: var(--ct-on-primary);
+  --secondary: var(--ct-bg-elevated);
+  --secondary-foreground: var(--ct-text);
+  --muted: var(--ct-bg-elevated);
+  --muted-foreground: var(--ct-text-muted);
+  --accent: var(--ct-border);
+  --accent-foreground: var(--ct-text);
+  --destructive: #ef4444;
+  --destructive-foreground: #fff7f7;
+  --border: var(--ct-border);
+  --input: var(--ct-border-strong);
+  --ring: var(--ct-primary);
+  --radius: var(--ct-radius);
 }
 
 *,
@@ -68,6 +127,41 @@ a {
 a:hover {
   color: var(--ct-primary-hover);
   text-decoration: underline;
+}
+
+/* Anchor color is unlayered, so it beats layered Tailwind text utilities.
+   Button links opt into the variant color explicitly. */
+a[data-slot="button"] {
+  text-decoration: none;
+}
+
+a[data-slot="button"]:hover {
+  text-decoration: none;
+}
+
+a[data-slot="button"][data-variant="default"],
+a[data-slot="button"][data-variant="default"]:hover {
+  color: var(--ct-on-primary);
+}
+
+a[data-slot="button"][data-variant="ghost"] {
+  color: var(--ct-text-muted);
+}
+
+a[data-slot="button"][data-variant="ghost"]:hover {
+  color: var(--ct-text);
+}
+
+a[data-slot="button"][data-variant="outline"],
+a[data-slot="button"][data-variant="secondary"],
+a[data-slot="button"][data-variant="outline"]:hover,
+a[data-slot="button"][data-variant="secondary"]:hover {
+  color: var(--ct-text);
+}
+
+a[data-slot="button"].ez-accent,
+a[data-slot="button"].ez-accent:hover {
+  color: var(--ct-primary);
 }
 
 code {

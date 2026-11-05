@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Loader2, Plus, Trash2 } from "lucide-react";
 import { AppraisalPhotoThumb } from "../../components/AppraisalPhotoThumb";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import {
   captureVideoFrameAsJpegFile,
   getAppraiserCameraMediaConstraints,
@@ -568,16 +568,7 @@ export default function AppraiserPage() {
   return (
     <AppShell
       topBar={saleTopBar}
-      actions={
-        <>
-          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
+      actions={<ShellActions onLogout={logout} />}
     >
       <div className="ct-dashboard" style={{ maxWidth: 900 }}>
       <header className="ct-page-header">

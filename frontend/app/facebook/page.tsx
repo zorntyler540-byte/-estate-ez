@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import { FindGroupsPanel } from "../../components/FindGroupsPanel";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
@@ -235,16 +236,7 @@ export default function FacebookPage() {
   return (
     <AppShell
       topBar={saleTopBar}
-      actions={
-        <>
-          <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Account
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
+      actions={<ShellActions onLogout={logout} />}
     >
       <div className="ct-dashboard" style={{ maxWidth: 1100 }}>
         <header className="ct-page-header">

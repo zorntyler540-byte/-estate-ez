@@ -31,6 +31,12 @@ import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { StatCard } from "../../components/ui/stat-card";
+import { SegmentedTabs } from "../../components/ui/tabs";
+import { useToast, type ToastTone } from "../../components/ui/toast";
 import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import { catalogPollIntervalMs, catalogStatusPath } from "../../lib/catalogPoll";
@@ -1085,15 +1091,7 @@ type LotsSortKey = "sku" | "title" | "price" | "status" | "photos";
 type AdminSortKey = "name" | "plan" | "status" | "usage";
 type SortDir = "asc" | "desc";
 
-type DashboardToastTone = "success" | "error" | "info";
-type DashboardToast = {
-  id: string;
-  tone: DashboardToastTone;
-  message: string;
-};
-
 const DASHBOARD_TAB_QUERY_KEY = "tab";
-const DASHBOARD_TOAST_TTL_MS = 4200;
 
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string; ownerOnly?: boolean }> = [
   { id: "overview", label: "Overview" },
@@ -1454,9 +1452,21 @@ function lotEligibleForCtSellerPost(lot: Lot): boolean {
   );
 }
 
-function lotSkuBadgeClass(lot: Lot): string {
-  if (lot.sku_needs_review || !lot.sku) return "ct-lot-sku-badge ct-lot-sku-badge--review";
-  return "ct-lot-sku-badge ct-lot-sku-badge--ok";
+function lotStatusBadgeVariant(lot: Lot): "positive" | "warning" | "info" | "neutral" {
+  const outcome = lotCtBidsOutcome(lot);
+  if (outcome === "sold") return "positive";
+  if (outcome === "unsold") return "warning";
+  if (lotIsPostedToCtSeller(lot)) return "positive";
+  if (lot.audience_hold) return "info";
+  return "neutral";
+}
+
+function jobStatusVariant(status: string): "positive" | "negative" | "warning" | "info" | "neutral" {
+  if (status === "completed") return "positive";
+  if (status === "failed") return "negative";
+  if (status === "processing") return "info";
+  if (status === "queued" || status === "receiving") return "warning";
+  return "neutral";
 }
 
 function lotSkuCellTitle(lot: Lot): string | undefined {
@@ -2056,22 +2066,7 @@ function DashboardTabBar({
   tabs: Array<{ id: DashboardTab; label: string }>;
   onSelect: (tab: DashboardTab) => void;
 }) {
-  return (
-    <div className="ct-seg ct-dash-tabs" role="tablist" aria-label="Dashboard sections">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab.id}
-          disabled={activeTab === tab.id}
-          onClick={() => onSelect(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <SegmentedTabs label="Dashboard sections" active={activeTab} tabs={tabs} onSelect={onSelect} />;
 }
 
 function DashboardSortHeader({
@@ -2126,42 +2121,23 @@ function RowOverflowMenu({
 
   return (
     <div className="ct-row-menu" ref={ref}>
-      <button
+      <Button
         type="button"
-        className="ct-btn ct-btn--ghost ct-row-menu__trigger"
+        variant="ghost"
+        size="icon"
+        className="ct-row-menu__trigger"
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={label}
         onClick={() => setOpen((v) => !v)}
       >
         <MoreHorizontal size={16} aria-hidden />
-      </button>
+      </Button>
       {open ? (
         <div className="ct-row-menu__panel" role="menu" onClick={() => setOpen(false)}>
           {children}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function DashboardToastViewport({
-  toasts,
-  onDismiss
-}: {
-  toasts: DashboardToast[];
-  onDismiss: (id: string) => void;
-}) {
-  return (
-    <div className="ct-toast-viewport" aria-live="polite" aria-atomic="true">
-      {toasts.map((toast) => (
-        <div key={toast.id} className={`ct-toast ct-toast--${toast.tone}`}>
-          <p>{toast.message}</p>
-          <button type="button" className="ct-toast__close" aria-label="Dismiss notification" onClick={() => onDismiss(toast.id)}>
-            <X size={14} aria-hidden />
-          </button>
-        </div>
-      ))}
     </div>
   );
 }
@@ -2399,7 +2375,7 @@ export default function DashboardPage() {
   } | null>(null);
   /** Bumps when returning to the tab so ``EventSource`` reconnects and replays recent SSE (mobile sleep / flaky LTE). */
   const [jobSseSession, setJobSseSession] = useState(0);
-  const [toasts, setToasts] = useState<DashboardToast[]>([]);
+  const toastApi = useToast();
   const sseRetryAfterErrorRef = useRef(0);
   /** Dashboard progress table + SSE follow this upload's job, not an older concurrent run. */
   const liveProgressJobIdRef = useRef<string | null>(null);
@@ -2436,22 +2412,9 @@ export default function DashboardPage() {
     [isMasterAdmin, pathname, router]
   );
 
-  const addToast = useCallback((message: string, tone: DashboardToastTone = "info") => {
-    if (!message.trim()) return;
-    setToasts((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, tone, message }]);
-  }, []);
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  }, []);
-  useEffect(() => {
-    if (!toasts.length) return;
-    const timers = toasts.map((toast) =>
-      window.setTimeout(() => {
-        dismissToast(toast.id);
-      }, DASHBOARD_TOAST_TTL_MS)
-    );
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [toasts, dismissToast]);
+  const addToast = useCallback((message: string, tone: ToastTone = "info") => {
+    toastApi.push(message, tone);
+  }, [toastApi]);
 
   const toggleLotsSort = useCallback((key: LotsSortKey) => {
     setLotsSortKey((prevKey) => {
@@ -6786,16 +6749,7 @@ export default function DashboardPage() {
     </label>
   );
 
-  const shellActions = (
-    <>
-      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-        Account
-      </Link>
-      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-        Log out
-      </button>
-    </>
-  );
+  const shellActions = <ShellActions onLogout={logout} />;
 
   const dashboardMobileBottomBar = (
     <>
@@ -6851,7 +6805,9 @@ export default function DashboardPage() {
                 return (
                   <li key={stuck.id}>
                     <div className="ct-stuck-jobs-banner__row">
-                      <span className="ct-job-status">{stuck.status}</span>
+                      <Badge variant={jobStatusVariant(stuck.status)} className="uppercase tracking-wide">
+                        {stuck.status}
+                      </Badge>
                       <span className="ct-stuck-jobs-banner__age">{formatJobAge(stuck.age_seconds)}</span>
                       {stuck.sku ? (
                         <span className="ct-muted" style={{ fontSize: "0.78rem" }}>
@@ -6940,7 +6896,9 @@ export default function DashboardPage() {
         <ul className="ct-job-list ct-dash-jobs-card__list">
           {activeJobs.map((job) => (
             <li key={job.id}>
-              <span className="ct-job-status">{job.status}</span>
+              <Badge variant={jobStatusVariant(job.status)} className="uppercase tracking-wide">
+                {job.status}
+              </Badge>
               <span className="ct-job-path" title={job.input_folder}>
                 {jobInputLabel(job.input_folder)}
               </span>
@@ -7057,7 +7015,9 @@ export default function DashboardPage() {
             <ul className="ct-job-list ct-job-list--compact">
               {completedJobs.map((job) => (
                 <li key={job.id}>
-                  <span className="ct-job-status ct-job-status--done">{job.status}</span>
+                  <Badge variant="positive" className="uppercase tracking-wide">
+                    {job.status}
+                  </Badge>
                   <span className="ct-job-path" title={job.input_folder}>
                     {jobInputLabel(job.input_folder)}
                   </span>
@@ -7092,9 +7052,9 @@ export default function DashboardPage() {
           <section className="ct-dash-panel">
             <p style={{ margin: 0 }}>Please sign in first.</p>
             <p style={{ margin: "0.75rem 0 0" }}>
-              <Link href="/" className="ct-btn ct-btn--primary">
-                Go to sign in
-              </Link>
+              <Button asChild>
+                <Link href="/">Go to sign in</Link>
+              </Button>
             </p>
           </section>
         </div>
@@ -7126,7 +7086,6 @@ export default function DashboardPage() {
       mobileBottomBar={dashboardMobileBottomBar}
     >
       <div id="dashboard-top" className="ct-dashboard">
-        <DashboardToastViewport toasts={toasts} onDismiss={dismissToast} />
         <div className="ct-dash-stats-row">
           <div className="ct-dashboard-hero-band">
             <header className="ct-dashboard-hero">
@@ -7149,18 +7108,9 @@ export default function DashboardPage() {
               </p>
             </header>
             <section className="ct-dash-stats" aria-label="Sale summary">
-              <div className="ct-stat-card">
-                <span className="ct-stat-card__value">{dashboardStats.totalLots}</span>
-                <span className="ct-stat-card__label">Total lots</span>
-              </div>
-              <div className="ct-stat-card">
-                <span className="ct-stat-card__value">{dashboardStats.photoTotal}</span>
-                <span className="ct-stat-card__label">Photos uploaded</span>
-              </div>
-              <div className="ct-stat-card">
-                <span className="ct-stat-card__value">{dashboardStats.withCondition}</span>
-                <span className="ct-stat-card__label">With condition</span>
-              </div>
+              <StatCard label="Total lots" value={dashboardStats.totalLots} className="border-primary/20 bg-black/25" />
+              <StatCard label="Photos uploaded" value={dashboardStats.photoTotal} className="border-primary/20 bg-black/25" />
+              <StatCard label="With condition" value={dashboardStats.withCondition} className="border-primary/20 bg-black/25" />
             </section>
           </div>
           {showJobsCard ? (
@@ -7168,36 +7118,39 @@ export default function DashboardPage() {
               <div className="ct-dash-jobs-card__head">
                 <span className="ct-dash-jobs-card__title">Recent jobs</span>
                 {activeJobs.length > 0 ? (
-                  <span className="ct-dash-jobs-card__badge ct-dash-jobs-card__badge--active">
+                  <Badge variant="warning" className="text-sm font-bold">
                     {activeJobs.length} active
-                  </span>
+                  </Badge>
                 ) : (
-                  <span className="ct-dash-jobs-card__badge ct-dash-jobs-card__badge--done">
+                  <Badge variant="positive" className="text-sm font-bold">
                     {dashboardStats.completedJobCount} completed
-                  </span>
+                  </Badge>
                 )}
               </div>
               {retryableFailedJobs.length > 0 ? (
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--primary ct-dash-jobs-card__clear"
+                  size="sm"
+                  className="self-start"
                   onClick={() => void retryFailedJobs()}
                   disabled={retryingFailed || selectedSaleClosed}
                 >
                   {retryingFailed
                     ? "Retrying…"
                     : `Retry ${retryableFailedJobs.length} failed`}
-                </button>
+                </Button>
               ) : null}
               {completedJobs.length > 0 && activeJobs.length === 0 ? (
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--ghost ct-dash-jobs-card__clear"
+                  size="sm"
+                  variant="ghost"
+                  className="self-start"
                   onClick={() => void deleteAllCompletedJobs()}
                   disabled={busyProcessing}
                 >
                   Clear job list
-                </button>
+                </Button>
               ) : null}
               <div className="ct-dash-jobs-card__body">{jobsPanelContent}</div>
             </section>
@@ -7210,22 +7163,10 @@ export default function DashboardPage() {
           <section className="ct-dash-panel ct-dash-overview-panel" aria-label="Overview metrics">
             <h2 className="ct-dash-panel__title">Overview</h2>
             <div className="ct-dash-overview-grid">
-              <article className="ct-dash-overview-card">
-                <h3>Total lots</h3>
-                <p>{dashboardStats.totalLots}</p>
-              </article>
-              <article className="ct-dash-overview-card">
-                <h3>Ready to post</h3>
-                <p>{ctSellerUnpostedEligible}</p>
-              </article>
-              <article className="ct-dash-overview-card">
-                <h3>Queued jobs</h3>
-                <p>{queuedJobCount}</p>
-              </article>
-              <article className="ct-dash-overview-card">
-                <h3>Completed jobs</h3>
-                <p>{dashboardStats.completedJobCount}</p>
-              </article>
+              <StatCard label="Total lots" value={dashboardStats.totalLots} />
+              <StatCard label="Ready to post" value={ctSellerUnpostedEligible} />
+              <StatCard label="Queued jobs" value={queuedJobCount} />
+              <StatCard label="Completed jobs" value={dashboardStats.completedJobCount} />
             </div>
           </section>
         ) : null}
@@ -7244,29 +7185,31 @@ export default function DashboardPage() {
                 onChange={(e) => setNewSaleName(e.target.value)}
                 disabled={creatingSale}
               />
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary"
+                size="sm"
                 disabled={creatingSale || !newSaleName.trim() || !token}
                 onClick={() => void createSale()}
               >
                 {creatingSale ? "Creating…" : "Add sale"}
-              </button>
+              </Button>
             </div>
             <div className="ct-toolbar__cluster">
               <span className="ct-toolbar__label">This catalog</span>
-              <button
+              <Button
                 type="button"
-                className="ct-btn"
+                size="sm"
+                variant="outline"
                 disabled={pullingCtSellerSales || creatingSale || !token}
                 title="Refresh now: add missing CT Bids auctions and update names (also runs when you open the dashboard)"
                 onClick={() => void pullCtSellerSalesIntoCatalog()}
               >
                 {pullingCtSellerSales ? "Syncing…" : "Sync CT Seller sales"}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ct-btn"
+                size="sm"
+                variant="outline"
                 disabled={
                   pullingCtSellerSales ||
                   !token ||
@@ -7277,16 +7220,17 @@ export default function DashboardPage() {
                 onClick={() => void fillBlankLotConditions()}
               >
                 Fill blank conditions
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ct-btn"
+                size="sm"
+                variant="outline"
                 disabled={pullingCtSellerSales || !token || !selectedSaleId || lots.length === 0}
                 title="Sort every lot: group shots, then each item with its angles, then labels, then measurements"
                 onClick={() => void sortSalePhotosForListing()}
               >
                 Sort for listing
-              </button>
+              </Button>
               {(
                 [
                   ["studio", "Warm"],
@@ -7294,19 +7238,20 @@ export default function DashboardPage() {
                   ["gray", "Gray"]
                 ] as const
               ).map(([id, label]) => (
-                <button
+                <Button
                   key={`sale-hero-${id}`}
                   type="button"
-                  className={`ct-btn${heroSaleColor === id ? " ct-btn--primary" : ""}`}
+                  size="sm"
+                  variant={heroSaleColor === id ? "default" : "outline"}
                   disabled={heroSaleBusy || !token || !selectedSaleId || selectedSaleClosed}
                   onClick={() => setHeroSaleColor(id)}
                 >
                   {label}
-                </button>
+                </Button>
               ))}
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary"
+                size="sm"
                 disabled={
                   heroSaleBusy || pullingCtSellerSales || !token || !selectedSaleId || selectedSaleClosed || lots.length === 0
                 }
@@ -7314,7 +7259,7 @@ export default function DashboardPage() {
                 onClick={() => void startSaleHeroBackground()}
               >
                 {heroSaleBusy ? "AI backgrounds…" : "AI on first photos"}
-              </button>
+              </Button>
             </div>
             <div className="ct-toolbar__cluster ct-toolbar__cluster--check">
               <label
@@ -7330,9 +7275,9 @@ export default function DashboardPage() {
               </label>
             </div>
             {isAccountOwner ? (
-              <Link href="/sales" className="ct-btn">
-                Manage sales
-              </Link>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/sales">Manage sales</Link>
+              </Button>
             ) : null}
           </div>
           {pullCtSellerSalesMsg ? (
@@ -8720,9 +8665,13 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="ct-lot-mobile-card__body">
-                <span className={lotSkuBadgeClass(lot)} title={lotSkuCellTitle(lot)}>
+                <Badge
+                  variant={lot.sku_needs_review || !lot.sku ? "warning" : "positive"}
+                  className="max-w-full font-mono text-[0.82rem]"
+                  title={lotSkuCellTitle(lot)}
+                >
                   {lot.sku || "—"}
-                </span>
+                </Badge>
                 <div className="ct-lot-mobile-card__title">{lot.auction_title || "—"}</div>
                 {lot.professional_description.trim() ? (
                   <p className="ct-lot-mobile-card__desc">{lotDescriptionPreview(lot.professional_description, 150)}</p>
@@ -8751,38 +8700,35 @@ export default function DashboardPage() {
                     </span>
                   ) : null}
                   {lot.condition_text ? (
-                    <span className="ct-lot-condition-chip">{lot.condition_text}</span>
+                    <Badge variant="neutral" className="max-w-full uppercase tracking-wide">
+                      {lot.condition_text}
+                    </Badge>
                   ) : null}
                 </div>
               </div>
             </div>
             <div className="ct-lot-mobile-card__actions">
-              <Link
-                href={`/lots/${lot.id}#listing-details`}
-                className="ct-lots-table__details-btn ct-lot-mobile-card__details-btn"
-                onClick={rememberDashboardScrollBeforeLotDetails}
-              >
-                Details
-              </Link>
-              <button
+              <Button variant="outline" size="sm" className="ez-accent min-h-11 border-primary/40 bg-primary/10 hover:bg-primary/20" asChild>
+                <Link
+                  href={`/lots/${lot.id}#listing-details`}
+                  onClick={rememberDashboardScrollBeforeLotDetails}
+                >
+                  Details
+                </Link>
+              </Button>
+              <Button
                 type="button"
-                className="ct-btn ct-lot-mobile-card__details-btn"
+                size="sm"
+                variant="outline"
+                className="min-h-11"
                 onClick={() => setPendingMoveLotIds([lot.id])}
                 disabled={busyProcessing}
                 title="Move this lot to another sale"
               >
                 Move
-              </button>
-              <span
-                className={`ct-lot-detail-status ct-lot-mobile-card__status${
-                  lotCtBidsOutcome(lot) === "sold"
-                    ? " ct-lot-detail-status--done"
-                    : lotCtBidsOutcome(lot) === "unsold"
-                      ? " ct-lot-detail-status--unsold"
-                      : lotIsPostedToCtSeller(lot)
-                        ? " ct-lot-detail-status--done"
-                        : ""
-                }`}
+              </Button>
+              <Badge
+                variant={lotStatusBadgeVariant(lot)}
                 title={
                   lotIsPostedToCtSeller(lot)
                     ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
@@ -8792,16 +8738,18 @@ export default function DashboardPage() {
                 }
               >
                 {lotPostedStatusLabel(lot, ctSellerRemoteSales)}
-              </span>
+              </Badge>
               {isAccountOwner ? (
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--danger-outline ct-lot-mobile-card__delete-btn"
+                  size="sm"
+                  variant="danger-outline"
+                  className="ml-auto min-h-11"
                   onClick={() => void deleteLotRow(lot.id)}
                   disabled={busyProcessing}
                 >
                   Delete
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -8933,7 +8881,12 @@ export default function DashboardPage() {
                 />
               </td>
               <td className="ct-sku-cell" title={lotSkuCellTitle(lot)}>
-                <span className={lotSkuBadgeClass(lot)}>{lot.sku || "—"}</span>
+                <Badge
+                  variant={lot.sku_needs_review || !lot.sku ? "warning" : "positive"}
+                  className="max-w-full font-mono text-[0.82rem]"
+                >
+                  {lot.sku || "—"}
+                </Badge>
               </td>
               <td
                 className="ct-lots-table__title"
@@ -8954,22 +8907,17 @@ export default function DashboardPage() {
               </td>
               <td>
                 {lot.condition_text ? (
-                  <span className="ct-lot-condition-chip">{lot.condition_text}</span>
+                  <Badge variant="neutral" className="max-w-full uppercase tracking-wide">
+                    {lot.condition_text}
+                  </Badge>
                 ) : (
                   <span className="ct-muted">—</span>
                 )}
               </td>
               <td>
-                <span
-                  className={`ct-lot-detail-status ct-lot-detail-status--table${
-                    lotCtBidsOutcome(lot) === "sold"
-                      ? " ct-lot-detail-status--done"
-                      : lotCtBidsOutcome(lot) === "unsold"
-                        ? " ct-lot-detail-status--unsold"
-                        : lotIsPostedToCtSeller(lot)
-                          ? " ct-lot-detail-status--done"
-                          : ""
-                  }`}
+                <Badge
+                  variant={lotStatusBadgeVariant(lot)}
+                  className="max-w-full"
                   title={
                     lotIsPostedToCtSeller(lot)
                       ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
@@ -8979,13 +8927,13 @@ export default function DashboardPage() {
                   }
                 >
                   {lotPostedStatusChip(lot)}
-                </span>
+                </Badge>
               </td>
               <td className="ct-lots-table__photo-count">
                 {lot.photo_count}
                 {photoAddsByLot.get(lot.id) ? (
-                  <span
-                    className="ct-lots-table__photo-added"
+                  <Badge
+                    variant="warning"
                     title={`More photos were uploaded to this lot${
                       photoAddsByLot.get(lot.id)?.added_by.length
                         ? ` by ${photoAddsByLot.get(lot.id)?.added_by.join(", ")}`
@@ -8993,51 +8941,61 @@ export default function DashboardPage() {
                     }`}
                   >
                     +{photoAddsByLot.get(lot.id)?.added_count} added
-                  </span>
+                  </Badge>
                 ) : null}
                 {(photoHealthMissing[lot.id] ?? 0) > 0 ? (
-                  <span
-                    className="ct-lots-table__photo-missing"
+                  <Badge
+                    variant="negative"
                     title="Catalog photo records exist but files are missing on the server — open Details to re-upload."
                   >
                     {photoHealthMissing[lot.id]} missing
-                  </span>
+                  </Badge>
                 ) : null}
               </td>
               <td className="ct-lots-table__row-actions">
-                <Link
-                  href={`/lots/${lot.id}#listing-details`}
-                  className="ct-lots-table__details-btn"
-                  onClick={rememberDashboardScrollBeforeLotDetails}
-                  title={
-                    (photoHealthMissing[lot.id] ?? 0) > 0
-                      ? "Photos missing on server — open to re-upload"
-                      : undefined
-                  }
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ez-accent border-primary/40 bg-primary/10 hover:bg-primary/20"
+                  asChild
                 >
-                  Details
-                </Link>
+                  <Link
+                    href={`/lots/${lot.id}#listing-details`}
+                    onClick={rememberDashboardScrollBeforeLotDetails}
+                    title={
+                      (photoHealthMissing[lot.id] ?? 0) > 0
+                        ? "Photos missing on server — open to re-upload"
+                        : undefined
+                    }
+                  >
+                    Details
+                  </Link>
+                </Button>
               </td>
               <td>
                 <RowOverflowMenu label={`Actions for ${lot.sku || lot.auction_title || "lot"}`}>
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-row-menu__item"
+                    variant="ghost"
+                    size="sm"
+                    className="ct-row-menu__item"
                     onClick={() => setPendingMoveLotIds([lot.id])}
                     disabled={busyProcessing}
                     title="Move this lot to another sale"
                   >
                     Move
-                  </button>
+                  </Button>
                   {isAccountOwner ? (
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn ct-btn--danger-outline ct-row-menu__item ct-row-menu__item--danger"
+                      variant="danger-outline"
+                      size="sm"
+                      className="ct-row-menu__item ct-row-menu__item--danger"
                       onClick={() => void deleteLotRow(lot.id)}
                       disabled={busyProcessing}
                     >
                       Delete
-                    </button>
+                    </Button>
                   ) : null}
                 </RowOverflowMenu>
               </td>

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "../components/ui/button";
+import { SegmentedTabs } from "../components/ui/tabs";
 import { API_BASE, apiFetch, isApiBaseMisconfiguredForHost } from "../lib/api";
 import { rememberAccountAccess, watcherHome } from "../lib/plans";
 import { isClientRole, rememberAccountRole } from "../lib/roles";
@@ -87,14 +89,15 @@ export default function HomePage() {
               : "Sign in to Estate-EZ."}
           </p>
         </div>
-        <div className="ct-seg" role="tablist" aria-label="Sign in or register">
-          <button type="button" onClick={() => setMode("login")} disabled={mode === "login"}>
-            Login
-          </button>
-          <button type="button" onClick={() => setMode("register")} disabled={mode === "register"}>
-            Register
-          </button>
-        </div>
+        <SegmentedTabs<"login" | "register">
+          label="Sign in or register"
+          active={mode}
+          tabs={[
+            { id: "login", label: "Login" },
+            { id: "register", label: "Register" },
+          ]}
+          onSelect={setMode}
+        />
         <form
           className="ct-stack"
           style={{ gap: "0.85rem" }}
@@ -145,13 +148,9 @@ export default function HomePage() {
               autoComplete={mode === "register" ? "new-password" : "current-password"}
             />
           </div>
-          <button
-            type="submit"
-            className="ct-btn ct-btn--primary"
-            disabled={busy || !email.trim() || !password}
-          >
+          <Button type="submit" className="w-full" disabled={busy || !email.trim() || !password}>
             {busy ? "Working…" : mode === "register" ? "Create watcher account" : "Sign in"}
-          </button>
+          </Button>
         </form>
         {configWarning ? (
           <p className="ct-banner ct-banner--error" style={{ marginBottom: 0, fontSize: "0.88rem" }}>

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AppShell } from "../AppShell";
+import { ShellActions } from "../ShellActions";
 
 const LINKS = [
   { href: "/operations", label: "Home", match: (p: string) => p === "/operations" },
@@ -55,14 +56,5 @@ export function OperationsSignInPrompt() {
 }
 
 export function operationsActions(logout: () => void) {
-  return (
-    <>
-      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-        Account
-      </Link>
-      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-        Log out
-      </button>
-    </>
-  );
+  return <ShellActions onLogout={logout} />;
 }

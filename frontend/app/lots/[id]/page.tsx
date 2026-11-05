@@ -10,6 +10,7 @@ import { LotThumbnail } from "../../../components/LotThumbnail";
 import { LotVideoThumb } from "../../../components/LotVideoThumb";
 import { MoveLotsToSale, type MoveSaleOption } from "../../../components/MoveLotsToSale";
 import { AppShell } from "../../../components/AppShell";
+import { ShellActions } from "../../../components/ShellActions";
 import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
 import {
   AudienceHuntProgress,
@@ -1740,16 +1741,7 @@ export default function LotDetailPage() {
     }
   }
 
-  const shellActions = (
-    <>
-      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-        Account
-      </Link>
-      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-        Log out
-      </button>
-    </>
-  );
+  const shellActions = <ShellActions onLogout={logout} />;
 
   const lotTopBar = (
     <nav className="ct-lot-detail-crumb" aria-label="Breadcrumb">
