@@ -1,0 +1,174 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Ffacebook_routes.py%23GET%20%2Fintegrations%2Ffacebook%2Foauth%2Fcallback::backend%2Fapp%2Fservices%2Ffacebook_page.py%23encode_oauth_state::backend%2Fapp%2Fservices%2Ffacebook_page.py::WEB-PROTOCOL-AND-AUTH.md%23OAuth%2FOIDC%20request%20and%20callback%20binding",
+    "surface": "Facebook OAuth callback without Bearer",
+    "boundary": "Unauthenticated browser versus Page-token write",
+    "subsystem": "Facebook Page posting",
+    "attack_class": "OAuth callback binding",
+    "starting_paths": [
+      "backend/app/facebook_routes.py",
+      "backend/app/services/facebook_page.py",
+      "backend/app/services/meta_graph.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules",
+      "WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding",
+      "WEB-PROTOCOL-AND-AUTH.md#JWT verification and claim binding",
+      "WEB-PROTOCOL-AND-AUTH.md#Host and forwarded-header trust"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Ffacebook_routes.py%23POST%20%2Ffacebook%2Fposts::backend%2Fapp%2Fservices%2Ffacebook_page.py%23require_facebook_poster::backend%2Fapp%2Fservices%2Ffacebook_page.py::ATTACK-CLASSES.md%23Business%20logic",
+    "surface": "Facebook publish, calendar Approve, and Post now",
+    "boundary": "Catalogger or outsider versus Page publish",
+    "subsystem": "Facebook Page posting",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "backend/app/facebook_routes.py",
+      "backend/app/services/facebook_page.py",
+      "backend/app/services/facebook_calendar.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules",
+      "WEB-PROTOCOL-AND-AUTH.md#Ordinary CSRF"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fservices%2Ffacebook_crypto.py%23seal_facebook_secret::backend%2Fapp%2Fservices%2Ffacebook_crypto.py%23XOR%20fallback::backend%2Fapp::ATTACK-CLASSES.md%23Cryptography%20and%20secrets",
+    "surface": "Facebook and CT Seller token storage",
+    "boundary": "Host or backup reader versus Page and CT secrets",
+    "subsystem": "Token sealing",
+    "attack_class": "Cryptography and secrets",
+    "starting_paths": [
+      "backend/app/services/facebook_crypto.py",
+      "backend/app/services/ctseller.py",
+      "backend/app/config.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Cryptography and secrets",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+        "reason": "At-rest sealing is not an HTTP identity boundary."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  }
+]

@@ -1,0 +1,80 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fintegrations%2Fr2%2Fmigrate-catalog::backend%2Fapp%2Fmain.py%23get_current_user%20R2%20ops::backend%2Fapp%2Fobject_storage.py::ATTACK-CLASSES.md%23Access%20control",
+    "surface": "POST /integrations/r2/migrate-catalog and GET /integrations/r2/ping|/cors",
+    "boundary": "Catalogger JWT versus owner-documented R2 ops on the shared bucket",
+    "subsystem": "Object storage",
+    "attack_class": "Access control",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/schemas.py",
+      "backend/app/object_storage.py",
+      "backend/app/services/roles.py",
+      "DEPLOY.md"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "CLOUD-AND-DEPLOYMENT.md#Core discipline",
+      "CLOUD-AND-DEPLOYMENT.md#Universal moves",
+      "CLOUD-AND-DEPLOYMENT.md#Validation rules",
+      "CLOUD-AND-DEPLOYMENT.md#Workload identity overreach",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Blob and signed-reference overreach"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "CLOUD-AND-DEPLOYMENT.md#Unexpected service or management-plane reachability",
+        "reason": "Peer-owned Railway reachability; this unit is JWT role gates on R2 management routes."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "No unsafe native surface."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML."
+      },
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP."
+      }
+    ]
+  },
+  {
+    "coverage_id": "DEPLOY.md%23R2%20private%20bucket::backend%2Fapp%2Fobject_storage.py%23bucket%20ACL::infra::CLOUD-AND-DEPLOYMENT.md%23Object%20and%20signed-URL%20policy%20confusion",
+    "surface": "R2 bucket public development URL and CORS AllowedOrigins",
+    "boundary": "Anonymous CDN or signed-URL caller versus catalog object bytes",
+    "subsystem": "Cloud deployment",
+    "attack_class": "Object and signed-URL policy confusion",
+    "starting_paths": [
+      "DEPLOY.md",
+      "backend/app/object_storage.py",
+      "backend/app/main.py",
+      "backend/app/config.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Cryptography and secrets",
+    "selected_companion_blocks": [
+      "CLOUD-AND-DEPLOYMENT.md#Core discipline",
+      "CLOUD-AND-DEPLOYMENT.md#Universal moves",
+      "CLOUD-AND-DEPLOYMENT.md#Validation rules",
+      "CLOUD-AND-DEPLOYMENT.md#Object and signed-URL policy confusion"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DATA-ISOLATION-AND-LIFECYCLE.md#Blob and signed-reference overreach",
+        "reason": "Presigned minting after JWT is covered by the media-url unit."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "No unsafe native surface."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML."
+      },
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP."
+      }
+    ]
+  }
+]

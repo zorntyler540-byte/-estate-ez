@@ -1,0 +1,121 @@
+[
+  {
+    "coverage_id": "DEPLOY.md%23Railway%20services::backend%2Fapp%2Fconfig.py%23production_must_be_safe::infra::CLOUD-AND-DEPLOYMENT.md%23Unexpected%20service%20or%20management-plane%20reachability",
+    "surface": "Railway, R2, and injected production secrets",
+    "boundary": "Mis-set env versus public API and worker",
+    "subsystem": "Cloud deployment",
+    "attack_class": "Cloud reachability and secret attachment",
+    "starting_paths": [
+      "DEPLOY.md",
+      "backend/app/config.py",
+      "infra/docker/Dockerfile.api",
+      "backend/app/worker.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Cryptography and secrets",
+    "selected_companion_blocks": [
+      "CLOUD-AND-DEPLOYMENT.md#Core discipline",
+      "CLOUD-AND-DEPLOYMENT.md#Universal moves",
+      "CLOUD-AND-DEPLOYMENT.md#Validation rules",
+      "CLOUD-AND-DEPLOYMENT.md#Unexpected service or management-plane reachability",
+      "CLOUD-AND-DEPLOYMENT.md#Workload identity overreach"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "infra%2Fdocker%2FDockerfile.api%23pip%20install::mobile%2Feas.json%23production%20channel::infra::SUPPLY-CHAIN-AND-RELEASE.md%23Mutable%20and%20unbound%20build%20inputs",
+    "surface": "Docker images, EAS Update, and dependency pins",
+    "boundary": "Build input versus released API or phone bundle",
+    "subsystem": "Supply chain and release",
+    "attack_class": "Supply chain and release",
+    "starting_paths": [
+      "infra/docker/Dockerfile.api",
+      "infra/docker/Dockerfile.web",
+      "requirements.txt",
+      "mobile/eas.json",
+      "mobile/app.json"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Chained vulnerabilities and trust boundaries",
+    "selected_companion_blocks": [
+      "SUPPLY-CHAIN-AND-RELEASE.md#Core discipline",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Universal moves",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Validation rules",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Mutable and unbound build inputs",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Build-context inclusion"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  }
+]

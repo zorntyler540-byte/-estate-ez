@@ -1,0 +1,76 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Ffacebook_routes.py%23GET%20%2Ffacebook%2Fposts::backend%2Fapp%2Ffacebook_routes.py%23get_current_user%20read::backend%2Fapp%2Fservices%2Ffacebook_page.py::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/facebook_routes.py",
+        "backend/app/schemas.py",
+        "backend/app/services/facebook_page.py",
+        "backend/app/services/meta_graph.py",
+        "backend/app/services/roles.py",
+        "backend/tests/test_facebook_page.py",
+        "frontend/app/account/page.tsx",
+        "frontend/app/dashboard/page.tsx",
+        "frontend/app/engagement/page.tsx",
+        "frontend/app/lots/[id]/page.tsx"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-wave2-fb",
+          "reviewed_paths": [
+            "backend/app/facebook_routes.py",
+            "backend/app/schemas.py",
+            "backend/app/services/facebook_page.py",
+            "backend/app/services/meta_graph.py"
+          ],
+          "invariant": "GET /integrations/facebook/status and GET /facebook/posts must not return unsealed Page or user access tokens",
+          "method": "source",
+          "result": "facebook_status maps connection_status through FacebookStatusOut (configured, connected, needs_reconnect, page_id, page_name, user_id as Meta facebook_user_id, connected_at, token_error, graph_api_version, oauth_scopes, calendar_auto_approve). connection_status unseals facebook_page_token_enc only to compute the connected boolean and does not put the secret on the dict. facebook_list_posts maps FacebookPagePost rows through FacebookPagePostOut (ids, caption, status, Graph facebook_post_id, error_message, schedule timestamps). Neither schema has a token field. token_error and post error_message are MetaGraphError.message (Graph error copy, optionally with a reconnect suffix), not the access token. listed_pages is a separate owner-gated route and strips Graph access_token before FacebookPageChoiceOut.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-fb",
+          "reviewed_paths": [
+            "backend/app/facebook_routes.py",
+            "backend/app/services/facebook_page.py",
+            "backend/app/services/roles.py",
+            "backend/tests/test_facebook_page.py",
+            "frontend/app/account/page.tsx",
+            "frontend/app/dashboard/page.tsx",
+            "frontend/app/engagement/page.tsx",
+            "frontend/app/lots/[id]/page.tsx"
+          ],
+          "invariant": "Catalogger read of same-tenant Page name and post captions must not exceed the owner-only Facebook connect/preview/publish model",
+          "method": "source",
+          "result": "require_facebook_poster is owner-only and its docstring limits that gate to connect, pick a Page, and post. GET status and GET /facebook/posts use get_current_user only. Mutations (oauth/start, pages list/select, disconnect, settings, preview, POST /facebook/posts, batches, calendar Approve/cancel) call require_facebook_poster or is_owner. test_preview_and_publish_are_owner_only asserts catalogger 403 on preview and POST, not on the GETs. roles.py treats cataloggers as staff who share sale inventory; captions are lot listing copy they already read and edit. Account UI copy is 'Owners only to connect' and still renders page_name plus recent caption slices to cataloggers; dashboard/lots/engagement fetch status only for the configured boolean and hide Post-to-Page behind isOwnerRole. Catalogger visibility of page name/captions is intended same-tenant staff share, not a crossing of the owner-only write model.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-fb",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/facebook_routes.py",
+            "backend/app/services/facebook_page.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Unauthenticated callers, client logins, and other tenants cannot read Facebook status or post history",
+          "method": "source",
+          "result": "Both GETs depend on get_current_user (Bearer). enforce_client_http runs before the handlers; facebook paths are absent from client_http_allowed, so clients receive 403. facebook_status loads Account by current.account_id. list_posts filters FacebookPagePost.account_id == current.account_id and optionally lot_id; a foreign lot_id still cannot return another tenant's rows. No Host or query token is used as tenant selector.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [],
+  "hardening": [
+    "If product wants owner-only Facebook identity reads, gate GET /facebook/posts and non-boolean FacebookStatusOut fields with require_facebook_poster; dashboard, lot detail, and engagement only consume configured.",
+    "Keep FacebookStatusOut and FacebookPagePostOut free of unsealed Page/user tokens; connection_status should keep unsealing only for the connected boolean.",
+    "Optionally omit page_id, facebook_user_id, token_error, oauth_scopes, calendar_auto_approve, and Graph facebook_post_id from catalogger responses; those are integration telemetry beyond page name and listing captions.",
+    "Account already treats connect, disconnect, and calendar_auto_approve as owner-only while showing page name and recent captions to cataloggers; that matches same-tenant staff share of catalog copy."
+  ],
+  "uncovered": []
+}

@@ -1,0 +1,51 @@
+{
+  "decision": "rejected",
+  "record": {
+    "verdict": "rejected",
+    "fingerprint": "supply.eas.production-ota-unbound-from-git",
+    "title": "Production EAS Update channel can replace phone JS without an in-repo git digest gate",
+    "description": "TestFlight/production binaries load JS from the Expo updates URL for project dfb4d2a5-1b94-449c-bc28-43466a46803d on channel production, with checkAutomatically ON_LOAD and runtimeVersion 1.1.0. The repo has no GitHub Actions to build, attest, or promote that payload from a git SHA. Anyone who can run eas update --channel production against that project can change field-app behavior independently of git. Expo collaborator lists and token holders were not observed and must not be probed.",
+    "claimed_root_cause": "The phone updater is bound to a mutable EAS channel name and Expo project URL, not to an in-repo immutable digest or CI promotion workflow.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "mobile/eas.json",
+        "line": 27,
+        "scope": "build.production.channel",
+        "description": "EAS production profile publishes to channel production."
+      },
+      {
+        "kind": "propagation",
+        "file": "mobile/app.json",
+        "line": 11,
+        "scope": "expo.updates",
+        "description": "Enabled updates.url points at u.expo.dev for this project, checkAutomatically ON_LOAD, fallbackToCacheTimeout 0."
+      },
+      {
+        "kind": "sink",
+        "file": "mobile/app.json",
+        "line": 10,
+        "scope": "runtimeVersion 1.1.0",
+        "description": "Installed 1.1.0 binaries accept any update Expo serves for that runtime and production channel, with no in-repo workflow binding the bundle to a git commit."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "mobile/app.json",
+        "line": 16,
+        "description": "updates.checkAutomatically is ON_LOAD so a published channel payload is applied at app start."
+      },
+      {
+        "file": "mobile/eas.json",
+        "line": 29,
+        "description": "Production EAS build.env pins EXPO_PUBLIC_API_BASE to the Railway API; eas update is a separate publish path that does not require this repo's CI."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 193,
+        "description": "Server updates are git-push rebuilds; mobile OTA is not described as a digest-pinned promotion in that deploy path, and no .github workflows exist in scope."
+      }
+    ],
+    "reason": "Cited lines are real at c661a8fd (eas.json production.channel, app.json updates.url/ON_LOAD/runtimeVersion 1.1.0, DEPLOY.md git-push for the API/web, no .github workflows). Publish still requires Expo login as owner vtz1900 or that account's EXPO_TOKEN (mobile/README.md; mobile/app.json owner/extra.eas.projectId). No lower-trust principal (anonymous client, staff JWT, GitHub PR, unauthenticated HTTP) can ship a production-channel payload without already holding those Expo credentials, and there is no in-repo CI a contributor could trigger as a confused deputy. eas update by the Expo project principal is the documented same-principal OTA path. Binding the channel to a git digest is a release-control/hygiene gap, not a cross-boundary result. An unobserved Expo collaborator list does not name a lower-trust actor: any such person would already hold Expo credentials. The first trace step is operator profile config, not a lower-trust entrypoint."
+  }
+}

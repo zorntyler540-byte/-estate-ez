@@ -1,0 +1,56 @@
+{
+  "decision": "rejected",
+  "record": {
+    "verdict": "rejected",
+    "fingerprint": "supply.docker.unpinned-pip-floating-base-rembg",
+    "title": "API and worker images consume floating base tags, unpinned PyPI specs, and an unsigned rembg model",
+    "description": "Each Docker rebuild of Dockerfile.api and Dockerfile.worker runs pip install against requirements.txt lower bounds and pulls python:3.12-slim-bookworm by tag. The API image additionally downloads the rembg u2netp model during build with no checksum. A PyPI or registry publisher who can change a matching version, retag the base image, or replace the rembg model bytes can land code or weights in the next Railway image. Web JS is lockfiled via npm ci; the Node base tag is still floating. Live resolved digests were not observed.",
+    "claimed_root_cause": "Maintained Dockerfiles treat mutable tags and unbounded pip specs as the release input, and bake a remotely fetched rembg model into the API image without an integrity pin.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 2,
+        "scope": "FROM python:3.12-slim-bookworm",
+        "description": "API image starts from an unpinned rolling distro tag."
+      },
+      {
+        "kind": "propagation",
+        "file": "requirements.txt",
+        "line": 1,
+        "scope": "pip lower bounds",
+        "description": "Runtime Python dependencies are specified only as >= versions, with no lockfile consumed by Docker."
+      },
+      {
+        "kind": "sink",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 10,
+        "scope": "pip install and rembg new_session",
+        "description": "Build runs pip install --no-cache-dir -r requirements.txt then rembg new_session('u2netp'), baking whatever those resolvers return into the image that later runs uvicorn."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "infra/docker/Dockerfile.worker",
+        "line": 4,
+        "description": "Worker uses the same floating python:3.12-slim-bookworm tag and pip install -r requirements.txt without a rembg digest pin."
+      },
+      {
+        "file": "infra/docker/Dockerfile.web",
+        "line": 2,
+        "description": "Web build and runtime use node:22-bookworm-slim by tag; npm ci plus package-lock.json pins JS packages only."
+      },
+      {
+        "file": "infra/docker/Dockerfile.web",
+        "line": 5,
+        "description": "npm ci is the contrasting control: frontend lockfile is copied and used, unlike Python."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 11,
+        "description": "Production images are built from repository root using these Dockerfiles, or optionally Procfile/Nixpacks, on each git push."
+      }
+    ],
+    "reason": "Source confirms the floating tags and unpinned pip path: infra/docker/Dockerfile.api:2 and Dockerfile.worker:4 FROM python:3.12-slim-bookworm; Dockerfile.web:2 and :20 FROM node:22-bookworm-slim; requirements.txt uses >= lower bounds (bcrypt alone has <6); Dockerfile.api:10-11 RUN pip install --no-cache-dir -r requirements.txt then rembg new_session('u2netp'); worker :12 installs the same file without prefetching the model. That is missing pin/digest hygiene, not a cross-boundary result. There is no lower-trust writer: resolvers use official image names and default PyPI (no extra-index-url, pip.conf, or alternate root), COPY only this repo's requirements.txt, and there is no in-repo CI, cache, or PR job a contributor could poison. The claimed actor is a generic publisher of packages already named in source. The consuming job is the owner's git-push Railway rebuild (DEPLOY.md:11, :194; same-principal). Dockerfile.web:4-5 already lockfiles JS via npm ci. Observing live Railway digests or hashing u2netp would only snapshot current floating resolution; it would not add a distinct writer or an unauthorized path into trusted output."
+  }
+}

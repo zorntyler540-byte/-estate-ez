@@ -1,0 +1,82 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "calendar_auto_approve hard-codes confirm=True as a synthetic owner and is triggered by catalogger-reachable snapshot ingest, bypassing require_facebook_poster on the publish routes.",
+  "title": "Catalogger snapshot ingest publishes to the Page when calendar_auto_approve is on",
+  "description": "HTTP preview, publish, Approve, and Post now call require_facebook_poster and publish_posts refuses confirm=false. force does not drop those gates. A parallel path does: if the owner has set facebook_calendar_auto_approve, sync_facebook_calendar_after_snapshot selects the first owner user and calls publish_posts or the in-memory poster thread with confirm=True. POST /integrations/engagement/snapshots is available to any authenticated staff JWT (owner or catalogger; clients are blocked by enforce_client_http) and always runs that sync, so a catalogger can submit snapshot metrics that score as Push and cause Page schedule/publish without the owner confirm click. PATCH /integrations/facebook/settings is owner-only but also syncs every engagement sale as soon as the flag is enabled.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/engagement_routes.py",
+      "line": 28,
+      "scope": "ingest_engagement_snapshot",
+      "description": "Any authenticated staff user can POST a watcher snapshot; there is no owner gate."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/engagement_store.py",
+      "line": 242,
+      "scope": "apply_engagement_snapshot",
+      "description": "After commit, every snapshot calls sync_facebook_calendar_after_snapshot."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_calendar.py",
+      "line": 698,
+      "scope": "sync_facebook_calendar_after_snapshot",
+      "description": "When facebook_calendar_auto_approve is true, the first owner is loaded and pending slots are published with confirm=True."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 747,
+      "scope": "publish_posts",
+      "description": "create_page_feed_post runs under the synthetic owner without a new HTTP confirm from that owner."
+    }
+  ],
+  "validation_plan": {
+    "local": "Using the existing TestClient fixtures, connect a Page, keep an owner User row, set calendar_auto_approve as owner, then authenticate as a catalogger and POST /integrations/engagement/snapshots for a future Push lot with Graph feed mocked. Expect create_page_feed_post to run and a scheduled FacebookPagePost row to appear. Repeat with the flag false and expect no feed call.",
+    "deployment": "Owner confirms which staff role the live watcher ingest uses and whether auto-approve is enabled on production accounts."
+  },
+  "blockers": [
+    "No OS-enforced sandbox, so the catalogger-snapshot plus auto-approve path was not executed.",
+    "Whether the deployed watcher/extension uses a catalogger token for POST /integrations/engagement/snapshots is not source-provable."
+  ],
+  "fingerprint": "facebook.calendar.auto-approve.non-owner-trigger",
+  "evidence": [
+    {
+      "file": "backend/app/services/roles.py",
+      "line": 58,
+      "description": "can_manage_integrations is owner-only; that is the HTTP Facebook poster gate."
+    },
+    {
+      "file": "backend/app/services/facebook_page.py",
+      "line": 589,
+      "description": "publish_posts returns 400 unless confirm is true."
+    },
+    {
+      "file": "backend/app/services/facebook_calendar.py",
+      "line": 740,
+      "description": "Auto-approve passes confirm=True into the background poster."
+    },
+    {
+      "file": "backend/app/facebook_routes.py",
+      "line": 178,
+      "description": "Enabling the setting immediately syncs every engagement sale."
+    },
+    {
+      "file": "backend/app/facebook_post_tasks.py",
+      "line": 166,
+      "description": "The background runner does not call require_facebook_poster before publish_posts."
+    },
+    {
+      "file": "backend/tests/test_facebook_page.py",
+      "line": 626,
+      "description": "Catalogger preview and POST /facebook/posts return 403."
+    },
+    {
+      "file": "backend/tests/test_facebook_page.py",
+      "line": 932,
+      "description": "Turning calendar_auto_approve on causes Graph feed calls without a per-slot confirm body."
+    }
+  ]
+}

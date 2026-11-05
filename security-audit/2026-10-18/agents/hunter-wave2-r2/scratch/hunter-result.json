@@ -1,0 +1,269 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fintegrations%2Fr2%2Fmigrate-catalog::backend%2Fapp%2Fmain.py%23get_current_user%20R2%20ops::backend%2Fapp%2Fobject_storage.py::ATTACK-CLASSES.md%23Access%20control",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "DEPLOY.md",
+        "backend/app/auth.py",
+        "backend/app/catalog_storage.py",
+        "backend/app/main.py",
+        "backend/app/object_storage.py",
+        "backend/app/schemas.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-wave2-r2",
+          "reviewed_paths": [
+            "DEPLOY.md",
+            "backend/app/auth.py",
+            "backend/app/main.py",
+            "backend/app/object_storage.py",
+            "backend/app/schemas.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Leftover R2 management routes (migrate-catalog, ping, GET cors) require the same owner (or master-admin) gate that DEPLOY.md, can_manage_integrations, _require_owner, and POST /integrations/r2/cors already document.",
+          "method": "source",
+          "result": "DEPLOY.md tells the operator to call POST /integrations/r2/migrate-catalog as account owner. can_manage_integrations and _require_owner are owner-only. Sibling POST /integrations/r2/cors checks is_owner or is_master_admin_email before put_bucket_cors. migrate_catalog_to_r2, r2_ping, and r2_cors_get only Depends(get_current_user). get_current_user runs enforce_client_http, then returns. No is_owner / can_manage_integrations / _require_owner call follows on those three handlers. Dashboard and frontend never call /integrations/r2/*. ping() put_bytes then delete_object on the shared key _health/r2-ping.txt (not catalog/{account_id}/). GET cors returns every AllowedOrigin plus the raw CORSRules list for the shared bucket. CatalogR2MigrateIn.account_id is documented as master-admin-only; default migrate still runs for a catalogger JWT on current.account_id.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-r2",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/catalog_storage.py",
+            "backend/app/main.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "A client JWT cannot hit leftover R2 ops, and a catalogger cannot name another tenant on migrate without the master-admin email check.",
+          "method": "source",
+          "result": "client_http_allowed has no /integrations/r2 path, so enforce_client_http raises 403 for clients on migrate, ping, GET cors, and POST cors. Anonymous callers fail oauth2_scheme. migrate_catalog_to_r2 sets account_id = current.account_id and calls _require_master_admin only when body.account_id differs; migrate_local_photos_to_r2 then uploads that account's Photo.storage_path keys. Cross-tenant migrate is not a catalogger bypass. The remaining gap is same-account catalogger (and any other non-client staff role) reaching leftover shared-bucket management writes and CORS disclosure.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "r2.mgmt.catalogger-jwt-owner-documented-ops"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "DEPLOY.md%23R2%20private%20bucket::backend%2Fapp%2Fobject_storage.py%23bucket%20ACL::infra::CLOUD-AND-DEPLOYMENT.md%23Object%20and%20signed-URL%20policy%20confusion",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "DEPLOY.md",
+        "backend/app/catalog_storage.py",
+        "backend/app/config.py",
+        "backend/app/job_batch_storage.py",
+        "backend/app/main.py",
+        "backend/app/object_storage.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-wave2-r2",
+          "reviewed_paths": [
+            "DEPLOY.md",
+            "backend/app/catalog_storage.py",
+            "backend/app/config.py",
+            "backend/app/job_batch_storage.py",
+            "backend/app/object_storage.py"
+          ],
+          "invariant": "Catalog and job-batch object bytes are reachable only via JWT-minted GetObject presigns; the bucket must not publish an anonymous r2.dev (or other public) origin.",
+          "method": "source",
+          "result": "DEPLOY.md says keep the bucket private and do not enable the public development URL. Settings expose R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_ENDPOINT, and optional R2_ACCOUNT_ID only; there is no R2 public-URL setting and no IaC/bucket policy in repo. put_bytes and put_file call put_object with Bucket, Key, Body, ContentType and never ACL or Grant. persist_catalog_photo writes catalog/{account_id}/{photo_id}.ext; job batches use job-batches/{account_id}/{batch_id}/…. signed_catalog_url / presigned_get_url mint GetObject URLs with ExpiresIn clamped 60..86400 (handlers pass 3600). Source never builds a pub-*.r2.dev or custom public URL. Whether the live Cloudflare bucket has Public development URL, a public custom domain, or object/bucket ACL public-read is a dashboard fact and is decisive for anonymous GET of those keys.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-r2",
+          "reviewed_paths": [
+            "DEPLOY.md",
+            "backend/app/config.py",
+            "backend/app/main.py",
+            "backend/app/object_storage.py"
+          ],
+          "invariant": "R2 CORS AllowedOrigins are server-chosen, not caller-chosen, and cannot be wildcarded through POST /integrations/r2/cors.",
+          "method": "source",
+          "result": "r2_cors_apply requires is_owner or master-admin email, then put_bucket_cors(cors_allow_origins()). cors_allow_origins always prepends http://127.0.0.1:3000 and http://localhost:3000 and drops any CORS_ORIGINS entry containing *. put_bucket_cors also skips origins containing * and applies GET/HEAD only. That blocks a catalogger from setting a remote AllowedOrigin. Localhost remains on the R2 CORS rule whenever an owner applies it, including production. CORS does not by itself publish object bytes; a public r2.dev origin would.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "r2.bucket.public-development-url-policy"
+      ],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "r2.mgmt.catalogger-jwt-owner-documented-ops",
+      "title": "Catalogger JWT can invoke leftover owner-documented R2 migrate, ping, and CORS-read ops",
+      "description": "UI-less R2 management routes are authenticated but not owner-authorized. DEPLOY.md says POST /integrations/r2/migrate-catalog is account-owner ops. Sibling POST /integrations/r2/cors and can_manage_integrations require owner (cors also allows master-admin email). migrate_catalog_to_r2, r2_ping, and r2_cors_get stop at get_current_user. Clients are 403 via the HTTP allowlist. A same-account catalogger JWT can therefore (1) write and delete the shared-bucket key _health/r2-ping.txt through the API Account token, outside catalog/{account_id}/, (2) read the bucket-wide CORS rules and AllowedOrigins, and (3) start a local-to-R2 migrate of that account. Cross-tenant migrate still requires master-admin email. No handler was executed in this run.",
+      "claimed_root_cause": "Leftover R2 management handlers gate on get_current_user only, while the documented and sibling owner control (_require_owner / can_manage_integrations / POST cors is_owner check) is omitted, so a catalogger JWT exercises the shared-bucket credential for ping write, CORS read, and own-account migrate.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 1491,
+          "scope": "GET /integrations/r2/ping",
+          "description": "r2_ping depends on get_current_user only and then calls object_storage.ping when R2 vars are set."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/auth.py",
+          "line": 83,
+          "scope": "get_current_user",
+          "description": "JWT is bound to User via sub plus account_id; enforce_client_http runs, then the User is returned with no owner or can_manage_integrations check."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/services/roles.py",
+          "line": 84,
+          "scope": "client_http_allowed",
+          "description": "No /integrations/r2 path is allowlisted, so clients are 403; catalogger and owner are not clients and continue."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/object_storage.py",
+          "line": 167,
+          "scope": "ping",
+          "description": "ping put_bytes then delete_object on _health/r2-ping.txt using the API R2 identity; that key is not under catalog/{account_id}/."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "DEPLOY.md",
+          "line": 116,
+          "description": "Migrate is documented as POST /integrations/r2/migrate-catalog with auth as account owner and as an ops endpoint not shown in the Account UI."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 1447,
+          "description": "migrate_catalog_to_r2 also Depends(get_current_user) only; is_owner is not called before migrate_local_photos_to_r2."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 1506,
+          "description": "r2_cors_get is get_current_user only and returns CatalogR2CorsOut origins plus the raw bucket CORSRules."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 1532,
+          "description": "Sibling POST /integrations/r2/cors requires is_owner(current) or is_master_admin_email before put_bucket_cors."
+        },
+        {
+          "file": "backend/app/services/roles.py",
+          "line": 58,
+          "description": "can_manage_integrations is owner-only; leftover R2 GET/migrate handlers do not call it."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 430,
+          "description": "_require_owner exists and is used on other account-admin routes but is not invoked by migrate, ping, or GET cors."
+        },
+        {
+          "file": "backend/app/schemas.py",
+          "line": 657,
+          "description": "CatalogR2MigrateIn.account_id is commented as master admin only; owners always migrate their own account — the schema comment does not mention cataloggers, and the handler does not reject them."
+        },
+        {
+          "file": "backend/app/object_storage.py",
+          "line": 169,
+          "description": "The ping probe key is the literal _health/r2-ping.txt on the shared bucket."
+        }
+      ],
+      "blockers": [
+        "This run has no OS-enforced sandbox and forbids executing target code, so catalogger versus owner versus client status codes were not observed.",
+        "Whether a live tenant has catalogger users and R2 configured is an environment fact; this run must not call the public API or write the shared bucket.",
+        "No parent scratch-promotion procedure is available, so a local dummy-JWT check could not be recorded as an artifact."
+      ],
+      "validation_plan": {
+        "local": "In an isolated dummy two-role fixture with R2 mocked (put_bytes/delete_object/get_bucket_cors/migrate_local_photos_to_r2), mint catalogger, owner, and client JWTs. GET /integrations/r2/ping, GET /integrations/r2/cors, and POST /integrations/r2/migrate-catalog as each role. Confirm client is 403; record whether catalogger is 200 while POST /integrations/r2/cors is 403. Assert the mocked ping key is _health/r2-ping.txt. Do not use live R2 credentials.",
+        "deployment": "Owner-observed only: confirm leftover /integrations/r2/migrate-catalog, /ping, and GET /cors are still mounted and whether any catalogger is expected to call them. Do not invoke ping against the production bucket (it writes a shared key)."
+      }
+    },
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "r2.bucket.public-development-url-policy",
+      "title": "Catalog privacy depends on an unencoded private-bucket and r2.dev-off policy",
+      "description": "The app stores catalog/{account_id}/…, job-batches/{account_id}/{batch_id}/…, thumbs, and a leftover _health/r2-ping.txt object with no object ACL and serves staff browsers via GetObject presigns. DEPLOY.md tells operators to keep the bucket private and not enable Cloudflare's public development URL. No bucket policy, public-access block, or r2.dev toggle exists in source. If that dashboard switch (or a public custom domain / public-read ACL) is on, an anonymous caller can GET those keys without a JWT or presign. Keys are deterministic from account_id plus photo or batch id. R2 CORS AllowedOrigins come from cors_allow_origins (always includes localhost; stars dropped) and are not caller-chosen. Live ACL and public-URL state were not observed and must not be probed.",
+      "claimed_root_cause": "Object privacy is a Cloudflare bucket setting that source neither encodes nor enforces: puts omit ACL, reads assume presign-only access, and the documented private / no-public-development-URL control lives only in DEPLOY.md.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "DEPLOY.md",
+          "line": 120,
+          "scope": "R2 private-bucket policy",
+          "description": "Operators are told to keep the bucket private and not enable the public development URL so browsers use short-lived media-url presigns."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/object_storage.py",
+          "line": 74,
+          "scope": "put_bytes",
+          "description": "put_object is called with Bucket, Key, Body, and ContentType only; no ACL, Grant, or private-enforcement argument is set on catalog, thumb, job-batch, or ping writes."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/catalog_storage.py",
+          "line": 50,
+          "scope": "persist_catalog_photo",
+          "description": "New photos are uploaded under catalog/{account_id}/{photo_id}.ext; the same helper family writes thumbs and videos on that shared bucket."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/object_storage.py",
+          "line": 86,
+          "scope": "presigned_get_url",
+          "description": "The only in-repo browser read path is a time-capped GetObject presign. Source never constructs an r2.dev URL; a public bucket origin would serve the same keys without that presign."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/config.py",
+          "line": 170,
+          "description": "R2 settings are account id, access key, secret, bucket, and endpoint only; there is no public-URL or ACL field."
+        },
+        {
+          "file": "backend/app/job_batch_storage.py",
+          "line": 38,
+          "description": "Job upload mirrors use job-batches/{account_id}/{batch_id}/… on the same bucket, so a public origin would also expose staged upload batches."
+        },
+        {
+          "file": "backend/app/object_storage.py",
+          "line": 190,
+          "description": "put_bucket_cors applies GET/HEAD for cors_allow_origins and drops any origin containing *; it does not set bucket ACL or disable a public development URL."
+        },
+        {
+          "file": "backend/app/config.py",
+          "line": 235,
+          "description": "cors_allow_origins always includes http://127.0.0.1:3000 and http://localhost:3000, so an owner POST /integrations/r2/cors writes those localhost origins onto the bucket CORS rule even in production."
+        },
+        {
+          "file": "DEPLOY.md",
+          "line": 106,
+          "description": "Deploy docs recommend an R2 Account API token on the API (and later the worker) for the shared estate-catalog bucket; least-privilege prefix keys are not encoded."
+        }
+      ],
+      "blockers": [
+        "Live Cloudflare R2 Public development URL, custom domain, and object/bucket ACL are dashboard facts and are not in this repository.",
+        "No IaC or bucket-policy render exists to evaluate locally.",
+        "This run must not fetch pub-*.r2.dev, a custom R2 domain, or any catalog/job-batch key.",
+        "No OS-enforced sandbox was available to inspect put_object kwargs at runtime beyond source."
+      ],
+      "validation_plan": {
+        "local": "In a network-disabled review, confirm put_bytes/put_file kwargs still omit ACL and that no code path concatenates r2.dev. That only reconfirms source; it does not settle live exposure.",
+        "deployment": "Owner, in the Cloudflare R2 bucket Settings only, confirms Public development URL is disabled, no public custom domain is attached, and access remains private/presign. Do not request catalog/ or job-batches/ objects from the internet."
+      }
+    }
+  ],
+  "hardening": [
+    "Call _require_owner (or can_manage_integrations plus optional master-admin) on migrate-catalog, ping, and GET /integrations/r2/cors, matching POST cors and DEPLOY.md.",
+    "r2_ping and r2_cors_get return exception text in HTTP 400 detail; avoid echoing provider errors that can include request ids or key names.",
+    "ping delete_object swallows failures after a successful put, so _health/r2-ping.txt can remain if delete fails.",
+    "cors_allow_origins always injects localhost origins into both FastAPI CORS and put_bucket_cors, including when ENVIRONMENT is production.",
+    "DEPLOY.md recommends a Cloudflare R2 Account API token on API and worker; prefix-scoped object keys are not encoded.",
+    "No backend test asserts owner-only behavior on leftover /integrations/r2 routes."
+  ],
+  "uncovered": []
+}

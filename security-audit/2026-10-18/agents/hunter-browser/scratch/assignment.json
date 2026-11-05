@@ -1,0 +1,183 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Fauth.py%23oauth2_scheme::frontend%2Flib%2Fapi.ts%23Authorization%20header::backend%2Fapp::WEB-PROTOCOL-AND-AUTH.md%23Ordinary%20CSRF",
+    "surface": "Bearer JWT mutations without cookie CSRF token",
+    "boundary": "Cross-site browser versus state-changing API",
+    "subsystem": "FastAPI core API",
+    "attack_class": "Ordinary CSRF",
+    "starting_paths": [
+      "backend/app/auth.py",
+      "backend/app/main.py",
+      "frontend/lib/api.ts",
+      "backend/app/config.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules",
+      "WEB-PROTOCOL-AND-AUTH.md#Ordinary CSRF",
+      "CLIENT-SIDE.md#Credentialed CORS trust"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23CORSMiddleware::backend%2Fapp%2Fconfig.py%23cors_allow_origins::frontend::CLIENT-SIDE.md%23Credentialed%20CORS%20trust",
+    "surface": "Credentialed CORS and dashboard token storage",
+    "boundary": "Foreign browser origin versus staff JWT and API",
+    "subsystem": "Next.js dashboard",
+    "attack_class": "Credentialed CORS and browser storage",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/config.py",
+      "frontend/lib/api.ts",
+      "frontend/app/dashboard/page.tsx"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Feature abuse and data leakage",
+    "selected_companion_blocks": [
+      "CLIENT-SIDE.md#Core discipline",
+      "CLIENT-SIDE.md#Universal moves",
+      "CLIENT-SIDE.md#Validation rules",
+      "CLIENT-SIDE.md#Credentialed CORS trust",
+      "CLIENT-SIDE.md#Browser-storage disclosure and stale authorization",
+      "CLIENT-SIDE.md#DOM-based XSS",
+      "WEB-PROTOCOL-AND-AUTH.md#Ordinary CSRF",
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "mobile%2Flib%2Fqueue%2Fsync.ts%23upload::mobile%2Flib%2FsecureStorage.ts%23SecureStore::mobile::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Custom-scheme%20and%20deep-link%20ambiguity",
+    "surface": "Expo capture, queue sync, and signed video open",
+    "boundary": "On-device peer or stolen phone versus API session",
+    "subsystem": "Expo field app",
+    "attack_class": "Mobile deep link and storage",
+    "starting_paths": [
+      "mobile/lib/queue/sync.ts",
+      "mobile/lib/secureStorage.ts",
+      "mobile/lib/config.ts",
+      "mobile/lib/playVideo.ts",
+      "mobile/app.json"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Custom-scheme and deep-link ambiguity",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#File-open and intent authority confusion"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  }
+]

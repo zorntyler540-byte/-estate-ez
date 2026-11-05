@@ -1,0 +1,91 @@
+{
+  "decision": "needs_validation",
+  "record": {
+    "verdict": "needs_validation",
+    "fingerprint": "r2.mgmt.catalogger-jwt-owner-documented-ops",
+    "title": "Catalogger JWT can invoke leftover owner-documented R2 migrate, ping, and CORS-read ops",
+    "description": "UI-less R2 management routes are authenticated but not owner-authorized. DEPLOY.md says POST /integrations/r2/migrate-catalog is account-owner ops. Sibling POST /integrations/r2/cors and can_manage_integrations require owner (cors also allows master-admin email). migrate_catalog_to_r2, r2_ping, and r2_cors_get stop at get_current_user. Clients are 403 via the HTTP allowlist. A same-account catalogger JWT can therefore (1) write and delete the shared-bucket key _health/r2-ping.txt through the API Account token, outside catalog/{account_id}/, (2) read the bucket-wide CORS rules and AllowedOrigins, and (3) start a local-to-R2 migrate of that account. Cross-tenant migrate still requires master-admin email. No handler was executed in this run.",
+    "claimed_root_cause": "Leftover R2 management handlers gate on get_current_user only, while the documented and sibling owner control (_require_owner / can_manage_integrations / POST cors is_owner check) is omitted, so a catalogger JWT exercises the shared-bucket credential for ping write, CORS read, and own-account migrate.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 1491,
+        "scope": "GET /integrations/r2/ping",
+        "description": "r2_ping depends on get_current_user only and then calls object_storage.ping when R2 vars are set."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/auth.py",
+        "line": 83,
+        "scope": "get_current_user",
+        "description": "JWT is bound to User via sub plus account_id; enforce_client_http runs, then the User is returned with no owner or can_manage_integrations check."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/roles.py",
+        "line": 84,
+        "scope": "client_http_allowed",
+        "description": "No /integrations/r2 path is allowlisted, so clients are 403; catalogger and owner are not clients and continue."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/object_storage.py",
+        "line": 167,
+        "scope": "ping",
+        "description": "ping put_bytes then delete_object on _health/r2-ping.txt using the API R2 identity; that key is not under catalog/{account_id}/."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "DEPLOY.md",
+        "line": 116,
+        "description": "Migrate is documented as POST /integrations/r2/migrate-catalog with auth as account owner and as an ops endpoint not shown in the Account UI."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1447,
+        "description": "migrate_catalog_to_r2 also Depends(get_current_user) only; is_owner is not called before migrate_local_photos_to_r2."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1506,
+        "description": "r2_cors_get is get_current_user only and returns CatalogR2CorsOut origins plus the raw bucket CORSRules."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 1532,
+        "description": "Sibling POST /integrations/r2/cors requires is_owner(current) or is_master_admin_email before put_bucket_cors."
+      },
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 58,
+        "description": "can_manage_integrations is owner-only; leftover R2 GET/migrate handlers do not call it."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 430,
+        "description": "_require_owner exists and is used on other account-admin routes but is not invoked by migrate, ping, or GET cors."
+      },
+      {
+        "file": "backend/app/schemas.py",
+        "line": 657,
+        "description": "CatalogR2MigrateIn.account_id is commented as master admin only; owners always migrate their own account — the schema comment does not mention cataloggers, and the handler does not reject them."
+      },
+      {
+        "file": "backend/app/object_storage.py",
+        "line": 169,
+        "description": "The ping probe key is the literal _health/r2-ping.txt on the shared bucket."
+      }
+    ],
+    "blockers": [
+      "This run has no OS-enforced sandbox and forbids executing target code, so catalogger versus owner versus client status codes were not observed.",
+      "Whether a live tenant has catalogger users and R2 configured is an environment fact; this run must not call the public API or write the shared bucket.",
+      "No parent scratch-promotion procedure is available, so a local dummy-JWT check could not be recorded as an artifact."
+    ],
+    "validation_plan": {
+      "local": "In an isolated dummy two-role fixture with R2 mocked (put_bytes/delete_object/get_bucket_cors/migrate_local_photos_to_r2), mint catalogger, owner, and client JWTs. GET /integrations/r2/ping, GET /integrations/r2/cors, and POST /integrations/r2/migrate-catalog as each role. Confirm client is 403; record whether catalogger is 200 while POST /integrations/r2/cors is 403. Assert the mocked ping key is _health/r2-ping.txt. Do not use live R2 credentials.",
+      "deployment": "Owner-observed only: confirm leftover /integrations/r2/migrate-catalog, /ping, and GET /cors are still mounted and whether any catalogger is expected to call them. Do not invoke ping against the production bucket (it writes a shared key)."
+    }
+  }
+}

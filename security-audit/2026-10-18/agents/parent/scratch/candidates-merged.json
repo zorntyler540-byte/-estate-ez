@@ -1,0 +1,10 @@
+[
+  {
+    "fingerprint": "unauth.fastapi.default-docs",
+    "merged_into": "cloud.ingress.fastapi-openapi-docs"
+  },
+  {
+    "fingerprint": "unauth.auth.register-master-admin-email",
+    "merged_into": "master-admin-email-claim-via-register-or-invite"
+  }
+]
