@@ -600,6 +600,7 @@ def annotate_social_calendar(
             "facebook_post_id": None,
             "facebook_error": None,
             "facebook_review_note": None,
+            "facebook_caption": None,
         }
         if target != PUBLISH_TARGET_FACEBOOK_PAGE:
             annotated.append({**data, **extra})
@@ -643,6 +644,7 @@ def annotate_social_calendar(
                 "facebook_post_id": (row.facebook_post_id if row else None),
                 "facebook_error": (row.error_message if row else None),
                 "facebook_review_note": (row.review_note if row else None),
+                "facebook_caption": (row.caption if row and row.status in PINNED_STATUSES else None),
                 "preflight": PAGE_PREFLIGHT,
             }
         )

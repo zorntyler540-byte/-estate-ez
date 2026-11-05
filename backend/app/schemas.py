@@ -1360,6 +1360,8 @@ class SocialCalendarPost(BaseModel):
     facebook_post_id: str | None = None
     facebook_error: str | None = None
     facebook_review_note: str | None = None
+    # The caption Facebook has for a scheduled / posted slot (``paste_copy`` is only a template).
+    facebook_caption: str | None = None
     # Approved / posted slot: the calendar keeps this lot on this day and time.
     pinned: bool = False
 
