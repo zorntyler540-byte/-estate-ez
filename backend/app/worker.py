@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 # Limit glibc arenas before the interpreter allocates (Railway Linux). Harmless elsewhere.
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
@@ -244,7 +245,8 @@ def _job_finish_stats(job_id: str, account_id: str) -> tuple[str, int, int]:
 
 
 def run_idle_maintenance() -> None:
-    """Click-row retention. Cheap DB work only; safe in the worker parent."""
+    """Click-row and publish-batch retention. Cheap DB work only; safe in the worker parent."""
+    from app.facebook_post_tasks import purge_old_batches
     from app.services.click_tracking import purge_old_tracked_clicks
 
     with SessionLocal() as db:
@@ -256,6 +258,13 @@ def run_idle_maintenance() -> None:
         except Exception:  # noqa: BLE001
             db.rollback()
             _LOG.exception("tracked-click retention sweep failed")
+        try:
+            n = purge_old_batches(db)
+            if n:
+                _LOG.info("Purged %s old social publish batch(es)", n)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            _LOG.exception("social publish batch retention failed")
 
 
 def run_social_sweep() -> int:
@@ -328,6 +337,90 @@ def maybe_social_sweep(state: SocialSweepState, *, isolate: bool, now_mono: floa
         state.child_started_mono = now
     except Exception:  # noqa: BLE001
         _LOG.exception("Failed to spawn social sweep child")
+        return False
+    return True
+
+
+def run_social_publish() -> int:
+    """Drain the durable social publish queue (Graph uploads; accounts in parallel)."""
+    from app.facebook_post_tasks import drain_publish_queue
+
+    try:
+        return drain_publish_queue()
+    except Exception:  # noqa: BLE001
+        _LOG.exception("social publish drain failed")
+        return 0
+
+
+# How often the parent checks for due publish jobs (one indexed query).
+SOCIAL_PUBLISH_POLL_SECONDS = 3.0
+# drain_publish_queue stops itself after DRAIN_MAX_SECONDS; this is the hard kill.
+SOCIAL_PUBLISH_KILL_SECONDS = 12 * 60.0
+
+
+@dataclass
+class SocialPublishState:
+    last_check_mono: float = 0.0
+    child: subprocess.Popen | None = None
+    child_started_mono: float = 0.0
+
+
+def parse_social_publish(argv: list[str]) -> bool:
+    return len(argv) >= 2 and argv[1] == "--social-publish"
+
+
+def _spawn_social_publish() -> subprocess.Popen:
+    cmd = [sys.executable, "-m", "app.worker", "--social-publish"]
+    env = os.environ.copy()
+    env.setdefault("MALLOC_ARENA_MAX", "2")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return subprocess.Popen(cmd, env=env, start_new_session=True, close_fds=True)
+
+
+def _social_publish_due() -> bool:
+    from app.facebook_post_tasks import has_due_jobs
+
+    with SessionLocal() as db:
+        return has_due_jobs(db)
+
+
+def maybe_social_publish(
+    state: SocialPublishState,
+    *,
+    isolate: bool,
+    now_mono: float | None = None,
+    due: Callable[[], bool] = _social_publish_due,
+) -> bool:
+    """Start a publish drain when jobs are due, busy cataloging or not. One drain child at a time."""
+    now = time.monotonic() if now_mono is None else now_mono
+    child = state.child
+    if child is not None:
+        if child.poll() is None:
+            if now - state.child_started_mono > SOCIAL_PUBLISH_KILL_SECONDS:
+                _LOG.error("Killing social publish child after %.0fs", now - state.child_started_mono)
+                try:
+                    child.kill()
+                except OSError:
+                    pass
+            return False
+        try:
+            child.wait(timeout=0)
+        except Exception:  # noqa: BLE001
+            pass
+        state.child = None
+    if state.last_check_mono and now - state.last_check_mono < SOCIAL_PUBLISH_POLL_SECONDS:
+        return False
+    state.last_check_mono = now
+    if not due():
+        return False
+    if not isolate:
+        run_social_publish()
+        return True
+    try:
+        state.child = _spawn_social_publish()
+        state.child_started_mono = now
+    except Exception:  # noqa: BLE001
+        _LOG.exception("Failed to spawn social publish child")
         return False
     return True
 
@@ -726,6 +819,7 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
 
     children: dict[str, IsolatedChild] = {}
     social = SocialSweepState()
+    publish = SocialPublishState()
     idle_sweeps = 0
     last_memory_log = 0.0
     _log_worker_memory(label="Boot", children=children)
@@ -743,6 +837,10 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
             maybe_social_sweep(social, isolate=isolate)
         except Exception:  # noqa: BLE001
             _LOG.exception("social sweep scheduling failed")
+        try:
+            maybe_social_publish(publish, isolate=isolate)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("social publish scheduling failed")
         if isolate:
             busy = bool(children)
         else:
@@ -780,6 +878,11 @@ def main(argv: list[str] | None = None) -> None:
         os.environ["WORKER_ISOLATED_CHILD"] = "1"
         n = run_social_sweep()
         _LOG.info("Social sweep child done sales=%s", n)
+        exit_isolated_child(0)
+    if parse_social_publish(argv):
+        os.environ["WORKER_ISOLATED_CHILD"] = "1"
+        n = run_social_publish()
+        _LOG.info("Social publish child done jobs=%s", n)
         exit_isolated_child(0)
     isolated = parse_worker_argv(argv)
     if isolated is not None:

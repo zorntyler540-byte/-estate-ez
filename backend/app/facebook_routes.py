@@ -1,10 +1,10 @@
-"""Facebook Page OAuth and approved feed posts (not Marketplace, Groups, or Instagram)."""
+"""Facebook Page OAuth and approved Page / Instagram / Stories posts (not Marketplace or Groups)."""
 
 from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -50,7 +50,7 @@ from app.services.facebook_page import (
     listed_pages,
     oauth_start_url,
     preview_posts,
-    publish_posts,
+    refresh_instagram,
     require_facebook_poster,
     select_page,
 )
@@ -199,6 +199,16 @@ def facebook_disconnect(
     return FacebookStatusOut.model_validate(disconnect(db, _account(db, current)))
 
 
+@router.post("/integrations/facebook/instagram/refresh", response_model=FacebookStatusOut)
+def facebook_refresh_instagram(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FacebookStatusOut:
+    if not is_owner(current):
+        raise HTTPException(status_code=403, detail="Owner access required")
+    return FacebookStatusOut.model_validate(refresh_instagram(db, _account(db, current)))
+
+
 @router.patch("/integrations/facebook/settings", response_model=FacebookStatusOut)
 def facebook_patch_settings(
     payload: FacebookSettingsIn,
@@ -252,6 +262,9 @@ def _publish_out(
     done: int = 0,
     posted: int = 0,
     failed: int = 0,
+    retrying: int = 0,
+    waiting_for_worker: bool = False,
+    **_ignored,
 ) -> FacebookPublishOut:
     return FacebookPublishOut(
         queued=queued,
@@ -261,8 +274,41 @@ def _publish_out(
         done=done,
         posted=posted,
         failed=failed,
+        retrying=retrying,
+        waiting_for_worker=waiting_for_worker,
         results=[FacebookPublishResultOut.model_validate(row) for row in results],
     )
+
+
+def _queue_posts(
+    db: Session,
+    *,
+    account_id: str,
+    user_id: str,
+    items: list[dict],
+    skipped: list[dict] | None = None,
+    include_follow_hook: bool,
+    force: bool,
+    source: str,
+    idempotency_key: str | None,
+) -> FacebookPublishOut:
+    """Persist the batch, start draining it (in-process in dev; the worker in production), report."""
+    batch_id, created = facebook_post_tasks.enqueue_batch(
+        db,
+        account_id=account_id,
+        user_id=user_id,
+        items=items,
+        skipped=skipped or [],
+        include_follow_hook=include_follow_hook,
+        force=force,
+        source=source,
+        idempotency_key=idempotency_key,
+    )
+    if created:
+        facebook_post_tasks.kick(db.get_bind(), account_id)
+    db.expire_all()
+    row = facebook_post_tasks.facebook_post_batch_status(db, batch_id, account_id) or {}
+    return _publish_out(**{**row, "queued": True, "batch_id": batch_id, "results": list(row.get("results") or [])})
 
 
 @router.post("/facebook/posts", response_model=FacebookPublishOut)
@@ -270,52 +316,20 @@ def facebook_publish(
     payload: FacebookPublishIn,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> FacebookPublishOut:
     require_facebook_poster(current)
     items = [item.model_dump() for item in payload.items]
     check_publish_request(account=_account(db, current), items=items, confirm=payload.confirm)
-    if len(items) > facebook_post_tasks.SYNC_LOT_LIMIT:
-        batch_id = facebook_post_tasks.start_facebook_posts_in_background(
-            account_id=current.account_id,
-            user_id=current.id,
-            items=items,
-            include_follow_hook=payload.include_follow_hook,
-            confirm=payload.confirm,
-            force=payload.force,
-            source=payload.source or "lot",
-            bind=db.get_bind(),
-        )
-        row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
-        return _publish_out(
-            results=list(row.get("results") or []),
-            queued=True,
-            batch_id=batch_id,
-            active=bool(row.get("active", True)),
-            total=int(row.get("total") or len(items)),
-            done=int(row.get("done") or 0),
-            posted=int(row.get("posted") or 0),
-            failed=int(row.get("failed") or 0),
-        )
-    results = publish_posts(
+    return _queue_posts(
         db,
-        account=_account(db, current),
-        user=current,
+        account_id=current.account_id,
+        user_id=current.id,
         items=items,
         include_follow_hook=payload.include_follow_hook,
-        confirm=payload.confirm,
         force=payload.force,
         source=payload.source or "lot",
-    )
-    posted = sum(1 for row in results if row.get("ok"))
-    failed = sum(1 for row in results if not row.get("ok") and not row.get("skipped"))
-    return _publish_out(
-        results=results,
-        queued=False,
-        active=False,
-        total=len(items),
-        done=len(results),
-        posted=posted,
-        failed=failed,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -323,21 +337,13 @@ def facebook_publish(
 def facebook_publish_batch(
     batch_id: str,
     current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> FacebookPublishOut:
     require_facebook_poster(current)
-    row = facebook_post_tasks.facebook_post_batch_status(batch_id.strip(), current.account_id)
+    row = facebook_post_tasks.facebook_post_batch_status(db, batch_id.strip(), current.account_id)
     if not row:
         raise HTTPException(status_code=404, detail="Facebook post batch not found")
-    return _publish_out(
-        results=list(row.get("results") or []),
-        queued=True,
-        batch_id=batch_id.strip(),
-        active=bool(row.get("active")),
-        total=int(row.get("total") or 0),
-        done=int(row.get("done") or 0),
-        posted=int(row.get("posted") or 0),
-        failed=int(row.get("failed") or 0),
-    )
+    return _publish_out(**row)
 
 
 @router.post(
@@ -400,6 +406,7 @@ def facebook_approve_calendar(
     payload: FacebookCalendarApproveIn,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> FacebookPublishOut:
     require_facebook_poster(current)
     account = _account(db, current)
@@ -422,49 +429,16 @@ def facebook_approve_calendar(
             failed=failed,
         )
     check_publish_request(account=account, items=publishable, confirm=payload.confirm)
-    if len(publishable) > facebook_post_tasks.SYNC_LOT_LIMIT:
-        batch_id = facebook_post_tasks.start_facebook_posts_in_background(
-            account_id=current.account_id,
-            user_id=current.id,
-            items=publishable,
-            include_follow_hook=payload.include_follow_hook,
-            confirm=payload.confirm,
-            force=payload.force,
-            source=CALENDAR_SOURCE,
-            bind=db.get_bind(),
-        )
-        row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
-        return _publish_out(
-            results=skipped + list(row.get("results") or []),
-            queued=True,
-            batch_id=batch_id,
-            active=bool(row.get("active", True)),
-            total=int(row.get("total") or len(publishable)) + len(skipped),
-            done=int(row.get("done") or 0) + len(skipped),
-            posted=int(row.get("posted") or 0),
-            failed=int(row.get("failed") or 0),
-        )
-    results = publish_posts(
+    return _queue_posts(
         db,
-        account=account,
-        user=current,
+        account_id=current.account_id,
+        user_id=current.id,
         items=publishable,
+        skipped=skipped,
         include_follow_hook=payload.include_follow_hook,
-        confirm=payload.confirm,
         force=payload.force,
         source=CALENDAR_SOURCE,
-    )
-    combined = skipped + results
-    posted = sum(1 for row in combined if row.get("ok"))
-    failed = sum(1 for row in combined if not row.get("ok") and not row.get("skipped"))
-    return _publish_out(
-        results=combined,
-        queued=False,
-        active=False,
-        total=len(combined),
-        done=len(combined),
-        posted=posted,
-        failed=failed,
+        idempotency_key=idempotency_key,
     )
 
 
