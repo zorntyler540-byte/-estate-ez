@@ -148,22 +148,11 @@ class JobTasksQueueTests(unittest.TestCase):
         job_tasks.kick_queue_if_idle("acct-1")
         mock_try.assert_not_called()
 
-    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
-    @patch.object(job_tasks, "try_start_next_queued_job")
-    @patch.object(job_tasks, "effective_running_count", return_value=0)
-    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
-    @patch.object(job_tasks, "SessionLocal")
-    def test_kick_worker_mode_starts_stale_queue(
-        self,
-        mock_session_local: object,
-        _mock_reconcile: object,
-        _mock_eff: object,
-        mock_try: object,
-        _mock_flag: object,
-    ) -> None:
+    @staticmethod
+    def _old_queued_db(age_seconds: float = 30) -> object:
         row = MagicMock()
         row.id = "job-stale-q"
-        row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
         row.created_at = row.updated_at
 
         class _FakeQuery:
@@ -186,9 +175,68 @@ class JobTasksQueueTests(unittest.TestCase):
             def __exit__(self, *args: object) -> None:
                 return None
 
-        mock_session_local.return_value = _FakeDb()
+        return _FakeDb()
+
+    @patch.object(job_tasks, "worker_heartbeat_is_fresh", return_value=False)
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "try_start_next_queued_job")
+    @patch.object(job_tasks, "effective_running_count", return_value=0)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks, "SessionLocal")
+    def test_kick_worker_mode_starts_stale_queue_when_worker_is_down(
+        self,
+        mock_session_local: object,
+        _mock_reconcile: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_flag: object,
+        _mock_beat: object,
+    ) -> None:
+        mock_session_local.return_value = self._old_queued_db()
         job_tasks.kick_queue_if_idle("acct-1")
         mock_try.assert_called_once_with("acct-1", force_in_process=True)
+
+    @patch.object(job_tasks, "worker_heartbeat_is_fresh", return_value=True)
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "try_start_next_queued_job")
+    @patch.object(job_tasks, "effective_running_count", return_value=0)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks, "SessionLocal")
+    def test_kick_never_runs_on_api_while_worker_heartbeat_is_fresh(
+        self,
+        mock_session_local: object,
+        _mock_reconcile: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_flag: object,
+        _mock_beat: object,
+    ) -> None:
+        """P0: worker slots busy with other franchises must not move Gemini onto the API."""
+        mock_session_local.return_value = self._old_queued_db(age_seconds=15 * 60)
+        job_tasks.kick_queue_if_idle("acct-waiting")
+        mock_try.assert_not_called()
+
+    @patch.object(job_tasks, "worker_heartbeat_is_fresh", return_value=False)
+    @patch.object(job_tasks, "catalog_jobs_run_in_process", return_value=False)
+    @patch.object(job_tasks, "try_start_next_queued_job")
+    @patch.object(job_tasks, "effective_running_count", return_value=0)
+    @patch.object(job_tasks, "reconcile_memory_threads_for_account")
+    @patch.object(job_tasks, "SessionLocal")
+    def test_api_fallback_runs_at_most_one_job(
+        self,
+        mock_session_local: object,
+        _mock_reconcile: object,
+        _mock_eff: object,
+        mock_try: object,
+        _mock_flag: object,
+        _mock_beat: object,
+    ) -> None:
+        mock_session_local.return_value = self._old_queued_db()
+        with job_tasks._job_cancels_lock:
+            job_tasks._job_cancels["already-on-api"] = MagicMock()
+            job_tasks._job_accounts["already-on-api"] = "acct-other"
+        job_tasks.kick_queue_if_idle("acct-2")
+        mock_try.assert_not_called()
 
     def test_kick_queue_if_idle_async_debounces(self) -> None:
         with patch.object(job_tasks.threading, "Thread") as mock_thread:

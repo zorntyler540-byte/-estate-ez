@@ -139,6 +139,11 @@ class Settings(BaseSettings):
     # When false, this process only enqueues catalog jobs; a separate ``python -m app.worker`` claims them.
     # Set false on the Railway API service and true (default) on the worker service.
     run_catalog_jobs_in_process: bool = Field(default=True, alias="RUN_CATALOG_JOBS_IN_PROCESS")
+    # API (worker mode) runs a queued catalog job itself only when no worker heartbeat is newer
+    # than this. A busy worker still beats every few seconds, so busy never triggers the fallback.
+    worker_heartbeat_stale_seconds: int = Field(
+        default=90, ge=15, le=3600, alias="WORKER_HEARTBEAT_STALE_SECONDS"
+    )
     gemini_image_max_edge: int = Field(default=2048, ge=512, le=4096, alias="GEMINI_IMAGE_MAX_EDGE")
     gemini_jpeg_quality: int = Field(default=85, ge=40, le=95, alias="GEMINI_JPEG_QUALITY")
     # In-memory pipeline copies (triage/gallery/Pro). Keep well below catalog 4096px originals.

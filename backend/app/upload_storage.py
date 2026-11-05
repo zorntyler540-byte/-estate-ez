@@ -13,6 +13,7 @@ from app.catalog_limits import should_store_as_catalog_image
 from app.catalog_storage import upload_root
 from app.job_batch_storage import mirror_local_file_to_r2
 from app.services.image_preprocess import compress_upload_bytes_if_image
+from app.services.upload_names import is_stable_upload_name
 from app.services.photo_captured_at import (
     captured_at_from_filename,
     captured_at_from_image_bytes,
@@ -70,9 +71,11 @@ async def save_uploaded_files(
     When R2 is configured, each saved file is also mirrored under ``job-batches/…`` so a
     worker or other API replica can restore the batch if local disk is gone.
 
-    ``skip_existing``: phone uploads use stable names (``mobile-<draft>-NN.jpg``), so a non-empty
-    file already stored under that name is the same photo arriving again (retry / resume) and
-    counts as success. Without it, collisions are renamed ``_2`` (browser folder uploads).
+    ``skip_existing``: with a stable upload name (``mobile-<draft>-NN.jpg``,
+    ``web-<batch>-NNNN.jpg``, see ``is_stable_upload_name``) a non-empty file already stored
+    under that name is the same photo arriving again (retry / resume) and counts as success.
+    Camera names (``image.jpg``, ``IMG_1234.JPG``) are never identity, even with
+    ``skip_existing``: a collision is stored as ``_2`` so no photo is dropped.
 
     Returns the stored relative names for every still in ``files`` (written or already present).
     """
@@ -84,7 +87,8 @@ async def save_uploaded_files(
 
     async def _save_one(uf: UploadFile) -> None:
         async with sem:
-            if skip_existing and uf.filename:
+            idempotent = skip_existing and is_stable_upload_name(uf.filename)
+            if idempotent and uf.filename:
                 early = _confined_target(root, uf.filename)
                 if _already_received(early):
                     stored.append(early.relative_to(root).as_posix())
@@ -109,7 +113,7 @@ async def save_uploaded_files(
             raw_name = stor_name.replace("\\", "/").lstrip("/")
             target = _confined_target(root, raw_name)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if skip_existing and _already_received(target):
+            if idempotent and _already_received(target):
                 stored.append(target.relative_to(root).as_posix())
                 return
             if target.exists() and target.stat().st_size > 0:

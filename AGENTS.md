@@ -72,6 +72,18 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   Isolated-child OOM/crash is capped (`WORKER_CHILD_CRASH_RETRIES`, default 3) and listed by
   `/jobs/stuck`. Parent RSS kill (`WORKER_CHILD_RSS_MB=3000`; 1200 is too low for a 3-photo lot)
   plus 1280px working images. Retries skip already-cataloged lot photos and reuse unlinked leftovers.
+- **The API runs catalog jobs only when the worker heartbeat is stale.** The worker parent upserts
+  `worker_heartbeats` every 10s (busy or idle). `kick_queue_if_idle`, Run now and Retry failed
+  leave jobs queued for the worker while any heartbeat is newer than `WORKER_HEARTBEAT_STALE_SECONDS`
+  (default 90). Worker slots being busy with other franchises is **not** a fallback trigger. When
+  stale, the API runs at most one job itself (`API_FALLBACK_MAX_JOBS`). The dashboard no longer sends
+  `force_in_process=true`; the server ignores it while the heartbeat is fresh.
+- **Filenames are not photo identity unless stable.** Only `mobile-<draft>-NN`, `append-<draft>-NN`
+  and `web-<batch>-NNNN[-stem]` names (`app/services/upload_names.py`) are deduped across a sale or
+  skipped as "already received". Website and client-portal uploads send `web-<batch>-NNNN` names
+  (`frontend/lib/webUploadNames.ts`). Camera names (`IMG_1234.JPG`, iOS `image.jpg`) never drop
+  photos; a job's own retry is recognized by `Photo.id = uuid5(job_id/relative path)`
+  (`job_photo_id` in `services/processing.py`).
 - **R2 must be configured on BOTH the API and the worker, pointing at the same bucket**
   (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`). Because the services don't
   share a disk, an uploaded batch only reaches the worker via R2 (`job-batches/{account}/{batch}/…`).
@@ -88,7 +100,7 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
 - **Mobile confirms the real outcome** with one batched `POST /mobile/drafts/status` at the end of
   Sync (see `mobile/lib/queue/sync.ts`); there is no per-lot wait after `/run`, and a `/run` 200 is not
   "cataloged." A dedicated worker being down/mid-deploy is the main
-  way jobs stall in `queued`. After `/run` the draft is marked **uploaded** immediately. Sync must
+  way jobs stall in `queued` (the API picks them up after the heartbeat goes stale). After `/run` the draft is marked **uploaded** immediately. Sync must
   **adopt** (not delete + re-upload) a `queued`/`processing`/`completed` job — retrying created
   duplicate lots and a second Gemini bill. Server-side, `process_job` skips Gemini when the same
   `mobile-<draft>-NN.jpg` names already exist on a lot in that sale (`same_sale=True`).

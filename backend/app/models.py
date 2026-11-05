@@ -285,6 +285,21 @@ class JobSseEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class WorkerHeartbeat(Base):
+    """Liveness of each dedicated catalog worker process (``python -m app.worker``).
+
+    The API only runs catalog jobs itself when every row is stale (worker down / wedged),
+    never just because the worker's slots are busy with other franchises.
+    """
+
+    __tablename__ = "worker_heartbeats"
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    slots: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    slots_in_use: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
 class AppraisalCheck(Base):
     """Job-site spot appraisal (separate from catalog lots/photos)."""
 

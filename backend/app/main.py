@@ -318,6 +318,7 @@ from app.services.image_preprocess import compress_upload_bytes_if_image
 from app.services.photo_captured_at import captured_at_from_epoch_ms, captured_at_from_path
 from app.services.photo_rotate import rotate_image_bytes
 from app.upload_storage import UPLOAD_ROOT, new_batch_dir, received_file_names, save_uploaded_files
+from app.services.upload_names import is_stable_upload_name
 from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
     MAX_VIDEO_BYTES,
@@ -5914,7 +5915,7 @@ async def create_job_from_upload(
                 reuse_job_id, reuse_folder = prior.id, folder
         if reuse_folder is not None:
             have = set(received_file_names(reuse_folder))
-            new_n = sum(1 for f in files if Path(f.filename or "").name not in have)
+            new_n = sum(1 for f in files if not _upload_already_received(f.filename, have))
             photo_err = job_photo_count_error(
                 current=len(have), delta=new_n, single_lot_mode=single
             )
@@ -5964,6 +5965,14 @@ async def create_job_from_upload(
         db2.commit()
         db2.refresh(job)
         return _job_out(job)
+
+
+def _upload_already_received(filename: str | None, have: set[str]) -> bool:
+    """A stable upload name already stored in the job folder (camera names never match)."""
+    if not is_stable_upload_name(filename):
+        return False
+    rel = (filename or "").replace("\\", "/").lstrip("/")
+    return rel in have or Path(rel).name in have
 
 
 def _owned_processing_job(db: Session, job_id: str, account_id: str) -> ProcessingJob | None:
@@ -6026,9 +6035,9 @@ async def append_files_to_queued_job(
             job_tasks.normalize_client_draft_id(client_draft_id) or getattr(job, "client_draft_id", None)
         )
         have = set(received_file_names(dest))
-        # A retried phone photo (same stable name) is not a new photo for the cap or quota.
-        new_n = (
-            sum(1 for f in files if Path(f.filename or "").name not in have) if stable_names else len(files)
+        # A retried phone/web photo (same stable name) is not a new photo for the cap or quota.
+        new_n = sum(
+            1 for f in files if not (stable_names and _upload_already_received(f.filename, have))
         )
         photo_err = job_photo_count_error(
             current=len(have),
@@ -6235,10 +6244,10 @@ def retry_failed_jobs(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     force_in_process: bool = Query(
-        True,
+        False,
         description=(
-            "When true (dashboard Retry failed), start the first re-queued job on this API "
-            "process even if a dedicated worker normally owns jobs. Phone Sync should leave this false."
+            "Emergency only: start the first re-queued job on this API process. Ignored while a "
+            "dedicated worker heartbeat is fresh — re-queued jobs go to the worker."
         ),
     ),
 ) -> RetryFailedJobsOut:
@@ -6277,7 +6286,10 @@ def retry_failed_jobs(
 
     started = False
     job_tasks.kick_queue_if_idle(account_id)
-    if force_in_process:
+    run_local = force_in_process and (
+        job_tasks.catalog_jobs_run_in_process() or job_tasks.in_process_fallback_allowed()
+    )
+    if run_local:
         try:
             started = bool(
                 job_tasks.start_job_in_background(
@@ -6308,8 +6320,8 @@ def run_job(
     force_in_process: bool = Query(
         False,
         description=(
-            "When true (dashboard Run now), start catalog on this API process even if a "
-            "dedicated worker normally owns jobs. Phone Sync should leave this false."
+            "Emergency only: start catalog on this API process. Ignored while a dedicated worker "
+            "heartbeat is fresh — the job is queued for the worker instead."
         ),
     ),
 ) -> JobOut:
@@ -6353,9 +6365,11 @@ def run_job(
 
     from app.job_batch_storage import confined_job_folder, count_staged_job_files, mirror_folder_to_r2
 
-    # Dedicated worker mode: phone Sync leaves the row queued for ``app.worker``.
-    # Dashboard **Run now** passes force_in_process so staff are not stuck if the worker is wedged.
-    run_remote = not job_tasks.catalog_jobs_run_in_process() and not force_in_process
+    # Dedicated worker mode: phone Sync and dashboard Run now leave the row queued for
+    # ``app.worker``. ``force_in_process`` only runs here while no worker heartbeat is fresh.
+    worker_mode = not job_tasks.catalog_jobs_run_in_process()
+    force_local = force_in_process and worker_mode and job_tasks.in_process_fallback_allowed()
+    run_remote = worker_mode and not force_local
     confined = confined_job_folder(Path(job.input_folder), current.account_id)
     if confined is None:
         raise HTTPException(status_code=400, detail="Invalid job upload path")

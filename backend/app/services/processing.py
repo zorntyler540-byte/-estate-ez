@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ from app.services.photo_roles import (
 from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
+from app.services.upload_names import is_stable_upload_name
 from app.catalog_limits import looks_like_video_file
 from app.catalog_storage import (
     catalog_photo_file_on_disk,
@@ -167,8 +169,59 @@ def _photo_names(photo_paths: list[Path]) -> list[str]:
     return [p.name for p in photo_paths if p.name]
 
 
+def _stable_names(names: list[str]) -> list[str]:
+    return [n for n in names if is_stable_upload_name(n)]
+
+
+# Fixed namespace: ``Photo.id`` for a job's input file is uuid5(job_id/relative path), so a
+# retry of the same job finds its own rows without trusting camera filenames.
+_JOB_PHOTO_NAMESPACE = uuid.UUID("5b7f3e4a-8f0e-4d55-9a57-2c1f0e1d6b42")
+
+
+def _job_relative_name(job: ProcessingJob, photo_path: Path) -> str:
+    try:
+        return photo_path.resolve().relative_to(Path(job.input_folder).resolve()).as_posix()
+    except (ValueError, OSError, TypeError):
+        return photo_path.name
+
+
+def job_photo_id(job: ProcessingJob, photo_path: Path) -> str:
+    """Deterministic ``Photo.id`` for one input file of one job."""
+    return str(uuid.uuid5(_JOB_PHOTO_NAMESPACE, f"{job.id}/{_job_relative_name(job, photo_path)}"))
+
+
+def _job_photos_on_lots(db: Session, job: ProcessingJob, photo_paths: list[Path]) -> set[Path]:
+    """Input files this job already attached to a lot (any sale — lots can move)."""
+    by_id = {job_photo_id(job, p): p for p in photo_paths}
+    if not by_id:
+        return set()
+    rows = (
+        db.query(Photo.id)
+        .filter(
+            Photo.id.in_(list(by_id)),
+            Photo.account_id == job.account_id,
+            Photo.lot_id.isnot(None),
+        )
+        .all()
+    )
+    return {by_id[str(pid)] for (pid,) in rows if str(pid) in by_id}
+
+
+def _already_cataloged_paths(db: Session, job: ProcessingJob, photo_paths: list[Path]) -> set[Path]:
+    """Inputs that are already listed: by this job, or (stable names only) anywhere on the sale."""
+    done = _job_photos_on_lots(db, job, photo_paths)
+    on_sale = _sale_lot_photos_by_name(db, job, _photo_names(photo_paths))
+    done.update(p for p in photo_paths if p.name in on_sale)
+    return done
+
+
 def _sale_lot_photos_by_name(db: Session, job: ProcessingJob, names: list[str]) -> dict[str, Photo]:
-    """Existing lot-linked photos on this sale, keyed by original filename (first wins)."""
+    """Lot-linked photos on this sale whose **stable** upload name matches (first wins).
+
+    Camera names (``IMG_1234.JPG``, ``image.jpg``) are ignored: they repeat across phones and
+    pick sessions, and matching on them silently dropped photos and whole lots.
+    """
+    names = _stable_names(names)
     if not names:
         return {}
     rows = (
@@ -190,7 +243,11 @@ def _sale_lot_photos_by_name(db: Session, job: ProcessingJob, names: list[str]) 
 
 
 def _unlinked_job_photos_by_name(db: Session, job: ProcessingJob, names: list[str]) -> dict[str, Photo]:
-    """Unlinked leftovers from this job (same account + name, created at/after the job)."""
+    """Unlinked leftovers with the same stable name, created at/after the job.
+
+    Fallback for rows persisted before ``job_photo_id``; camera names never match.
+    """
+    names = _stable_names(names)
     if not names:
         return {}
     q = db.query(Photo).filter(
@@ -217,8 +274,8 @@ def _names_already_on_one_lot(
     *,
     same_sale: bool = False,
 ) -> bool:
-    """True when every name already sits on a single lot in this sale."""
-    if not names:
+    """True when every name is a stable upload name and all of them sit on a single lot in this sale."""
+    if not names or len(_stable_names(names)) != len(names):
         return False
     needed = set(names)
     q = (
@@ -248,19 +305,19 @@ def job_photos_already_cataloged_on_sale(
     job: ProcessingJob,
     photo_paths: list[Path],
 ) -> bool:
-    """True when every input filename already sits on a lot in this sale (any number of lots).
+    """True when every input is already listed (any number of lots).
 
-    Batch retries use this so completed lots are not Gemini'd again. Names split across lots
-    still count as cataloged — creating another lot would duplicate spend and the daily cap.
+    An input counts when this job already attached it to a lot, or when its stable upload name
+    (``mobile-…`` / ``append-…`` / ``web-…``) sits on a lot in this sale. Batch retries use this
+    so completed lots are not Gemini'd again. Camera names only match this job's own rows.
     """
     db.refresh(job)
     if job.status == JobStatus.completed:
         return True
-    names = _photo_names(photo_paths)
-    if not names:
+    paths = [p for p in photo_paths if p.name]
+    if not paths:
         return False
-    found = _sale_lot_photos_by_name(db, job, names)
-    return set(names) <= set(found)
+    return len(_already_cataloged_paths(db, job, paths)) == len(set(paths))
 
 
 def _batch_segment_already_cataloged(
@@ -268,8 +325,13 @@ def _batch_segment_already_cataloged(
     job: ProcessingJob,
     photo_paths: list[Path],
 ) -> bool:
-    """True when this tape-SKU segment already produced one lot on the sale."""
-    return _names_already_on_one_lot(db, job, _photo_names(photo_paths), same_sale=True)
+    """True when this tape-SKU segment already produced a lot (this job, or same stable names)."""
+    paths = [p for p in photo_paths if p.name]
+    if not paths:
+        return False
+    if len(_job_photos_on_lots(db, job, paths)) == len(set(paths)):
+        return True
+    return _names_already_on_one_lot(db, job, _photo_names(paths), same_sale=True)
 
 
 def _single_lot_batch_already_cataloged(
@@ -286,16 +348,20 @@ def _single_lot_batch_already_cataloged(
 
     ``same_sale=True`` looks at the whole sale. Use that *before* Gemini so a Sync retry / Resend
     of the same ``mobile-<draft>-NN.jpg`` names does not pay for a second catalog pass.
+
+    Name matching only applies to stable upload names; any job also matches its own rows.
     """
     if not bool(getattr(job, "single_lot_mode", False)) or not photo_paths:
         return False
     db.refresh(job)
     if job.status == JobStatus.completed:
         return True
-    names = _photo_names(photo_paths)
-    if not names:
+    paths = [p for p in photo_paths if p.name]
+    if not paths:
         return False
-    return _names_already_on_one_lot(db, job, names, same_sale=same_sale)
+    if len(_job_photos_on_lots(db, job, paths)) == len(set(paths)):
+        return True
+    return _names_already_on_one_lot(db, job, _photo_names(paths), same_sale=same_sale)
 
 
 def _note_isolated_job_persisted(job: ProcessingJob, *, lots: int) -> None:
@@ -355,16 +421,26 @@ def _add_catalog_photo(
 ) -> Photo:
     """Register a photo row pointing at a permanent copy under ``catalog/{account_id}/``.
 
-    Retries reuse unlinked leftovers from this job (same original_name) so a mid-persist
-    crash cannot insert duplicate Photo rows or double-count the daily photo cap.
+    The row id is ``job_photo_id`` so a retry after a mid-persist crash reuses this job's own
+    unlinked leftover instead of inserting a duplicate (or double-counting the daily photo cap).
     """
-    existing = _unlinked_job_photos_by_name(db, job, [photo_path.name]).get(photo_path.name)
-    if existing is not None:
+    wanted_id: str | None = job_photo_id(job, photo_path)
+    existing = db.get(Photo, wanted_id)
+    if existing is not None and existing.account_id == job.account_id and existing.lot_id is None:
         _apply_listing_attrs_to_photo(existing, photo_role=photo_role, attrs=attrs)
         db.flush()
         return existing
+    if existing is not None:
+        # Already on a lot (moved/split after an earlier run) — never re-home it; store a copy.
+        wanted_id = None
+    else:
+        legacy = _unlinked_job_photos_by_name(db, job, [photo_path.name]).get(photo_path.name)
+        if legacy is not None:
+            _apply_listing_attrs_to_photo(legacy, photo_role=photo_role, attrs=attrs)
+            db.flush()
+            return legacy
 
-    photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path)
+    photo_id, storage_path = persist_catalog_photo(job.account_id, photo_path, photo_id=wanted_id)
     listing = attrs or PhotoListingAttrs(photo_role=photo_role)
     from app.services.photo_captured_at import captured_at_from_path
 
@@ -740,8 +816,8 @@ def _process_job_batch_pipeline(
     cancel_event: threading.Event | None = None,
 ) -> None:
     """Choose photos / folder batch: triage once, split on tape SKU, pipeline each lot."""
-    already = _sale_lot_photos_by_name(db, job, _photo_names(photos))
-    photos = [p for p in photos if p.name not in already]
+    already = _already_cataloged_paths(db, job, photos)
+    photos = [p for p in photos if p not in already]
     if not photos:
         _LOG.info(
             "batch pipeline skipped — all photos already cataloged on this sale job_id=%s",

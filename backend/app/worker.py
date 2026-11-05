@@ -42,6 +42,7 @@ from app.models import JobStatus, Lot, ProcessingJob
 from app.proc_memory import process_rss_mb, process_tree_rss_mb
 from app.services import job_events
 from app.services.memory_trim import trim_process_memory
+from app.worker_heartbeat import HeartbeatWriter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -822,8 +823,10 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
     publish = SocialPublishState()
     idle_sweeps = 0
     last_memory_log = 0.0
+    heartbeat = HeartbeatWriter(slots=cap)
     _log_worker_memory(label="Boot", children=children)
     while True:
+        heartbeat.maybe_beat(len(children) if isolate else _in_process_running_count())
         if isolate:
             _reap_isolated_children(children)
         try:
