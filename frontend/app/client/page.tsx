@@ -2,11 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch, apiUploadFiles } from "../../lib/api";
 import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
-import { newWebUploadBatchId, webUploadName } from "../../lib/webUploadNames";
+import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import {
+  assignUploadNames,
+  newWebUploadSession,
+  webClientDraftId,
+  type WebUploadSession
+} from "../../lib/webUploadSession";
 
 const MAX_PHOTOS = 40;
 
@@ -36,6 +42,7 @@ export default function ClientUploadPage() {
   const [ready, setReady] = useState(false);
   const [sku, setSku] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const uploadSessionRef = useRef<WebUploadSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -127,18 +134,36 @@ export default function ClientUploadPage() {
     setBusy(true);
     setError("");
     setMessage("");
+    // Same batch / draft id until the selection changes, so a retry after a lost response
+    // reuses the receiving job instead of uploading the lot twice.
+    const session = uploadSessionRef.current ?? newWebUploadSession();
+    uploadSessionRef.current = session;
     try {
+      if (session.jobId) {
+        const state = (await apiFetch(`/jobs/${encodeURIComponent(session.jobId)}/received-files`, token).catch(
+          () => null
+        )) as { status?: string } | null;
+        if (state?.status && state.status !== "receiving") {
+          uploadSessionRef.current = null;
+          setFiles([]);
+          setSku("");
+          setMessage("These photos were already uploaded — they were not sent again.");
+          return;
+        }
+      }
+      const names = assignUploadNames(session, files, (f) => f.name);
+      const ready = await resizeJpegsForUpload(files, { concurrency: 2 });
       const form = new FormData();
       form.append("sale_id", me.assigned_sale_id);
       form.append("inherit_sku_from_subfolder", "false");
       form.append("single_lot_mode", "true");
-      form.append("client_draft_id", crypto.randomUUID());
+      form.append("client_draft_id", webClientDraftId(session));
       if (sku.trim()) form.append("single_lot_manual_sku", sku.trim());
-      // iOS names every picked photo image.jpg; the server only dedupes web-<batch>-NNNN names.
-      const batchId = newWebUploadBatchId();
-      files.forEach((file, i) => form.append("files", file, webUploadName(batchId, i + 1, file.name)));
+      ready.forEach((file, i) => form.append("files", file, names[i]!));
       const created = (await apiUploadFiles("/jobs/upload", token, form)) as JobRow;
+      session.jobId = created.id;
       await apiFetch(`/jobs/${encodeURIComponent(created.id)}/run`, token, { method: "POST" });
+      uploadSessionRef.current = null;
       try {
         const rows = (await apiFetch(
           `/jobs?sale_id=${encodeURIComponent(me.assigned_sale_id || "")}`,
@@ -245,7 +270,10 @@ export default function ClientUploadPage() {
                   accept="image/*"
                   multiple
                   disabled={busy}
-                  onChange={(e) => setFiles(Array.from(e.target.files || []))}
+                  onChange={(e) => {
+                    uploadSessionRef.current = null;
+                    setFiles(Array.from(e.target.files || []));
+                  }}
                 />
                 <p className="ct-muted" style={{ marginTop: "0.45rem" }}>
                   {files.length === 0

@@ -76,10 +76,23 @@ import {
 import { convertHeicFileToJpeg, isHeicLikeFile } from "../../lib/heicConvert";
 import {
   buildStagedUploadRel,
-  getStagedUploadRel,
-  markStagedUploadRel
+  markStagedUploadRel,
+  stagedUploadRelOrNull
 } from "../../lib/stagedUploadPath";
-import { newWebUploadBatchId, webUploadName } from "../../lib/webUploadNames";
+import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import {
+  assignUploadNames,
+  decideResume,
+  inheritUploadName,
+  missingUploadIndexes,
+  newWebUploadSession,
+  setUploadName,
+  uploadNameOf,
+  webClientDraftId,
+  type ResumeDecision,
+  type ServerBatchState,
+  type WebUploadSession
+} from "../../lib/webUploadSession";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 const SHOW_CLOSED_SALES_KEY = "ct_show_closed_sales";
@@ -137,7 +150,9 @@ function scheduleScrollStagingUploadBoxIntoView() {
  * Max files per multipart POST. Smaller chunks shorten each request (less “stuck” behind proxies)
  * while still batching enough for large estate folders.
  */
-const UPLOAD_FILE_CHUNK = 48;
+const UPLOAD_FILE_CHUNK = 24;
+/** Appends to one receiving job in flight at once (photos are resized first, so chunks are small). */
+const UPLOAD_PARALLEL_CHUNKS = 2;
 
 function uploadProgressFromBytes(prefix: string, loaded: number, total: number | null): string {
   const loMb = (n: number) => (n / (1024 * 1024)).toFixed(1);
@@ -560,6 +575,7 @@ async function stabilizeCapturedFile(
     });
     markStagedUploadRel(out, uploadRel);
     markStabilizedCaptureFile(out);
+    inheritUploadName(file, out);
     return out;
   };
 
@@ -648,6 +664,10 @@ async function createDisplayThumbUrls(files: File[]): Promise<(string | null)[]>
 }
 
 /** Re-clone bytes and verify readability immediately before multipart upload (iOS stale File handles). */
+function stagedRelForUploadName(file: File): string {
+  return stagedUploadRelOrNull(file) || file.name;
+}
+
 async function prepareStagedFilesForUpload(files: File[]): Promise<{ files: File[]; skipped: number }> {
   const out: File[] = [];
   const usedLeafNames = new Set<string>();
@@ -1498,6 +1518,8 @@ type Job = {
   progress_done?: number;
   progress_total?: number;
   progress_file_name?: string | null;
+  /** Set by ``/jobs/upload`` (reused receiving job) and ``/upload-files``. */
+  received_files?: string[] | null;
 };
 
 type StuckJob = {
@@ -2303,6 +2325,11 @@ export default function DashboardPage() {
   const [uploading, setUploading] = useState(false);
   const [stagingSuccess, setStagingSuccess] = useState("");
   const stagingDraftRestoredRef = useRef(false);
+  const stagingRestorePendingRef = useRef(false);
+  /** Batch id / receiving job for the staged photos, so Upload after a failure or refresh resumes. */
+  const webUploadSessionRef = useRef<WebUploadSession | null>(null);
+  /** ``uploading`` state lags a double tap by a render; this does not. */
+  const uploadInFlightRef = useRef(false);
   /** Shown during multi-request folder uploads (large batches). */
   const [uploadProgress, setUploadProgress] = useState("");
   /** When set, top-level subfolders named with 2–6 digits (e.g. ``035/``) set each lot's SKU on finalize. */
@@ -2875,15 +2902,25 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || folderPick || stagingDraftRestoredRef.current) return;
     stagingDraftRestoredRef.current = true;
+    stagingRestorePendingRef.current = true;
     void loadStagingDraft().then(async (draft) => {
-      if (!draft?.imageFiles.length) return;
-      draft.imageFiles.forEach((f) => markStabilizedCaptureFile(f));
-      if (draft.thumbUrls.length) revokeObjectUrls(draft.thumbUrls);
-      const built = await createDisplayThumbUrls(draft.imageFiles);
+      if (!draft?.files.length) {
+        stagingRestorePendingRef.current = false;
+        return;
+      }
+      const imageFiles = draft.files.map(({ file, uploadRel, uploadName }) => {
+        markStabilizedCaptureFile(file);
+        if (uploadRel) markStagedUploadRel(file, uploadRel);
+        if (uploadName) setUploadName(file, uploadName);
+        return file;
+      });
+      webUploadSessionRef.current = draft.session;
+      const built = await createDisplayThumbUrls(imageFiles);
       const thumbUrls = built.map((u) => u ?? "");
+      stagingRestorePendingRef.current = false;
       setFolderPick({
         folderLabel: draft.folderLabel,
-        imageFiles: draft.imageFiles,
+        imageFiles,
         thumbUrls,
         skippedCount: draft.skippedCount,
         singleLotMode: draft.singleLotMode
@@ -2898,21 +2935,35 @@ export default function DashboardPage() {
         setSelectedSaleId(draft.saleId);
       }
       setStagingSuccess(
-        `Restored ${draft.imageFiles.length} staged photo${draft.imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
+        draft.session?.jobId
+          ? `Restored ${imageFiles.length} staged photo${imageFiles.length === 1 ? "" : "s"} from an upload that did not finish. Tap Upload to resume — photos already on the server are not sent again.`
+          : `Restored ${imageFiles.length} staged photo${imageFiles.length === 1 ? "" : "s"} from your last session on this device.`
       );
     });
   }, [token, folderPick]);
 
   useEffect(() => {
     if (!folderPick?.imageFiles.length) {
-      void clearStagingDraft();
+      // Mount runs this before the IndexedDB restore resolves; do not wipe the draft it is reading.
+      if (!stagingRestorePendingRef.current) void clearStagingDraft();
       return;
     }
     const pick = folderPick;
     const t = window.setTimeout(() => {
-      void saveStagingDraft(pick, {
-        saleId: selectedSaleId || undefined,
-        singleLotManualSku: singleLotManualSku.trim() || undefined
+      // Name photos in pick order as they are staged, so a refresh or retry keeps the same names.
+      const session = webUploadSessionRef.current ?? newWebUploadSession();
+      webUploadSessionRef.current = session;
+      assignUploadNames(session, pick.imageFiles, stagedRelForUploadName);
+      void saveStagingDraft(
+        pick,
+        { uploadRelOf: stagedUploadRelOrNull, uploadNameOf },
+        {
+          saleId: selectedSaleId || undefined,
+          singleLotManualSku: singleLotManualSku.trim() || undefined,
+          session
+        }
+      ).catch(() => {
+        /* quota / private mode — staging still works in memory */
       });
     }, 500);
     return () => window.clearTimeout(t);
@@ -4349,6 +4400,7 @@ export default function DashboardPage() {
 
   function clearFolderPick() {
     void clearStagingDraft();
+    webUploadSessionRef.current = null;
     clearStagingAwaitingGeminiJobId();
     setStagingSuccess("");
     singleLotCaptureChainingRef.current = false;
@@ -4367,9 +4419,15 @@ export default function DashboardPage() {
     });
   }
 
-  function restoreSingleLotStaging(files: File[], manualSku: string, skippedCount: number) {
+  function restoreSingleLotStaging(
+    files: File[],
+    manualSku: string,
+    skippedCount: number,
+    session: WebUploadSession | null
+  ) {
     if (!files.length) return;
     files.forEach((f) => markStabilizedCaptureFile(f));
+    webUploadSessionRef.current = session;
     setFolderPick({
       folderLabel:
         files.length === 1 ? folderLabelFromFile(files[0]!) : `One lot (${files.length} photos)`,
@@ -4436,6 +4494,10 @@ export default function DashboardPage() {
     markStabilizedCaptureFile(file);
     setFolderPick((prev) => {
       if (!prev || index < 0 || index >= prev.imageFiles.length) return prev;
+      const old = prev.imageFiles[index];
+      // Same name = same photo to the server; once part of the batch is uploaded an edit
+      // needs a new name (Upload then restarts the batch instead of keeping the old frame).
+      if (old && !webUploadSessionRef.current?.jobId) inheritUploadName(old, file);
       const nextFiles = [...prev.imageFiles];
       nextFiles[index] = file;
       return { ...prev, imageFiles: nextFiles };
@@ -5378,7 +5440,42 @@ export default function DashboardPage() {
     }
   }
 
+  async function fetchServerBatchState(jobId: string): Promise<ServerBatchState | null> {
+    let received: { status: string; names?: string[]; folder_missing?: boolean };
+    try {
+      received = (await apiFetch(`/jobs/${encodeURIComponent(jobId)}/received-files`, token)) as typeof received;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (/not found/i.test(msg)) return null;
+      throw e;
+    }
+    let errorMessage: string | null = null;
+    if ((received.status || "").toLowerCase() === "failed") {
+      try {
+        errorMessage = ((await apiFetch(`/jobs/${encodeURIComponent(jobId)}`, token)) as Job).error_message ?? null;
+      } catch {
+        /* treat as a non-orphan failure: do not re-send */
+      }
+    }
+    return {
+      status: received.status,
+      names: received.names ?? [],
+      folder_missing: received.folder_missing,
+      error_message: errorMessage
+    };
+  }
+
   async function uploadStagedFolder() {
+    if (uploadInFlightRef.current) return;
+    uploadInFlightRef.current = true;
+    try {
+      await uploadStagedFolderOnce();
+    } finally {
+      uploadInFlightRef.current = false;
+    }
+  }
+
+  async function uploadStagedFolderOnce() {
     if (!folderPick?.imageFiles.length) return;
     if (!selectedSaleId) {
       setError("Select or create a sale first — choose a sale at the top of the dashboard before Upload.");
@@ -5451,18 +5548,80 @@ export default function DashboardPage() {
       );
       return;
     }
+    // One session per staged batch: stable web-<batch>-NNNN names (pick order) and the
+    // receiving job id, so a retry / refresh resumes instead of opening a second job.
+    let session = webUploadSessionRef.current ?? newWebUploadSession();
+    webUploadSessionRef.current = session;
     if (isSingleLot) {
       clearFolderPick();
     }
-    // Camera names (image.jpg, IMG_1234.JPG) repeat across sessions; the server only trusts
-    // web-<batch>-NNNN names as photo identity. NNNN is pick order.
-    const uploadBatchId = newWebUploadBatchId();
-    const uploadNames = new Map<File, string>(
-      readyFiles.map((file, i) => [file, webUploadName(uploadBatchId, i + 1, getStagedUploadRel(file))])
-    );
-    const uploadNameFor = (file: File) => uploadNames.get(file) || getStagedUploadRel(file);
+    let names = assignUploadNames(session, readyFiles, stagedRelForUploadName);
+    const persistSession = () => {
+      if (isSingleLot) return;
+      const pick = folderPickRef.current;
+      if (!pick?.imageFiles.length) return;
+      void saveStagingDraft(
+        pick,
+        { uploadRelOf: stagedUploadRelOrNull, uploadNameOf },
+        { saleId: selectedSaleId || undefined, session }
+      ).catch(() => {
+        /* in-memory session still resumes until refresh */
+      });
+    };
     try {
-      const buildFormForSlice = (slice: File[]) => {
+      let decision: ResumeDecision = { kind: "fresh", discardJobId: null };
+      if (session.jobId) {
+        setUploadProgress("Checking which photos are already on the server…");
+        decision = decideResume(session, names, await fetchServerBatchState(session.jobId));
+      }
+      if (decision.kind === "already_submitted") {
+        if (!isSingleLot) clearFolderPick();
+        webUploadSessionRef.current = null;
+        setStagingSuccess(
+          `This batch was already uploaded (job ${decision.status}) — it was not sent again. Check Jobs below.`
+        );
+        await refreshJobsAndStuck();
+        setCatalogPollEpoch((n) => n + 1);
+        return;
+      }
+      if (decision.kind === "fresh" && decision.discardJobId) {
+        // That job can never catalog this batch (photos changed, disk lost, or upload orphaned).
+        await apiFetch(`/jobs/${encodeURIComponent(decision.discardJobId)}`, token, { method: "DELETE" }).catch(
+          () => {
+            /* already gone */
+          }
+        );
+        session = newWebUploadSession();
+        webUploadSessionRef.current = session;
+        names = assignUploadNames(session, readyFiles, stagedRelForUploadName);
+      }
+      let jobId: string | null = decision.kind === "resume" ? decision.jobId : null;
+      let pending: number[] = decision.kind === "resume" ? decision.missing : readyFiles.map((_, i) => i);
+      const resumed = decision.kind === "resume";
+      const alreadyThere = total - pending.length;
+
+      setUploadProgress(`Preparing ${pending.length} photo${pending.length === 1 ? "" : "s"}…`);
+      const shrunk = await resizeJpegsForUpload(
+        pending.map((i) => readyFiles[i]!),
+        {
+          concurrency: 2,
+          onProgress: (done, n) => setUploadProgress(`Shrinking photos for upload ${done}/${n}…`)
+        }
+      );
+      const sendFile = new Map<number, File>(pending.map((idx, k) => [idx, shrunk[k]!]));
+      const appendFiles = (form: FormData, idxs: number[]) => {
+        form.append("client_draft_id", webClientDraftId(session));
+        for (const i of idxs) form.append("files", sendFile.get(i)!, names[i]!);
+      };
+      const onUploadPart =
+        (label: string) => (ev: { loaded: number; total: number | null }) => {
+          setUploadProgress(uploadProgressFromBytes(label, ev.loaded, ev.total));
+        };
+
+      let latest: Job | null = null;
+      let sent = 0;
+      if (!jobId) {
+        const first = pending.slice(0, UPLOAD_FILE_CHUNK);
         const form = new FormData();
         form.append("sale_id", selectedSaleId);
         form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
@@ -5470,73 +5629,56 @@ export default function DashboardPage() {
         if (isSingleLot && manualSkuBackup.trim()) {
           form.append("single_lot_manual_sku", manualSkuBackup.trim());
         }
-        for (const file of slice) {
-          form.append("files", file, uploadNameFor(file));
-        }
-        return form;
-      };
-
-      let created: Job;
-      const onUploadPart =
-        (label: string) => (ev: { loaded: number; total: number | null }) => {
-          setUploadProgress(uploadProgressFromBytes(label, ev.loaded, ev.total));
-        };
-
-      if (total <= UPLOAD_FILE_CHUNK) {
-        setUploadProgress(`Starting upload of ${total} photo${total === 1 ? "" : "s"}…`);
-        created = jobFromUploadResponse(
-          await apiUploadFiles(
-            "/jobs/upload",
-            token,
-            buildFormForSlice(readyFiles),
-            900_000,
-            onUploadPart(`Upload ${total} photos`)
-          )
+        appendFiles(form, first);
+        setUploadProgress(`Starting upload of ${pending.length} photo${pending.length === 1 ? "" : "s"}…`);
+        latest = jobFromUploadResponse(
+          await apiUploadFiles("/jobs/upload", token, form, 900_000, onUploadPart(`Upload ${first.length} of ${pending.length} photos`))
         );
-      } else {
-        const batchCount = Math.ceil(total / UPLOAD_FILE_CHUNK);
-        setUploadProgress(`Uploading batch 1/${batchCount} (${Math.min(UPLOAD_FILE_CHUNK, total)} of ${total} files)…`);
-        const first = readyFiles.slice(0, UPLOAD_FILE_CHUNK);
-        created = jobFromUploadResponse(
-          await apiUploadFiles(
-            "/jobs/upload",
-            token,
-            buildFormForSlice(first),
-            900_000,
-            onUploadPart(`Batch 1/${batchCount}`)
-          )
-        );
-        let uploaded = first.length;
-        let batchIndex = 2;
-        while (uploaded < total) {
-          const slice = readyFiles.slice(uploaded, uploaded + UPLOAD_FILE_CHUNK);
-          setUploadProgress(
-            `Uploading batch ${batchIndex}/${batchCount} (${slice.length} files, ${uploaded + slice.length}/${total} total)…`
-          );
-          const form = new FormData();
-          for (const file of slice) {
-            form.append("files", file, uploadNameFor(file));
-          }
-          created = jobFromUploadResponse(
-            await apiUploadFiles(
-              `/jobs/${created.id}/upload-files`,
-              token,
-              form,
-              900_000,
-              onUploadPart(`Batch ${batchIndex}/${batchCount}`)
-            )
-          );
-          uploaded += slice.length;
-          batchIndex += 1;
+        jobId = latest.id;
+        session.jobId = jobId;
+        persistSession();
+        sent = first.length;
+        pending = pending.slice(first.length);
+        if (latest.received_files?.length && pending.length) {
+          // Same draft id reused a receiving job from a lost response: skip what it already has.
+          const missing = new Set(missingUploadIndexes(names, latest.received_files));
+          sent += pending.filter((i) => !missing.has(i)).length;
+          pending = pending.filter((i) => missing.has(i));
         }
-        setUploadProgress(`All ${total} files uploaded — starting job…`);
       }
-      setJobs((prev) => [created, ...prev]);
+      const chunks: number[][] = [];
+      for (let k = 0; k < pending.length; k += UPLOAD_FILE_CHUNK) {
+        chunks.push(pending.slice(k, k + UPLOAD_FILE_CHUNK));
+      }
+      const sendTotal = sent + pending.length;
+      if (chunks.length) {
+        setUploadProgress(`Uploading ${sent}/${sendTotal} photos…`);
+        let nextChunk = 0;
+        // Distinct names per chunk, so parallel appends to the receiving job are safe.
+        const workers = Array.from({ length: Math.min(UPLOAD_PARALLEL_CHUNKS, chunks.length) }, async () => {
+          while (nextChunk < chunks.length) {
+            const idxs = chunks[nextChunk++]!;
+            const form = new FormData();
+            appendFiles(form, idxs);
+            latest = jobFromUploadResponse(
+              await apiUploadFiles(`/jobs/${encodeURIComponent(jobId!)}/upload-files`, token, form, 900_000)
+            );
+            sent += idxs.length;
+            setUploadProgress(`Uploading ${sent}/${sendTotal} photos…`);
+          }
+        });
+        await Promise.all(workers);
+      }
+      const created: Job = latest ?? ((await apiFetch(`/jobs/${encodeURIComponent(jobId)}`, token)) as Job);
+      setUploadProgress(`All ${total} photos on the server — starting job…`);
+      setJobs((prev) => [created, ...prev.filter((j) => j.id !== created.id)]);
       if (!isSingleLot) {
         // Every photo is on the server now. Keeping the box filled let a second Upload tap
         // send the same batch again as a new job (duplicate lots + a second Gemini bill).
         clearFolderPick();
       }
+      webUploadSessionRef.current = null;
+      const resumedNote = resumed && alreadyThere > 0 ? ` (resumed — ${alreadyThere} were already on the server)` : "";
       setUploadProgress("Starting catalog job…");
       try {
         const running = (await apiFetch(`/jobs/${created.id}/run`, token, { method: "POST" })) as Job;
@@ -5557,11 +5699,11 @@ export default function DashboardPage() {
         setStagingSuccess(
           isSingleLot
             ? running.status === "queued"
-              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — queued. It will start automatically when the current lot finishes. You can add another lot now.`
-              : `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} as one lot — queued. It will start automatically when the current lot finishes. You can add another lot now.`
+              : `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
             : running.status === "queued"
-              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} — upload box cleared. Queued for the catalog worker; it starts automatically.`
-              : `Uploaded ${total} photo${total === 1 ? "" : "s"} — upload box cleared. Catalog is running; lots appear below as they finish.`
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} — upload box cleared. Queued for the catalog worker; it starts automatically.`
+              : `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} — upload box cleared. Catalog is running; lots appear below as they finish.`
         );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
@@ -5583,12 +5725,15 @@ export default function DashboardPage() {
         return;
       }
       if (isSingleLot) {
-        restoreSingleLotStaging(readyFiles, manualSkuBackup, skippedCount + prepareSkipped);
+        restoreSingleLotStaging(readyFiles, manualSkuBackup, skippedCount + prepareSkipped, session);
       }
+      const resumeHint = session.jobId
+        ? " Tap Upload again to resume — photos already on the server are not sent twice."
+        : " Fix the issue and tap Upload again.";
       setError(
         isSingleLot
-          ? `${msg} Your staged photos were restored in the upload box — fix the issue and try again without refreshing.`
-          : `${msg} Your staged photos are still in the upload box — fix the issue and try again without refreshing.`
+          ? `${msg} Your staged photos were restored in the upload box.${resumeHint}`
+          : `${msg} Your staged photos are still in the upload box.${resumeHint}`
       );
     } finally {
       setUploading(false);

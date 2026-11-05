@@ -84,6 +84,14 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   (`frontend/lib/webUploadNames.ts`). Camera names (`IMG_1234.JPG`, iOS `image.jpg`) never drop
   photos; a job's own retry is recognized by `Photo.id = uuid5(job_id/relative path)`
   (`job_photo_id` in `services/processing.py`).
+- **Website bulk Upload resumes like phone Sync.** Each staged batch is a `WebUploadSession`
+  (`frontend/lib/webUploadSession.ts`): names are assigned in pick order when photos are staged
+  and saved per photo in IndexedDB (Blob records, relative path kept). Upload sends
+  `client_draft_id=web-<batch>`, stores the receiving job id, and on retry/refresh asks
+  `received-files` for what is missing. A batch already `queued`/`processing`/`completed` is never
+  re-sent. A changed batch, lost disk, or orphan failure gets its old job deleted and a new
+  batch id. JPEGs over ~1.2 MB are resized to 2560px in the browser (EXIF kept, orientation 1).
+  Job photos are natural-sorted by relative path (pick order for `web-…-NNNN`).
 - **R2 must be configured on BOTH the API and the worker, pointing at the same bucket**
   (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`). Because the services don't
   share a disk, an uploaded batch only reaches the worker via R2 (`job-batches/{account}/{batch}/…`).
