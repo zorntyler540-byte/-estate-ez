@@ -104,6 +104,15 @@ def test_resumed_web_batch_reuses_the_receiving_job_and_skips_received_names(tmp
         db.close()
         stored = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.jpg"))
         assert stored == sorted([_web(1), _web(3), _web(2, folder="035/")])
+
+        # Resume reads the job row (status / error_message) before deciding what to send.
+        row = client.get(f"/jobs/{job_id}", headers=headers)
+        assert row.status_code == 200, row.text
+        assert row.json()["status"] == "receiving"
+        assert row.json()["client_draft_id"] == DRAFT
+        assert client.get("/jobs/nope", headers=headers).status_code == 404
+        # Literal routes still win over /jobs/{job_id}.
+        assert client.get("/jobs/stuck", headers=headers).status_code == 200
     finally:
         app.dependency_overrides.pop(get_db, None)
 
