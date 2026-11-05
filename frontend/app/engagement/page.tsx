@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import {
   FacebookPagePostModal,
   type FacebookCalendarSlot,
@@ -430,16 +431,7 @@ export default function EngagementPage() {
 
   return (
     <AppShell
-      actions={
-        <>
-          <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-            Dashboard
-          </Link>
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
-      }
+      actions={<ShellActions onLogout={logout} links={[{ href: "/dashboard", label: "Dashboard" }]} />}
     >
       <div className="ct-dashboard" style={{ maxWidth: 1200 }}>
         <header className="ct-page-header">

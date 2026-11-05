@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
 import { apiFetch } from "../../lib/api";
 import { isWatcherPlan, rememberAccountAccess } from "../../lib/plans";
 import { accountRoleLabel, isClientRole } from "../../lib/roles";
@@ -645,22 +646,16 @@ export default function AccountPage() {
   return (
     <AppShell
       actions={
-        <>
-          {watcherAccount ? (
-            watcherAnalytics ? (
-              <Link href="/engagement" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-                Push queue
-              </Link>
-            ) : null
-          ) : (
-            <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-              Dashboard
-            </Link>
-          )}
-          <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-            Log out
-          </button>
-        </>
+        <ShellActions
+          onLogout={logout}
+          links={
+            watcherAccount
+              ? watcherAnalytics
+                ? [{ href: "/engagement", label: "Push queue" }]
+                : []
+              : [{ href: "/dashboard", label: "Dashboard" }]
+          }
+        />
       }
     >
       <div className="ct-dashboard" style={{ maxWidth: 1100 }}>

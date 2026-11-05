@@ -12,11 +12,20 @@
     "test:lot-media": "node --experimental-strip-types --test lib/lotMediaGallery.test.ts lib/lotPhotoThumbLoad.test.ts"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.5.0",
+    "@tailwindcss/postcss": "^4.3.4",
+    "@tanstack/react-table": "^8.21.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "heic2any": "^0.0.4",
     "lucide-react": "^1.8.0",
+    "motion": "^14.9.1",
     "next": "^15.0.0",
+    "postcss": "^8.5.32",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.4"
   },
   "devDependencies": {
     "@types/node": "25.6.0",

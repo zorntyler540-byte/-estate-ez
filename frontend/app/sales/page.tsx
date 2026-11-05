@@ -1,13 +1,20 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ShellActions } from "../../components/ShellActions";
+import { SalesTable, type SalePending } from "../../components/sales/SalesTable";
+import { Button } from "../../components/ui/button";
+import { useToast } from "../../components/ui/toast";
 import { apiFetch } from "../../lib/api";
 import { isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
+
+function saleLabel(sale: SaleRow | undefined, fallback: string): string {
+  return sale?.name?.trim() || fallback;
+}
 
 type SaleRow = {
   id: string;
@@ -19,17 +26,6 @@ type SaleRow = {
   job_count?: number;
   active_job_count?: number;
 };
-
-type Pending =
-  | { kind: "delete"; id: string }
-  | { kind: "move"; id: string; targetId: string }
-  | { kind: "close"; id: string }
-  | { kind: "reopen"; id: string }
-  | { kind: "rename"; id: string };
-
-function saleLabel(sale: SaleRow | undefined, fallback: string): string {
-  return sale?.name?.trim() || fallback;
-}
 
 export default function SalesManagePage() {
   const router = useRouter();
@@ -43,7 +39,8 @@ export default function SalesManagePage() {
   const [creating, setCreating] = useState(false);
   const [moveTargetById, setMoveTargetById] = useState<Record<string, string>>({});
   const [renameById, setRenameById] = useState<Record<string, string>>({});
-  const [pending, setPending] = useState<Pending | null>(null);
+  const [pending, setPending] = useState<SalePending | null>(null);
+  const toast = useToast();
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -95,6 +92,11 @@ export default function SalesManagePage() {
         return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
       });
   }, [query, sales, showClosed]);
+
+  useEffect(() => {
+    if (!notice) return;
+    toast.success(notice);
+  }, [notice, toast]);
 
   const openSales = sales.filter((sale) => !sale.closed_at);
 
@@ -201,17 +203,13 @@ export default function SalesManagePage() {
   }
 
   const shellActions = (
-    <>
-      <Link href="/dashboard" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-        Catalog
-      </Link>
-      <Link href="/account" className="ct-btn ct-btn--ghost ct-app-topbar-btn">
-        Account
-      </Link>
-      <button type="button" className="ct-btn ct-btn--ghost ct-app-topbar-btn" onClick={logout}>
-        Log out
-      </button>
-    </>
+    <ShellActions
+      onLogout={logout}
+      links={[
+        { href: "/dashboard", label: "Catalog" },
+        { href: "/account", label: "Account" },
+      ]}
+    />
   );
 
   if (!token) {
@@ -258,14 +256,13 @@ export default function SalesManagePage() {
                 if (e.key === "Enter") void createSale();
               }}
             />
-            <button
+            <Button
               type="button"
-              className="ct-btn ct-btn--primary"
               disabled={!owner || creating || !newName.trim()}
               onClick={() => void createSale()}
             >
               {creating ? "Adding…" : "Add sale"}
-            </button>
+            </Button>
             <input
               className="ct-input"
               style={{ maxWidth: 240, flex: "1 1 160px" }}
@@ -281,176 +278,24 @@ export default function SalesManagePage() {
           </div>
         </section>
 
-        {loading ? <p className="ct-muted">Loading sales…</p> : null}
-        {!loading && visible.length === 0 ? (
-          <p className="ct-muted">No sales match this list.</p>
-        ) : null}
-
-        <div className="ct-sale-manage">
-          {visible.map((sale) => {
-            const lots = sale.lot_count || 0;
-            const jobs = sale.job_count || 0;
-            const active = sale.active_job_count || 0;
-            const closed = Boolean(sale.closed_at);
-            const targets = openSales.filter((row) => row.id !== sale.id);
-            const targetId = moveTargetById[sale.id] || "";
-            const rowPending = pending?.id === sale.id ? pending : null;
-            const busy = busyId === sale.id;
-            return (
-              <article key={sale.id} className="ct-card ct-card--padded">
-                <div className="ct-sale-manage__row">
-                  <div>
-                    <h2 className="ct-section-title" style={{ margin: 0 }}>
-                      {sale.name}
-                    </h2>
-                    <p className="ct-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.88rem" }}>
-                      {closed ? "Closed" : "Open"}
-                      {" · "}
-                      {lots} lot{lots === 1 ? "" : "s"}
-                      {" · "}
-                      {jobs} job{jobs === 1 ? "" : "s"}
-                      {active > 0 ? ` · ${active} still uploading` : ""}
-                      {sale.ctseller_sale_id ? " · linked to CT Bids" : ""}
-                    </p>
-                  </div>
-                  {owner ? (
-                    <div className="ct-sale-manage__actions">
-                      <button type="button" className="ct-btn" onClick={() => openInCatalog(sale.id)}>
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        className="ct-btn"
-                        disabled={busy}
-                        onClick={() => {
-                          setRenameById((prev) => ({ ...prev, [sale.id]: sale.name }));
-                          setPending({ kind: "rename", id: sale.id });
-                        }}
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        className="ct-btn"
-                        disabled={busy}
-                        onClick={() => setPending({ kind: closed ? "reopen" : "close", id: sale.id })}
-                      >
-                        {closed ? "Reopen" : "Close"}
-                      </button>
-                      {!closed && targets.length > 0 ? (
-                        <>
-                          <select
-                            className="ct-input"
-                            aria-label={`Move ${sale.name} into`}
-                            value={targetId}
-                            disabled={busy || active > 0}
-                            onChange={(e) =>
-                              setMoveTargetById((prev) => ({ ...prev, [sale.id]: e.target.value }))
-                            }
-                          >
-                            <option value="">Move into…</option>
-                            {targets.map((row) => (
-                              <option key={row.id} value={row.id}>
-                                {row.name}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            className="ct-btn"
-                            disabled={busy || !targetId || active > 0}
-                            onClick={() => setPending({ kind: "move", id: sale.id, targetId })}
-                          >
-                            Move
-                          </button>
-                        </>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ct-btn ct-btn--danger-outline"
-                        disabled={busy || active > 0}
-                        onClick={() => setPending({ kind: "delete", id: sale.id })}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ) : (
-                    <button type="button" className="ct-btn" onClick={() => openInCatalog(sale.id)}>
-                      Open
-                    </button>
-                  )}
-                </div>
-                {active > 0 && owner ? (
-                  <p className="ct-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.85rem" }}>
-                    Wait until uploads finish before moving or deleting this sale.
-                  </p>
-                ) : null}
-                {rowPending ? (
-                  <div className="ct-banner ct-banner--warning" style={{ marginTop: "0.75rem" }}>
-                    {rowPending.kind === "rename" ? (
-                      <label className="ct-label" style={{ display: "block", marginBottom: "0.55rem" }}>
-                        Sale name
-                        <input
-                          className="ct-input"
-                          style={{ display: "block", marginTop: 6, maxWidth: 360 }}
-                          value={renameById[sale.id] ?? sale.name}
-                          onChange={(e) =>
-                            setRenameById((prev) => ({ ...prev, [sale.id]: e.target.value }))
-                          }
-                        />
-                      </label>
-                    ) : (
-                      <p style={{ margin: "0 0 0.55rem" }}>{confirmCopy(rowPending, sale, sales)}</p>
-                    )}
-                    <div className="ct-sale-manage__actions" style={{ justifyContent: "flex-start" }}>
-                      <button
-                        type="button"
-                        className={rowPending.kind === "delete" ? "ct-btn ct-btn--danger" : "ct-btn ct-btn--primary"}
-                        disabled={busy}
-                        onClick={() => void confirmPending()}
-                      >
-                        {busy ? "Saving…" : confirmLabel(rowPending.kind)}
-                      </button>
-                      <button type="button" className="ct-btn" disabled={busy} onClick={() => setPending(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
+        {loading ? <p className="ct-muted">Loading sales…</p> : (
+          <SalesTable
+            sales={visible}
+            allSales={sales}
+            openSales={openSales}
+            owner={owner}
+            pending={pending}
+            busyId={busyId}
+            moveTargetById={moveTargetById}
+            renameById={renameById}
+            onOpen={openInCatalog}
+            onPending={setPending}
+            onRenameDraft={(saleId, name) => setRenameById((prev) => ({ ...prev, [saleId]: name }))}
+            onMoveTarget={(saleId, targetId) => setMoveTargetById((prev) => ({ ...prev, [saleId]: targetId }))}
+            onConfirm={() => void confirmPending()}
+          />
+        )}
       </div>
     </AppShell>
   );
-}
-
-function confirmLabel(kind: Pending["kind"]): string {
-  if (kind === "delete") return "Delete catalog";
-  if (kind === "move") return "Move lots";
-  if (kind === "close") return "Close sale";
-  if (kind === "reopen") return "Reopen sale";
-  return "Save name";
-}
-
-function confirmCopy(pending: Pending, sale: SaleRow, sales: SaleRow[]): string {
-  const lots = sale.lot_count || 0;
-  if (pending.kind === "delete") {
-    const linked = sale.ctseller_sale_id
-      ? " This catalog is linked to a CT Bids auction. If that auction is still open, Sync can add the name back — Close it instead if you only want it off the working list."
-      : "";
-    return `Delete “${sale.name}” and its ${lots} lot${lots === 1 ? "" : "s"} from Estate-EZ? Photos on this website go with it. CT Bids listings stay up.${linked}`;
-  }
-  if (pending.kind === "move") {
-    const target = sales.find((row) => row.id === pending.targetId);
-    return `Move ${lots} lot${lots === 1 ? "" : "s"} from “${sale.name}” into “${saleLabel(target, "the other sale")}”, then remove “${sale.name}” from this list? CT Bids auctions stay separate.`;
-  }
-  if (pending.kind === "close") {
-    return `Close “${sale.name}”? It stays in this list and drops off the open catalog picker.`;
-  }
-  if (pending.kind === "reopen") {
-    return `Reopen “${sale.name}” so it can take new photos again?`;
-  }
-  return "";
 }
