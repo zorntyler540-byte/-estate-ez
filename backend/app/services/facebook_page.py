@@ -7,8 +7,8 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from jose import JWTError, jwt
@@ -20,8 +20,9 @@ from app.config import cors_allow_origins, settings
 from app.models import Account, EngagementSnapshot, FacebookOAuthState, FacebookPagePost, Lot, Photo, Sale, User
 from app.services.ctseller import jpeg_bytes_for_ctseller_post
 from app.services.ctbids_urls import CTBIDS_ITEM_URL, ctbids_sale_url
-from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_facebook_caption, group_post_copy
+from app.services.facebook_caption import FOLLOW_HOOK_LINE, draft_captions, draft_facebook_caption, group_post_copy
 from app.services.facebook_crypto import seal_facebook_secret, unseal_facebook_secret
+from app.services.franchise_time import US_TIMEZONES, account_zone_name, to_local, zone_label
 from app.services.meta_graph import (
     GRAPH_API_VERSION,
     MetaGraphError,
@@ -37,7 +38,6 @@ from app.services.photo_order import ordered_photos_for_listing
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.roles import can_manage_integrations, is_owner
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
 OAUTH_STATE_MINUTES = 15
 OAUTH_COOKIE_NAME = "fb_oauth_jti"
 MAX_PAGE_PHOTOS = 4
@@ -169,6 +169,9 @@ def connection_status(account: Account) -> dict:
         "connected": connected,
         "needs_reconnect": needs_reconnect,
         "calendar_auto_approve": bool(getattr(account, "facebook_calendar_auto_approve", False)),
+        "timezone": account_zone_name(account),
+        "timezone_label": zone_label(account_zone_name(account)),
+        "timezone_choices": [{"value": value, "label": label} for value, label in US_TIMEZONES],
         "page_id": page_id or None,
         "page_name": page_name or None,
         "user_id": str(getattr(account, "facebook_user_id", None) or "").strip() or None,
@@ -455,20 +458,21 @@ def suggest_schedule_slots(
     *,
     now: datetime | None = None,
     close_at: datetime | None = None,
+    tz: str | None = None,
 ) -> list[dict]:
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
+    label = zone_label(tz, at=moment)
     candidates: list[tuple[datetime, str]] = []
     if close_at is not None:
-        close_pt = close_at.astimezone(PACIFIC) if close_at.tzinfo else close_at.replace(tzinfo=PACIFIC)
-        morning = close_pt.replace(hour=9, minute=0, second=0, microsecond=0)
-        candidates.append((morning - timedelta(days=3), "3 days before close, 9:00 AM PT"))
-        candidates.append((morning - timedelta(days=2), "2 days before close, 9:00 AM PT"))
-        candidates.append((morning, "Morning of close, 9:00 AM PT"))
-    tomorrow = moment.astimezone(PACIFIC).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        morning = to_local(close_at, tz).replace(hour=9, minute=0, second=0, microsecond=0)
+        candidates.append((morning - timedelta(days=3), f"3 days before close, 9:00 AM {label}"))
+        candidates.append((morning - timedelta(days=2), f"2 days before close, 9:00 AM {label}"))
+        candidates.append((morning, f"Morning of close, 9:00 AM {label}"))
+    tomorrow = to_local(moment, tz).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
     if not any(abs((c[0] - tomorrow).total_seconds()) < 60 for c in candidates):
-        candidates.append((tomorrow, "Tomorrow morning, 9:00 AM PT"))
+        candidates.append((tomorrow, f"Tomorrow morning, 9:00 AM {label}"))
     out: list[dict] = []
     seen: set[str] = set()
     for when, label in candidates:
@@ -536,8 +540,16 @@ def preview_posts(
     if missing:
         raise HTTPException(status_code=404, detail="One or more lots were not found on this account.")
 
+    from app.services.click_tracking import (
+        CHANNEL_GROUP_SHARE,
+        CHANNEL_PAGE_POST,
+        apply_tracked_urls,
+        tracked_pair,
+    )
+
+    tz = account_zone_name(account)
     close_times: list[datetime] = []
-    drafts: list[dict] = []
+    staged: list[dict] = []
     for lid in ids:
         lot = by_id[lid]
         snapshot = _latest_snapshot(db, lot)
@@ -548,13 +560,6 @@ def preview_posts(
             auction_url=(snapshot.auction_url if snapshot else "") or "",
             item_url=dest_item,
         )
-        from app.services.click_tracking import (
-            CHANNEL_GROUP_SHARE,
-            CHANNEL_PAGE_POST,
-            apply_tracked_urls,
-            tracked_pair,
-        )
-
         _di, _ds, item_url, sale_url = tracked_pair(
             db,
             account_id=account.id,
@@ -575,21 +580,52 @@ def preview_posts(
         if close_at is not None:
             close_times.append(close_at)
         existing = _existing_posts(db, account.id, lot.id)
-        error = ""
-        if not photos:
-            error = "This lot has no listing photos (SKU-tape frames are never posted)."
-        caption = draft_facebook_caption(
-            title=lot.auction_title or "",
-            description=lot.professional_description or "",
-            sku=lot.sku or "",
-            item_url=item_url,
-            close_at=close_at,
-            include_follow_hook=include_follow_hook,
-            current_bid=float(snapshot.price) if snapshot else None,
-            watchers=int(snapshot.watchers) if snapshot else None,
-            sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
-            sale_url=sale_url,
+        staged.append(
+            {
+                "urls": (dest_item, dest_sale, item_url, sale_url, group_item_url, group_sale_url),
+                "request": {
+                    "title": lot.auction_title or "",
+                    "description": lot.professional_description or "",
+                    "sku": lot.sku or "",
+                    "item_url": item_url,
+                    "close_at": close_at,
+                    "include_follow_hook": include_follow_hook,
+                    "current_bid": float(snapshot.price) if snapshot else None,
+                    "watchers": int(snapshot.watchers) if snapshot else None,
+                    "sale_title": (snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
+                    "sale_url": sale_url,
+                    "tz": tz,
+                },
+                "draft": {
+                    "lot_id": lot.id,
+                    "sku": lot.sku,
+                    "title": lot.auction_title or "",
+                    "item_url": item_url,
+                    "sale_ends_at": close_at,
+                    "photo_ids": [p.id for p in photos],
+                    "photo_count": len(photos),
+                    "already_posted": bool(existing),
+                    "existing_posts": [
+                        {
+                            "id": row.id,
+                            "status": row.status,
+                            "facebook_post_id": row.facebook_post_id,
+                            "scheduled_publish_time": row.scheduled_publish_time,
+                            "posted_at": row.posted_at,
+                            "created_at": row.created_at,
+                        }
+                        for row in existing[:5]
+                    ],
+                    "error": None if photos else "This lot has no listing photos (SKU-tape frames are never posted).",
+                },
+            }
         )
+    # Tracked links are stored; release the connection before the Gemini calls.
+    db.commit()
+    captions = draft_captions([row["request"] for row in staged], drafter=draft_facebook_caption)
+    drafts: list[dict] = []
+    for row, caption in zip(staged, captions):
+        dest_item, dest_sale, item_url, sale_url, group_item_url, group_sale_url = row["urls"]
         caption = apply_tracked_urls(
             caption,
             dest_item=dest_item,
@@ -598,12 +634,13 @@ def preview_posts(
             short_sale=sale_url,
         )
         group_caption = group_post_copy(
-            title=lot.auction_title or "",
-            description=lot.professional_description or "",
+            title=row["request"]["title"],
+            description=row["request"]["description"],
             caption=caption,
             item_url=group_item_url,
-            close_at=close_at,
+            close_at=row["request"]["close_at"],
             sale_url=group_sale_url,
+            tz=tz,
         )
         group_caption = apply_tracked_urls(
             group_caption,
@@ -612,44 +649,27 @@ def preview_posts(
             short_item=group_item_url,
             short_sale=group_sale_url,
         )
-        drafts.append(
-            {
-                "lot_id": lot.id,
-                "sku": lot.sku,
-                "title": lot.auction_title or "",
-                "item_url": item_url,
-                "sale_ends_at": close_at,
-                "caption": caption,
-                "group_caption": group_caption,
-                "photo_ids": [p.id for p in photos],
-                "photo_count": len(photos),
-                "already_posted": bool(existing),
-                "existing_posts": [
-                    {
-                        "id": row.id,
-                        "status": row.status,
-                        "facebook_post_id": row.facebook_post_id,
-                        "scheduled_publish_time": row.scheduled_publish_time,
-                        "posted_at": row.posted_at,
-                        "created_at": row.created_at,
-                    }
-                    for row in existing[:5]
-                ],
-                "error": error or None,
-            }
-        )
+        drafts.append({**row["draft"], "caption": caption, "group_caption": group_caption})
     close_at = min(close_times) if close_times else None
     db.commit()
     return {
         **status,
         "include_follow_hook": include_follow_hook,
         "follow_hook_line": FOLLOW_HOOK,
-        "schedule_suggestions": suggest_schedule_slots(close_at=close_at),
+        "schedule_suggestions": suggest_schedule_slots(close_at=close_at, tz=account_zone_name(account)),
         "lots": drafts,
     }
 
 
-def _photo_jpeg(photo: Photo) -> bytes | None:
+class _PhotoRef(NamedTuple):
+    """Detached photo fields so Graph uploads never lazy-load from the session."""
+
+    id: str
+    storage_path: str | None
+    original_name: str | None
+
+
+def _photo_jpeg(photo: Photo | _PhotoRef) -> bytes | None:
     try:
         path = resolve_catalog_storage_path(photo.storage_path)
         if not path.is_file():
@@ -657,6 +677,22 @@ def _photo_jpeg(photo: Photo) -> bytes | None:
         return jpeg_bytes_for_ctseller_post(path)
     except (OSError, ValueError, FileNotFoundError):
         return None
+
+
+def check_publish_request(*, account: Account, items: list[dict], confirm: bool) -> tuple[str, str]:
+    """Request-time checks so a bad publish is a 400, not a failed background batch."""
+    require_meta_configured()
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Preview the post and click Post to Page. Nothing is sent without that.",
+        )
+    page = _page_token(account)
+    if not items:
+        raise HTTPException(status_code=400, detail="Pick at least one lot.")
+    if len(items) > MAX_PAGE_POSTS:
+        raise HTTPException(status_code=400, detail=f"Post at most {MAX_PAGE_POSTS} lots at a time.")
+    return page
 
 
 def publish_posts(
@@ -673,17 +709,8 @@ def publish_posts(
     on_lot=None,
     on_result=None,
 ) -> list[dict]:
-    require_meta_configured()
-    if not confirm:
-        raise HTTPException(
-            status_code=400,
-            detail="Preview the post and click Post to Page. Nothing is sent without that.",
-        )
-    page_id, page_token = _page_token(account)
-    if not items:
-        raise HTTPException(status_code=400, detail="Pick at least one lot.")
-    if len(items) > MAX_PAGE_POSTS:
-        raise HTTPException(status_code=400, detail=f"Post at most {MAX_PAGE_POSTS} lots at a time.")
+    page_id, page_token = check_publish_request(account=account, items=items, confirm=confirm)
+    user_id = user.id
 
     results: list[dict] = []
 
@@ -786,12 +813,13 @@ def publish_posts(
                 continue
             scheduled_unix = int(scheduled_at.timestamp())
 
+        photo_refs = [_PhotoRef(p.id, p.storage_path, p.original_name) for p in photos]
         claimed_at = datetime.now(timezone.utc)
         fields = {
-            "user_id": user.id,
+            "user_id": user_id,
             "lot_id": lot.id,
             "lot_ids_json": json.dumps([lot.id]),
-            "photo_ids_json": json.dumps([p.id for p in photos]),
+            "photo_ids_json": json.dumps([ref.id for ref in photo_refs]),
             "facebook_page_id": page_id,
             "caption": caption,
             "include_follow_hook": include_follow_hook,
@@ -825,12 +853,14 @@ def publish_posts(
                 )
                 continue
             db.commit()
-            db.refresh(cal_row)
             record = cal_row
+            record_id = cal_row.id
         else:
             record = FacebookPagePost(account_id=account.id, **fields)
             db.add(record)
             try:
+                db.flush()
+                record_id = record.id
                 db.commit()
             except IntegrityError:
                 db.rollback()
@@ -853,28 +883,30 @@ def publish_posts(
                 text=caption,
                 channel=CHANNEL_PAGE_POST,
                 calendar_key=calendar_key or "",
-                facebook_post_id=record.id,
+                facebook_post_id=record_id,
             )
             record.caption = caption
             bind_links_to_post(
                 db,
                 account_id=account.id,
-                lot_id=lot.id,
+                lot_id=lot_id,
                 channel=CHANNEL_PAGE_POST,
                 calendar_key=calendar_key or "",
-                facebook_post_id=record.id,
+                facebook_post_id=record_id,
             )
             db.add(record)
             db.commit()
         except Exception:
             db.rollback()
-            _LOG.exception("Tracked links failed for Facebook post %s; posting untracked URLs", record.id)
+            _LOG.exception("Tracked links failed for Facebook post %s; posting untracked URLs", record_id)
 
+        # The claim and links are committed, so the session holds no connection here.
+        # Nothing below may touch an ORM attribute until the Graph calls finish.
         error: MetaGraphError | None = None
         post_id = ""
         try:
             media_ids: list[str] = []
-            for photo in photos:
+            for photo in photo_refs:
                 raw = _photo_jpeg(photo)
                 if not raw:
                     continue
@@ -899,9 +931,10 @@ def publish_posts(
         except MetaGraphError as exc:
             error = exc
         except Exception as exc:  # noqa: BLE001
-            _LOG.exception("Facebook Page post crashed record=%s", record.id)
+            _LOG.exception("Facebook Page post crashed record=%s", record_id)
             error = MetaGraphError(f"Facebook post failed: {exc}")
 
+        record = db.get(FacebookPagePost, record_id)
         if error is not None:
             attempts = int(record.attempt_count or 0) + 1
             record.status = "failed"

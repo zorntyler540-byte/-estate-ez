@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, Sale, User
+from app.models import Account, FacebookPagePost, Lot, Sale, User
 from app.schemas import (
     FacebookCalendarApproveIn,
     FacebookCalendarCancelIn,
@@ -29,17 +29,19 @@ from app.schemas import (
     FacebookSettingsIn,
     FacebookStatusOut,
 )
-from app import facebook_post_tasks
+from app import engagement_tasks, facebook_post_tasks
 from app.services.facebook_calendar import (
     CALENDAR_SOURCE,
     calendar_preview,
     calendar_publish_items,
     cancel_calendar_slots,
-    sync_facebook_calendar_after_snapshot,
+    open_calendar_sale_ids,
 )
+from app.services.franchise_time import normalize_timezone
 from app.config import settings
 from app.services.facebook_page import (
     OAUTH_COOKIE_NAME,
+    check_publish_request,
     complete_oauth,
     connection_status,
     disconnect,
@@ -205,25 +207,22 @@ def facebook_patch_settings(
 ) -> FacebookStatusOut:
     require_facebook_poster(current)
     account = _account(db, current)
-    account.facebook_calendar_auto_approve = bool(payload.calendar_auto_approve)
+    if payload.timezone is not None:
+        zone = normalize_timezone(payload.timezone)
+        if zone is None:
+            raise HTTPException(status_code=400, detail="Pick a valid time zone (for example America/Chicago).")
+        account.timezone = zone
+    if payload.calendar_auto_approve is not None:
+        account.facebook_calendar_auto_approve = bool(payload.calendar_auto_approve)
     db.add(account)
     db.commit()
     db.refresh(account)
-    if account.facebook_calendar_auto_approve:
-        sale_ids = {
-            int(row[0])
-            for row in db.query(EngagementSnapshot.ctseller_sale_id)
-            .filter(EngagementSnapshot.account_id == account.id)
-            .distinct()
-            .all()
-        }
-        for sale_id in sale_ids:
-            try:
-                sync_facebook_calendar_after_snapshot(
-                    db, account.id, sale_id, publish_new_slots=True
-                )
-            except Exception:
-                continue
+    if payload.calendar_auto_approve and account.facebook_calendar_auto_approve:
+        bind = db.get_bind()
+        for sale_id in open_calendar_sale_ids(db, account.id):
+            engagement_tasks.schedule_facebook_calendar_sync(
+                bind, account.id, sale_id, publish_new_slots=True
+            )
     return _status_out(account)
 
 
@@ -274,6 +273,7 @@ def facebook_publish(
 ) -> FacebookPublishOut:
     require_facebook_poster(current)
     items = [item.model_dump() for item in payload.items]
+    check_publish_request(account=_account(db, current), items=items, confirm=payload.confirm)
     if len(items) > facebook_post_tasks.SYNC_LOT_LIMIT:
         batch_id = facebook_post_tasks.start_facebook_posts_in_background(
             account_id=current.account_id,
@@ -283,6 +283,7 @@ def facebook_publish(
             confirm=payload.confirm,
             force=payload.force,
             source=payload.source or "lot",
+            bind=db.get_bind(),
         )
         row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
         return _publish_out(
@@ -420,6 +421,7 @@ def facebook_approve_calendar(
             done=len(skipped),
             failed=failed,
         )
+    check_publish_request(account=account, items=publishable, confirm=payload.confirm)
     if len(publishable) > facebook_post_tasks.SYNC_LOT_LIMIT:
         batch_id = facebook_post_tasks.start_facebook_posts_in_background(
             account_id=current.account_id,
@@ -429,6 +431,7 @@ def facebook_approve_calendar(
             confirm=payload.confirm,
             force=payload.force,
             source=CALENDAR_SOURCE,
+            bind=db.get_bind(),
         )
         row = facebook_post_tasks.facebook_post_batch_status(batch_id, current.account_id) or {}
         return _publish_out(
