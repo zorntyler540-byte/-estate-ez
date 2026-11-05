@@ -221,6 +221,28 @@ assert(
       "Checked the website. 2 lots waiting for Wi‑Fi (Upload on Wi‑Fi only is on).",
     "Wi-Fi only Sync copy"
   );
+  assert(
+    formatSyncOutcome({ uploaded: 0, failed: 0, reconciled: 0, deferred: 3 }) ===
+      "3 lots waiting for the website to catalog earlier ones — they upload on their own.",
+    "paced-only Sync copy"
+  );
+  assert(
+    formatSyncOutcome({ uploaded: 2, failed: 0, reconciled: 0, deferred: 1 }).endsWith(
+      " 1 more lot uploads as the website catalogs earlier ones."
+    ),
+    "sent + paced Sync copy"
+  );
 }
 
-console.log("queueStatus selftest ok (66 cases)");
+{
+  const importing = queueRowView({ status: "importing", photo_count: 4 });
+  assert(importing.label === "Importing…" && !importing.showResend && !importing.showRetry, "importing row");
+  const paced = queueRowView({
+    status: "queued",
+    error_message: "Waiting — the website is still cataloging earlier lots. This lot uploads on its own as they finish.",
+    photo_count: 4
+  });
+  assert(paced.label === "Waiting for website" && paced.detail?.startsWith("Waiting —"), "paced row");
+}
+
+console.log("queueStatus selftest ok (70 cases)");

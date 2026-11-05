@@ -202,6 +202,16 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   cannot be destinations. Posted CT Seller items are not edited — staff still fix
   those on seller.ctbids.com if needed. Dashboard **Move** and the lot Details
   **Sale** panel both call this. Do not Resend-all after a move.
+- **Camera-roll import makes ordinary single-lot drafts.** Capture tab → **Import from Photos**
+  (`app/import-photos.tsx`) uses the system picker (`expo-image-picker`, already in the native
+  build; no new permission) and groups picks by capture-time gap or by hand, one lot per group,
+  max 40 photos per lot (`lib/queue/importGroups.ts`). Each lot is a `lot_drafts` row in status
+  **`importing`** while its photos are copied/resized into `Documents/lot-captures/<draft>/`, then
+  flips to `queued`. `importing` rows are invisible to `findOpenDraft` and Sync; ones left by an app
+  kill are discarded (`discardInterruptedImports`). Never make an import one batch job — the
+  phone's per-draft adopt/resume/confirm all key on one draft per lot. Sync paces new jobs with
+  `GET /jobs/quota` (`RunPacer`, keeps 3 queued slots free; older APIs are unpaced), leaving the
+  rest `queued` with a "Waiting —" note for a later Sync.
 - **Lot videos are extra media, not catalog frames.** The phone capture session has a Photo /
   Video toggle (`expo-camera` `recordAsync`, 720p ~5 Mbps, 45s / 80 MB / 8 per lot; hidden for
   client logins, which cannot upload clips). Clips upload to

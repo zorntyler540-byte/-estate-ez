@@ -1,6 +1,7 @@
 import type { ConnectionPhase } from "../connectivity";
 import { formatMediaCounts } from "../mediaKind";
 import { isPausedMessage } from "../uploadPause";
+import { isPacedMessage } from "./importPacing";
 import { isStillCatalogingMessage } from "./archiveCataloged";
 import { formatRetryWait } from "./retryPolicy";
 import { isTransientSyncError } from "./syncRecovery";
@@ -237,6 +238,15 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
   }
 
   switch (item.status) {
+    case "importing":
+      return {
+        label: "Importing…",
+        hint: "Copying photos from the camera roll. The lot queues for upload when every photo is copied.",
+        tone: "progress",
+        detail: null,
+        showResend: false,
+        ...remove
+      };
     case "draft":
       return {
         label: "Saved on phone",
@@ -247,6 +257,16 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
         ...remove
       };
     case "queued":
+      if (isPacedMessage(error)) {
+        return {
+          label: "Waiting for website",
+          hint: "Big imports go a few lots at a time so the website's limits are not hit. Nothing to do here.",
+          tone: "progress",
+          detail: error,
+          showResend: false,
+          ...remove
+        };
+      }
       if (isPausedMessage(error)) {
         return {
           label: "Paused",
@@ -363,18 +383,27 @@ export function formatSyncOutcome(
     healthSummary?: string | null;
     paused?: boolean;
     waitingForWifi?: number;
+    deferred?: number;
   },
   online?: boolean | null
 ): string {
   const wifi = result.waitingForWifi || 0;
-  const wifiTail = wifi
-    ? ` ${wifi} lot${wifi === 1 ? "" : "s"} waiting for Wi‑Fi (Upload on Wi‑Fi only is on).`
-    : "";
+  const deferred = result.deferred || 0;
+  const wifiTail =
+    (wifi ? ` ${wifi} lot${wifi === 1 ? "" : "s"} waiting for Wi‑Fi (Upload on Wi‑Fi only is on).` : "") +
+    (deferred
+      ? ` ${deferred} more lot${deferred === 1 ? "" : "s"} upload${deferred === 1 ? "s" : ""} as the website catalogs earlier ones.`
+      : "");
   if (result.paused) {
     const sent = result.uploaded
       ? `Sent ${result.uploaded} lot${result.uploaded === 1 ? "" : "s"}, then paused`
       : "Paused";
     return `${sent} — the connection dropped. Uploads pick up where they left off once the connection is stable.`;
+  }
+  if (deferred && !result.uploaded && !result.failed) {
+    return `${deferred} lot${deferred === 1 ? "" : "s"} waiting for the website to catalog earlier ones — they upload on their own.${
+      wifi ? ` ${wifi} lot${wifi === 1 ? "" : "s"} waiting for Wi‑Fi (Upload on Wi‑Fi only is on).` : ""
+    }`;
   }
   return formatSyncOutcomeCore(result, online) + wifiTail;
 }

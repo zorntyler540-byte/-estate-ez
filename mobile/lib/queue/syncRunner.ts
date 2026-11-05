@@ -20,6 +20,7 @@ export type SyncResult = {
   healthSummary?: string | null;
   paused?: boolean;
   waitingForWifi?: number;
+  deferred?: number;
 };
 
 export type SyncPassOptions = {
