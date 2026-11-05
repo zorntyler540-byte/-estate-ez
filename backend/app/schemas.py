@@ -1332,7 +1332,8 @@ class SocialCalendarPost(BaseModel):
     order: int
     post_date: str
     local_time: str
-    zone: str = "PT"
+    zone: str = "America/Los_Angeles"
+    zone_label: str = "PT"
     platform: str
     hook: str = ""
     post_type: str = ""
@@ -1392,6 +1393,9 @@ class FacebookStatusOut(BaseModel):
     graph_api_version: str = ""
     oauth_scopes: list[str] = Field(default_factory=list)
     calendar_auto_approve: bool = False
+    timezone: str = "America/Los_Angeles"
+    timezone_label: str = "PT"
+    timezone_choices: list[dict[str, str]] = Field(default_factory=list)
 
 
 class FacebookOAuthStartOut(BaseModel):
@@ -1410,7 +1414,8 @@ class FacebookSelectPageIn(BaseModel):
 
 
 class FacebookSettingsIn(BaseModel):
-    calendar_auto_approve: bool
+    calendar_auto_approve: bool | None = None
+    timezone: str | None = None
 
 
 class FacebookExistingPostOut(BaseModel):

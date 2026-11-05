@@ -69,6 +69,8 @@ class Account(Base):
     facebook_calendar_auto_approve: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # IANA zone for Push-calendar slot times, caption close times, and click days. NULL = Pacific.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
