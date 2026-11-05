@@ -32,3 +32,19 @@ def is_stable_upload_name(name: object | None) -> bool:
     if not leaf:
         return False
     return bool(_PHONE_NAME.match(leaf) or _WEB_NAME.match(leaf))
+
+
+_DIGITS = re.compile(r"(\d+)")
+
+
+def natural_path_key(rel: str) -> tuple:
+    """Folder-then-file sort with numbers compared by value (``IMG_9`` before ``IMG_10``).
+
+    Stable names zero-pad their pick-order number, so they sort by pick order either way;
+    this keeps camera-named folder jobs in shot order too.
+    """
+    parts = PurePosixPath(rel.replace("\\", "/").lower()).parts
+    return tuple(
+        tuple((0, int(tok), "") if tok.isdigit() else (1, 0, tok) for tok in _DIGITS.split(part) if tok)
+        for part in parts
+    )

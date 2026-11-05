@@ -6516,6 +6516,20 @@ def cancel_job(job_id: str, current: User = Depends(get_current_user), db: Sessi
     return _job_out(job)
 
 
+@app.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(
+    job_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """One job row (dashboard resume / staging checks). Declared after the literal ``/jobs/*`` GETs."""
+    job = _owned_processing_job(db, job_id, current.account_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _assert_client_job(current, job)
+    return _job_out(job)
+
+
 @app.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job(
     job_id: str,
