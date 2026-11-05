@@ -46,8 +46,8 @@ def test_fresh_database_upgrade_matches_models(tmp_path):
     assert schema_check.schema_problems(engine) == []
 
 
-def test_head_revision_is_0050():
-    assert schema_check.alembic_head_revisions() == {"0050_startup_ddl_to_alembic"}
+def test_head_revision_is_0051():
+    assert schema_check.alembic_head_revisions() == {"0051_push_calendar_slot_safety"}
 
 
 def test_0050_adds_objects_only_startup_used_to_create(tmp_path):
