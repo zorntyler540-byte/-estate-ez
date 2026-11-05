@@ -1,7 +1,7 @@
 """Dedicated catalog worker heartbeats (API in-process fallback only when stale).
 
-Revision ID: 0051_worker_heartbeats
-Revises: 0050_startup_ddl_to_alembic
+Revision ID: 0052_worker_heartbeats
+Revises: 0051_push_calendar_slot_safety
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0051_worker_heartbeats"
-down_revision = "0050_startup_ddl_to_alembic"
+revision = "0052_worker_heartbeats"
+down_revision = "0051_push_calendar_slot_safety"
 branch_labels = None
 depends_on = None
 

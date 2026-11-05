@@ -205,13 +205,23 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   already posted keep whatever photos are on CT Bids until someone edits that item there;
   do not Resend all. Posting is dashboard-only — there is no browser extension.
 - **Watcher snapshots only prune when `complete: true`.** `POST /integrations/engagement/snapshots`
- upserts the posted items; lots missing from the body are dropped (and their engagement cleared,
- which cancels their scheduled Push-calendar Page posts) only when the Watcher says it sent every
- live lot. Old clients send no `complete`, so they never prune. A body whose `captured_at` is
+ upserts the posted items; lots missing from the body are dropped (and their engagement cleared)
+ only when the Watcher says it sent every live lot. Old clients send no `complete`, so they never
+ prune. A pruned lot's scheduled Page post is **flagged** (`review_note`), never deleted. A body whose `captured_at` is
  older than the newest stored one for that sale returns `ignored: true` and writes nothing.
  Ingest is serialized per sale (in-process lock + Postgres `pg_advisory_xact_lock`). The
  Facebook calendar follow-up runs in a daemon thread (`app/engagement_tasks.py`), coalesced per
  sale; tests run it inline via the autouse fixture in `tests/conftest.py`.
+- **Push-calendar slots that Facebook accepted are pinned.** A `facebook_page_posts` row in
+ `scheduled` / `publishing` / `posted` keeps its lot, day and time across every calendar rebuild
+ (`calendar_pins` → `build_social_calendar(pinned=…)`). The snapshot sync is local bookkeeping
+ only (scheduled past slot time → `posted`; stale `publishing` claim → `failed` + check-the-Page
+ note) and **never** deletes, moves or edits a Graph post. Only an owner **Unapprove** deletes,
+ and only while the post is still more than 2 minutes from going live. Rows match by their own
+ dated key (`effective_calendar_key`), not the undated alias. One row per slot (unique
+ `account_id, calendar_key`); the publisher claims `publishing` before any Graph call, so a slot
+ can't double-post. Empty `slot_keys` is a 400. Auto-approve skips dead tokens and owner-cancelled
+ slots and retries a failed slot at most 3 times (10 min, 20 min backoff).
  `POST /integrations/ctseller/session` never holds a DB connection during CT Seller HTTP and
  takes a per-account in-process lock so a burst of Watcher mints makes one refresh/login.
 - **Find groups is public groups only (Facebook tab).** `POST /lots/{id}/audience-hunt` and
