@@ -1358,6 +1358,9 @@ class SocialCalendarPost(BaseModel):
     facebook_slot_at: datetime | None = None
     facebook_post_id: str | None = None
     facebook_error: str | None = None
+    facebook_review_note: str | None = None
+    # Approved / posted slot: the calendar keeps this lot on this day and time.
+    pinned: bool = False
 
 
 class EngagementIngestOut(BaseModel):
@@ -1529,6 +1532,8 @@ class FacebookPagePostOut(BaseModel):
     scheduled_publish_time: datetime | None = None
     posted_at: datetime | None = None
     error_message: str | None = None
+    review_note: str | None = None
+    attempt_count: int = 0
     created_at: datetime
 
 
