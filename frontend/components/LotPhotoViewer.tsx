@@ -1,7 +1,9 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../lib/lotPhotoReplace";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { useToast } from "./ui/toast";
 import { ZoomablePreview } from "./ZoomablePreview";
@@ -17,7 +19,24 @@ export type ViewerPhoto = {
   id: string;
   original_name: string;
   file_on_disk?: boolean;
+  photo_role?: string | null;
+  shows_measuring_scale?: boolean;
 };
+
+const VIEWER_ROLE_LABEL: Record<string, string> = {
+  hero: "Group",
+  item_front: "Item",
+  angle_only: "Detail",
+  tape: "SKU tape",
+  unusable: "Skip"
+};
+
+function viewerRoleLabel(photo: ViewerPhoto | undefined): string | null {
+  if (!photo) return null;
+  if (photo.shows_measuring_scale) return "Measure";
+  const role = (photo.photo_role || "").toLowerCase();
+  return VIEWER_ROLE_LABEL[role] || null;
+}
 
 type Props = {
   lotId: string;
@@ -106,6 +125,35 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     void loadPhoto();
     return () => revokePreview();
   }, [loadPhoto, revokePreview]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (cropMode) {
+          setCropMode(false);
+          setCropAnchor(null);
+          setCropCurrent(null);
+          return;
+        }
+        onClose();
+        return;
+      }
+      if (cropMode || saving || loading) return;
+      if (event.key === "ArrowLeft" && index > 0) {
+        event.preventDefault();
+        onIndexChange(index - 1);
+      }
+      if (event.key === "ArrowRight" && index < photos.length - 1) {
+        event.preventDefault();
+        onIndexChange(index + 1);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cropMode, index, loading, onClose, onIndexChange, photos.length, saving]);
 
   async function handleRotate(degrees: 90 | -90) {
     const blob = workBlobRef.current;
@@ -204,13 +252,15 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
       ? normalizeCropRect(cropAnchor, cropCurrent, imgRef.current.naturalWidth, imgRef.current.naturalHeight)
       : null;
 
+  const roleLabel = viewerRoleLabel(photo);
+
   return (
     <div
       onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.85)",
+        background: "rgba(7, 7, 8, 0.86)",
         zIndex: 9999,
         display: "flex",
         alignItems: "center",
@@ -219,58 +269,73 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lot-photo-viewer-title"
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[92vh] w-[min(96vw,1200px)] flex-col gap-3 rounded-xl border border-border bg-card p-3 text-foreground shadow-lg shadow-black/50"
+        className="ct-photo-viewer"
       >
-        <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <div className="ct-muted" style={{ fontSize: "0.9rem" }}>
-            Photo {index + 1}/{photos.length}
-            {photo ? ` · ${photo.original_name}` : ""}
+        <div className="ct-photo-viewer__head">
+          <div id="lot-photo-viewer-title" className="ct-photo-viewer__title">
+            <span>
+              Photo {index + 1} of {photos.length}
+              {photo ? ` · ${photo.original_name}` : ""}
+            </span>
+            {roleLabel ? <Badge variant="neutral">{roleLabel}</Badge> : <Badge variant="outline">Untagged</Badge>}
           </div>
           <Button type="button" variant="ghost" onClick={onClose}>
             Close
           </Button>
         </div>
 
-        <div
-          className="ct-row ct-row--gap-lg"
-          style={{ flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}
-        >
-          <Button type="button" variant="outline" disabled={loading || saving} onClick={() => void handleRotate(-90)}>
-            Rotate left
-          </Button>
-          <Button type="button" variant="outline" disabled={loading || saving} onClick={() => void handleRotate(90)}>
-            Rotate right
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={loading || saving}
-            onClick={() => {
-              setCropMode((v) => !v);
-              setCropAnchor(null);
-              setCropCurrent(null);
-              setError("");
-            }}
-          >
-            {cropMode ? "Cancel crop" : "Crop"}
-          </Button>
-          {cropMode ? (
-            <Button type="button" variant="default" disabled={loading || saving} onClick={() => void applyCrop()}>
-              Apply crop
+        <div className="ct-photo-viewer__tools">
+          <div className="ct-photo-viewer__group" role="group" aria-label="Edit this photo">
+            <Button type="button" variant="outline" size="sm" disabled={loading || saving} onClick={() => void handleRotate(-90)}>
+              Rotate left
             </Button>
-          ) : null}
-          <Button type="button" variant="outline" disabled={loading || saving || !dirty} onClick={resetEdits}>
-            Reset
-          </Button>
-          <Button
-            type="button"
-            variant="default"
-            disabled={loading || saving || !dirty}
-            onClick={() => void saveEdits()}
-          >
-            {saving ? "Saving…" : "Save to catalog"}
-          </Button>
+            <Button type="button" variant="outline" size="sm" disabled={loading || saving} onClick={() => void handleRotate(90)}>
+              Rotate right
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loading || saving}
+              onClick={() => {
+                setCropMode((v) => !v);
+                setCropAnchor(null);
+                setCropCurrent(null);
+                setError("");
+              }}
+            >
+              {cropMode ? "Cancel crop" : "Crop"}
+            </Button>
+            {cropMode ? (
+              <Button type="button" size="sm" disabled={loading || saving} onClick={() => void applyCrop()}>
+                Apply crop
+              </Button>
+            ) : null}
+            <Button type="button" variant="ghost" size="sm" disabled={loading || saving || !dirty} onClick={resetEdits}>
+              Reset
+            </Button>
+            <Button type="button" size="sm" disabled={loading || saving || !dirty} onClick={() => void saveEdits()}>
+              {saving ? "Saving…" : "Save to catalog"}
+            </Button>
+          </div>
+          <div className="ct-photo-viewer__group" role="group" aria-label="Browse photos">
+            <Button type="button" variant="outline" size="sm" disabled={loading || saving || index <= 0} onClick={() => onIndexChange(index - 1)}>
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loading || saving || index >= photos.length - 1}
+              onClick={() => onIndexChange(index + 1)}
+            >
+              Next
+            </Button>
+          </div>
         </div>
 
         {cropMode ? (
@@ -280,8 +345,9 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
           </p>
         ) : (
           <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-            Pinch or scroll to zoom. Rotate or crop, then <strong>Save to catalog</strong> to replace
-            the stored file.
+            Pinch or scroll to zoom. Arrow keys move between photos, Escape closes. Rotate or crop, then{" "}
+            <strong>Save to catalog</strong> to replace the stored file.
+            {roleLabel ? ` This frame is tagged ${roleLabel}.` : ""}
           </p>
         )}
 
@@ -300,7 +366,10 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
           }}
         >
           {loading ? (
-            <div className="ct-muted">Loading full-size photo…</div>
+            <div className="ct-photo-viewer__loading" role="status">
+              <Loader2 size={22} className="ct-spin" aria-hidden />
+              Loading full-size photo…
+            </div>
           ) : error && !previewUrl ? (
             <div className="ct-banner ct-banner--error" style={{ margin: "1rem" }}>
               {error}
@@ -339,25 +408,6 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
             {error}
           </div>
         ) : null}
-
-        <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between" }}>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={loading || saving || index <= 0}
-            onClick={() => onIndexChange(index - 1)}
-          >
-            Previous
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={loading || saving || index >= photos.length - 1}
-            onClick={() => onIndexChange(index + 1)}
-          >
-            Next
-          </Button>
-        </div>
       </div>
     </div>
   );
@@ -381,7 +431,7 @@ function CropBoxOverlay({
         width: box.width,
         height: box.height,
         border: "2px dashed var(--ct-primary)",
-        background: "rgba(56, 189, 248, 0.12)",
+        background: "rgba(255, 77, 26, 0.16)",
         pointerEvents: "none",
         boxSizing: "border-box"
       }}

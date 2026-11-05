@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, ImagePlus, LayoutList, Loader2, Paintbrush, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, GripVertical, ImagePlus, LayoutList, Loader2, Paintbrush, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -13,6 +13,8 @@ import { AppShell } from "../../../components/AppShell";
 import { ShellActions } from "../../../components/ShellActions";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { StatCard } from "../../../components/ui/stat-card";
+import { SegmentedTabs } from "../../../components/ui/tabs";
 import { useToast, type ToastTone } from "../../../components/ui/toast";
 import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
 import {
@@ -125,6 +127,27 @@ function listingRoleBadge(photo: LotPhoto): string | null {
   }
   return null;
 }
+
+const ROLE_FILTERS: { id: string; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "hero", label: "Group" },
+  { id: "item_front", label: "Item" },
+  { id: "angle_only", label: "Detail" },
+  { id: "measure", label: "Measure" },
+  { id: "tape", label: "SKU tape" },
+  { id: "unusable", label: "Skip" },
+  { id: "other", label: "Untagged" }
+];
+
+/** Gallery role bucket. Measuring-tape frames win over a mis-tag so the filter matches the badge. */
+function photoRoleKey(photo: LotPhoto): string {
+  if (photo.shows_measuring_scale) return "measure";
+  const role = (photo.photo_role || "").toLowerCase();
+  if (role in LISTING_ROLE_LABEL) return role;
+  return "other";
+}
+
+type LotSecondaryTab = "organize" | "seller" | "groups" | "engagement" | "sale";
 
 type Lot = {
   id: string;
@@ -370,6 +393,12 @@ export default function LotDetailPage() {
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
+  const [lotLoadError, setLotLoadError] = useState("");
+  const [lotReloadNonce, setLotReloadNonce] = useState(0);
+  const [secondaryTab, setSecondaryTab] = useState<LotSecondaryTab>("seller");
+  const secondaryTabTouched = useRef(false);
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [dropPhotoId, setDropPhotoId] = useState<string | null>(null);
   const toast = useToast();
   useOutcomeToast(error, "error");
   useOutcomeToast(photosError, "error");
@@ -384,6 +413,21 @@ export default function LotDetailPage() {
   useOutcomeToast(ctSellerMsg, "success", true);
 
   const editorPhotos = useMemo(() => photosForEditorGrid(catalogPhotos), [catalogPhotos]);
+  const visiblePhotos = useMemo(
+    () =>
+      editorPhotos
+        .map((photo, editorIndex) => ({ photo, editorIndex }))
+        .filter(({ photo }) => roleFilter === "all" || photoRoleKey(photo) === roleFilter),
+    [editorPhotos, roleFilter]
+  );
+  const roleCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: editorPhotos.length };
+    for (const photo of editorPhotos) {
+      const key = photoRoleKey(photo);
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    return counts;
+  }, [editorPhotos]);
   const photoFileHealth = useMemo(() => {
     const total = editorPhotos.length;
     const missing = editorPhotos.filter((p) => p.file_on_disk === false).length;
@@ -463,12 +507,14 @@ export default function LotDetailPage() {
     if (!t || !routeLotId) return;
     let cancelled = false;
     setPhotosError("");
+    setLotLoadError("");
     void (async () => {
       try {
         const d = await apiFetch(`/lots/${encodeURIComponent(routeLotId)}`, t);
         if (cancelled) return;
         const row = d as Lot;
         setLot({ ...row, search_tags: row.search_tags || [] });
+        setLotLoadError("");
         setListingDirty(false);
         setAiRegenerating(Boolean(row.ai_regenerating));
         if (row.ai_regenerating) {
@@ -498,13 +544,17 @@ export default function LotDetailPage() {
           if (!cancelled) setCatalogVideos([]);
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Load failed");
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : "Load failed";
+          setLotLoadError(message);
+          setError(message);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [routeLotId]);
+  }, [routeLotId, lotReloadNonce]);
 
   useEffect(() => {
     if (!token || !routeLotId || !showAiRegenProgress) return;
@@ -704,7 +754,20 @@ export default function LotDetailPage() {
     setOrganizeMsg("");
     setSplitNewLotTitle("");
     lastPhotoSelectAnchorRef.current = null;
+    secondaryTabTouched.current = false;
+    setRoleFilter("all");
+    setDropPhotoId(null);
   }, [routeLotId]);
+
+  useEffect(() => {
+    if (!lot || lot.id !== routeLotId || secondaryTabTouched.current) return;
+    secondaryTabTouched.current = true;
+    setSecondaryTab(lot.ctseller_item_id ? "organize" : "seller");
+  }, [lot, routeLotId]);
+
+  useEffect(() => {
+    if (ctSellerErr || ctSellerMsg) setSecondaryTab("seller");
+  }, [ctSellerErr, ctSellerMsg]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !lot) return;
@@ -1487,6 +1550,11 @@ export default function LotDetailPage() {
     void persistCatalogPhotoOrder(next);
   }
 
+  function movePhotoStep(photoId: string, delta: -1 | 1) {
+    const fromIndex = catalogPhotos.findIndex((photo) => photo.id === photoId);
+    applyPhotoReorder(fromIndex, fromIndex + delta);
+  }
+
   function selectAllCatalogPhotos() {
     setSelectedPhotoIds(new Set(catalogPhotos.map((p) => p.id)));
     lastPhotoSelectAnchorRef.current = catalogPhotos.length > 0 ? catalogPhotos.length - 1 : null;
@@ -1927,14 +1995,13 @@ export default function LotDetailPage() {
   if (!token) {
     return (
       <AppShell actions={shellActions}>
-        <div className="ct-dashboard">
-          <section className="ct-dash-panel">
-            <p style={{ margin: 0 }}>Please sign in first.</p>
-            <p style={{ margin: "0.75rem 0 0" }}>
-              <Button asChild>
-                <Link href="/">Go to sign in</Link>
-              </Button>
-            </p>
+        <div className="ct-dashboard ct-lot-detail-stack">
+          <section className="ct-ld-empty" role="status">
+            <p className="ct-ld-empty__title">Sign in to open this lot</p>
+            <p className="ct-ld-empty__body">Listing edits, photos, and CT Seller posting stay on this page after you sign in.</p>
+            <Button asChild>
+              <Link href="/">Go to sign in</Link>
+            </Button>
           </section>
         </div>
       </AppShell>
@@ -1943,10 +2010,36 @@ export default function LotDetailPage() {
   if (!lot) {
     return (
       <AppShell topBar={lotTopBar} actions={shellActions}>
-        <div className="ct-dashboard">
-          <section className="ct-dash-panel ct-dash-panel--loading" aria-busy="true">
-            <p style={{ margin: 0 }}>Loading lot…</p>
-          </section>
+        <div className="ct-dashboard ct-lot-detail-stack">
+          {lotLoadError ? (
+            <section className="ct-ld-empty" role="alert">
+              <p className="ct-ld-empty__title">Couldn’t load this lot</p>
+              <p className="ct-ld-empty__body">{lotLoadError}</p>
+              <div className="ct-ld-empty__actions">
+                <Button type="button" onClick={() => setLotReloadNonce((n) => n + 1)}>
+                  Try again
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link href="/dashboard" onClick={rememberDashboardScrollBeforeLotDetails}>
+                    Back to dashboard
+                  </Link>
+                </Button>
+              </div>
+            </section>
+          ) : (
+            <section className="ct-ld-skeleton" aria-busy="true" aria-live="polite">
+              <span className="ct-sr-only">Loading lot</span>
+              <div className="ct-ld-skeleton__hero" />
+              <div className="ct-ld-skeleton__grid">
+                <div />
+                <div />
+                <div />
+                <div />
+                <div />
+                <div />
+              </div>
+            </section>
+          )}
         </div>
       </AppShell>
     );
@@ -1969,12 +2062,10 @@ export default function LotDetailPage() {
     Boolean(audienceHuntNotice);
 
   const lotMobileSaveBar = (
-    <>
-      {listingDirty ? (
-        <span className="ct-app-mobile-bar__hint" aria-live="polite">
-          Unsaved changes
-        </span>
-      ) : null}
+    <div className="ct-ld-savebar">
+      <p className={listingDirty ? "ct-ld-savebar__status ct-ld-savebar__status--dirty" : "ct-ld-savebar__status"} role="status">
+        {saving ? "Saving listing…" : listingDirty ? "Unsaved changes" : "All changes saved"}
+      </p>
       <button
         type="button"
         className="ct-app-mobile-bar__btn ct-app-mobile-bar__btn--primary"
@@ -1985,80 +2076,121 @@ export default function LotDetailPage() {
         <Save size={20} aria-hidden />
         {saving ? "Saving…" : "Save listing"}
       </button>
-    </>
+    </div>
   );
+
+  const postedToSeller = Boolean(lot.ctseller_item_id || lot.ctseller_posted_at);
+  const sellerStatusLabel = postedToSeller
+    ? lot.ctseller_item_status
+      ? lot.ctseller_item_status
+      : lot.ctseller_sale_id
+        ? `Posted · #${lot.ctseller_sale_id}`
+        : "Posted"
+    : "Not posted";
+  const heroPhoto = listingHeroPhoto(editorPhotos);
+  const heroViewerIndex = heroPhoto ? catalogPhotos.findIndex((photo) => photo.id === heroPhoto.id) : -1;
+  const heroTitle = (lot.auction_title || "").trim();
 
   return (
     <AppShell topBar={lotTopBar} actions={shellActions} mobileBottomBar={lotMobileSaveBar}>
       <div className="ct-dashboard ct-lot-detail-stack">
-        <header className="ct-lot-detail-hero">
-          <div className="ct-lot-detail-hero__main">
-            <h1 className="ct-lot-detail-hero__sku">Lot {lot.sku || "(no SKU)"}</h1>
-            {(lot.auction_title || "").trim() ? (
-              <p className="ct-lot-detail-hero__title">{(lot.auction_title || "").trim()}</p>
+        <header className="ct-ld-hero">
+          <div className="ct-ld-hero__media">
+            {heroPhoto ? (
+              <button
+                type="button"
+                className="ct-ld-hero__shot"
+                onClick={() => openPhotoViewer(heroViewerIndex >= 0 ? heroViewerIndex : 0)}
+                aria-label={`Open hero photo${heroTitle ? ` for ${heroTitle}` : ""}`}
+              >
+                <LotPhotoThumb
+                  lotId={lot.id}
+                  photoId={heroPhoto.id}
+                  token={token}
+                  label={heroPhoto.original_name}
+                  maxPx={720}
+                  maxHeight={168}
+                  minHeight={148}
+                  fileOnDisk={heroPhoto.file_on_disk !== false}
+                  cacheBust={thumbCacheBust[heroPhoto.id] ?? 0}
+                />
+              </button>
             ) : (
-              <p className="ct-lot-detail-hero__title ct-muted">No auction title yet</p>
+              <div className="ct-ld-hero__placeholder">
+                <ImagePlus size={28} strokeWidth={1.75} aria-hidden />
+                <span>No hero yet</span>
+              </div>
             )}
-            {lot.engagement?.bucket ? (
-              <p className="ct-muted mb-0 mt-2 flex flex-wrap items-center gap-2 text-sm">
-                <Badge variant={lot.engagement.bucket === "Push" ? "default" : "info"}>
-                  {lot.engagement.bucket}
-                </Badge>
-                {lot.engagement.push_rank ? <span>Push rank {lot.engagement.push_rank}</span> : null}
-                <span>
-                  {lot.engagement.views ?? 0} views, {lot.engagement.watchers ?? 0} watchers,{" "}
-                  {lot.engagement.bids ?? 0} bids
-                </span>
-                {lot.engagement.notes ? <span>{lot.engagement.notes}</span> : null}
-                <Link href="/engagement">Open Push queue</Link>
-              </p>
-            ) : null}
           </div>
-          <div className="ct-lot-detail-hero__side">
-            {(() => {
-              const posted = Boolean(lot.ctseller_item_id || lot.ctseller_posted_at);
-              const statusLabel = posted
-                ? lot.ctseller_item_status
-                  ? lot.ctseller_item_status
-                  : lot.ctseller_sale_id
-                    ? `Posted · #${lot.ctseller_sale_id}`
-                    : "Posted"
-                : "Not posted";
-              return (
-                <Badge
-                  variant={sellerStatusVariant(statusLabel, posted)}
-                  className="px-2.5 py-1 text-sm"
-                  title={
-                    posted
-                      ? [
-                          lot.ctseller_item_status || "Posted to CT Seller",
-                          lot.ctseller_sale_id ? `sale #${lot.ctseller_sale_id}` : "",
-                          lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
-                            ? `$${lot.ctseller_sold_price}`
-                            : ""
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")
-                      : "Not posted to CT Seller yet"
-                  }
-                >
-                  {statusLabel}
-                </Badge>
-              );
-            })()}
-            <div className="ct-lot-detail-hero__actions">
-              <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.82rem" }}>
+          <div className="ct-ld-hero__copy">
+            <p className="ct-ld-kicker">{saleName || "Sale"}</p>
+            <h1 className="ct-ld-hero__title">{heroTitle || "Untitled lot"}</h1>
+            <p className="ct-ld-hero__sku">Lot {lot.sku?.trim() || "(no SKU)"}</p>
+            <div className="ct-ld-hero__badges">
+              <Badge
+                variant={sellerStatusVariant(sellerStatusLabel, postedToSeller)}
+                className="px-2.5 py-1 text-sm"
+                title={
+                  postedToSeller
+                    ? [
+                        lot.ctseller_item_status || "Posted to CT Seller",
+                        lot.ctseller_sale_id ? `sale #${lot.ctseller_sale_id}` : "",
+                        lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
+                          ? `$${lot.ctseller_sold_price}`
+                          : ""
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : "Not posted to CT Seller yet"
+                }
+              >
+                {sellerStatusLabel}
+              </Badge>
+              <Badge variant="neutral">{catalogPhotos.length} photo{catalogPhotos.length === 1 ? "" : "s"}</Badge>
+              {catalogVideos.length ? (
+                <Badge variant="neutral">{catalogVideos.length} video{catalogVideos.length === 1 ? "" : "s"}</Badge>
+              ) : null}
+              {audienceHeld ? <Badge variant="warning">Held for groups</Badge> : null}
+              {lot.listing_needs_review ? <Badge variant="warning">Needs rewrite</Badge> : null}
+              {lot.sku_needs_review ? <Badge variant="warning">Check SKU</Badge> : null}
+              {lot.engagement?.bucket ? (
+                <Badge variant={lot.engagement.bucket === "Push" ? "default" : "info"}>{lot.engagement.bucket}</Badge>
+              ) : null}
+            </div>
+            <nav className="ct-ld-jump" aria-label="On this page">
+              <a href="#lot-photos">Photos</a>
+              <a href="#listing-details">Listing</a>
+              <a href="#lot-more">More actions</a>
+            </nav>
+          </div>
+          <div className="ct-ld-hero__actions">
+            <Button
+              type="button"
+              size="lg"
+              className="ct-ld-save-desktop"
+              onClick={() => void save()}
+              disabled={saving || !listingDirty}
+              aria-busy={saving}
+            >
+              {saving ? "Saving…" : listingDirty ? "Save listing" : "Saved"}
+            </Button>
+            <p className={listingDirty ? "ct-ld-save-note ct-ld-save-note--dirty" : "ct-ld-save-note"} role="status">
+              {saving ? "Saving…" : listingDirty ? "Unsaved changes" : "Listing is saved"}
+            </p>
+            <div className="ct-ld-hero__secondary">
+              <label className="ct-ld-check">
                 <input
                   type="checkbox"
                   checked={preserveSkuForAi}
                   onChange={(e) => setPreserveSkuForAi(e.target.checked)}
                   disabled={showAiRegenProgress || saving}
                 />
-                <span className="ct-muted">Keep SKU</span>
+                <span>Keep SKU</span>
               </label>
               <Button
                 type="button"
-                variant="default"
+                variant="outline"
+                size="sm"
                 onClick={() => void regenerateListingWithAi()}
                 disabled={showAiRegenProgress || saving || !catalogPhotos.length}
                 aria-busy={showAiRegenProgress}
@@ -2072,35 +2204,15 @@ export default function LotDetailPage() {
                   "Regenerate with AI"
                 )}
               </Button>
-              {lot.ctseller_item_id ? (
-                <Button
-                  type="button"
-                  variant="default"
-                  onClick={() => void updatePhotosOnCtSeller()}
-                  disabled={ctSellerPostBusy || showAiRegenProgress}
-                  aria-busy={ctSellerPostBusy && ctSellerPostMode === "photos"}
-                  title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
-                >
-                  {ctSellerPostBusy && ctSellerPostMode === "photos"
-                    ? "Adding photos…"
-                    : "Add photos to CT Seller"}
-                </Button>
-              ) : null}
-              {facebookConfigured && isAccountOwner ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setFacebookPostOpen(true)}
-                  disabled={saving || showAiRegenProgress}
-                  title="Draft a Facebook Page post. Nothing is sent until you approve it."
-                >
-                  Post to Facebook Page
-                </Button>
-              ) : null}
               <Button
                 type="button"
                 variant={lot.ctseller_item_id ? "ghost" : "outline"}
-                onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
+                size="sm"
+                onClick={() => {
+                  secondaryTabTouched.current = true;
+                  setSecondaryTab("seller");
+                  void postToCtSeller(Boolean(lot.ctseller_item_id));
+                }}
                 disabled={
                   ctSellerPostBusy ||
                   saving ||
@@ -2127,339 +2239,122 @@ export default function LotDetailPage() {
                     ? "Post as new item"
                     : "Post to CT Seller"}
               </Button>
+              {lot.ctseller_item_id ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    secondaryTabTouched.current = true;
+                    setSecondaryTab("seller");
+                    void updatePhotosOnCtSeller();
+                  }}
+                  disabled={ctSellerPostBusy || showAiRegenProgress}
+                  aria-busy={ctSellerPostBusy && ctSellerPostMode === "photos"}
+                  title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
+                >
+                  {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos to CT Seller"}
+                </Button>
+              ) : null}
+              {facebookConfigured && isAccountOwner ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setFacebookPostOpen(true)}
+                  disabled={saving || showAiRegenProgress}
+                  title="Draft a Facebook Page post. Nothing is sent until you approve it."
+                >
+                  Facebook Page
+                </Button>
+              ) : null}
             </div>
           </div>
         </header>
 
         {showLotAlerts ? <div className="ct-lot-detail-alerts">{lotWarnings}</div> : null}
 
-        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
-          <h2 className="ct-dash-panel__title">Sale</h2>
-          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            This lot is in <strong>{saleName || "an unnamed sale"}</strong>. Move it if it was
-            cataloged under the wrong sale.
-          </p>
-          <MoveLotsToSale
-            token={token}
-            lotIds={[lot.id]}
-            currentSaleId={lot.sale_id}
-            currentSaleName={saleName}
-            sales={catalogSales}
-            postedCount={lot.ctseller_item_id || lot.ctseller_posted_at ? 1 : 0}
-            disabled={saving || organizeBusy}
-            onMoved={(result) => {
-              setLot((prev) =>
-                prev ? { ...prev, sale_id: result.destination_sale_id } : prev
-              );
-              setSaleName(result.destination_sale_name);
-              setSaleLots([]);
-            }}
-          />
-        </section>
-
-        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
-          <h2 className="ct-dash-panel__title">Groups</h2>
-          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            National US collector groups for this lot (from Gemini + Google Search; ships nationwide).
-            Hunt more groups on the <Link href="/facebook">Facebook</Link> tab. Staff still join and
-            share by hand — this does not scrape members or auto-post.
-          </p>
-          {audienceCopyMsg ? (
-            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">
-              {audienceCopyMsg}
+        <section id="lot-photos" className="ct-dash-panel ct-ld-photos">
+          <div className="ct-ld-section__head">
+            <div>
+              <p className="ct-ld-kicker">1 · Photos</p>
+              <h2 className="ct-dash-panel__title">
+                Gallery
+                {catalogPhotos.length ? (
+                  <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
+                    ({catalogPhotos.length}
+                    {catalogVideos.length
+                      ? ` · ${catalogVideos.length} video${catalogVideos.length === 1 ? "" : "s"}`
+                      : ""}
+                    )
+                  </span>
+                ) : null}
+              </h2>
+            </div>
+            <p className="ct-ld-section__lede">
+              Left to right is the order shoppers, ZIP downloads, and CT Seller use. Drag a frame or use the arrows. Open a photo to crop.
             </p>
-          ) : null}
-          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
-            {isAccountOwner ? (
-              <Button variant="outline" asChild>
-                <Link href="/facebook">Find groups</Link>
-              </Button>
-            ) : (
-              <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-                Ask an owner to run a group hunt on the Facebook tab. Existing results stay visible.
-              </p>
-            )}
-            <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
-              <input
-                type="checkbox"
-                checked={audienceHeld}
-                onChange={(e) => void setAudienceHold(e.target.checked)}
-                disabled={audienceHoldBusy || saving}
-              />
-              <span>Hold for groups (skip CT Bids post)</span>
-            </label>
           </div>
-          {lot.audience?.skip_reason && !(lot.audience.groups?.length) ? (
-            <p className="ct-field-hint" style={{ marginTop: "0.75rem" }}>
-              {lot.audience.skip_reason}
-            </p>
-          ) : null}
-          {lot.audience?.groups && lot.audience.groups.length > 0 ? (
-            <ul style={{ margin: "0.85rem 0 0", paddingLeft: "1.15rem" }}>
-              {lot.audience.groups.map((g, i) => (
-                <li key={`${g.name}-${i}`} style={{ marginBottom: "0.45rem" }}>
-                  {g.url ? (
-                    <a href={g.url} target="_blank" rel="noopener noreferrer">
-                      {g.name}
-                    </a>
-                  ) : (
-                    <strong>{g.name}</strong>
-                  )}
-                  {g.why ? <span className="ct-muted"> — {g.why}</span> : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {lot.audience?.blurb_ctbids || lot.audience?.blurb_hold ? (
-            <div
-              className="ct-row ct-row--gap-lg"
-              style={{ flexWrap: "wrap", alignItems: "stretch", marginTop: "0.9rem" }}
-            >
-              {lot.audience?.blurb_ctbids ? (
-                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
-                  <label className="ct-label" htmlFor="audience-blurb-ctbids">
-                    Invite to CT Bids
-                  </label>
-                  <textarea
-                    id="audience-blurb-ctbids"
-                    className="ct-input"
-                    rows={5}
-                    readOnly
-                    value={lot.audience?.blurb_ctbids || ""}
-                    style={{ resize: "vertical" }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    style={{ marginTop: "0.4rem" }}
-                    onClick={() => void copyAudienceText("CT Bids blurb", lot.audience?.blurb_ctbids || "")}
-                  >
-                    Copy
-                  </Button>
-                </div>
-              ) : null}
-              {lot.audience?.blurb_hold ? (
-                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
-                  <label className="ct-label" htmlFor="audience-blurb-hold">
-                    Hold / talk to groups first
-                  </label>
-                  <textarea
-                    id="audience-blurb-hold"
-                    className="ct-input"
-                    rows={5}
-                    readOnly
-                    value={lot.audience?.blurb_hold || ""}
-                    style={{ resize: "vertical" }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    style={{ marginTop: "0.4rem" }}
-                    onClick={() => void copyAudienceText("hold blurb", lot.audience?.blurb_hold || "")}
-                  >
-                    Copy
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
-          <h2 className="ct-dash-panel__title">CT Seller</h2>
-          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
-            Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
-            <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
-            photos stay in this gallery and stay off CT Bids. Add photos puts gallery pictures that are
-            not already on the CT Seller item onto that listing. Photos already there stay. Post as new
-            item creates another listing.
-          </p>
-          {audienceHeld ? (
-            <div className="ct-banner ct-banner--warning">
-              Held for collector groups — bulk and single CT Seller post will skip this lot until you uncheck{" "}
-              <strong>Hold for groups</strong> above.
-            </div>
-          ) : null}
-          {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
-          {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
-          {lot.ctseller_item_id ? (
-            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-              Last posted as CT Seller item <strong>#{lot.ctseller_item_id}</strong>
-              {lot.ctseller_sale_id ? ` · CT Bids sale #${lot.ctseller_sale_id}` : ""}
-              {lot.ctseller_item_status ? ` · ${lot.ctseller_item_status}` : ""}
-              {lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
-                ? ` · $${lot.ctseller_sold_price}`
-                : ""}
-              {lot.ctseller_posted_at
-                ? ` · ${new Date(lot.ctseller_posted_at).toLocaleString()}`
-                : ""}
-            </p>
-          ) : null}
-          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ minWidth: 220, flex: "1 1 240px" }}>
-              <label className="ct-label" htmlFor="ctseller-sale-pick">
-                CT Seller auction
-              </label>
-              <select
-                id="ctseller-sale-pick"
-                className="ct-input"
-                value={ctSellerPickId}
-                onChange={(e) => setCtSellerPickId(e.target.value)}
-                disabled={ctSellerPostBusy}
-              >
-                <option value="">Select auction…</option>
-                {ctSellerRemoteSales.map((s) => (
-                  <option key={s.id} value={String(s.id)}>
-                    {s.title}
-                    {s.status ? ` (${s.status})` : ""}
-                    {s.starttime ? ` · starts ${String(s.starttime).slice(0, 10)}` : ""} · #{s.id}
-                  </option>
-                ))}
-              </select>
-              {!ctSellerRemoteSales.length ? (
-                <p className="ct-field-hint">
-                  No auctions loaded — if CT Seller is already connected on Account, refresh this
-                  page. Only reconnect there if your CT Seller password changed.
-                </p>
-              ) : null}
-            </div>
-            {lot.ctseller_item_id ? (
-              <Button
-                type="button"
-                variant="default"
-                onClick={() => void updatePhotosOnCtSeller()}
-                disabled={ctSellerPostBusy}
-                title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
-              >
-                {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos"}
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant={lot.ctseller_item_id ? "ghost" : "default"}
-              onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
-              disabled={
-                ctSellerPostBusy ||
-                saving ||
-                listingDirty ||
-                audienceHeld ||
-                !(lot.sku || "").trim() ||
-                !(lot.auction_title || "").trim() ||
-                !ctSellerPickId
-              }
-              title={
-                audienceHeld
-                  ? "Held for collector groups — turn off Hold for groups to post"
-                  : lot.ctseller_item_id
-                    ? "Creates another CT Seller item"
-                    : undefined
-              }
-            >
-              {ctSellerPostBusy && ctSellerPostMode === "post"
-                ? "Posting…"
-                : lot.ctseller_item_id
-                  ? "Post as new item"
-                  : "Post lot"}
-            </Button>
-          </div>
-        </section>
-
-        <section className="ct-dash-panel">
-          <h2 className="ct-dash-panel__title">
-            Catalog photos
-            {catalogPhotos.length ? (
-              <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
-                ({catalogPhotos.length})
-              </span>
-            ) : null}
-          </h2>
-          <p className="ct-upload-intro">
-            Gallery order is export order. New lots are auto-sorted for listing (group shots, then
-            each item with its angles, then labels, then measurements). Drag to fine-tune; tap a photo to crop.
-          </p>
           <input
             ref={addPhotosInputRef}
             type="file"
             multiple
             accept="image/*,.heic,.heif"
-            style={{ display: "none" }}
+            className="ct-sr-only"
             onChange={(e) => void uploadAdditionalCatalogPhotos(e.target.files)}
           />
-          <div className="ct-upload-options" role="group" aria-label="Photo actions">
-            <div className="ct-upload-option ct-upload-option--featured">
-              <span className="ct-upload-option__icon" aria-hidden>
-                <ImagePlus size={20} strokeWidth={1.75} />
-              </span>
-              <div className="ct-upload-option__text">
-                <span className="ct-upload-option__title">Add photos</span>
-                <span className="ct-upload-option__desc">
-                  Upload more frames to this listing
-                  {CTBIDS_MAX_PHOTOS_PER_LOT != null ? ` (max ${CTBIDS_MAX_PHOTOS_PER_LOT})` : ""}.
-                </span>
-              </div>
+          <div className="ct-ld-toolbar" role="toolbar" aria-label="Photo actions">
+            <Button
+              type="button"
+              disabled={
+                addPhotosBusy ||
+                organizeBusy ||
+                reorderBusy ||
+                showAiRegenProgress ||
+                (CTBIDS_MAX_PHOTOS_PER_LOT != null && catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
+              }
+              onClick={() => addPhotosInputRef.current?.click()}
+            >
+              <ImagePlus size={16} aria-hidden />
+              {addPhotosBusy
+                ? "Uploading…"
+                : CTBIDS_MAX_PHOTOS_PER_LOT != null && catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
+                  ? "Limit reached"
+                  : "Add photos"}
+            </Button>
+            {catalogPhotos.length > 1 ? (
               <Button
                 type="button"
-                variant="default" className="ct-upload-option__btn"
-                disabled={
-                  addPhotosBusy ||
-                  organizeBusy ||
-                  reorderBusy ||
-                  showAiRegenProgress ||
-                  (CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-                    catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT)
-                }
-                onClick={() => addPhotosInputRef.current?.click()}
+                variant="outline"
+                disabled={organizeBusy || reorderBusy || addPhotosBusy}
+                onClick={() => void sortCatalogPhotosForListing()}
               >
-                {addPhotosBusy
-                  ? "Uploading…"
-                  : CTBIDS_MAX_PHOTOS_PER_LOT != null &&
-                      catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
-                    ? "Limit reached"
-                    : "Add photos…"}
+                <LayoutList size={16} aria-hidden />
+                {reorderBusy ? "Sorting…" : "Sort for listing"}
               </Button>
-            </div>
-            {catalogPhotos.length > 1 ? (
-              <div className="ct-upload-option">
-                <span className="ct-upload-option__icon" aria-hidden>
-                  <LayoutList size={20} strokeWidth={1.75} />
-                </span>
-                <div className="ct-upload-option__text">
-                  <span className="ct-upload-option__title">Sort for listing</span>
-                  <span className="ct-upload-option__desc">
-                    Group shots first, then each item with its angles, then labels, then measurements. SKU tape last.
-                  </span>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline" className="ct-upload-option__btn"
-                  disabled={organizeBusy || reorderBusy || addPhotosBusy}
-                  onClick={() => void sortCatalogPhotosForListing()}
-                >
-                  {reorderBusy ? "Sorting…" : "Sort for listing"}
-                </Button>
-              </div>
             ) : null}
             {catalogPhotos.length > 0 ? (
-              <div className="ct-upload-option">
-                <span className="ct-upload-option__icon" aria-hidden>
-                  <Archive size={20} strokeWidth={1.75} />
-                </span>
-                <div className="ct-upload-option__text">
-                  <span className="ct-upload-option__title">Download ZIP</span>
-                  <span className="ct-upload-option__desc">
-                    Full-resolution files for this lot — same images used for export and CT Seller.
-                  </span>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline" className="ct-upload-option__btn"
-                  disabled={zipDownloading || addPhotosBusy}
-                  onClick={() => void downloadLotPhotosZip()}
-                >
-                  {zipDownloading ? "Preparing…" : "Download ZIP"}
-                </Button>
-              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={zipDownloading || addPhotosBusy}
+                onClick={() => void downloadLotPhotosZip()}
+              >
+                <Archive size={16} aria-hidden />
+                {zipDownloading ? "Preparing…" : "Download ZIP"}
+              </Button>
             ) : null}
+            <Button type="button" variant="ghost" disabled={videoBusy} onClick={() => addVideosInputRef.current?.click()}>
+              {videoBusy ? "Uploading video…" : "Add video"}
+            </Button>
+          </div>
+          <details className="ct-ld-disclosure">
+            <summary>Adjust photos</summary>
+            <div className="ct-ld-disclosure__body">
+              <p className="ct-ld-disclosure__note">
+                Rotate, replace a background, or read how gallery order works. Add, sort, and ZIP stay in the toolbar.
+              </p>
+          <div className="ct-upload-options" role="group" aria-label="Adjust photos">
             {catalogPhotos.length > 0 ? (
               <div className="ct-upload-option">
                 <span className="ct-upload-option__icon" aria-hidden>
@@ -2705,6 +2600,8 @@ export default function LotDetailPage() {
               </ul>
             </div>
           </details>
+            </div>
+          </details>
           {photosError ? (
             <div className="ct-banner ct-banner--error" style={{ marginBottom: "0.75rem", marginTop: "0.65rem" }}>
               {photosError}
@@ -2720,36 +2617,143 @@ export default function LotDetailPage() {
                 : ""}
             </p>
           ) : null}
-          <div
-            className="ct-lot-detail-photo-grid-wrap"
-            style={editorPhotos.length > 0 || catalogVideos.length > 0 ? { marginTop: "0.65rem" } : undefined}
-          >
-        {editorPhotos.length === 0 && catalogVideos.length === 0 && !photosError ? (
-          <div className="ct-lot-hero" style={{ marginBottom: 0 }}>
-            <LotThumbnail lotId={lot.id} token={token} hasThumbnail={lot.has_thumbnail} size={140} maxPx={720} />
-            <p className="ct-lot-hero-note" style={{ margin: 0 }}>
-              No photos on this listing yet. Use <strong>Add photos</strong> above, or run a photo job from the
-              dashboard.
+          {editorPhotos.length > 0 ? (
+            <div className="ct-ld-filters" role="toolbar" aria-label="Filter photos by role">
+              {ROLE_FILTERS.filter((item) => item.id === "all" || (roleCounts[item.id] || 0) > 0).map((item) => {
+                const selected = roleFilter === item.id;
+                const count = roleCounts[item.id] || 0;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={selected ? "ct-ld-filter ct-ld-filter--on" : "ct-ld-filter"}
+                    aria-pressed={selected}
+                    onClick={() => setRoleFilter(item.id)}
+                  >
+                    {item.label}
+                    <span>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {roleFilter !== "all" ? (
+            <p className="ct-ld-filter-note">
+              Showing {ROLE_FILTERS.find((item) => item.id === roleFilter)?.label || "these"} frames. Drag still saves the full gallery order.
             </p>
+          ) : null}
+          <p className="ct-ld-role-note">
+            Roles (Group, Item, Detail, SKU tape) are set when the lot is cataloged. Sort for listing uses them. Arrows and drag change order.
+          </p>
+          {selectedPhotoIds.size > 0 ? (
+            <div className="ct-ld-selectbar" role="region" aria-label="Selected photos">
+              <strong>{selectedPhotoIds.size} selected</strong>
+              <Button type="button" size="sm" variant="ghost" disabled={organizeBusy || reorderBusy} onClick={selectAllCatalogPhotos}>
+                Select all
+              </Button>
+              <Button type="button" size="sm" variant="ghost" disabled={organizeBusy || reorderBusy} onClick={clearPhotoSelection}>
+                Clear
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={organizeBusy || reorderBusy || batchRotating || quickRotatingId !== null}
+                onClick={() => void rotateLotPhotos(-90, Array.from(selectedPhotoIds))}
+              >
+                Rotate left
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={organizeBusy || reorderBusy || batchRotating || quickRotatingId !== null}
+                onClick={() => void rotateLotPhotos(90, Array.from(selectedPhotoIds))}
+              >
+                Rotate right
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="danger"
+                disabled={organizeBusy || reorderBusy || saving}
+                onClick={() => void deleteSelectedPhotos()}
+              >
+                Delete
+              </Button>
+              <label className="ct-ld-selectbar__move">
+                <span className="ct-sr-only">Destination for selected photos</span>
+                <select
+                  className="ct-input"
+                  value={transferTargetId}
+                  onChange={(e) => setTransferTargetId(e.target.value)}
+                  disabled={organizeBusy || reorderBusy}
+                  aria-label="Move selected photos to"
+                >
+                  <option value="">Move to…</option>
+                  <option value={TRANSFER_DEST_NEW_LOT}>New listing</option>
+                  {saleLots
+                    .filter((x) => x.id !== lot.id)
+                    .map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {(opt.sku || "—") + " · " + (opt.auction_title || "(untitled)").slice(0, 42)}
+                      </option>
+                    ))}
+                </select>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    organizeBusy ||
+                    reorderBusy ||
+                    !transferTargetId ||
+                    (transferTargetId === TRANSFER_DEST_NEW_LOT
+                      ? catalogPhotos.length < 2 || selectedPhotoIds.size >= catalogPhotos.length
+                      : !saleLots.some((x) => x.id === transferTargetId))
+                  }
+                  onClick={() => void applyPhotoDestination()}
+                >
+                  {transferTargetId === TRANSFER_DEST_NEW_LOT ? "Create lot" : "Move"}
+                </Button>
+              </label>
+            </div>
+          ) : null}
+          <div className="ct-lot-detail-photo-grid-wrap">
+        {editorPhotos.length === 0 && catalogVideos.length === 0 && !photosError ? (
+          <div className="ct-ld-empty ct-ld-empty--compact">
+            <ImagePlus size={28} strokeWidth={1.75} aria-hidden />
+            <p className="ct-ld-empty__title">No photos on this lot</p>
+            <p className="ct-ld-empty__body">
+              Add frames here, or catalog the lot from the dashboard. A lot still needs photos before it can be posted.
+            </p>
+            <Button type="button" onClick={() => addPhotosInputRef.current?.click()} disabled={addPhotosBusy}>
+              {addPhotosBusy ? "Uploading…" : "Add photos"}
+            </Button>
+          </div>
+        ) : visiblePhotos.length === 0 && roleFilter !== "all" ? (
+          <div className="ct-ld-empty ct-ld-empty--compact">
+            <p className="ct-ld-empty__title">No frames with this role</p>
+            <p className="ct-ld-empty__body">Choose All to see the full gallery.</p>
+            <Button type="button" variant="outline" onClick={() => setRoleFilter("all")}>
+              Show all photos
+            </Button>
           </div>
         ) : (
-          <div
-            className="ct-lot-photo-grid"
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-              gap: "0.85rem"
-            }}
-          >
-            {editorPhotos.map((p, index) => (
+          <div className="ct-ld-grid">
+            {visiblePhotos.map(({ photo: p, editorIndex: index }) => (
               <figure
                 key={p.id}
+                className={`ct-ld-card${selectedPhotoIds.has(p.id) ? " ct-ld-card--selected" : ""}${dropPhotoId === p.id ? " ct-ld-card--drop" : ""}`}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
+                  setDropPhotoId(p.id);
                 }}
+                onDragLeave={() => setDropPhotoId((current) => (current === p.id ? null : current))}
                 onDrop={(e) => {
                   e.preventDefault();
+                  setDropPhotoId(null);
                   const fromId = e.dataTransfer.getData("text/plain") || dragPhotoIdRef.current;
                   dragPhotoIdRef.current = null;
                   if (!fromId) return;
@@ -2757,12 +2761,6 @@ export default function LotDetailPage() {
                   const toIndex = catalogPhotos.findIndex((x) => x.id === p.id);
                   if (fromIndex < 0 || toIndex < 0) return;
                   applyPhotoReorder(fromIndex, toIndex);
-                }}
-                style={{
-                  margin: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.35rem"
                 }}
               >
                 <div style={{ position: "relative" }}>
@@ -2776,6 +2774,7 @@ export default function LotDetailPage() {
                     </Badge>
                   ) : null}
                   <span
+                    className="ct-ld-card__drag"
                     draggable={!organizeBusy && !reorderBusy}
                     onDragStart={(e) => {
                       e.stopPropagation();
@@ -2785,66 +2784,40 @@ export default function LotDetailPage() {
                     }}
                     onDragEnd={() => {
                       dragPhotoIdRef.current = null;
+                      setDropPhotoId(null);
                     }}
                     title="Drag to reorder"
-                    style={{
-                      position: "absolute",
-                      bottom: 4,
-                      left: 4,
-                      zIndex: 3,
-                      fontSize: "0.62rem",
-                      fontWeight: 700,
-                      letterSpacing: "-0.06em",
-                      padding: "2px 4px",
-                      cursor: organizeBusy || reorderBusy ? "default" : "grab",
-                      background: "rgba(12, 15, 18, 0.9)",
-                      color: "var(--ct-primary)",
-                      borderRadius: 4,
-                      border: "1px solid var(--ct-border)",
-                      userSelect: "none",
-                      lineHeight: 1
-                    }}
+                    role="img"
+                    aria-label={`Drag to reorder ${listingRoleBadge(p) || "photo"} ${index + 1}`}
                   >
-                    ⋮⋮
+                    <GripVertical size={14} aria-hidden />
                   </span>
                   <input
                     type="checkbox"
+                    className="ct-ld-card__check"
                     title="Select for move (Shift+click range, Ctrl/Cmd+click toggle)"
+                    aria-label={`Select ${listingRoleBadge(p) || "photo"} ${index + 1}, ${p.original_name}`}
                     checked={selectedPhotoIds.has(p.id)}
                     onMouseDown={(e) => {
                       if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
                     }}
                     onChange={(e) => {
                       if (organizeBusy || reorderBusy) return;
-                      handlePhotoCheckboxClick(index, p.id, e.nativeEvent as unknown as React.MouseEvent<HTMLInputElement>);
+                      handlePhotoCheckboxClick(
+                        catalogPhotos.findIndex((photo) => photo.id === p.id),
+                        p.id,
+                        e.nativeEvent as unknown as React.MouseEvent<HTMLInputElement>
+                      );
                     }}
                     onClick={(e) => e.stopPropagation()}
                     disabled={organizeBusy || reorderBusy}
-                    style={{
-                      position: "absolute",
-                      top: 6,
-                      right: 6,
-                      zIndex: 2,
-                      width: "1rem",
-                      height: "1rem",
-                      cursor: "pointer"
-                    }}
                   />
-                  <div
-                    style={{
-                      position: "absolute",
-                      bottom: 4,
-                      right: 4,
-                      zIndex: 4,
-                      display: "flex",
-                      gap: "0.2rem"
-                    }}
-                  >
+                  <div className="ct-ld-card__tools" role="group" aria-label={`Reorder and rotate photo ${index + 1}`}>
                     <Button
                       type="button"
                       variant="secondary"
                       size="sm"
-                      className="h-7 min-h-0 bg-black/75 px-1.5 text-xs text-foreground hover:bg-black/90"
+                      className="h-7 min-h-0 px-1.5 text-xs"
                       title="Rotate left 90°"
                       aria-label="Rotate left"
                       disabled={
@@ -2865,7 +2838,7 @@ export default function LotDetailPage() {
                       type="button"
                       variant="secondary"
                       size="sm"
-                      className="h-7 min-h-0 bg-black/75 px-1.5 text-xs text-foreground hover:bg-black/90"
+                      className="h-7 min-h-0 px-1.5 text-xs"
                       title="Rotate right 90°"
                       aria-label="Rotate right"
                       disabled={
@@ -2882,21 +2855,47 @@ export default function LotDetailPage() {
                     >
                       {quickRotatingId === p.id ? "…" : "↻"}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 min-h-0 px-1.5 text-xs"
+                      title="Move earlier in the gallery"
+                      aria-label={`Move ${listingRoleBadge(p) || "photo"} earlier`}
+                      disabled={organizeBusy || reorderBusy || index <= 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        movePhotoStep(p.id, -1);
+                      }}
+                    >
+                      <ChevronUp size={14} aria-hidden />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 min-h-0 px-1.5 text-xs"
+                      title="Move later in the gallery"
+                      aria-label={`Move ${listingRoleBadge(p) || "photo"} later`}
+                      disabled={organizeBusy || reorderBusy || index >= editorPhotos.length - 1}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        movePhotoStep(p.id, 1);
+                      }}
+                    >
+                      <ChevronDown size={14} aria-hidden />
+                    </Button>
                   </div>
                   <button
                     type="button"
+                    className="ct-ld-card__open"
                     onClick={() => {
                       const viewerAt = catalogPhotos.findIndex((x) => x.id === p.id);
                       openPhotoViewer(viewerAt >= 0 ? viewerAt : index);
                     }}
                     title={`Open ${p.original_name} — crop and fine-tune`}
-                    style={{
-                      all: "unset",
-                      cursor: quickRotatingId === p.id ? "wait" : "zoom-in",
-                      display: "block",
-                      width: "100%",
-                      opacity: quickRotatingId === p.id ? 0.65 : 1
-                    }}
+                    aria-label={`Open ${listingRoleBadge(p) || "photo"} ${index + 1}, ${p.original_name}`}
+                    style={{ cursor: quickRotatingId === p.id ? "wait" : undefined, opacity: quickRotatingId === p.id ? 0.65 : 1 }}
                   >
                     <LotPhotoThumb
                       key={`${p.id}-${thumbCacheBust[p.id] ?? 0}`}
@@ -2904,49 +2903,39 @@ export default function LotDetailPage() {
                       photoId={p.id}
                       token={token}
                       label={p.original_name}
-                      maxPx={1600}
-                      maxHeight={420}
-                      minHeight={200}
+                      maxPx={1200}
+                      maxHeight={260}
+                      minHeight={168}
                       fileOnDisk={p.file_on_disk !== false}
                       cacheBust={thumbCacheBust[p.id] ?? 0}
                     />
                   </button>
                 </div>
                 <figcaption
-                  className="ct-muted"
-                  style={{
-                    fontSize: "0.72rem",
-                    lineHeight: 1.35,
-                    wordBreak: "break-word",
-                    margin: 0
-                  }}
+                  className="ct-ld-card__caption"
                   title={
                     p.file_on_disk === false
                       ? `${p.original_name} — file missing on server`
                       : p.original_name
                   }
                 >
+                  <span className="ct-ld-card__role">{listingRoleBadge(p) || "Untagged"}</span>
                   {p.file_on_disk === false ? (
-                    <span className="text-[#fca5a5]">Missing on server · </span>
+                    <span className="text-[#fca5a5]">Missing on server</span>
                   ) : null}
                   {p.added_later ? (
-                    <Badge variant="warning" className="mr-1 uppercase">
+                    <Badge variant="warning" className="uppercase">
                       Added{formatPhotoAddedAt(p.created_at) ? ` ${formatPhotoAddedAt(p.created_at)}` : ""}
                     </Badge>
                   ) : null}
-                  {p.original_name}
+                  <span className="ct-ld-card__name">{p.original_name}</span>
                 </figcaption>
               </figure>
             ))}
-            {catalogVideos.map((video, index) => (
+            {(roleFilter === "all" ? catalogVideos : []).map((video, index) => (
               <figure
                 key={`vid-${video.id}`}
-                style={{
-                  margin: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.35rem"
-                }}
+                className="ct-ld-card"
               >
                 <div style={{ position: "relative" }}>
                   <span className="absolute left-1.5 top-1.5 z-[1] flex items-center gap-1">
@@ -2957,20 +2946,15 @@ export default function LotDetailPage() {
                     type="button"
                     onClick={() => void playLotVideo(video.id)}
                     title={`Play ${video.original_name}`}
-                    style={{
-                      all: "unset",
-                      cursor: "pointer",
-                      display: "block",
-                      width: "100%"
-                    }}
+                    className="ct-ld-card__open"
                   >
                     <LotVideoThumb
                       lotId={lot.id}
                       videoId={video.id}
                       token={token}
                       label={video.original_name}
-                      maxHeight={420}
-                      minHeight={200}
+                      maxHeight={260}
+                      minHeight={168}
                       fileOnDisk={video.file_on_disk !== false}
                     />
                   </button>
@@ -2994,20 +2978,22 @@ export default function LotDetailPage() {
           </div>
         </section>
 
-        <section className="ct-dash-panel">
-          <h2 className="ct-dash-panel__title">
-            Videos
-            {catalogVideos.length ? (
-              <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
-                ({catalogVideos.length})
-              </span>
-            ) : null}
-          </h2>
-          <p className="ct-upload-intro">
-            Short walk-around clips from the phone app. They also appear in the photo grid above
-            with a Video badge (first-frame preview). Post to CT Seller sends them to the item
-            media tab after the photos. They are not sent through AI catalog.
-          </p>
+        <section id="lot-videos" className="ct-dash-panel ct-ld-videos">
+          <div className="ct-ld-section__head">
+            <div>
+              <h2 className="ct-dash-panel__title">
+                Videos
+                {catalogVideos.length ? (
+                  <span className="ct-muted" style={{ fontWeight: 500, marginLeft: "0.35rem" }}>
+                    ({catalogVideos.length})
+                  </span>
+                ) : null}
+              </h2>
+            </div>
+            <p className="ct-ld-section__lede">
+              Walk-around clips also show in the gallery with a Video badge. They go to CT Seller after the photos and skip AI catalog.
+            </p>
+          </div>
           <input
             ref={addVideosInputRef}
             type="file"
@@ -3016,21 +3002,11 @@ export default function LotDetailPage() {
             style={{ display: "none" }}
             onChange={(e) => void uploadLotVideos(e.target.files)}
           />
-          <div className="ct-upload-options" role="group" aria-label="Video actions">
-            <div className="ct-upload-option">
-              <div className="ct-upload-option__text">
-                <span className="ct-upload-option__title">Add video</span>
-                <span className="ct-upload-option__desc">MP4 or MOV, up to 80 MB, max 8 per lot.</span>
-              </div>
-              <Button
-                type="button"
-                variant="default" className="ct-upload-option__btn"
-                disabled={videoBusy}
-                onClick={() => addVideosInputRef.current?.click()}
-              >
-                {videoBusy ? "Uploading…" : "Add video…"}
-              </Button>
-            </div>
+          <div className="ct-ld-toolbar" role="toolbar" aria-label="Video actions">
+            <Button type="button" variant="outline" disabled={videoBusy} onClick={() => addVideosInputRef.current?.click()}>
+              {videoBusy ? "Uploading…" : "Add video"}
+            </Button>
+            <span className="ct-ld-role-note">MP4 or MOV, up to 80 MB, max 8 per lot.</span>
           </div>
           {videoError ? (
             <div className="ct-banner ct-banner--error" style={{ marginTop: "0.75rem" }}>
@@ -3073,16 +3049,331 @@ export default function LotDetailPage() {
               ))}
             </ul>
           ) : (
-            <p className="ct-muted" style={{ marginTop: "0.75rem" }}>
-              No videos on this lot yet. Record one in the phone app (Photo / Video toggle).
-            </p>
+            <div className="ct-ld-empty ct-ld-empty--compact">
+              <p className="ct-ld-empty__title">No videos yet</p>
+              <p className="ct-ld-empty__body">
+                Record one in the phone app (Photo / Video toggle), or add an MP4 or MOV here. Up to 8 clips, 80 MB each.
+              </p>
+            </div>
           )}
         </section>
 
+        <section id="listing-details" className="ct-dash-panel ct-listing-form ct-ld-listing" style={{ scrollMarginTop: "0.75rem" }}>
+          <div className="ct-ld-section__head">
+            <div>
+              <p className="ct-ld-kicker">2 · Listing</p>
+              <h2 className="ct-dash-panel__title">Listing</h2>
+            </div>
+            <p className="ct-ld-section__lede">
+              Title, description, and price are what shoppers see. Save before you export or post.
+            </p>
+          </div>
+          {listingDirty ? (
+            <p className="ct-ld-dirty" role="status">
+              Unsaved changes
+            </p>
+          ) : null}
+
+          <div className="ct-listing-form__sections">
+            <section className="ct-listing-form__section ct-ld-identity" aria-labelledby="listing-identity-heading">
+              <h3 id="listing-identity-heading" className="ct-listing-form__section-title">
+                Identity
+              </h3>
+              <div>
+                <label className="ct-label" htmlFor="lot-sku">
+                  Estate lot SKU
+                </label>
+                <input
+                  id="lot-sku"
+                  className="ct-input"
+                  inputMode="text"
+                  autoComplete="off"
+                  placeholder="e.g. 034 or SA013"
+                  value={lot.sku ?? ""}
+                  onChange={(e) => updateListingFields({ sku: e.target.value.trim() || null })}
+                />
+                <p className="ct-field-hint">
+                  Handwritten code on colored estate tape. Save after you fix it — the yellow “review SKU” flag on the
+                  dashboard clears.
+                </p>
+              </div>
+              <div>
+                <label className="ct-label" htmlFor="auction-title">
+                  Auction title
+                </label>
+                <input
+                  id="auction-title"
+                  className="ct-input"
+                  value={lot.auction_title}
+                  onChange={(e) => updateListingFields({ auction_title: e.target.value })}
+                />
+              </div>
+            </section>
+
+            <section className="ct-listing-form__section" aria-labelledby="listing-copy-heading">
+              <h3 id="listing-copy-heading" className="ct-listing-form__section-title">
+                Listing copy
+              </h3>
+              <div>
+                <label className="ct-label" htmlFor="pro-desc">
+                  Professional description
+                </label>
+                <textarea
+                  id="pro-desc"
+                  className="ct-textarea ct-textarea--listing-pro"
+                  value={lot.professional_description}
+                  onChange={(e) => updateListingFields({ professional_description: e.target.value })}
+                />
+              </div>
+            </section>
+
+            <section className="ct-listing-form__section" aria-labelledby="listing-details-heading">
+              <h3 id="listing-details-heading" className="ct-listing-form__section-title">
+                Price and condition
+              </h3>
+              <div className="ct-listing-form__details-grid">
+                <div>
+                  <label className="ct-label" htmlFor="price">
+                    Starting price
+                  </label>
+                  <div className="ct-input-prefix">
+                    <span className="ct-input-prefix__symbol" aria-hidden>
+                      $
+                    </span>
+                    <input
+                      id="price"
+                      className="ct-input"
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      placeholder="0.00"
+                      value={lot.starting_price ?? ""}
+                      onChange={(e) =>
+                        updateListingFields({ starting_price: e.target.value ? Number(e.target.value) : null })
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="reserve">
+                    Reserve price
+                  </label>
+                  <div className="ct-input-prefix">
+                    <span className="ct-input-prefix__symbol" aria-hidden>
+                      $
+                    </span>
+                    <input
+                      id="reserve"
+                      className="ct-input"
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      placeholder="none"
+                      value={lot.reserve_price ?? ""}
+                      onChange={(e) =>
+                        updateListingFields({ reserve_price: e.target.value ? Number(e.target.value) : null })
+                      }
+                    />
+                  </div>
+                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    Loaded from CT Seller when you Check CT Bids sales / Load from CT Seller. Saving
+                    here also writes the lot, and bulk apply can push to CT Seller.
+                  </p>
+                </div>
+                <div>
+                  <label className="ct-label" htmlFor="condition">
+                    Condition
+                  </label>
+                  <select
+                    id="condition"
+                    className="ct-input"
+                    value={lot.condition_text}
+                    onChange={(e) => updateListingFields({ condition_text: e.target.value })}
+                    title="CT Seller item condition tiers"
+                  >
+                    <option value="">Select condition…</option>
+                    {conditionSelectOptions(lot.condition_text, ctSellerConditions).map((opt) => (
+                      <option key={opt.condition} value={opt.condition} title={opt.description || undefined}>
+                        {opt.condition}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <details className="ct-ld-disclosure">
+                <summary>Brands, specifications, and search tags</summary>
+                <div className="ct-ld-disclosure__body ct-ld-advanced">
+              <div>
+                <label className="ct-label" htmlFor="spec-lines">
+                  Specification lines
+                </label>
+                <textarea
+                  id="spec-lines"
+                  className="ct-textarea ct-textarea--compact"
+                  placeholder="One label per line, e.g. Brand: …"
+                  value={lot.specification_lines.join("\n")}
+                  onChange={(e) =>
+                    updateListingFields({ specification_lines: e.target.value.split("\n").filter(Boolean) })
+                  }
+                />
+                <details className="ct-help-details ct-listing-form__help">
+                  <summary>What goes in specification lines?</summary>
+                  <div className="ct-help-details__body">
+                    <p style={{ margin: "0 0 0.5rem" }}>One line per fact — use labels like:</p>
+                    <ul>
+                      <li>
+                        <strong>Brand:</strong> confirmed maker when visible
+                      </li>
+                      <li>
+                        <strong>Dimensions:</strong> / <strong>Measurement:</strong> when a ruler or tape is in the
+                        photos
+                      </li>
+                      <li>
+                        <strong>Condition note:</strong> wear or damage called out in the listing
+                      </li>
+                      <li>
+                        <strong>Size / tags:</strong> for apparel only (otherwise use Sizes / tags below)
+                      </li>
+                    </ul>
+                  </div>
+                </details>
+              </div>
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="brands">
+                    Brands
+                  </label>
+                  <input
+                    id="brands"
+                    className="ct-input"
+                    placeholder="Comma separated"
+                    value={lot.brands.join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        brands: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                </div>
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="tags">
+                    Sizes / tags
+                  </label>
+                  <input
+                    id="tags"
+                    className="ct-input"
+                    placeholder="Clothing &amp; shoes only — comma separated"
+                    value={lot.labels_and_tags.join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        labels_and_tags: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                </div>
+                <div className="ct-listing-form__details-span">
+                  <label className="ct-label" htmlFor="search-tags">
+                    CT Bids search tags
+                  </label>
+                  <input
+                    id="search-tags"
+                    className="ct-input"
+                    placeholder="Brand, model, material, era — comma separated"
+                    value={(lot.search_tags || []).join(", ")}
+                    onChange={(e) =>
+                      updateListingFields({
+                        search_tags: e.target.value
+                          .split(",")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                      })
+                    }
+                  />
+                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    Posted to CT Seller tags so shoppers can find this lot. Use words they would type for this
+                    piece — not Rolex or Porsche unless that is actually on the item.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    style={{ marginTop: "0.45rem" }}
+                    disabled={searchTagsBusy}
+                    onClick={() => void fillSearchTagsFromListing()}
+                  >
+                    {searchTagsBusy ? "Filling…" : "Fill from listing"}
+                  </Button>
+                </div>
+                </div>
+              </details>
+            </section>
+          </div>
+
+          <div className="ct-listing-form__actions">
+            <Button
+              type="button"
+              variant="default" className="ct-listing-form__save-desktop"
+              onClick={() => void save()}
+              disabled={saving || !listingDirty}
+              aria-busy={saving}
+            >
+              {saving ? "Saving…" : listingDirty ? "Save listing" : "Saved"}
+            </Button>
+            <span className={listingDirty ? "ct-ld-save-note ct-ld-save-note--dirty" : "ct-ld-save-note"} role="status">
+              {listingDirty ? "Unsaved changes" : "Saved"}
+            </span>
+            {isAccountOwner ? (
+              <Button type="button" variant="danger-outline" className="ct-ld-delete" onClick={() => void removeLot()}>
+                Delete lot
+              </Button>
+            ) : null}
+          </div>
+          {error ? (
+            <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>
+              {error}
+            </div>
+          ) : null}
+        </section>
+
+        <section id="lot-more" className="ct-dash-panel ct-ld-more" aria-labelledby="lot-more-heading">
+          <div className="ct-ld-section__head">
+            <div>
+              <p className="ct-ld-kicker">3 · More</p>
+              <h2 id="lot-more-heading" className="ct-dash-panel__title">More actions</h2>
+            </div>
+            <p className="ct-ld-section__lede">
+              Organize frames, post to CT Seller, check groups and engagement, or move this lot. Day-to-day edits stay in the listing above.
+            </p>
+          </div>
+          <SegmentedTabs
+            label="More lot actions"
+            active={secondaryTab}
+            onSelect={(id) => {
+              secondaryTabTouched.current = true;
+              setSecondaryTab(id);
+            }}
+            className="ct-ld-tabs"
+            tabs={[
+              { id: "organize", label: "Organize" },
+              { id: "seller", label: "CT Seller" },
+              { id: "groups", label: "Groups" },
+              { id: "engagement", label: "Engagement" },
+              { id: "sale", label: "Sale" }
+            ]}
+          />
+          <div hidden={secondaryTab !== "organize"} className="ct-ld-tabpanel" role="tabpanel">
         {showOrganizePanel ? (
           <section className="ct-dash-panel">
             <h2 className="ct-dash-panel__title">Organize photos</h2>
-            <p className="ct-upload-intro">Select photos in the grid above, then choose an action below.</p>
+            <p className="ct-upload-intro">
+              Select photos in the gallery, then move, delete, or merge here. A selection bar also appears on the photos when something is checked.
+            </p>
             {organizeMsg ? (
               <div className="ct-banner ct-banner--success" style={{ marginBottom: "0.75rem" }}>
                 {organizeMsg}
@@ -3344,270 +3635,292 @@ export default function LotDetailPage() {
               </div>
             </details>
           </section>
-        ) : null}
+        ) : (
+          <div className="ct-ld-empty ct-ld-empty--compact">
+            <p className="ct-ld-empty__title">Nothing to organize yet</p>
+            <p className="ct-ld-empty__body">Add photos, or catalog another lot in this sale, to move, delete, or merge frames.</p>
+          </div>
+        )}
 
-        <section id="listing-details" className="ct-dash-panel ct-listing-form" style={{ scrollMarginTop: "0.75rem" }}>
-          <h2 className="ct-dash-panel__title">Listing details</h2>
-          <p className="ct-upload-intro">
-            Edit auction copy and metadata for this lot, then save. Changes apply to exports after you save.
+          </div>
+          <div hidden={secondaryTab !== "seller"} className="ct-ld-tabpanel" role="tabpanel">
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">CT Seller</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
+            <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
+            photos stay in this gallery and stay off CT Bids. Add photos puts gallery pictures that are
+            not already on the CT Seller item onto that listing. Photos already there stay. Post as new
+            item creates another listing.
           </p>
-
-          <div className="ct-listing-form__sections">
-            <section className="ct-listing-form__section" aria-labelledby="listing-identity-heading">
-              <h3 id="listing-identity-heading" className="ct-listing-form__section-title">
-                Identity
-              </h3>
-              <div>
-                <label className="ct-label" htmlFor="lot-sku">
-                  Estate lot SKU
-                </label>
-                <input
-                  id="lot-sku"
-                  className="ct-input"
-                  inputMode="text"
-                  autoComplete="off"
-                  placeholder="e.g. 034 or SA013"
-                  value={lot.sku ?? ""}
-                  onChange={(e) => updateListingFields({ sku: e.target.value.trim() || null })}
-                />
-                <p className="ct-field-hint">
-                  Handwritten code on colored estate tape. Save after you fix it — the yellow “review SKU” flag on the
-                  dashboard clears.
-                </p>
-              </div>
-              <div>
-                <label className="ct-label" htmlFor="auction-title">
-                  Auction title
-                </label>
-                <input
-                  id="auction-title"
-                  className="ct-input"
-                  value={lot.auction_title}
-                  onChange={(e) => updateListingFields({ auction_title: e.target.value })}
-                />
-              </div>
-            </section>
-
-            <section className="ct-listing-form__section" aria-labelledby="listing-copy-heading">
-              <h3 id="listing-copy-heading" className="ct-listing-form__section-title">
-                Listing copy
-              </h3>
-              <div>
-                <label className="ct-label" htmlFor="pro-desc">
-                  Professional description
-                </label>
-                <textarea
-                  id="pro-desc"
-                  className="ct-textarea ct-textarea--listing-pro"
-                  value={lot.professional_description}
-                  onChange={(e) => updateListingFields({ professional_description: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="ct-label" htmlFor="spec-lines">
-                  Specification lines
-                </label>
-                <textarea
-                  id="spec-lines"
-                  className="ct-textarea ct-textarea--compact"
-                  placeholder="One label per line, e.g. Brand: …"
-                  value={lot.specification_lines.join("\n")}
-                  onChange={(e) =>
-                    updateListingFields({ specification_lines: e.target.value.split("\n").filter(Boolean) })
-                  }
-                />
-                <details className="ct-help-details ct-listing-form__help">
-                  <summary>What goes in specification lines?</summary>
-                  <div className="ct-help-details__body">
-                    <p style={{ margin: "0 0 0.5rem" }}>One line per fact — use labels like:</p>
-                    <ul>
-                      <li>
-                        <strong>Brand:</strong> confirmed maker when visible
-                      </li>
-                      <li>
-                        <strong>Dimensions:</strong> / <strong>Measurement:</strong> when a ruler or tape is in the
-                        photos
-                      </li>
-                      <li>
-                        <strong>Condition note:</strong> wear or damage called out in the listing
-                      </li>
-                      <li>
-                        <strong>Size / tags:</strong> for apparel only (otherwise use Sizes / tags below)
-                      </li>
-                    </ul>
-                  </div>
-                </details>
-              </div>
-            </section>
-
-            <section className="ct-listing-form__section" aria-labelledby="listing-details-heading">
-              <h3 id="listing-details-heading" className="ct-listing-form__section-title">
-                Details
-              </h3>
-              <div className="ct-listing-form__details-grid">
-                <div className="ct-listing-form__details-span">
-                  <label className="ct-label" htmlFor="brands">
-                    Brands
-                  </label>
-                  <input
-                    id="brands"
-                    className="ct-input"
-                    placeholder="Comma separated"
-                    value={lot.brands.join(", ")}
-                    onChange={(e) =>
-                      updateListingFields({
-                        brands: e.target.value
-                          .split(",")
-                          .map((x) => x.trim())
-                          .filter(Boolean)
-                      })
-                    }
-                  />
-                </div>
-                <div className="ct-listing-form__details-span">
-                  <label className="ct-label" htmlFor="tags">
-                    Sizes / tags
-                  </label>
-                  <input
-                    id="tags"
-                    className="ct-input"
-                    placeholder="Clothing &amp; shoes only — comma separated"
-                    value={lot.labels_and_tags.join(", ")}
-                    onChange={(e) =>
-                      updateListingFields({
-                        labels_and_tags: e.target.value
-                          .split(",")
-                          .map((x) => x.trim())
-                          .filter(Boolean)
-                      })
-                    }
-                  />
-                </div>
-                <div className="ct-listing-form__details-span">
-                  <label className="ct-label" htmlFor="search-tags">
-                    CT Bids search tags
-                  </label>
-                  <input
-                    id="search-tags"
-                    className="ct-input"
-                    placeholder="Brand, model, material, era — comma separated"
-                    value={(lot.search_tags || []).join(", ")}
-                    onChange={(e) =>
-                      updateListingFields({
-                        search_tags: e.target.value
-                          .split(",")
-                          .map((x) => x.trim())
-                          .filter(Boolean)
-                      })
-                    }
-                  />
-                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
-                    Posted to CT Seller tags so shoppers can find this lot. Use words they would type for this
-                    piece — not Rolex or Porsche unless that is actually on the item.
-                  </p>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    style={{ marginTop: "0.45rem" }}
-                    disabled={searchTagsBusy}
-                    onClick={() => void fillSearchTagsFromListing()}
-                  >
-                    {searchTagsBusy ? "Filling…" : "Fill from listing"}
-                  </Button>
-                </div>
-                <div>
-                  <label className="ct-label" htmlFor="price">
-                    Starting price
-                  </label>
-                  <div className="ct-input-prefix">
-                    <span className="ct-input-prefix__symbol" aria-hidden>
-                      $
-                    </span>
-                    <input
-                      id="price"
-                      className="ct-input"
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      placeholder="0.00"
-                      value={lot.starting_price ?? ""}
-                      onChange={(e) =>
-                        updateListingFields({ starting_price: e.target.value ? Number(e.target.value) : null })
-                      }
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="ct-label" htmlFor="reserve">
-                    Reserve price
-                  </label>
-                  <div className="ct-input-prefix">
-                    <span className="ct-input-prefix__symbol" aria-hidden>
-                      $
-                    </span>
-                    <input
-                      id="reserve"
-                      className="ct-input"
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      placeholder="none"
-                      value={lot.reserve_price ?? ""}
-                      onChange={(e) =>
-                        updateListingFields({ reserve_price: e.target.value ? Number(e.target.value) : null })
-                      }
-                    />
-                  </div>
-                  <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
-                    Loaded from CT Seller when you Check CT Bids sales / Load from CT Seller. Saving
-                    here also writes the lot, and bulk apply can push to CT Seller.
-                  </p>
-                </div>
-                <div>
-                  <label className="ct-label" htmlFor="condition">
-                    Condition
-                  </label>
-                  <select
-                    id="condition"
-                    className="ct-input"
-                    value={lot.condition_text}
-                    onChange={(e) => updateListingFields({ condition_text: e.target.value })}
-                    title="CT Seller item condition tiers"
-                  >
-                    <option value="">Select condition…</option>
-                    {conditionSelectOptions(lot.condition_text, ctSellerConditions).map((opt) => (
-                      <option key={opt.condition} value={opt.condition} title={opt.description || undefined}>
-                        {opt.condition}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div className="ct-listing-form__actions">
-            <Button
-              type="button"
-              variant="default" className="ct-listing-form__save-desktop"
-              onClick={() => void save()}
-              disabled={saving}
-            >
-              {saving ? "Saving…" : "Save"}
-            </Button>
-            {isAccountOwner ? (
-              <Button type="button" variant="danger-outline" onClick={() => void removeLot()}>
-                Delete lot
-              </Button>
-            ) : null}
-          </div>
-          {error ? (
-            <div className="ct-banner ct-banner--error" style={{ marginBottom: 0 }}>
-              {error}
+          {audienceHeld ? (
+            <div className="ct-banner ct-banner--warning">
+              Held for collector groups — bulk and single CT Seller post will skip this lot until you uncheck{" "}
+              <strong>Hold for groups</strong> above.
             </div>
           ) : null}
+          {ctSellerMsg ? <div className="ct-banner ct-banner--success">{ctSellerMsg}</div> : null}
+          {ctSellerErr ? <div className="ct-banner ct-banner--error">{ctSellerErr}</div> : null}
+          {lot.ctseller_item_id ? (
+            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+              Last posted as CT Seller item <strong>#{lot.ctseller_item_id}</strong>
+              {lot.ctseller_sale_id ? ` · CT Bids sale #${lot.ctseller_sale_id}` : ""}
+              {lot.ctseller_item_status ? ` · ${lot.ctseller_item_status}` : ""}
+              {lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
+                ? ` · $${lot.ctseller_sold_price}`
+                : ""}
+              {lot.ctseller_posted_at
+                ? ` · ${new Date(lot.ctseller_posted_at).toLocaleString()}`
+                : ""}
+            </p>
+          ) : null}
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ minWidth: 220, flex: "1 1 240px" }}>
+              <label className="ct-label" htmlFor="ctseller-sale-pick">
+                CT Seller auction
+              </label>
+              <select
+                id="ctseller-sale-pick"
+                className="ct-input"
+                value={ctSellerPickId}
+                onChange={(e) => setCtSellerPickId(e.target.value)}
+                disabled={ctSellerPostBusy}
+              >
+                <option value="">Select auction…</option>
+                {ctSellerRemoteSales.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.title}
+                    {s.status ? ` (${s.status})` : ""}
+                    {s.starttime ? ` · starts ${String(s.starttime).slice(0, 10)}` : ""} · #{s.id}
+                  </option>
+                ))}
+              </select>
+              {!ctSellerRemoteSales.length ? (
+                <p className="ct-field-hint">
+                  No auctions loaded — if CT Seller is already connected on Account, refresh this
+                  page. Only reconnect there if your CT Seller password changed.
+                </p>
+              ) : null}
+            </div>
+            {lot.ctseller_item_id ? (
+              <Button
+                type="button"
+                variant="default"
+                onClick={() => void updatePhotosOnCtSeller()}
+                disabled={ctSellerPostBusy}
+                title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
+              >
+                {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos"}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant={lot.ctseller_item_id ? "ghost" : "default"}
+              onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
+              disabled={
+                ctSellerPostBusy ||
+                saving ||
+                listingDirty ||
+                audienceHeld ||
+                !(lot.sku || "").trim() ||
+                !(lot.auction_title || "").trim() ||
+                !ctSellerPickId
+              }
+              title={
+                audienceHeld
+                  ? "Held for collector groups — turn off Hold for groups to post"
+                  : lot.ctseller_item_id
+                    ? "Creates another CT Seller item"
+                    : undefined
+              }
+            >
+              {ctSellerPostBusy && ctSellerPostMode === "post"
+                ? "Posting…"
+                : lot.ctseller_item_id
+                  ? "Post as new item"
+                  : "Post lot"}
+            </Button>
+          </div>
+        </section>
+
+          </div>
+          <div hidden={secondaryTab !== "groups"} className="ct-ld-tabpanel" role="tabpanel">
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">Groups</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            National US collector groups for this lot (from Gemini + Google Search; ships nationwide).
+            Hunt more groups on the <Link href="/facebook">Facebook</Link> tab. Staff still join and
+            share by hand — this does not scrape members or auto-post.
+          </p>
+          {audienceCopyMsg ? (
+            <p className="ct-muted" style={{ marginTop: 0, fontSize: "0.85rem" }} role="status">
+              {audienceCopyMsg}
+            </p>
+          ) : null}
+          <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
+            {isAccountOwner ? (
+              <Button variant="outline" asChild>
+                <Link href="/facebook">Find groups</Link>
+              </Button>
+            ) : (
+              <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+                Ask an owner to run a group hunt on the Facebook tab. Existing results stay visible.
+              </p>
+            )}
+            <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.85rem" }}>
+              <input
+                type="checkbox"
+                checked={audienceHeld}
+                onChange={(e) => void setAudienceHold(e.target.checked)}
+                disabled={audienceHoldBusy || saving}
+              />
+              <span>Hold for groups (skip CT Bids post)</span>
+            </label>
+          </div>
+          {lot.audience?.skip_reason && !(lot.audience.groups?.length) ? (
+            <p className="ct-field-hint" style={{ marginTop: "0.75rem" }}>
+              {lot.audience.skip_reason}
+            </p>
+          ) : null}
+          {lot.audience?.groups && lot.audience.groups.length > 0 ? (
+            <ul style={{ margin: "0.85rem 0 0", paddingLeft: "1.15rem" }}>
+              {lot.audience.groups.map((g, i) => (
+                <li key={`${g.name}-${i}`} style={{ marginBottom: "0.45rem" }}>
+                  {g.url ? (
+                    <a href={g.url} target="_blank" rel="noopener noreferrer">
+                      {g.name}
+                    </a>
+                  ) : (
+                    <strong>{g.name}</strong>
+                  )}
+                  {g.why ? <span className="ct-muted"> — {g.why}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {lot.audience?.blurb_ctbids || lot.audience?.blurb_hold ? (
+            <div
+              className="ct-row ct-row--gap-lg"
+              style={{ flexWrap: "wrap", alignItems: "stretch", marginTop: "0.9rem" }}
+            >
+              {lot.audience?.blurb_ctbids ? (
+                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+                  <label className="ct-label" htmlFor="audience-blurb-ctbids">
+                    Invite to CT Bids
+                  </label>
+                  <textarea
+                    id="audience-blurb-ctbids"
+                    className="ct-input"
+                    rows={5}
+                    readOnly
+                    value={lot.audience?.blurb_ctbids || ""}
+                    style={{ resize: "vertical" }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    style={{ marginTop: "0.4rem" }}
+                    onClick={() => void copyAudienceText("CT Bids blurb", lot.audience?.blurb_ctbids || "")}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              ) : null}
+              {lot.audience?.blurb_hold ? (
+                <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+                  <label className="ct-label" htmlFor="audience-blurb-hold">
+                    Hold / talk to groups first
+                  </label>
+                  <textarea
+                    id="audience-blurb-hold"
+                    className="ct-input"
+                    rows={5}
+                    readOnly
+                    value={lot.audience?.blurb_hold || ""}
+                    style={{ resize: "vertical" }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    style={{ marginTop: "0.4rem" }}
+                    onClick={() => void copyAudienceText("hold blurb", lot.audience?.blurb_hold || "")}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
+          </div>
+          <div hidden={secondaryTab !== "engagement"} className="ct-ld-tabpanel" role="tabpanel">
+            <section className="ct-ld-subpanel" aria-labelledby="lot-engagement-heading">
+              <h3 id="lot-engagement-heading" className="ct-ld-subpanel__title">Engagement</h3>
+              <p className="ct-upload-intro">
+                Views, watchers, and bids come from the CT Bids watcher. This page does not change the live auction.
+              </p>
+              {lot.engagement?.bucket ? (
+                <>
+                  <div className="ct-ld-stats">
+                    <StatCard label="Views" value={lot.engagement.views ?? 0} />
+                    <StatCard label="Watchers" value={lot.engagement.watchers ?? 0} />
+                    <StatCard label="Bids" value={lot.engagement.bids ?? 0} />
+                    <StatCard label="Push rank" value={lot.engagement.push_rank ?? "—"} />
+                  </div>
+                  <p className="ct-ld-engagement-line">
+                    <Badge variant={lot.engagement.bucket === "Push" ? "default" : "info"}>{lot.engagement.bucket}</Badge>
+                    {lot.engagement.price != null ? <span>Price ${lot.engagement.price}</span> : null}
+                    {lot.engagement.notes ? <span>{lot.engagement.notes}</span> : null}
+                  </p>
+                  <p className="ct-ld-engagement-links">
+                    <Link href="/engagement">Open Push queue</Link>
+                    {lot.engagement.item_url ? (
+                      <a href={lot.engagement.item_url} target="_blank" rel="noopener noreferrer">
+                        View on CT Bids
+                      </a>
+                    ) : null}
+                  </p>
+                </>
+              ) : (
+                <div className="ct-ld-empty ct-ld-empty--compact">
+                  <p className="ct-ld-empty__title">No engagement yet</p>
+                  <p className="ct-ld-empty__body">
+                    After this lot is on CT Bids and a watcher snapshot arrives, views, watchers, and bids show up here.
+                  </p>
+                  <Button variant="outline" asChild>
+                    <Link href="/engagement">Open Push queue</Link>
+                  </Button>
+                </div>
+              )}
+            </section>
+          </div>
+          <div hidden={secondaryTab !== "sale"} className="ct-ld-tabpanel" role="tabpanel">
+        <section className="ct-dash-panel" style={{ marginTop: "0.75rem" }}>
+          <h2 className="ct-dash-panel__title">Sale</h2>
+          <p className="ct-upload-intro" style={{ marginTop: 0 }}>
+            This lot is in <strong>{saleName || "an unnamed sale"}</strong>. Move it if it was
+            cataloged under the wrong sale.
+          </p>
+          <MoveLotsToSale
+            token={token}
+            lotIds={[lot.id]}
+            currentSaleId={lot.sale_id}
+            currentSaleName={saleName}
+            sales={catalogSales}
+            postedCount={lot.ctseller_item_id || lot.ctseller_posted_at ? 1 : 0}
+            disabled={saving || organizeBusy}
+            onMoved={(result) => {
+              setLot((prev) =>
+                prev ? { ...prev, sale_id: result.destination_sale_id } : prev
+              );
+              setSaleName(result.destination_sale_name);
+              setSaleLots([]);
+            }}
+          />
+        </section>
+
+          </div>
         </section>
       {viewerIndex !== null && lot && token ? (
         <LotPhotoViewer
@@ -3622,19 +3935,7 @@ export default function LotDetailPage() {
       ) : null}
 
       {showScrollJumpNav && viewerIndex === null ? (
-        <div
-          role="navigation"
-          aria-label="Jump scroll"
-          style={{
-            position: "fixed",
-            right: "max(12px, env(safe-area-inset-right, 0px))",
-            bottom: "max(16px, env(safe-area-inset-bottom, 0px))",
-            zIndex: 9990,
-            display: "flex",
-            flexDirection: "column",
-            gap: 6
-          }}
-        >
+        <div className="ct-lot-jumpnav" role="navigation" aria-label="Jump scroll">
           <Button
             type="button"
             variant="outline"
