@@ -4,6 +4,7 @@ import {
   appendPhotoToJob,
   createLotJobWithPhoto,
   deleteJob,
+  getCatalogQuota,
   getJobReceivedFiles,
   getMobileDraftStatuses,
   getSaleUploadHealth,
@@ -65,6 +66,7 @@ import {
   type WebsiteIndex
 } from "./draftConfirm";
 import { namesStillMissing, planResume } from "./resumePlan";
+import { RunPacer } from "./importPacing";
 import { classifyUploadError, retryAllowed } from "./retryPolicy";
 import { decideSyncRecovery, findJobForDraft, isTransientSyncError, jobIsLiveOrDone } from "./syncRecovery";
 import { clipUploadName } from "./uploadNames";
@@ -287,10 +289,13 @@ type SyncCtx = {
   index: WebsiteIndex;
   /** Lots whose ``/run`` was accepted this Sync — confirmed in one batched call at the end. */
   sent: LotDraft[];
+  /** Holds back new jobs past the website's queued/daily limits (big camera-roll imports). */
+  pacer: RunPacer;
   onProgress?: () => void;
 };
 
-type LotOutcome = "sent" | "failed" | "skipped" | "paused";
+/** ``deferred`` = held back by pacing; stays queued for a later Sync. */
+type LotOutcome = "sent" | "failed" | "skipped" | "paused" | "deferred";
 
 /**
  * The connection dropped (or Wi‑Fi only stopped this upload): not a failed attempt. The native
@@ -395,10 +400,19 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
     return "failed";
   }
 
+  let jobId = draft.server_job_id;
+  const paced = !jobId;
+  if (paced) {
+    const pace = ctx.pacer.admit(images.length);
+    if (!pace.ok) {
+      await setDraftStatus(draft.id, "queued", pace.reason);
+      return "deferred";
+    }
+  }
+
   const items = uploadItems(images);
   const expected = items.map((i) => i.name);
   const total = items.length;
-  let jobId = draft.server_job_id;
   /** Union of every name the server reported; null = this API does not report names. */
   let received: Set<string> | null = null;
   const sentHere = new Set<string>();
@@ -530,6 +544,7 @@ async function uploadNewLot(ctx: SyncCtx, queued: LotDraft): Promise<LotOutcome>
         return "sent";
       }
     }
+    if (paced && !jobId) ctx.pacer.release(images.length);
     if (await pausedByConnection(e)) {
       await pauseDraft(draft.id, e);
       return "paused";
@@ -629,6 +644,8 @@ export async function syncPendingLots(
   paused?: boolean;
   /** Lots left queued because Upload on Wi‑Fi only is on. */
   waitingForWifi?: number;
+  /** Lots held back until the website catalogs earlier ones (or the daily limit resets). */
+  deferred?: number;
 }> {
   const net = await NetInfo.fetch();
   if (classifyNet(net, false) === "offline") {
@@ -653,6 +670,7 @@ export async function syncPendingLots(
     concurrency: uploadConcurrencyFor(net.type),
     index,
     sent: [],
+    pacer: new RunPacer(null),
     onProgress
   };
 
@@ -832,16 +850,23 @@ export async function syncPendingLots(
       }
       out.push(d);
     }
-    return out;
+    // Oldest first, so an import's lots reach the website in the order they were shot.
+    return out.sort((a, b) => a.created_at - b.created_at);
   }
 
   let waitingForWifi = 0;
+  let deferred = 0;
+  let quotaRead = false;
   if (!mediaAllowed) {
     waitingForWifi = (await nextRound()).length;
   } else {
     for (let round = 0; round < MAX_SYNC_ROUNDS && !uploadPause.paused; round++) {
       const pending = await nextRound();
       if (!pending.length) break;
+      if (!quotaRead && pending.some((d) => !d.append_lot_id && !d.server_job_id)) {
+        quotaRead = true;
+        ctx.pacer = new RunPacer(await getCatalogQuota(authToken));
+      }
       for (const d of pending) attempted.add(d.id);
       await mapPool(pending, LOTS_AT_ONCE, async (draft) => {
         if (uploadPause.paused) return;
@@ -850,6 +875,7 @@ export async function syncPendingLots(
           : await uploadNewLot(ctx, draft);
         if (outcome === "sent") uploaded += 1;
         else if (outcome === "failed") failed += 1;
+        else if (outcome === "deferred") deferred += 1;
         onProgress?.();
       });
     }
@@ -858,7 +884,16 @@ export async function syncPendingLots(
     // Offline now: the batched confirm and health calls would only time out. Sent lots are
     // confirmed by the next Sync / follow-up.
     onProgress?.();
-    return { uploaded, failed, reconciled, archived: archivedEarly, healthSummary: null, paused: true, waitingForWifi };
+    return {
+      uploaded,
+      failed,
+      reconciled,
+      archived: archivedEarly,
+      healthSummary: null,
+      paused: true,
+      waitingForWifi,
+      deferred
+    };
   }
 
   // One batched status call for every lot sent this Sync (no per-lot polling). Lots still
@@ -923,5 +958,5 @@ export async function syncPendingLots(
     cataloging_count: cataloging,
     stuck_count: stuck
   });
-  return { uploaded, failed, reconciled, archived, healthSummary, waitingForWifi };
+  return { uploaded, failed, reconciled, archived, healthSummary, waitingForWifi, deferred };
 }

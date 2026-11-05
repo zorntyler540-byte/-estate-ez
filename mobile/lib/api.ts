@@ -13,6 +13,7 @@ import {
 } from "./uploadPrepare";
 import { UploadPausedError, uploadPause } from "./uploadPause";
 import * as FileSystem from "expo-file-system/legacy";
+import type { CatalogQuota } from "./queue/importPacing";
 
 export type SaleLotCoverUrls = {
   expires_in: number;
@@ -560,6 +561,15 @@ export function lotVideoStreamSource(lotId: string, videoId: string, token: stri
     uri: `${API_BASE}/lots/${encodeURIComponent(lotId)}/videos/${encodeURIComponent(videoId)}/stream`,
     headers: { Authorization: `Bearer ${token}` }
   };
+}
+
+/** Account catalog limits and today's usage; ``null`` when this API has no quota endpoint. */
+export async function getCatalogQuota(token: string): Promise<CatalogQuota | null> {
+  try {
+    return await apiFetch<CatalogQuota>("/jobs/quota", token);
+  } catch {
+    return null;
+  }
 }
 
 export async function runJob(jobId: string, token: string): Promise<Job> {
