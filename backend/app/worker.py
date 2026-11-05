@@ -797,11 +797,13 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
     cap = worker_slot_capacity()
     _LOG.info(
         "Catalog worker starting poll=%.1fs worker_max_concurrent=%s account_max_concurrent=%s "
+        "account_bulk_max_concurrent=%s "
         "gemini_global_concurrency=%s gemini_parallelism=%s isolate_jobs=%s "
         "child_rss_cap_mb=%s malloc_arena_max=%s",
         interval,
         cap,
         settings.catalog_job_max_concurrent,
+        settings.catalog_bulk_max_concurrent,
         settings.gemini_global_concurrency,
         settings.gemini_parallelism,
         isolate,

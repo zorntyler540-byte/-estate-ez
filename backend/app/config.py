@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     catalog_job_transient_retries: int = Field(default=3, ge=1, le=10, alias="CATALOG_JOB_TRANSIENT_RETRIES")
     # Stacked Add-one-lot uploads queue automatically when this many jobs are already running per account.
     catalog_job_max_concurrent: int = Field(default=1, ge=1, le=4, alias="CATALOG_JOB_MAX_CONCURRENT")
+    # Separate per-account lane for website bulk work (multi-lot batch triage + the per-lot jobs it
+    # splits into), so phone / single-lot uploads never wait behind a 250-photo folder.
+    catalog_bulk_max_concurrent: int = Field(default=2, ge=1, le=6, alias="CATALOG_BULK_MAX_CONCURRENT")
+    # After triage, a multi-lot batch queues one single-lot job per tape-SKU lot instead of
+    # cataloging every lot inside the batch job.
+    catalog_batch_fanout: bool = Field(default=True, alias="CATALOG_BATCH_FANOUT")
     # One worker process may run this many isolated catalog jobs at once (child-process pool).
     worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
     # After this many isolated-child deaths (OOM / SIGKILL) the job is marked failed, not re-queued.
@@ -130,7 +136,7 @@ class Settings(BaseSettings):
         default=25, ge=1, le=500, alias="CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT"
     )
     catalog_max_photos_per_account_per_day: int = Field(
-        default=800, ge=40, le=50000, alias="CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY"
+        default=2000, ge=40, le=50000, alias="CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY"
     )
     # Multi-lot folder jobs (single-lot jobs still use the 40-photo CT Bids cap).
     catalog_max_photos_per_job: int = Field(

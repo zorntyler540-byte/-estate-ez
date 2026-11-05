@@ -46,8 +46,8 @@ def test_fresh_database_upgrade_matches_models(tmp_path):
     assert schema_check.schema_problems(engine) == []
 
 
-def test_head_revision_is_0054():
-    assert schema_check.alembic_head_revisions() == {"0054_worker_heartbeats"}
+def test_head_revision_is_0055():
+    assert schema_check.alembic_head_revisions() == {"0055_job_parent_id"}
 
 
 def test_0050_adds_objects_only_startup_used_to_create(tmp_path):
