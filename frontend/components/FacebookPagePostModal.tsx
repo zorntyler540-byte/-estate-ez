@@ -13,6 +13,7 @@ export type FacebookCalendarSlot = {
   platform: string;
   hook?: string;
   local_time?: string;
+  zone_label?: string;
 };
 
 type ExistingPost = {
@@ -362,6 +363,15 @@ export function FacebookPagePostModal({
     }
   }
 
+  function resultLabel(row: PublishResult): string {
+    const lot = preview?.lots.find(
+      (item) => (row.calendar_key && item.calendar_key === row.calendar_key) || item.lot_id === row.lot_id
+    );
+    const sku = (lot?.sku || "").trim() || (lot?.title || "").trim() || "Lot";
+    const slot = row.calendar_key ? calendarSlots?.find((item) => item.slot_key === row.calendar_key) : undefined;
+    return slot?.local_time ? `${sku} · ${slot.local_time} ${slot.zone_label || ""}`.trim() : sku;
+  }
+
   const title = calendarMode
     ? publishNow
       ? lotIds.length === 1
@@ -513,7 +523,11 @@ export function FacebookPagePostModal({
                   </strong>
                   {calendarMode && (lot.intended_platform || lot.local_time) ? (
                     <p className="ct-muted" style={{ margin: "0.25rem 0 0" }}>
-                      {lot.local_time ? `${lot.local_time} PT · ` : ""}
+                      {lot.local_time
+                        ? `${lot.local_time} ${
+                            calendarSlots?.find((slot) => slot.slot_key === lot.calendar_key)?.zone_label || "PT"
+                          } · `
+                        : ""}
                       {lot.intended_platform && lot.intended_platform !== "Facebook"
                         ? `Posting to Facebook in place of ${lot.intended_platform}`
                         : "Facebook Page feed"}
@@ -608,11 +622,17 @@ export function FacebookPagePostModal({
 
             {results ? (
               <div className="ct-banner" style={{ marginBottom: "0.75rem" }}>
-                {results.map((row) => (
-                  <div key={row.calendar_key || row.lot_id}>
+                {results.map((row, index) => (
+                  <div key={row.calendar_key || `${row.lot_id}-${index}`}>
+                    <strong>{resultLabel(row)}</strong>
+                    {": "}
                     {row.ok
-                      ? `${row.status === "scheduled" ? "Scheduled" : "Posted"} ${row.facebook_post_id || ""}`
-                      : row.error || "Failed"}
+                      ? `${row.status === "scheduled" ? "Scheduled" : "Posted"}${
+                          row.facebook_post_id ? ` (${row.facebook_post_id})` : ""
+                        }`
+                      : row.skipped
+                        ? `Skipped — ${row.error || "not sent"}`
+                        : row.error || "Failed"}
                   </div>
                 ))}
               </div>

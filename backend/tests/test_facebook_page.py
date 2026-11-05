@@ -557,7 +557,9 @@ def test_publish_uploads_unpublished_then_feed(tmp_path, monkeypatch) -> None:
         assert row["ok"] is True
         assert row["facebook_post_id"] == "111_555"
         assert row["status"] == "posted"
-        assert res.json().get("queued") is False
+        # Even one lot runs off the request; the batch finished inline under pytest.
+        assert res.json().get("queued") is True
+        assert res.json().get("batch_id")
         assert uploads
         stored = db.query(FacebookPagePost).one()
         assert stored.facebook_post_id == "111_555"

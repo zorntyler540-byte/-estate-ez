@@ -1,4 +1,4 @@
-"""Background Facebook Page posting — do not hold the HTTP request for multi-lot uploads."""
+"""Background Facebook Page posting — Graph uploads never run on the HTTP request."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ import threading
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
+
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import sessionmaker
 
 from app.db import SessionLocal
 from app.models import Account, User
@@ -17,9 +20,12 @@ _COMPLETED_HOLD = timedelta(minutes=15)
 _lock = threading.Lock()
 _runs: dict[str, dict[str, Any]] = {}
 
-# One lot stays on the request so the modal can show a result immediately.
-# Two or more lots (Push-queue / dashboard selection) run in a daemon thread.
-SYNC_LOT_LIMIT = 1
+# Every publish runs in a daemon thread; the modal polls the batch. Tests may raise this.
+SYNC_LOT_LIMIT = 0
+
+
+def _start_thread(target: Callable[[], None], name: str) -> None:
+    threading.Thread(target=target, daemon=True, name=name).start()
 
 
 def _utcnow() -> datetime:
@@ -63,8 +69,10 @@ def start_facebook_posts_in_background(
     confirm: bool,
     force: bool,
     source: str,
+    bind: Engine | None = None,
 ) -> str:
     batch_id = uuid.uuid4().hex
+    factory = sessionmaker(bind=bind, autoflush=False, autocommit=False, future=True) if bind else None
     ordered = list(items)
     with _lock:
         _runs[batch_id] = {
@@ -91,6 +99,7 @@ def start_facebook_posts_in_background(
                 confirm=confirm,
                 force=force,
                 source=source,
+                factory=factory,
             )
         except Exception:
             _LOG.error("Facebook Page batch crashed batch_id=%s\n%s", batch_id, traceback.format_exc())
@@ -107,7 +116,7 @@ def start_facebook_posts_in_background(
                         }
                     ]
 
-    threading.Thread(target=_runner, daemon=True, name=f"fb-page-post-{batch_id[:8]}").start()
+    _start_thread(_runner, f"fb-page-post-{batch_id[:8]}")
     return batch_id
 
 
@@ -141,10 +150,11 @@ def _run_facebook_posts(
     confirm: bool,
     force: bool,
     source: str,
+    factory: sessionmaker | None = None,
 ) -> None:
     from app.services.facebook_page import publish_posts
 
-    with SessionLocal() as db:
+    with (factory or SessionLocal)() as db:
         account = db.query(Account).filter(Account.id == account_id).first()
         user = db.query(User).filter(User.id == user_id, User.account_id == account_id).first()
         if not account or not user:

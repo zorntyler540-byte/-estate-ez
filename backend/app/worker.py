@@ -244,16 +244,10 @@ def _job_finish_stats(job_id: str, account_id: str) -> tuple[str, int, int]:
 
 
 def run_idle_maintenance() -> None:
-    """Owner-configured Facebook auto-approve plus click-row retention (not a catalogger trigger)."""
+    """Click-row retention. Cheap DB work only; safe in the worker parent."""
     from app.services.click_tracking import purge_old_tracked_clicks
-    from app.services.facebook_calendar import sweep_calendar_auto_approve
 
     with SessionLocal() as db:
-        try:
-            sweep_calendar_auto_approve(db)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("facebook auto-approve sweep failed")
-            db.rollback()
         try:
             n = purge_old_tracked_clicks(db)
             db.commit()
@@ -262,6 +256,80 @@ def run_idle_maintenance() -> None:
         except Exception:  # noqa: BLE001
             db.rollback()
             _LOG.exception("tracked-click retention sweep failed")
+
+
+def run_social_sweep() -> int:
+    """Owner-configured Facebook auto-approve for open sales (Gemini captions + Graph posts)."""
+    from app.services.facebook_calendar import sweep_calendar_auto_approve
+
+    with SessionLocal() as db:
+        try:
+            return sweep_calendar_auto_approve(db)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("facebook auto-approve sweep failed")
+            db.rollback()
+            return 0
+
+
+SOCIAL_SWEEP_SECONDS = 60.0
+# A sweep child that outlives this is killed; the next tick starts a fresh one.
+SOCIAL_SWEEP_MAX_SECONDS = 15 * 60.0
+
+
+@dataclass
+class SocialSweepState:
+    last_mono: float = 0.0
+    child: subprocess.Popen | None = None
+    child_started_mono: float = 0.0
+
+
+def parse_social_sweep(argv: list[str]) -> bool:
+    return len(argv) >= 2 and argv[1] == "--social-sweep"
+
+
+def _spawn_social_sweep() -> subprocess.Popen:
+    cmd = [sys.executable, "-m", "app.worker", "--social-sweep"]
+    env = os.environ.copy()
+    env.setdefault("MALLOC_ARENA_MAX", "2")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return subprocess.Popen(cmd, env=env, start_new_session=True, close_fds=True)
+
+
+def maybe_social_sweep(state: SocialSweepState, *, isolate: bool, now_mono: float | None = None) -> bool:
+    """Run the auto-approve sweep on a fixed timer, busy or not. Returns True if one started.
+
+    Isolated mode spawns ``--social-sweep`` so caption/Gemini/Pillow memory leaves with the
+    child and the parent never imports the pipeline. One sweep child at a time.
+    """
+    now = time.monotonic() if now_mono is None else now_mono
+    child = state.child
+    if child is not None:
+        if child.poll() is None:
+            if now - state.child_started_mono > SOCIAL_SWEEP_MAX_SECONDS:
+                _LOG.error("Killing social sweep child after %.0fs", now - state.child_started_mono)
+                try:
+                    child.kill()
+                except OSError:
+                    pass
+            return False
+        try:
+            child.wait(timeout=0)
+        except Exception:  # noqa: BLE001
+            pass
+        state.child = None
+    if state.last_mono and now - state.last_mono < SOCIAL_SWEEP_SECONDS:
+        return False
+    state.last_mono = now
+    if not isolate:
+        run_social_sweep()
+        return True
+    try:
+        state.child = _spawn_social_sweep()
+        state.child_started_mono = now
+    except Exception:  # noqa: BLE001
+        _LOG.exception("Failed to spawn social sweep child")
+        return False
+    return True
 
 
 def _reconcile_stale_receiving_globally() -> int:
@@ -657,6 +725,7 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
         _LOG.exception("boot orphan processing reconcile failed")
 
     children: dict[str, IsolatedChild] = {}
+    social = SocialSweepState()
     idle_sweeps = 0
     last_memory_log = 0.0
     _log_worker_memory(label="Boot", children=children)
@@ -670,6 +739,10 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
         except Exception:  # noqa: BLE001
             _LOG.exception("orphan processing reconcile failed")
         started = _fill_worker_slots(isolate=isolate, children=children, cap=cap)
+        try:
+            maybe_social_sweep(social, isolate=isolate)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("social sweep scheduling failed")
         if isolate:
             busy = bool(children)
         else:
@@ -703,6 +776,11 @@ def main(argv: list[str] | None = None) -> None:
     parent_jobs = parse_self_test_parent_jobs(argv)
     if parent_jobs is not None:
         raise SystemExit(run_self_test_parent_jobs(*parent_jobs))
+    if parse_social_sweep(argv):
+        os.environ["WORKER_ISOLATED_CHILD"] = "1"
+        n = run_social_sweep()
+        _LOG.info("Social sweep child done sales=%s", n)
+        exit_isolated_child(0)
     isolated = parse_worker_argv(argv)
     if isolated is not None:
         job_id, account_id = isolated

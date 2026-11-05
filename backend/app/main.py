@@ -781,11 +781,12 @@ def _start_in_process_maintenance() -> None:
         return
 
     def _loop() -> None:
-        from app.worker import run_idle_maintenance
+        from app.worker import run_idle_maintenance, run_social_sweep
 
         while True:
             time.sleep(60)
             try:
+                run_social_sweep()
                 run_idle_maintenance()
             except Exception:
                 _LOG.exception("in-process idle maintenance failed")
