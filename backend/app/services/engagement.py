@@ -348,17 +348,25 @@ def build_social_calendar(
     sale_ends_at: datetime | None = None,
     auction_url: str = "",
     ctseller_sale_id: int | None = None,
+    pinned: list[dict] | None = None,
 ) -> list[dict]:
-    """Push lots get multiple slots; Needs eyes fill leftovers lightly. Status stays Planned."""
+    """Push lots get multiple slots; Needs eyes fill leftovers lightly. Status stays Planned.
+
+    ``pinned`` slots (approved / posted on the Page) keep their day, time, and lot no
+    matter how ranks move. Each is ``{"post_date", "local_time", "row", "upcoming"}``.
+    They count toward the lot's slot quota and are placed before anything else. Pins
+    before the first calendar day are history and dropped unless ``upcoming``.
+    """
     ordered = sorted(push_rows, key=lambda row: int(row.get("push_rank") or 9999))
     needs_eyes = list(needs_eyes_rows or [])
-    if not ordered and not needs_eyes:
+    pins = list(pinned or [])
+    if not ordered and not needs_eyes and not pins:
         return []
     days = calendar_days(captured_at, sale_ends_at)
     end_day = _pacific(sale_ends_at).date() if sale_ends_at is not None else None
 
     class _Cell:
-        __slots__ = ("day", "slot_time", "platform", "hook", "fmt", "row")
+        __slots__ = ("day", "slot_time", "platform", "hook", "fmt", "row", "pinned")
 
         def __init__(self, day: date, slot_time: time, platform: str, hook: str, fmt: str):
             self.day = day
@@ -367,6 +375,7 @@ def build_social_calendar(
             self.hook = hook
             self.fmt = fmt
             self.row: dict | None = None
+            self.pinned = False
 
     cells: list[_Cell] = []
     for day in days:
@@ -376,6 +385,7 @@ def build_social_calendar(
             cells.append(_Cell(day, slot_time, platform, slot_hook, fmt))
 
     used_days: dict[str, set[date]] = {}
+    placed: dict[str, int] = {}
 
     def _skip_days_for(row: dict, *, rank: int | None = None) -> set[date]:
         blocked = set(used_days.get(_lot_key(row), set()))
@@ -394,11 +404,45 @@ def build_social_calendar(
                     return cell
         return empty[0]
 
+    def _mark_used(row: dict, day: date) -> None:
+        key = _lot_key(row)
+        used_days.setdefault(key, set()).add(day)
+        placed[key] = placed.get(key, 0) + 1
+
     def _place(row: dict, cell: _Cell) -> None:
         cell.row = row
-        used_days.setdefault(_lot_key(row), set()).add(cell.day)
+        _mark_used(row, cell.day)
+
+    needs_days: set[date] = set()
+    loose_pins: list[tuple[dict, date, str]] = []
+    closing_pinned = False
+    for pin in pins:
+        try:
+            pin_day = date.fromisoformat(str(pin.get("post_date") or "")[:10])
+        except ValueError:
+            continue
+        stamp = str(pin.get("local_time") or "")[:5]
+        row = dict(pin.get("row") or {})
+        if not _lot_key(row) or (pin_day < days[0] and not pin.get("upcoming")):
+            continue
+        if stamp == "17:40":
+            closing_pinned = True
+        cell = next(
+            (c for c in cells if c.row is None and c.day == pin_day and c.slot_time.strftime("%H:%M") == stamp),
+            None,
+        )
+        if cell is not None:
+            _place(row, cell)
+            cell.pinned = True
+        else:
+            _mark_used(row, pin_day)
+            loose_pins.append((row, pin_day, stamp))
+        if display_bucket(str(row.get("bucket") or "")) == "Needs eyes":
+            needs_days.add(pin_day)
 
     for row in ordered:
+        if placed.get(_lot_key(row), 0) > 0:
+            continue
         rank = int(row.get("push_rank") or 9999)
         cell = _find_cell(row, preferred_times=(), rank=rank)
         if cell is not None:
@@ -406,8 +450,7 @@ def build_social_calendar(
 
     for row in ordered:
         rank = int(row.get("push_rank") or 9999)
-        extra = _push_daily_quota(rank) - 1
-        for _ in range(max(0, extra)):
+        while placed.get(_lot_key(row), 0) < _push_daily_quota(rank):
             cell = _find_cell(
                 row,
                 preferred_times=(*PREFERRED_PUSH_TIMES[::-1], "12:15", "18:00"),
@@ -417,8 +460,9 @@ def build_social_calendar(
                 break
             _place(row, cell)
 
-    needs_days: set[date] = set()
     for row in needs_eyes:
+        if placed.get(_lot_key(row), 0) > 0:
+            continue
         empty = [
             cell
             for cell in cells
@@ -434,7 +478,17 @@ def build_social_calendar(
 
     posts: list[dict] = []
 
-    def _append(row: dict, *, day: date, local_time: str, platform: str, hook: str, fmt: str, closing: bool) -> None:
+    def _append(
+        row: dict,
+        *,
+        day: date,
+        local_time: str,
+        platform: str,
+        hook: str,
+        fmt: str,
+        closing: bool,
+        is_pinned: bool = False,
+    ) -> None:
         title = str(row.get("title") or row.get("sku") or "Lot").strip()
         url = str(row.get("item_url") or "").strip()
         sale_url = auction_url or ctbids_sale_url(sale_id=ctseller_sale_id, item_url=url)
@@ -472,6 +526,7 @@ def build_social_calendar(
                 ),
                 "status": "Planned",
                 "preflight": PREFLIGHT,
+                "pinned": is_pinned,
             }
         )
 
@@ -486,9 +541,32 @@ def build_social_calendar(
             hook=cell.hook,
             fmt=cell.fmt,
             closing=end_day is not None and cell.day == end_day,
+            is_pinned=cell.pinned,
         )
 
-    if end_day is not None and ordered and end_day >= days[0]:
+    for row, pin_day, stamp in loose_pins:
+        closing = end_day is not None and pin_day == end_day
+        if stamp == "17:40":
+            platform, hook, fmt = "FB + IG Stories", "Closing countdown", "Story Countdown Sticker"
+        else:
+            platform, hook, fmt = next(
+                ((p, h, f) for t, p, h, f in _SLOTS if t.strftime("%H:%M") == stamp),
+                ("Facebook", "Collector find", "Static Photo / Collector Spotlight"),
+            )
+            if closing:
+                hook = "Closing day: " + hook
+        _append(
+            row,
+            day=pin_day,
+            local_time=stamp or "09:00",
+            platform=platform,
+            hook=hook,
+            fmt=fmt,
+            closing=closing,
+            is_pinned=True,
+        )
+
+    if end_day is not None and ordered and end_day >= days[0] and not closing_pinned:
         top = ordered[0]
         top_key = _lot_key(top)
         if end_day not in used_days.get(top_key, set()):

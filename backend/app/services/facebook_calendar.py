@@ -18,7 +18,19 @@ Calendar identity is per lot + day + slot:
 ``pushcal:{sale}:{lot}:{YYYYMMDD}:{slot}`` (slot is ``0900`` / ``1215`` /
 ``1630`` / ``1800`` / ``1740``). A lot can appear on more than one day.
 Legacy keys ``pushcal:{sale}:{lot}`` are the 09:00 Facebook row; undated
-``pushcal:{sale}:{lot}:{slot}`` keys pick up the scheduled date on migrate.
+``pushcal:{sale}:{lot}:{slot}`` keys pick up the date of their own scheduled /
+posted time (never the date of whatever calendar is current).
+
+Safety rules:
+
+* A slot row that is ``scheduled``, ``publishing`` or ``posted`` is **pinned**: the
+  rebuilt calendar keeps that lot on that day and time, and the snapshot sync never
+  deletes, moves, or edits the Graph post. Only unposted slots are regenerated.
+* Publishing claims the slot row (``publishing``) before any Graph call; the unique
+  ``(account_id, calendar_key)`` index makes a second publisher skip it.
+* Auto-approve never re-posts a slot the owner cancelled, retries a failed slot at
+  most ``AUTO_APPROVE_MAX_ATTEMPTS`` times with backoff, and skips accounts whose
+  Page token is dead.
 """
 
 from __future__ import annotations
@@ -47,7 +59,7 @@ from app.services.facebook_page import (
     publish_posts,
     rotate_listing_photos,
 )
-from app.services.meta_graph import MetaGraphError, delete_page_post, update_scheduled_page_post
+from app.services.meta_graph import MetaGraphError, delete_page_post
 
 _LOG = logging.getLogger(__name__)
 
@@ -55,6 +67,25 @@ CALENDAR_SOURCE = "push_calendar"
 FACEBOOK_PLATFORM = "Facebook"
 PUBLISH_TARGET_FACEBOOK_PAGE = "facebook_page"
 UTC = timezone.utc
+
+# Rows in these states own their slot; rebuilds and auto-approve leave them alone.
+PINNED_STATUSES = frozenset({"scheduled", "publishing", "posted"})
+AUTO_APPROVE_MAX_ATTEMPTS = 3
+AUTO_RETRY_BASE = timedelta(minutes=10)
+AUTO_RETRY_MAX = timedelta(hours=6)
+# A ``publishing`` claim older than this crashed mid-Graph-call; the outcome is unknown.
+PUBLISH_CLAIM_STALE = timedelta(minutes=15)
+# Owner Unapprove refuses once the post is this close to going live.
+CANCEL_MIN_LEAD = timedelta(minutes=2)
+
+LOT_LEFT_SALE_NOTE = (
+    "This lot is no longer in the latest Watcher snapshot. The scheduled post is still on "
+    "Facebook — Unapprove it if the lot ended."
+)
+INTERRUPTED_NOTE = (
+    "Publishing was interrupted before Facebook answered. Check the Page before posting this "
+    "slot again — it may already be live."
+)
 
 # Intended spreadsheet platform -> publisher that actually runs today.
 # Change a value here when a native Instagram/TikTok/Stories publisher exists.
@@ -93,6 +124,7 @@ FACEBOOK_STATUS_LABELS: dict[str, str] = {
     "too_soon": "Too soon (under 10 min)",
     "out_of_window": "Too far (over 75 days)",
     "scheduled": "Scheduled",
+    "publishing": "Publishing…",
     "posted": "Posted",
     "failed": "Failed",
     "cancelled": "Cancelled",
@@ -105,6 +137,7 @@ FACEBOOK_BLOCKED_REASONS: dict[str, str] = {
     "too_soon": "Can't schedule: under 10 minutes. Facebook needs 10 minutes — use Post now.",
     "out_of_window": "Can't schedule: more than 75 days ahead. Use Post now to publish immediately.",
     "scheduled": "Already scheduled on the Page.",
+    "publishing": "Being sent to the Page right now.",
     "posted": "Already posted to the Page.",
     "no_lot": "Catalog this lot before posting to the Page.",
     "not_applicable": "This slot is not posting to the Facebook Page.",
@@ -245,9 +278,81 @@ def calendar_key_aliases(key: str | None) -> list[str]:
 
 
 def calendar_keys_match(slot_key: str, wanted: set[str]) -> bool:
+    """Exact dated-key match. An empty selection matches nothing (never "all slots")."""
     if not wanted:
+        return False
+    return migrate_calendar_key(slot_key) in wanted
+
+
+def _as_aware(moment: datetime | None) -> datetime | None:
+    if moment is None:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def effective_calendar_key(row: FacebookPagePost) -> str:
+    """The dated slot key this row owns. Undated legacy keys take the row's own time."""
+    raw = str(getattr(row, "calendar_key", None) or "").strip()
+    if not raw:
+        return ""
+    when = (
+        _as_aware(getattr(row, "scheduled_publish_time", None))
+        or _as_aware(getattr(row, "posted_at", None))
+        or _as_aware(getattr(row, "created_at", None))
+    )
+    return migrate_calendar_key(raw, when=when)
+
+
+def calendar_row_for_key(db: Session, account_id: str, key: str | None) -> FacebookPagePost | None:
+    """The row that owns this dated slot (legacy undated rows only by their own date)."""
+    wanted = migrate_calendar_key(key)
+    if not wanted:
+        return None
+    candidates = (
+        db.query(FacebookPagePost)
+        .filter(
+            FacebookPagePost.account_id == account_id,
+            FacebookPagePost.calendar_key.in_(calendar_key_aliases(wanted)),
+        )
+        .order_by(FacebookPagePost.created_at.desc())
+        .all()
+    )
+    return _index_calendar_rows(candidates).get(wanted)
+
+
+def dated_slot_parts(key: str) -> tuple[str, str] | None:
+    """``(YYYY-MM-DD, HH:MM)`` for a dated slot key, else None."""
+    if not is_dated_slot_key(key):
+        return None
+    parts = key.split(":")
+    ymd, slot = parts[3], parts[4]
+    return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}", f"{slot[:2]}:{slot[2:]}"
+
+
+def requested_slot_keys(slot_keys: list[str] | None) -> set[str]:
+    """Normalize a request's slot keys. Raises 400 when nothing was picked."""
+    wanted = {migrate_calendar_key(key.strip()) for key in (slot_keys or []) if key and key.strip()}
+    wanted.discard("")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Pick at least one calendar slot.")
+    return wanted
+
+
+def auto_retry_backoff(attempts: int) -> timedelta:
+    step = AUTO_RETRY_BASE * (2 ** max(0, int(attempts) - 1))
+    return min(step, AUTO_RETRY_MAX)
+
+
+def auto_retry_allowed(row: FacebookPagePost | None, *, now: datetime) -> bool:
+    """Auto-approve may (re)try this slot. Owner-cancelled and pinned slots: never."""
+    if row is None:
         return True
-    return bool(wanted.intersection(calendar_key_aliases(slot_key)))
+    if row.status != "failed":
+        return False
+    if int(row.attempt_count or 0) >= AUTO_APPROVE_MAX_ATTEMPTS:
+        return False
+    due = _as_aware(row.next_attempt_at)
+    return due is None or due <= _as_utc(now)
 
 
 def slot_angle_for(local_time: str, *, hook: str = "") -> str:
@@ -315,10 +420,103 @@ def _slot_dict(
     }
 
 
+def calendar_rows(db: Session, account_id: str, ctseller_sale_id: int) -> list[FacebookPagePost]:
+    return (
+        db.query(FacebookPagePost)
+        .filter(
+            FacebookPagePost.account_id == account_id,
+            FacebookPagePost.source == CALENDAR_SOURCE,
+            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
+        )
+        .order_by(FacebookPagePost.created_at.desc())
+        .all()
+    )
+
+
+def _index_calendar_rows(records: list[FacebookPagePost]) -> dict[str, FacebookPagePost]:
+    """Effective dated key -> row. A pinned row wins over a failed/cancelled one."""
+    by_key: dict[str, FacebookPagePost] = {}
+    for row in records:
+        key = effective_calendar_key(row)
+        if not key:
+            continue
+        current = by_key.get(key)
+        if current is None or (current.status not in PINNED_STATUSES and row.status in PINNED_STATUSES):
+            by_key[key] = row
+    return by_key
+
+
+def snapshot_payload(row: EngagementSnapshot) -> dict[str, Any]:
+    from app.services.engagement import display_bucket
+
+    return {
+        "push_rank": row.push_rank,
+        "sku": row.sku,
+        "title": row.title,
+        "price": row.price,
+        "watchers": row.watchers,
+        "item_url": row.item_url,
+        "lot_id": row.lot_id,
+        "photo_ids": [],
+        "bucket": display_bucket(row.bucket or "", watchers=row.watchers, bids=row.bids),
+    }
+
+
+def calendar_pins(
+    db: Session,
+    account_id: str,
+    records: list[FacebookPagePost],
+    payload_by_lot: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pinned slots for ``build_social_calendar``: approved/posted rows keep day + time + lot."""
+    pins: list[dict[str, Any]] = []
+    missing: set[str] = set()
+    moment = datetime.now(UTC)
+    for row in records:
+        if row.status not in PINNED_STATUSES or not row.lot_id:
+            continue
+        parts = dated_slot_parts(effective_calendar_key(row))
+        if parts is None:
+            continue
+        if str(row.lot_id) not in payload_by_lot:
+            missing.add(str(row.lot_id))
+        pins.append(
+            {
+                "post_date": parts[0],
+                "local_time": parts[1],
+                "lot_id": str(row.lot_id),
+                "upcoming": row.status != "posted" and not _row_live(row, now=moment),
+            }
+        )
+    stubs: dict[str, dict[str, Any]] = {}
+    if missing:
+        for lot in db.query(Lot).filter(Lot.account_id == account_id, Lot.id.in_(sorted(missing))).all():
+            stubs[lot.id] = {
+                "push_rank": None,
+                "sku": lot.sku or "",
+                "title": lot.auction_title or lot.sku or "Lot",
+                "price": 0,
+                "watchers": 0,
+                "item_url": ctbids_lot_url(lot),
+                "lot_id": lot.id,
+                "photo_ids": [],
+                "bucket": "",
+            }
+    out: list[dict[str, Any]] = []
+    for pin in pins:
+        row = payload_by_lot.get(pin["lot_id"]) or stubs.get(pin["lot_id"])
+        if row is None:
+            continue
+        out.append({**pin, "row": row})
+    return out
+
+
 def facebook_page_slots(
     db: Session,
     account_id: str,
     ctseller_sale_id: int,
+    *,
+    records: list[FacebookPagePost] | None = None,
 ) -> list[dict[str, Any]]:
     rows = (
         db.query(EngagementSnapshot)
@@ -330,28 +528,20 @@ def facebook_page_slots(
     )
     if not rows:
         return []
-    from app.services.engagement import display_bucket
-
     latest = max(rows, key=lambda row: row.captured_at or datetime.min.replace(tzinfo=UTC))
     push_rows = []
     needs_eyes_rows = []
+    payload_by_lot: dict[str, dict[str, Any]] = {}
     for row in rows:
-        bucket = display_bucket(row.bucket or "", watchers=row.watchers, bids=row.bids)
-        payload = {
-            "push_rank": row.push_rank,
-            "sku": row.sku,
-            "title": row.title,
-            "price": row.price,
-            "watchers": row.watchers,
-            "item_url": row.item_url,
-            "lot_id": row.lot_id,
-            "photo_ids": [],
-            "bucket": bucket,
-        }
-        if bucket == "Push":
+        payload = snapshot_payload(row)
+        if row.lot_id:
+            payload_by_lot.setdefault(str(row.lot_id), payload)
+        if payload["bucket"] == "Push":
             push_rows.append(payload)
-        elif bucket == "Needs eyes":
+        elif payload["bucket"] == "Needs eyes":
             needs_eyes_rows.append(payload)
+    if records is None:
+        records = calendar_rows(db, account_id, ctseller_sale_id)
     posts = build_social_calendar(
         push_rows,
         needs_eyes_rows=needs_eyes_rows,
@@ -360,6 +550,7 @@ def facebook_page_slots(
         sale_ends_at=latest.sale_ends_at,
         auction_url=latest.auction_url or "",
         ctseller_sale_id=int(ctseller_sale_id),
+        pinned=calendar_pins(db, account_id, records, payload_by_lot),
     )
     out: list[dict[str, Any]] = []
     for post in posts:
@@ -372,18 +563,6 @@ def facebook_page_slots(
     return out
 
 
-def _index_calendar_rows(records: list[FacebookPagePost]) -> dict[str, FacebookPagePost]:
-    by_key: dict[str, FacebookPagePost] = {}
-    for row in records:
-        key = str(getattr(row, "calendar_key", None) or "").strip()
-        if not key:
-            continue
-        for alias in calendar_key_aliases(key):
-            if alias not in by_key:
-                by_key[alias] = row
-    return by_key
-
-
 def annotate_social_calendar(
     db: Session,
     account_id: str,
@@ -391,18 +570,12 @@ def annotate_social_calendar(
     posts: list[Any],
     *,
     now: datetime | None = None,
+    records: list[FacebookPagePost] | None = None,
 ) -> list[dict[str, Any]]:
-    records = (
-        db.query(FacebookPagePost)
-        .filter(
-            FacebookPagePost.account_id == account_id,
-            FacebookPagePost.source == CALENDAR_SOURCE,
-            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
-        )
-        .order_by(FacebookPagePost.created_at.desc())
-        .all()
-    )
+    if records is None:
+        records = calendar_rows(db, account_id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
+    moment = _as_utc(now or datetime.now(UTC))
     annotated: list[dict[str, Any]] = []
     for post in posts:
         data = post if isinstance(post, dict) else post.model_dump()
@@ -422,6 +595,7 @@ def annotate_social_calendar(
             "facebook_slot_at": None,
             "facebook_post_id": None,
             "facebook_error": None,
+            "facebook_review_note": None,
         }
         if target != PUBLISH_TARGET_FACEBOOK_PAGE:
             annotated.append({**data, **extra})
@@ -437,36 +611,34 @@ def annotate_social_calendar(
         when = slot_datetime(str(data["post_date"]), str(data["local_time"]), zone=str(data.get("zone") or "PT"))
         window = schedule_window_state(when, now=now)
         row = by_key.get(key)
-        if row is None:
-            for alias in calendar_key_aliases(key):
-                row = by_key.get(alias)
-                if row is not None:
-                    break
         status = "planned"
-        if row and row.status in {"scheduled", "posted", "failed", "cancelled"}:
+        if row and row.status in {"scheduled", "publishing", "posted", "failed", "cancelled"}:
             status = row.status
+            # Facebook publishes a scheduled post on its own at slot time.
+            if status == "scheduled" and _row_live(row, now=moment):
+                status = "posted"
         elif window == "missed":
             status = "missed"
         elif window == "too_soon":
             status = "too_soon"
         elif window == "too_far":
             status = "out_of_window"
-        schedulable = window == "ok" and (not row or row.status in {"failed", "cancelled"})
-        if row and row.status == "scheduled":
-            schedulable = False
-        can_post_now = not row or row.status in {"failed", "cancelled"}
+        open_slot = not row or row.status in {"failed", "cancelled"}
+        schedulable = window == "ok" and open_slot
+        can_cancel = bool(row and status == "scheduled" and _cancel_allowed(row, now=moment))
         extra.update(
             {
                 "slot_key": key,
                 "facebook_schedulable": schedulable,
-                "facebook_can_post_now": can_post_now,
-                "facebook_can_cancel": bool(row and row.status == "scheduled"),
+                "facebook_can_post_now": open_slot,
+                "facebook_can_cancel": can_cancel,
                 "facebook_status": status,
                 "facebook_status_label": facebook_status_label(status),
                 "facebook_blocked_reason": facebook_blocked_reason(status, schedulable=schedulable),
                 "facebook_slot_at": when,
                 "facebook_post_id": (row.facebook_post_id if row else None),
                 "facebook_error": (row.error_message if row else None),
+                "facebook_review_note": (row.review_note if row else None),
                 "preflight": PAGE_PREFLIGHT,
             }
         )
@@ -499,6 +671,17 @@ def _connected_page(account: Account) -> tuple[str, str] | None:
     return page_id, token
 
 
+def _row_live(row: FacebookPagePost, *, now: datetime) -> bool:
+    """A scheduled row whose slot time has passed is live on Facebook."""
+    when = _as_aware(row.scheduled_publish_time)
+    return when is not None and when <= _as_utc(now)
+
+
+def _cancel_allowed(row: FacebookPagePost, *, now: datetime) -> bool:
+    when = _as_aware(row.scheduled_publish_time)
+    return when is not None and when - _as_utc(now) > CANCEL_MIN_LEAD
+
+
 def _cancel_scheduled(
     db: Session,
     account: Account,
@@ -506,6 +689,7 @@ def _cancel_scheduled(
     *,
     reason: str,
 ) -> None:
+    """Owner-initiated only. Snapshot sync and rebuilds never call this."""
     creds = _connected_page(account)
     graph_id = str(row.facebook_post_id or "").strip()
     if creds and graph_id:
@@ -518,45 +702,63 @@ def _cancel_scheduled(
                 return
     row.status = "cancelled"
     row.error_message = reason[:2000]
+    row.review_note = None
     db.add(row)
     db.commit()
 
 
-def _reschedule_row(
+def reconcile_calendar_rows(
     db: Session,
     account: Account,
-    row: FacebookPagePost,
-    when: datetime,
-) -> None:
-    creds = _connected_page(account)
-    graph_id = str(row.facebook_post_id or "").strip()
-    if creds and graph_id:
-        try:
-            update_scheduled_page_post(
-                post_id=graph_id,
-                page_token=creds[1],
-                scheduled_unix=int(_as_utc(when).timestamp()),
-            )
-        except MetaGraphError as exc:
-            _LOG.warning("Could not reschedule Facebook post %s: %s", graph_id, exc)
-            if exc.is_token_error:
-                _mark_token_error(db, account, str(exc))
+    ctseller_sale_id: int,
+    *,
+    now: datetime | None = None,
+    records: list[FacebookPagePost] | None = None,
+) -> int:
+    """Local bookkeeping only — never a Graph call. Returns rows changed.
+
+    * ``scheduled`` past its slot time -> ``posted`` (Facebook published it).
+    * ``publishing`` with a stale claim -> ``failed`` with a check-the-Page note and no
+      auto retries (the Graph call may have succeeded).
+    * ``scheduled`` whose lot left the sale snapshot -> review note for the owner. The
+      Graph post is left alone.
+    """
+    moment = _as_utc(now or datetime.now(UTC))
+    if records is None:
+        records = calendar_rows(db, account.id, ctseller_sale_id)
+    snapshot_lots = {
+        str(row[0])
+        for row in db.query(EngagementSnapshot.lot_id)
+        .filter(
+            EngagementSnapshot.account_id == account.id,
+            EngagementSnapshot.ctseller_sale_id == int(ctseller_sale_id),
+            EngagementSnapshot.lot_id.isnot(None),
+        )
+        .all()
+    }
+    changed = 0
+    for row in records:
+        if row.status == "scheduled" and _row_live(row, now=moment):
+            row.status = "posted"
+            row.posted_at = row.posted_at or row.scheduled_publish_time
+            row.review_note = None
+            changed += 1
+        elif row.status == "publishing":
+            claimed = _as_aware(row.claimed_at)
+            if claimed is None or moment - claimed >= PUBLISH_CLAIM_STALE:
                 row.status = "failed"
-                row.error_message = str(exc)[:2000]
-                db.add(row)
-                db.commit()
-                return
-            row.status = "failed"
-            row.error_message = str(exc)[:2000]
-            db.add(row)
-            db.commit()
-            return
-    row.scheduled_publish_time = _as_utc(when)
-    row.status = "scheduled"
-    row.error_message = None
-    _clear_token_error(db, account)
-    db.add(row)
-    db.commit()
+                row.error_message = INTERRUPTED_NOTE
+                row.review_note = INTERRUPTED_NOTE
+                row.attempt_count = max(int(row.attempt_count or 0), AUTO_APPROVE_MAX_ATTEMPTS)
+                changed += 1
+        if row.status == "scheduled" and row.review_note in (None, LOT_LEFT_SALE_NOTE):
+            note = None if str(row.lot_id or "") in snapshot_lots else LOT_LEFT_SALE_NOTE
+            if row.review_note != note:
+                row.review_note = note
+                changed += 1
+    if changed:
+        db.commit()
+    return changed
 
 
 def _photos_for_slot(db: Session, lot: Lot, slot_id: str) -> list:
@@ -676,12 +878,25 @@ def _draft_item(
 
 
 def _record_for_slot(by_key: dict[str, FacebookPagePost], slot: dict[str, Any]) -> FacebookPagePost | None:
-    key = str(slot.get("slot_key") or "")
-    for alias in calendar_key_aliases(key):
-        row = by_key.get(alias)
-        if row is not None:
-            return row
-    return None
+    return by_key.get(migrate_calendar_key(str(slot.get("slot_key") or "")))
+
+
+def _account_owner(db: Session, account_id: str) -> User | None:
+    return (
+        db.query(User)
+        .filter(User.account_id == account_id, User.role == "owner")
+        .order_by(User.created_at.asc())
+        .first()
+    )
+
+
+def auto_approve_ready(account: Account) -> bool:
+    """Auto-approve on, Page connected, and no recorded dead-token error."""
+    if not bool(getattr(account, "facebook_calendar_auto_approve", False)):
+        return False
+    if str(getattr(account, "facebook_token_error", None) or "").strip():
+        return False
+    return _connected_page(account) is not None
 
 
 def sync_facebook_calendar_after_snapshot(
@@ -692,100 +907,39 @@ def sync_facebook_calendar_after_snapshot(
     now: datetime | None = None,
     publish_new_slots: bool = False,
 ) -> None:
-    """Update/delete already-approved Graph posts; auto-approve new slots only when asked.
+    """Reconcile slot rows locally; auto-approve new slots only when asked.
 
-    Snapshot ingest must pass ``publish_new_slots=False`` so a catalogger watcher upload
-    cannot publish. Owner settings and the auto-approve scheduler pass True.
+    Never deletes, moves, or edits a Graph post: approved / posted slots are pinned and
+    the rebuilt calendar keeps them. Snapshot ingest passes ``publish_new_slots=False``
+    so a catalogger Watcher upload cannot publish. Owner settings and the auto-approve
+    sweep pass True.
     """
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         return
-    slots = facebook_page_slots(db, account_id, ctseller_sale_id)
-    by_key: dict[str, dict[str, Any]] = {}
-    for slot in slots:
-        key = str(slot["slot_key"])
-        by_key[key] = slot
-        for alias in calendar_key_aliases(key):
-            by_key.setdefault(alias, slot)
-    scheduled_rows = (
-        db.query(FacebookPagePost)
-        .filter(
-            FacebookPagePost.account_id == account_id,
-            FacebookPagePost.source == CALENDAR_SOURCE,
-            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
-            FacebookPagePost.status == "scheduled",
-        )
-        .all()
-    )
-    for row in scheduled_rows:
-        key = str(getattr(row, "calendar_key", None) or "").strip()
-        migrated = migrate_calendar_key(key, when=row.scheduled_publish_time or row.posted_at)
-        slot = by_key.get(migrated) or by_key.get(key)
-        if slot is None:
-            for alias in calendar_key_aliases(key) + calendar_key_aliases(migrated):
-                slot = by_key.get(alias)
-                if slot is not None:
-                    migrated = str(slot["slot_key"])
-                    break
-        if slot is None:
-            _cancel_scheduled(
-                db,
-                account,
-                row,
-                reason="Lot left this Push calendar slot.",
-            )
-            continue
-        dated = str(slot["slot_key"])
-        if key and key != dated:
-            row.calendar_key = dated
-            db.add(row)
-            db.commit()
-        window = schedule_window_state(slot["when"], now=now)
-        old = row.scheduled_publish_time
-        same_time = False
-        if old is not None:
-            same_time = abs((_as_utc(old) - _as_utc(slot["when"])).total_seconds()) < 60
-        if window != "ok":
-            if not same_time or window == "missed":
-                _cancel_scheduled(
-                    db,
-                    account,
-                    row,
-                    reason="Push calendar slot is outside Facebook's 10-minute to 75-day window.",
-                )
-            continue
-        if not same_time:
-            _reschedule_row(db, account, row, slot["when"])
-
+    reconcile_calendar_rows(db, account, ctseller_sale_id, now=now)
     if not publish_new_slots:
         return
     if not bool(getattr(account, "facebook_calendar_auto_approve", False)):
         return
-    if not _connected_page(account):
+    if not auto_approve_ready(account):
+        _LOG.info(
+            "Auto-approve skipped account=%s sale=%s: Facebook Page not connected or token needs reconnect",
+            account_id,
+            ctseller_sale_id,
+        )
         return
-    owner = (
-        db.query(User)
-        .filter(User.account_id == account_id, User.role == "owner")
-        .order_by(User.created_at.asc())
-        .first()
-    )
+    owner = _account_owner(db, account_id)
     if owner is None:
         return
+    moment = _as_utc(now or datetime.now(UTC))
+    records = calendar_rows(db, account_id, ctseller_sale_id)
+    by_key = _index_calendar_rows(records)
     pending: list[dict[str, Any]] = []
-    for slot in slots:
-        if schedule_window_state(slot["when"], now=now) != "ok":
+    for slot in facebook_page_slots(db, account_id, ctseller_sale_id, records=records):
+        if schedule_window_state(slot["when"], now=moment) != "ok":
             continue
-        key = str(slot.get("slot_key") or "")
-        existing_cal = (
-            db.query(FacebookPagePost)
-            .filter(
-                FacebookPagePost.account_id == account_id,
-                FacebookPagePost.calendar_key.in_(calendar_key_aliases(key)),
-                FacebookPagePost.status.in_(("scheduled", "posted")),
-            )
-            .first()
-        )
-        if existing_cal:
+        if not auto_retry_allowed(_record_for_slot(by_key, slot), now=moment):
             continue
         item = _draft_item(db, account, slot)
         if item:
@@ -834,6 +988,8 @@ def sweep_calendar_auto_approve(db: Session, *, now: datetime | None = None) -> 
     )
     n = 0
     for account in accounts:
+        if not auto_approve_ready(account):
+            continue
         sale_ids = {
             int(row[0])
             for row in db.query(EngagementSnapshot.ctseller_sale_id)
@@ -849,12 +1005,20 @@ def sweep_calendar_auto_approve(db: Session, *, now: datetime | None = None) -> 
                 )
                 n += 1
             except Exception:
+                db.rollback()
                 _LOG.exception(
                     "Auto-approve sweep failed account=%s sale=%s",
                     account.id,
                     sale_id,
                 )
     return n
+
+
+def _skip(lot_id: str, key: str, error: str, *, failed: bool = False) -> dict[str, Any]:
+    row: dict[str, Any] = {"lot_id": lot_id, "calendar_key": key, "ok": False, "error": error}
+    if not failed:
+        row["skipped"] = True
+    return row
 
 
 def calendar_publish_items(
@@ -868,41 +1032,48 @@ def calendar_publish_items(
     post_now: bool = False,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return (publishable items, skipped result rows) for Push-calendar Page slots."""
-    slots = facebook_page_slots(db, account.id, ctseller_sale_id)
-    wanted_raw = {key.strip() for key in slot_keys if key and key.strip()}
-    wanted: set[str] = set()
-    for key in wanted_raw:
-        wanted.update(calendar_key_aliases(key))
-        wanted.add(migrate_calendar_key(key))
-    chosen = [slot for slot in slots if not wanted_raw or calendar_keys_match(str(slot["slot_key"]), wanted)]
+    """Return (publishable items, skipped result rows) for Push-calendar Page slots.
+
+    Only the exact slot keys asked for. An empty request is a 400, never "every slot".
+    Keys that are no longer on the calendar come back as skipped rows.
+    """
+    wanted = requested_slot_keys(slot_keys)
+    records = calendar_rows(db, account.id, ctseller_sale_id)
+    by_key = _index_calendar_rows(records)
+    slots = facebook_page_slots(db, account.id, ctseller_sale_id, records=records)
+    chosen = [slot for slot in slots if migrate_calendar_key(str(slot["slot_key"])) in wanted]
     captions = captions or {}
     publishable: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    found = {migrate_calendar_key(str(slot["slot_key"])) for slot in chosen}
+    for key in sorted(wanted - found):
+        parts = key.split(":")
+        lot_id = parts[2] if len(parts) > 2 else ""
+        skipped.append(
+            _skip(lot_id, key, "This slot is no longer on the Push calendar. Refresh and approve again.")
+        )
     for slot in chosen:
         window = schedule_window_state(slot["when"], now=now)
         lot_id = str(slot["lot_id"])
         key = str(slot["slot_key"])
+        existing = _record_for_slot(by_key, slot)
+        if existing is not None and existing.status in PINNED_STATUSES:
+            skipped.append(_skip(lot_id, key, "This Push-calendar slot is already scheduled or posted."))
+            continue
         if not post_now and window != "ok":
             skipped.append(
-                {
-                    "lot_id": lot_id,
-                    "calendar_key": key,
-                    "ok": False,
-                    "skipped": True,
-                    "error": "This calendar slot is outside Facebook's 10-minute to 75-day window. Use Post now to publish immediately.",
-                }
+                _skip(
+                    lot_id,
+                    key,
+                    "This calendar slot is outside Facebook's 10-minute to 75-day window. "
+                    "Use Post now to publish immediately.",
+                )
             )
             continue
         drafted = _draft_item(db, account, slot, include_follow_hook=include_follow_hook)
         if not drafted:
             skipped.append(
-                {
-                    "lot_id": lot_id,
-                    "calendar_key": key,
-                    "ok": False,
-                    "error": "Catalog the lot with listing photos before scheduling the Page post.",
-                }
+                _skip(lot_id, key, "Catalog the lot with listing photos before scheduling the Page post.", failed=True)
             )
             continue
         caption = (
@@ -924,44 +1095,32 @@ def cancel_calendar_slots(
     account: Account,
     ctseller_sale_id: int,
     slot_keys: list[str],
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Delete unpublished Graph posts and mark those calendar slots cancelled."""
-    wanted_raw = [key.strip() for key in slot_keys if key and str(key).strip()]
-    if not wanted_raw:
-        raise HTTPException(status_code=400, detail="Pick at least one calendar slot to unapprove.")
-    records = (
-        db.query(FacebookPagePost)
-        .filter(
-            FacebookPagePost.account_id == account.id,
-            FacebookPagePost.source == CALENDAR_SOURCE,
-            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
-        )
-        .order_by(FacebookPagePost.created_at.desc())
-        .all()
-    )
-    by_key = _index_calendar_rows(records)
+    """Owner Unapprove: delete a still-unpublished scheduled Graph post. Live posts are refused."""
+    wanted = requested_slot_keys(slot_keys)
+    moment = _as_utc(now or datetime.now(UTC))
+    by_key = _index_calendar_rows(calendar_rows(db, account.id, ctseller_sale_id))
     results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in wanted_raw:
-        key = migrate_calendar_key(raw)
-        if key in seen:
-            continue
-        seen.add(key)
-        row = None
-        for alias in calendar_key_aliases(key):
-            row = by_key.get(alias)
-            if row is not None:
-                break
+    for key in sorted(wanted):
+        row = by_key.get(key)
         lot_id = str(row.lot_id) if row and row.lot_id else ""
         if row is None or row.status != "scheduled":
+            results.append(_skip(lot_id, key, "No scheduled Page post for this slot."))
+            continue
+        if not _cancel_allowed(row, now=moment):
+            if _row_live(row, now=moment):
+                row.status = "posted"
+                row.posted_at = row.posted_at or row.scheduled_publish_time
+                db.add(row)
+                db.commit()
             results.append(
-                {
-                    "lot_id": lot_id,
-                    "calendar_key": key,
-                    "ok": False,
-                    "skipped": True,
-                    "error": "No scheduled Page post for this slot.",
-                }
+                _skip(
+                    lot_id,
+                    key,
+                    "This post is already live (or about to go live) on Facebook. "
+                    "Delete it on the Page if it should come down.",
+                )
             )
             continue
         _cancel_scheduled(
@@ -1012,29 +1171,17 @@ def calendar_preview(
             status_code=400,
             detail="Connect a Facebook Page on Account settings before drafting a post.",
         )
-    slots = facebook_page_slots(db, account.id, ctseller_sale_id)
-    wanted_raw = {key.strip() for key in slot_keys if key and key.strip()}
-    wanted: set[str] = set()
-    for key in wanted_raw:
-        wanted.update(calendar_key_aliases(key))
-        wanted.add(migrate_calendar_key(key))
-    chosen = [slot for slot in slots if not wanted_raw or calendar_keys_match(str(slot["slot_key"]), wanted)]
-    records = (
-        db.query(FacebookPagePost)
-        .filter(
-            FacebookPagePost.account_id == account.id,
-            FacebookPagePost.source == CALENDAR_SOURCE,
-            FacebookPagePost.calendar_sale_id == int(ctseller_sale_id),
-        )
-        .order_by(FacebookPagePost.created_at.desc())
-        .all()
-    )
+    wanted = requested_slot_keys(slot_keys)
+    records = calendar_rows(db, account.id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
+    slots = facebook_page_slots(db, account.id, ctseller_sale_id, records=records)
+    chosen = [slot for slot in slots if migrate_calendar_key(str(slot["slot_key"])) in wanted]
     drafts: list[dict[str, Any]] = []
     for slot in chosen:
         key = str(slot["slot_key"])
         row = _record_for_slot(by_key, slot)
-        drafted = _draft_item(db, account, slot, include_follow_hook=include_follow_hook)
+        already = bool(row and row.status in PINNED_STATUSES)
+        drafted = None if already else _draft_item(db, account, slot, include_follow_hook=include_follow_hook)
         if not drafted:
             drafts.append(
                 {
@@ -1043,12 +1190,16 @@ def calendar_preview(
                     "title": slot.get("title") or "",
                     "item_url": slot.get("item_url") or "",
                     "sale_ends_at": None,
-                    "caption": "",
+                    "caption": (row.caption if already and row else ""),
                     "photo_ids": [],
                     "photo_count": 0,
-                    "already_posted": bool(row and row.status in {"posted", "scheduled"}),
+                    "already_posted": already,
                     "existing_posts": [],
-                    "error": "Catalog the lot with listing photos before scheduling the Page post.",
+                    "error": (
+                        "This Push-calendar slot is already scheduled or posted."
+                        if already
+                        else "Catalog the lot with listing photos before scheduling the Page post."
+                    ),
                     "calendar_key": key,
                     "intended_platform": slot.get("intended_platform") or "",
                     "publish_target": slot.get("publish_target") or PUBLISH_TARGET_FACEBOOK_PAGE,
@@ -1072,7 +1223,7 @@ def calendar_preview(
         drafts.append(
             {
                 **drafted,
-                "already_posted": bool(row and row.status in {"posted", "scheduled"}),
+                "already_posted": False,
                 "existing_posts": existing,
                 "error": None,
             }

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from jose import JWTError, jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog_storage import resolve_catalog_storage_path
@@ -443,7 +444,7 @@ def _existing_posts(db: Session, account_id: str, lot_id: str) -> list[FacebookP
         .filter(
             FacebookPagePost.account_id == account_id,
             FacebookPagePost.lot_id == lot_id,
-            FacebookPagePost.status.in_(("posted", "scheduled")),
+            FacebookPagePost.status.in_(("posted", "scheduled", "publishing")),
         )
         .order_by(FacebookPagePost.created_at.desc())
         .all()
@@ -692,15 +693,24 @@ def publish_posts(
             on_result(row)
         return row
 
-    for item in items:
+    from app.services.click_tracking import (
+        CHANNEL_PAGE_POST,
+        bind_links_to_post,
+        rewrite_copy_with_tracked_links,
+    )
+    from app.services.facebook_calendar import (
+        AUTO_APPROVE_MAX_ATTEMPTS,
+        PINNED_STATUSES,
+        auto_retry_backoff,
+        calendar_row_for_key,
+        migrate_calendar_key,
+    )
+
+    for index, item in enumerate(items):
         lot_id = str(item.get("lot_id") or "").strip()
         caption = str(item.get("caption") or "").strip()
         scheduled = item.get("scheduled_publish_time")
-        calendar_key = str(item.get("calendar_key") or "").strip() or None
-        if calendar_key:
-            from app.services.facebook_calendar import calendar_key_aliases, migrate_calendar_key
-
-            calendar_key = migrate_calendar_key(calendar_key) or None
+        calendar_key = migrate_calendar_key(str(item.get("calendar_key") or "").strip()) or None
         calendar_sale_id = item.get("calendar_sale_id")
         try:
             calendar_sale_id = int(calendar_sale_id) if calendar_sale_id is not None else None
@@ -719,21 +729,9 @@ def publish_posts(
         if not caption:
             _emit({"lot_id": lot_id, "calendar_key": calendar_key, "ok": False, "error": "Caption is empty"})
             continue
-        cal_row = None
-        if calendar_key:
-            from app.services.facebook_calendar import calendar_key_aliases
-
-            cal_row = (
-                db.query(FacebookPagePost)
-                .filter(
-                    FacebookPagePost.account_id == account.id,
-                    FacebookPagePost.calendar_key.in_(calendar_key_aliases(calendar_key)),
-                )
-                .order_by(FacebookPagePost.created_at.desc())
-                .first()
-            )
-        existing = _existing_posts(db, account.id, lot.id)
-        if cal_row and cal_row.status in {"posted", "scheduled"} and not force:
+        cal_row = calendar_row_for_key(db, account.id, calendar_key) if calendar_key else None
+        # A calendar slot posts once. ``force`` only re-posts plain lot posts.
+        if cal_row is not None and cal_row.status in PINNED_STATUSES:
             _emit(
                 {
                     "lot_id": lot_id,
@@ -744,11 +742,9 @@ def publish_posts(
                 }
             )
             continue
-        # Calendar slots on the same lot must not block each other. Lot/queue posts
-        # still skip when this lot already has a posted/scheduled Page row.
         if not calendar_key:
-            other_active = [row for row in existing if cal_row is None or row.id != cal_row.id]
-            if other_active and not force:
+            existing = _existing_posts(db, account.id, lot.id)
+            if existing and not force:
                 _emit(
                     {
                         "lot_id": lot_id,
@@ -775,69 +771,107 @@ def publish_posts(
         scheduled_at = None
         scheduled_unix = None
         if scheduled is not None:
-            scheduled_at = validate_scheduled_time(scheduled, now=now)
+            try:
+                scheduled_at = validate_scheduled_time(scheduled, now=now)
+            except HTTPException as exc:
+                _emit(
+                    {
+                        "lot_id": lot_id,
+                        "calendar_key": calendar_key,
+                        "ok": False,
+                        "skipped": True,
+                        "error": f"{exc.detail} Use Post now to publish immediately.",
+                    }
+                )
+                continue
             scheduled_unix = int(scheduled_at.timestamp())
 
-        if cal_row is not None and cal_row.status in {"failed", "cancelled"}:
-            record = cal_row
-            record.user_id = user.id
-            record.lot_id = lot.id
-            record.lot_ids_json = json.dumps([lot.id])
-            record.photo_ids_json = json.dumps([p.id for p in photos])
-            record.facebook_page_id = page_id
-            record.caption = caption
-            record.include_follow_hook = include_follow_hook
-            record.source = (source or "lot")[:32]
-            record.status = "failed"
-            record.scheduled_publish_time = scheduled_at
-            record.facebook_post_id = None
-            record.posted_at = None
-            record.error_message = None
-            record.calendar_key = calendar_key
-            record.calendar_sale_id = calendar_sale_id
-        else:
-            record = FacebookPagePost(
-                account_id=account.id,
-                user_id=user.id,
-                lot_id=lot.id,
-                lot_ids_json=json.dumps([lot.id]),
-                photo_ids_json=json.dumps([p.id for p in photos]),
-                facebook_page_id=page_id,
-                caption=caption,
-                include_follow_hook=include_follow_hook,
-                source=(source or "lot")[:32],
-                calendar_key=calendar_key,
-                calendar_sale_id=calendar_sale_id,
-                status="failed",
-                scheduled_publish_time=scheduled_at,
+        claimed_at = datetime.now(timezone.utc)
+        fields = {
+            "user_id": user.id,
+            "lot_id": lot.id,
+            "lot_ids_json": json.dumps([lot.id]),
+            "photo_ids_json": json.dumps([p.id for p in photos]),
+            "facebook_page_id": page_id,
+            "caption": caption,
+            "include_follow_hook": include_follow_hook,
+            "source": (source or "lot")[:32],
+            "calendar_key": calendar_key,
+            "calendar_sale_id": calendar_sale_id,
+            "status": "publishing",
+            "claimed_at": claimed_at,
+            "scheduled_publish_time": scheduled_at,
+            "facebook_post_id": None,
+            "posted_at": None,
+            "error_message": None,
+        }
+        if cal_row is not None:
+            # Compare-and-set so two publishers cannot both claim a failed/cancelled slot.
+            won = (
+                db.query(FacebookPagePost)
+                .filter(FacebookPagePost.id == cal_row.id, FacebookPagePost.status == cal_row.status)
+                .update(fields, synchronize_session=False)
             )
-        db.add(record)
-        db.flush()
-        from app.services.click_tracking import (
-            CHANNEL_PAGE_POST,
-            bind_links_to_post,
-            rewrite_copy_with_tracked_links,
-        )
+            if won != 1:
+                db.rollback()
+                _emit(
+                    {
+                        "lot_id": lot_id,
+                        "calendar_key": calendar_key,
+                        "ok": False,
+                        "skipped": True,
+                        "error": "This Push-calendar slot is already being posted.",
+                    }
+                )
+                continue
+            db.commit()
+            db.refresh(cal_row)
+            record = cal_row
+        else:
+            record = FacebookPagePost(account_id=account.id, **fields)
+            db.add(record)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                _emit(
+                    {
+                        "lot_id": lot_id,
+                        "calendar_key": calendar_key,
+                        "ok": False,
+                        "skipped": True,
+                        "error": "This Push-calendar slot is already being posted.",
+                    }
+                )
+                continue
 
-        caption = rewrite_copy_with_tracked_links(
-            db,
-            account_id=account.id,
-            lot=lot,
-            text=caption,
-            channel=CHANNEL_PAGE_POST,
-            calendar_key=calendar_key or "",
-            facebook_post_id=record.id,
-        )
-        record.caption = caption
-        bind_links_to_post(
-            db,
-            account_id=account.id,
-            lot_id=lot.id,
-            channel=CHANNEL_PAGE_POST,
-            calendar_key=calendar_key or "",
-            facebook_post_id=record.id,
-        )
+        try:
+            caption = rewrite_copy_with_tracked_links(
+                db,
+                account_id=account.id,
+                lot=lot,
+                text=caption,
+                channel=CHANNEL_PAGE_POST,
+                calendar_key=calendar_key or "",
+                facebook_post_id=record.id,
+            )
+            record.caption = caption
+            bind_links_to_post(
+                db,
+                account_id=account.id,
+                lot_id=lot.id,
+                channel=CHANNEL_PAGE_POST,
+                calendar_key=calendar_key or "",
+                facebook_post_id=record.id,
+            )
+            db.add(record)
+            db.commit()
+        except Exception:
+            db.rollback()
+            _LOG.exception("Tracked links failed for Facebook post %s; posting untracked URLs", record.id)
 
+        error: MetaGraphError | None = None
+        post_id = ""
         try:
             media_ids: list[str] = []
             for photo in photos:
@@ -863,12 +897,26 @@ def publish_posts(
                 scheduled_unix=scheduled_unix,
             )
         except MetaGraphError as exc:
-            record.error_message = str(exc)[:2000]
+            error = exc
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("Facebook Page post crashed record=%s", record.id)
+            error = MetaGraphError(f"Facebook post failed: {exc}")
+
+        if error is not None:
+            attempts = int(record.attempt_count or 0) + 1
             record.status = "failed"
+            record.claimed_at = None
+            record.error_message = str(error)[:2000]
+            record.attempt_count = attempts
+            record.next_attempt_at = (now or datetime.now(timezone.utc)) + auto_retry_backoff(attempts)
+            if calendar_key and attempts >= AUTO_APPROVE_MAX_ATTEMPTS:
+                record.review_note = (
+                    f"Stopped retrying after {attempts} failed attempts. Fix the error, then Approve again."
+                )
             db.add(record)
             db.commit()
-            if exc.is_token_error:
-                _mark_token_error(db, account, str(exc))
+            if error.is_token_error:
+                _mark_token_error(db, account, str(error))
                 _emit(
                     {
                         "lot_id": lot_id,
@@ -876,9 +924,20 @@ def publish_posts(
                         "ok": False,
                         "post_id": record.id,
                         "needs_reconnect": True,
-                        "error": str(exc),
+                        "error": str(error),
                     }
                 )
+                for rest in items[index + 1 :]:
+                    _emit(
+                        {
+                            "lot_id": str(rest.get("lot_id") or ""),
+                            "calendar_key": migrate_calendar_key(str(rest.get("calendar_key") or "")) or None,
+                            "ok": False,
+                            "skipped": True,
+                            "needs_reconnect": True,
+                            "error": "Not sent: reconnect the Facebook Page first.",
+                        }
+                    )
                 break
             _emit(
                 {
@@ -886,7 +945,7 @@ def publish_posts(
                     "calendar_key": calendar_key,
                     "ok": False,
                     "post_id": record.id,
-                    "error": str(exc),
+                    "error": str(error),
                 }
             )
             continue
@@ -894,7 +953,11 @@ def publish_posts(
         record.facebook_post_id = post_id
         record.status = "scheduled" if scheduled_unix else "posted"
         record.posted_at = None if scheduled_unix else datetime.now(timezone.utc)
+        record.claimed_at = None
         record.error_message = None
+        record.review_note = None
+        record.attempt_count = 0
+        record.next_attempt_at = None
         _clear_token_error(db, account)
         db.add(record)
         db.commit()

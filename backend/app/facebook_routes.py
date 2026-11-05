@@ -97,6 +97,8 @@ def _post_out(row: FacebookPagePost) -> FacebookPagePostOut:
         scheduled_publish_time=row.scheduled_publish_time,
         posted_at=row.posted_at,
         error_message=row.error_message,
+        review_note=row.review_note,
+        attempt_count=int(row.attempt_count or 0),
         created_at=row.created_at,
     )
 

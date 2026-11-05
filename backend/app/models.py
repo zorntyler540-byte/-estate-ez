@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -425,9 +425,20 @@ class FacebookPagePost(Base):
     Push-calendar rows keep an intended spreadsheet platform; v1 still stores a
     Page feed post here. Native Instagram / Stories / TikTok publishers should
     get their own tables rather than reuse this row.
+
+    A calendar slot owns exactly one row (unique ``account_id`` + ``calendar_key``).
+    ``publishing`` is claimed before any Graph call so a second publisher skips it.
     """
 
     __tablename__ = "facebook_page_posts"
+    __table_args__ = (
+        Index(
+            "uq_facebook_page_posts_account_calendar_key",
+            "account_id",
+            "calendar_key",
+            unique=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
@@ -446,6 +457,10 @@ class FacebookPagePost(Base):
     scheduled_publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

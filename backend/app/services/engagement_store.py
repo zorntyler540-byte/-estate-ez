@@ -542,8 +542,11 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
     detail = engagement_sale_detail(db, account_id, ctseller_sale_id)
     if detail is None:
         return None
+    from app.services.facebook_calendar import annotate_social_calendar, calendar_pins, calendar_rows
+
     push_rows = []
     needs_eyes_rows = []
+    payload_by_lot: dict[str, dict] = {}
     for item in detail.items:
         payload = {
             "push_rank": item.push_rank,
@@ -556,10 +559,13 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
             "photo_ids": item.photo_ids,
             "bucket": item.bucket,
         }
+        if item.lot_id:
+            payload_by_lot.setdefault(str(item.lot_id), payload)
         if item.bucket == "Push":
             push_rows.append(payload)
         elif item.bucket == "Needs eyes":
             needs_eyes_rows.append(payload)
+    records = calendar_rows(db, account_id, int(ctseller_sale_id))
     posts = build_social_calendar(
         push_rows,
         needs_eyes_rows=needs_eyes_rows,
@@ -568,10 +574,9 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
         sale_ends_at=detail.sale_ends_at,
         auction_url=detail.auction_url,
         ctseller_sale_id=int(ctseller_sale_id),
+        pinned=calendar_pins(db, account_id, records, payload_by_lot),
     )
-    from app.services.facebook_calendar import annotate_social_calendar
-
-    annotated = annotate_social_calendar(db, account_id, int(ctseller_sale_id), posts)
+    annotated = annotate_social_calendar(db, account_id, int(ctseller_sale_id), posts, records=records)
     return [SocialCalendarPost.model_validate(post) for post in annotated]
 
 
