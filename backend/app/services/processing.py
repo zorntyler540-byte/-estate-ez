@@ -47,7 +47,7 @@ from app.services.photo_roles import (
 from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
-from app.services.upload_names import is_stable_upload_name
+from app.services.upload_names import is_stable_upload_name, natural_path_key
 from app.catalog_limits import looks_like_video_file
 from app.catalog_storage import (
     catalog_photo_file_on_disk,
@@ -176,6 +176,15 @@ def _stable_names(names: list[str]) -> list[str]:
 # Fixed namespace: ``Photo.id`` for a job's input file is uuid5(job_id/relative path), so a
 # retry of the same job finds its own rows without trusting camera filenames.
 _JOB_PHOTO_NAMESPACE = uuid.UUID("5b7f3e4a-8f0e-4d55-9a57-2c1f0e1d6b42")
+
+
+def _job_photo_sort_key(folder: Path, photo_path: Path) -> tuple:
+    """Pick order for ``web-``/``mobile-`` names, shot order for camera names (natural sort)."""
+    try:
+        rel = photo_path.resolve().relative_to(folder.resolve()).as_posix()
+    except (OSError, ValueError):
+        rel = photo_path.name
+    return natural_path_key(rel)
 
 
 def _job_relative_name(job: ProcessingJob, photo_path: Path) -> str:
@@ -1191,7 +1200,7 @@ def _process_job_body(
 
     raw_photos = sorted(
         [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
-        key=lambda p: str(p).lower(),
+        key=lambda p: _job_photo_sort_key(folder, p),
     )
     if not raw_photos:
         try:
@@ -1200,7 +1209,7 @@ def _process_job_body(
             folder = ensure_job_input_folder(folder, account_id=job.account_id)
             raw_photos = sorted(
                 [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
-                key=lambda p: str(p).lower(),
+                key=lambda p: _job_photo_sort_key(folder, p),
             )
         except Exception:
             _LOG.exception("job-batch R2 restore retry failed job_id=%s", job.id)
@@ -1216,7 +1225,7 @@ def _process_job_body(
             photos.append(np)
     photos = sorted(
         [p for p in photos if not looks_like_video_file(p)],
-        key=lambda p: str(p).lower(),
+        key=lambda p: _job_photo_sort_key(folder, p),
     )
     if not photos:
         job.status = JobStatus.failed

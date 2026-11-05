@@ -516,6 +516,20 @@ def job_outcome_already_on_sale(
     return False
 
 
+def _orphan_receiving_message(row: ProcessingJob) -> str:
+    """Fail text for an abandoned ``receiving`` row (must keep an ``_ORPHAN_UPLOAD_ERROR_MARKERS`` phrase)."""
+    if str(getattr(row, "client_draft_id", None) or "").startswith("web-"):
+        return (
+            "Upload never finished (the website upload stopped mid-batch). "
+            "The photos are still staged on that device: open the dashboard there and tap "
+            "Upload again (this job is replaced), or delete it and upload the photos again."
+        )
+    return (
+        "Upload never finished (phone Sync stopped mid-lot). "
+        "Delete this job, then Sync/Resend the lot from the phone."
+    )
+
+
 def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
     """
     Close ``receiving`` jobs with no recent append activity (orphaned mid-upload).
@@ -547,10 +561,7 @@ def reconcile_stale_receiving_jobs(db, account_id: str) -> bool:
             _mark_job_superseded_complete(row)
         else:
             row.status = JobStatus.failed
-            row.error_message = (
-                "Upload never finished (phone Sync stopped mid-lot). "
-                "Delete this job, then Sync/Resend the lot from the phone."
-            )
+            row.error_message = _orphan_receiving_message(row)
             row.cancel_requested = False
         changed = True
     return changed
