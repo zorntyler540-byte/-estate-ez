@@ -2,9 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useToast } from "../../components/ui/toast";
+import { cn } from "../../lib/utils";
 import {
   FacebookPagePostModal,
   type FacebookCalendarSlot,
@@ -129,13 +134,27 @@ function toCalendarSlot(post: CalendarPost): FacebookCalendarSlot {
 
 const FILTERS = ["Push", "Needs eyes", "No interest", "Protect", "Let Ride"] as const;
 
-const FILTER_COLORS: Record<(typeof FILTERS)[number], string> = {
-  Push: "var(--ct-primary)",
-  "Needs eyes": "#c47b16",
-  "No interest": "#6b7280",
-  Protect: "#1f7a4d",
-  "Let Ride": "#2563eb"
+const BUCKET_VALUE_CLASS: Record<(typeof FILTERS)[number], string> = {
+  Push: "text-primary",
+  "Needs eyes": "text-[#fde68a]",
+  "No interest": "text-muted-foreground",
+  Protect: "text-[#4ade80]",
+  "Let Ride": "text-[#ffb199]"
 };
+
+function scoreVariant(score: string): "positive" | "warning" | "neutral" {
+  if (score === "Strong") return "positive";
+  if (score === "Moderate") return "warning";
+  return "neutral";
+}
+
+function facebookBadgeVariant(status?: string): "positive" | "negative" | "warning" | "info" | "neutral" {
+  if (status === "posted" || status === "scheduled") return "positive";
+  if (status === "failed") return "negative";
+  if (status === "missed" || status === "too_soon" || status === "out_of_window") return "warning";
+  if (status === "planned") return "info";
+  return "neutral";
+}
 
 function displayBucket(item: { bucket: string; watchers: number; bids: number }): string {
   if (item.bucket === "Rescue") {
@@ -236,17 +255,24 @@ function SortHeader({
 }) {
   const active = sortKey === activeKey;
   return (
-    <th
-      className={numeric ? "ct-table__num" : undefined}
+    <TableHead
+      className={numeric ? "text-right" : undefined}
       aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}
     >
-      <button type="button" className="ct-table-sort" onClick={() => onSort(sortKey)}>
-        <span className="ct-table-sort__label">{label}</span>
-        <span className="ct-table-sort__mark" aria-hidden="true">
+      <button
+        type="button"
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-sans text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground",
+          numeric && "w-full justify-end"
+        )}
+        onClick={() => onSort(sortKey)}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true" className="text-[0.65rem] text-primary">
           {active ? (dir === "asc" ? "▲" : "▼") : ""}
         </span>
       </button>
-    </th>
+    </TableHead>
   );
 }
 
@@ -286,6 +312,8 @@ export default function EngagementPage() {
   const [facebookModalSource, setFacebookModalSource] = useState<FacebookPostSource>("push_queue");
   const [facebookPublishNow, setFacebookPublishNow] = useState(false);
   const [cancellingKey, setCancellingKey] = useState("");
+  const toast = useToast();
+  const seenError = useRef("");
   const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
   const upcomingSlots = posts.filter((post) => post.facebook_schedulable && post.lot_id && post.slot_key);
 
@@ -310,6 +338,7 @@ export default function EngagementPage() {
         body: JSON.stringify({ slot_keys: [post.slot_key] })
       });
       await loadSale(token, saleId);
+      toast.success("Removed the scheduled Facebook Page post.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not unapprove this slot");
     } finally {
@@ -367,6 +396,17 @@ export default function EngagementPage() {
   }, [router]);
 
   useEffect(() => {
+    const text = error.trim();
+    if (!text) {
+      seenError.current = "";
+      return;
+    }
+    if (text === seenError.current) return;
+    seenError.current = text;
+    toast.error(text);
+  }, [error, toast]);
+
+  useEffect(() => {
     if (!token || saleId == null) return;
     setLoading(true);
     void loadSale(token, saleId)
@@ -399,8 +439,10 @@ export default function EngagementPage() {
       await navigator.clipboard.writeText(post.paste_copy);
       setCopied(post.order);
       setCopiedGroup(null);
+      toast.success("Copied post.");
     } catch {
       setCopied(null);
+      toast.error("Could not copy.");
     }
   }
 
@@ -411,20 +453,24 @@ export default function EngagementPage() {
       await navigator.clipboard.writeText(text);
       setCopiedGroup(post.order);
       setCopied(null);
+      toast.success("Copied group caption.");
     } catch {
       setCopiedGroup(null);
+      toast.error("Could not copy.");
     }
   }
 
   if (!token) {
     return (
-      <main className="ct-shell">
-        <div className="ct-panel">
-          <p style={{ margin: 0 }}>Please sign in first.</p>
-          <p style={{ margin: "1rem 0 0" }}>
-            <Link href="/">Go to sign in</Link>
+      <main className="mx-auto flex min-h-[50vh] w-full max-w-md items-center px-4">
+        <section className="w-full rounded-xl border border-border bg-card px-5 py-6 shadow-sm shadow-black/30">
+          <p className="m-0 text-foreground">Please sign in first.</p>
+          <p className="mb-0 mt-4">
+            <Button asChild>
+              <Link href="/">Go to sign in</Link>
+            </Button>
           </p>
-        </div>
+        </section>
       </main>
     );
   }
@@ -433,29 +479,32 @@ export default function EngagementPage() {
     <AppShell
       actions={<ShellActions onLogout={logout} links={[{ href: "/dashboard", label: "Dashboard" }]} />}
     >
-      <div className="ct-dashboard" style={{ maxWidth: 1200 }}>
-        <header className="ct-page-header">
-          <div>
-            <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
-              Push queue
-            </h1>
-            <p className="ct-subtitle" style={{ margin: 0 }}>
-              The Watcher sends views, watchers, bids, price, and the lot link after each refresh.
-              Check cataloged lots and approve Facebook Page posts from the social calendar.
-              Spreadsheet Instagram, Stories, and TikTok slots currently publish as Page feed posts.
-            </p>
-          </div>
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-4">
+        <header>
+          <h1 className="m-0 text-2xl font-bold tracking-tight text-foreground">Push queue</h1>
+          <p className="mb-0 mt-1 max-w-3xl text-sm text-muted-foreground">
+            The Watcher sends views, watchers, bids, price, and the lot link after each refresh.
+            Check cataloged lots and approve Facebook Page posts from the social calendar.
+            Spreadsheet Instagram, Stories, and TikTok slots currently publish as Page feed posts.
+          </p>
         </header>
 
-        {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
+        {error ? (
+          <div
+            className="rounded-lg border border-[rgba(248,113,113,0.45)] bg-[rgba(239,68,68,0.12)] px-3 py-2.5 text-sm text-[#fca5a5]"
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
 
         {sales.length > 0 ? (
-          <label className="ct-field" style={{ maxWidth: 420, display: "block", marginBottom: "1rem" }}>
-            <span className="ct-muted">CT Bids sale</span>
+          <label className="block max-w-md text-sm text-muted-foreground">
+            CT Bids sale
             <select
+              className="ct-input mt-1.5 block w-full"
               value={saleId ?? ""}
               onChange={(e) => setSaleId(Number(e.target.value))}
-              style={{ display: "block", marginTop: "0.35rem", width: "100%" }}
             >
               {sales.map((sale) => (
                 <option key={sale.ctseller_sale_id} value={sale.ctseller_sale_id}>
@@ -466,11 +515,19 @@ export default function EngagementPage() {
           </label>
         ) : null}
 
-        {loading ? <p className="ct-muted">Loading…</p> : null}
+        {loading ? (
+          <div
+            className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground"
+            role="status"
+            aria-busy="true"
+          >
+            Loading push queue…
+          </div>
+        ) : null}
 
         {!loading && sales.length === 0 ? (
-          <section className="ct-card ct-card--padded">
-            <p style={{ margin: 0 }}>
+          <section className="rounded-xl border border-dashed border-border bg-card px-4 py-6 text-sm text-foreground shadow-sm shadow-black/30">
+            <p className="m-0">
               No live snapshot yet. Sign in to Estate-EZ from the Watcher, open the sale, and refresh.
               Counts show up here after that refresh.
             </p>
@@ -479,7 +536,7 @@ export default function EngagementPage() {
 
         {detail ? (
           <>
-            <p className="ct-muted" style={{ marginTop: 0 }}>
+            <p className="m-0 text-sm text-muted-foreground">
               Snapshot {when(detail.captured_at)}
               {detail.sale_ends_at ? ` · closes ${when(detail.sale_ends_at)}` : ""}
               {detail.auction_url ? (
@@ -491,53 +548,50 @@ export default function EngagementPage() {
                 </>
               ) : null}
             </p>
-            <section className="ct-dash-stats" aria-label="Engagement buckets" style={{ marginBottom: "1rem" }}>
+            <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" aria-label="Engagement buckets">
               {FILTERS.map((name) => {
                 const count = filterCount(detail, name);
-                const color = FILTER_COLORS[name];
+                const selected = bucket === name;
                 return (
                   <button
                     key={name}
                     type="button"
-                    className="ct-stat-card"
                     onClick={() => setBucket(name)}
-                    style={{
-                      textAlign: "left",
-                      cursor: "pointer",
-                      outline: bucket === name ? `2px solid ${color}` : undefined,
-                      borderColor: color
-                    }}
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex cursor-pointer flex-col gap-1 rounded-lg border bg-[var(--ct-bg-elevated)] px-3 py-2.5 text-left transition-colors",
+                      selected
+                        ? "border-primary shadow-[0_0_0_1px_var(--primary)]"
+                        : "border-border hover:border-primary/40"
+                    )}
                   >
-                    <span className="ct-stat-card__value" style={{ color }}>
+                    <span className={cn("text-[1.35rem] font-bold leading-none tracking-tight", BUCKET_VALUE_CLASS[name])}>
                       {count}
                     </span>
-                    <span className="ct-stat-card__label">{name}</span>
+                    <span className="text-[0.76rem] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                      {name}
+                    </span>
                   </button>
                 );
               })}
             </section>
 
             {canPostFacebook ? (
-              <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-                <button
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--ghost"
+                  variant="ghost"
                   onClick={() =>
                     setSelectedLotIds(new Set(visible.map((item) => item.lot_id).filter((id): id is string => Boolean(id))))
                   }
                 >
                   Select cataloged in {bucket}
-                </button>
-                <button
-                  type="button"
-                  className="ct-btn ct-btn--ghost"
-                  onClick={() => setSelectedLotIds(new Set())}
-                >
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setSelectedLotIds(new Set())}>
                   Clear
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--primary"
                   disabled={selectedLotIds.size < 1}
                   onClick={() => {
                     setFacebookModalSource("push_queue");
@@ -548,112 +602,113 @@ export default function EngagementPage() {
                   }}
                 >
                   Post selected to Facebook Page ({selectedLotIds.size})
-                </button>
+                </Button>
               </div>
             ) : null}
 
-            <div className="ct-table-wrap">
-              <table className="ct-table ct-table--engagement">
-                <thead>
-                  <tr>
-                    {canPostFacebook ? <th>Post</th> : null}
-                    {SORT_COLUMNS.map((column) => (
-                      <SortHeader
-                        key={column.key}
-                        label={column.label}
-                        sortKey={column.key}
-                        activeKey={sortKey}
-                        dir={sortDir}
-                        numeric={column.numeric}
-                        onSort={onSort}
-                      />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.length === 0 ? (
-                    <tr>
-                      <td colSpan={canPostFacebook ? 9 : 8}>No {bucket} lots in this snapshot.</td>
-                    </tr>
-                  ) : (
-                    visible.map((item) => (
-                      <tr key={`${item.ctseller_item_id}-${item.sku}`}>
-                        {canPostFacebook ? (
-                          <td>
-                            {item.lot_id ? (
-                              <input
-                                type="checkbox"
-                                checked={selectedLotIds.has(item.lot_id)}
-                                onChange={(e) => {
-                                  const id = item.lot_id as string;
-                                  setSelectedLotIds((prev) => {
-                                    const next = new Set(prev);
-                                    if (e.target.checked) next.add(id);
-                                    else next.delete(id);
-                                    return next;
-                                  });
-                                }}
-                                aria-label={`Select ${item.sku || "lot"} for Facebook Page`}
-                              />
-                            ) : (
-                              <span className="ct-muted">—</span>
-                            )}
-                          </td>
-                        ) : null}
-                        <td>{item.push_rank ?? "—"}</td>
-                        <td>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  {canPostFacebook ? <TableHead>Post</TableHead> : null}
+                  {SORT_COLUMNS.map((column) => (
+                    <SortHeader
+                      key={column.key}
+                      label={column.label}
+                      sortKey={column.key}
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      numeric={column.numeric}
+                      onSort={onSort}
+                    />
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.length === 0 ? (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={canPostFacebook ? 9 : 8} className="py-8 text-center text-muted-foreground">
+                      No {bucket} lots in this snapshot.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  visible.map((item) => (
+                    <TableRow key={`${item.ctseller_item_id}-${item.sku}`}>
+                      {canPostFacebook ? (
+                        <TableCell>
                           {item.lot_id ? (
-                            <LotThumbnail
-                              lotId={item.lot_id}
-                              token={token}
-                              hasThumbnail={item.has_thumbnail}
-                              size={56}
-                              maxPx={220}
+                            <input
+                              type="checkbox"
+                              checked={selectedLotIds.has(item.lot_id)}
+                              onChange={(e) => {
+                                const id = item.lot_id as string;
+                                setSelectedLotIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(id);
+                                  else next.delete(id);
+                                  return next;
+                                });
+                              }}
+                              aria-label={`Select ${item.sku || "lot"} for Facebook Page`}
                             />
                           ) : (
-                            <span className="ct-muted">No catalog photo</span>
+                            <span className="text-muted-foreground">—</span>
                           )}
-                        </td>
-                        <td>
-                          <div>
-                            {item.lot_id ? (
-                              <Link href={`/lots/${item.lot_id}`}>{item.sku || "Lot"}</Link>
-                            ) : (
-                              <strong>{item.sku || "No SKU"}</strong>
-                            )}
-                          </div>
-                          <div>{item.title}</div>
-                          {item.item_url ? (
-                            <a href={item.item_url} target="_blank" rel="noreferrer">
-                              Listing
-                            </a>
-                          ) : null}
-                          {!item.lot_id ? (
-                            <div className="ct-muted">Cataloged lots match on CT Bids item id, then SKU.</div>
-                          ) : null}
-                        </td>
-                        <td className="ct-table__num">{item.views}</td>
-                        <td className="ct-table__num">{item.watchers}</td>
-                        <td className="ct-table__num">{item.bids}</td>
-                        <td className="ct-table__num">
-                          {money(item.price)}
-                          <div className="ct-muted">reserve {money(item.reserve)}</div>
-                        </td>
-                        <td>
-                          {item.engagement_score} · {item.momentum}
-                          <div>{item.notes}</div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                        </TableCell>
+                      ) : null}
+                      <TableCell className="tabular-nums">{item.push_rank ?? "—"}</TableCell>
+                      <TableCell>
+                        {item.lot_id ? (
+                          <LotThumbnail
+                            lotId={item.lot_id}
+                            token={token}
+                            hasThumbnail={item.has_thumbnail}
+                            size={56}
+                            maxPx={220}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">No catalog photo</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          {item.lot_id ? (
+                            <Link href={`/lots/${item.lot_id}`}>{item.sku || "Lot"}</Link>
+                          ) : (
+                            <strong>{item.sku || "No SKU"}</strong>
+                          )}
+                        </div>
+                        <div>{item.title}</div>
+                        {item.item_url ? (
+                          <a href={item.item_url} target="_blank" rel="noreferrer">
+                            Listing
+                          </a>
+                        ) : null}
+                        {!item.lot_id ? (
+                          <div className="text-muted-foreground">Cataloged lots match on CT Bids item id, then SKU.</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{item.views}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.watchers}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.bids}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {money(item.price)}
+                        <div className="text-muted-foreground">reserve {money(item.reserve)}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant={scoreVariant(item.engagement_score)}>{item.engagement_score}</Badge>
+                          <Badge variant="outline">{item.momentum}</Badge>
+                        </div>
+                        {item.notes ? <div className="mt-1 text-muted-foreground">{item.notes}</div> : null}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
 
-            <h2 className="ct-page-title" style={{ fontSize: "1.25rem", marginTop: "1.5rem" }}>
-              Social calendar
-            </h2>
-            <p className="ct-muted">
+            <h2 className="m-0 mt-2 text-xl font-bold tracking-tight text-foreground">Social calendar</h2>
+            <p className="m-0 text-sm text-muted-foreground">
               Top Push lots get two or three slots before close (09:00 and 16:30 on different days,
               plus a closing-day 17:40 countdown for #1). Lower-ranked Push lots get at least one;
               Needs eyes lots fill leftover slots lightly (at most one per day). No interest lots
@@ -662,10 +717,9 @@ export default function EngagementPage() {
               Missed or too-soon slots cannot be scheduled — use Post now to publish them immediately.
             </p>
             {canPostFacebook && posts.length > 0 ? (
-              <div className="ct-row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-                <button
+              <div>
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--primary"
                   disabled={upcomingSlots.length < 1}
                   title={
                     upcomingSlots.length < 1
@@ -675,89 +729,99 @@ export default function EngagementPage() {
                   onClick={() => openCalendarApprove(upcomingSlots)}
                 >
                   Approve all upcoming slots ({upcomingSlots.length})
-                </button>
+                </Button>
               </div>
             ) : null}
             {posts.length === 0 ? (
-              <p className="ct-muted">No Push or Needs eyes lots, so there is nothing to schedule.</p>
+              <div className="rounded-xl border border-dashed border-border bg-card px-4 py-6 text-sm text-muted-foreground">
+                No Push or Needs eyes lots, so there is nothing to schedule.
+              </div>
             ) : (
-              <div className="ct-table-wrap">
-                <table className="ct-table">
-                  <thead>
-                    <tr>
-                      <th>When</th>
-                      <th>Platform</th>
-                      <th>Lot</th>
-                      <th>Copy</th>
-                      {canPostFacebook ? <th>Page post</th> : null}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {posts.map((post) => (
-                      <tr key={post.order}>
-                        <td>
-                          {post.post_date}
-                          <div>
-                            {post.local_time} {post.zone}
-                          </div>
-                          <div className="ct-muted">{post.status}</div>
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>When</TableHead>
+                    <TableHead>Platform</TableHead>
+                    <TableHead>Lot</TableHead>
+                    <TableHead>Copy</TableHead>
+                    {canPostFacebook ? <TableHead>Page post</TableHead> : null}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {posts.map((post) => (
+                    <TableRow key={post.order}>
+                      <TableCell>
+                        <div>{post.post_date}</div>
+                        <div>
+                          {post.local_time} {post.zone}
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="neutral">{post.status}</Badge>
                           {post.publish_target === "facebook_page" || post.facebook_status ? (
-                            <div>
-                              Page: {facebookStatusLabel(post)}
-                              {post.facebook_post_id ? ` · ${post.facebook_post_id}` : ""}
-                            </div>
+                            <Badge variant={facebookBadgeVariant(post.facebook_status)}>
+                              {facebookStatusLabel(post)}
+                            </Badge>
                           ) : null}
-                          {post.facebook_error ? <div className="ct-error">{post.facebook_error}</div> : null}
-                        </td>
-                        <td>
-                          {post.platform}
-                          {post.publish_target === "facebook_page" && post.platform !== "Facebook" ? (
-                            <div className="ct-muted">Posting to Facebook in place of {post.platform}</div>
-                          ) : post.publish_target === "facebook_page" ? (
-                            <div className="ct-muted">Facebook Page feed</div>
-                          ) : null}
-                          <div className="ct-muted">{post.hook}</div>
-                          <div className="ct-muted">{post.post_type}</div>
-                        </td>
-                        <td>
-                          {post.lot_id ? (
-                            <Link href={`/lots/${post.lot_id}`}>{post.sku}</Link>
-                          ) : (
-                            post.sku
-                          )}
-                          <div>{post.title}</div>
-                          {post.bucket ? <div className="ct-muted">{post.bucket}</div> : null}
-                          {post.item_url ? (
+                        </div>
+                        {post.facebook_post_id ? (
+                          <div className="mt-1 text-xs text-muted-foreground">{post.facebook_post_id}</div>
+                        ) : null}
+                        {post.facebook_error ? (
+                          <div className="mt-1 text-xs text-[#fca5a5]">{post.facebook_error}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <div>{post.platform}</div>
+                        {post.publish_target === "facebook_page" && post.platform !== "Facebook" ? (
+                          <div className="text-muted-foreground">Posting to Facebook in place of {post.platform}</div>
+                        ) : post.publish_target === "facebook_page" ? (
+                          <div className="text-muted-foreground">Facebook Page feed</div>
+                        ) : null}
+                        <div className="text-muted-foreground">{post.hook}</div>
+                        <div className="text-muted-foreground">{post.post_type}</div>
+                      </TableCell>
+                      <TableCell>
+                        {post.lot_id ? <Link href={`/lots/${post.lot_id}`}>{post.sku}</Link> : post.sku}
+                        <div>{post.title}</div>
+                        {post.bucket ? (
+                          <div className="mt-1">
+                            <Badge variant={post.bucket === "Push" ? "default" : "info"}>{post.bucket}</Badge>
+                          </div>
+                        ) : null}
+                        {post.item_url ? (
+                          <div>
                             <a href={post.item_url} target="_blank" rel="noreferrer">
                               Listing
                             </a>
-                          ) : null}
-                        </td>
-                        <td>
-                          <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit" }}>
-                            {post.paste_copy}
-                          </pre>
-                          <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void copyPost(post)}>
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="min-w-[16rem]">
+                        <pre className="m-0 whitespace-pre-wrap font-sans text-sm text-foreground">{post.paste_copy}</pre>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button type="button" variant="ghost" size="sm" onClick={() => void copyPost(post)}>
                             {copied === post.order ? "Copied" : "Copy"}
-                          </button>
+                          </Button>
                           {post.group_copy ? (
-                            <button
+                            <Button
                               type="button"
-                              className="ct-btn ct-btn--ghost"
-                              style={{ marginLeft: "0.35rem" }}
+                              variant="ghost"
+                              size="sm"
                               title="Shorter caption for sharing a Page post into a Facebook group"
                               onClick={() => void copyGroupPost(post)}
                             >
                               {copiedGroup === post.order ? "Copied for groups" : "Copy for groups"}
-                            </button>
+                            </Button>
                           ) : null}
-                          <div className="ct-muted">{post.preflight}</div>
-                        </td>
-                        {canPostFacebook ? (
-                          <td>
-                            <button
+                        </div>
+                        <div className="mt-1 text-muted-foreground">{post.preflight}</div>
+                      </TableCell>
+                      {canPostFacebook ? (
+                        <TableCell>
+                          <div className="flex flex-col items-start gap-1.5">
+                            <Button
                               type="button"
-                              className="ct-btn ct-btn--primary"
+                              size="sm"
                               disabled={!post.facebook_schedulable || !post.lot_id || !post.slot_key}
                               title={
                                 post.facebook_schedulable
@@ -767,41 +831,39 @@ export default function EngagementPage() {
                               onClick={() => openCalendarApprove([post])}
                             >
                               Approve
-                            </button>
+                            </Button>
                             {post.facebook_can_post_now && post.lot_id && post.slot_key ? (
-                              <button
+                              <Button
                                 type="button"
-                                className="ct-btn"
-                                style={{ marginTop: "0.35rem" }}
+                                size="sm"
+                                variant="outline"
                                 title="Preview caption and photos, then publish this slot immediately"
                                 onClick={() => openCalendarApprove([post], { postNow: true })}
                               >
                                 Post now
-                              </button>
+                              </Button>
                             ) : null}
                             {post.facebook_can_cancel && post.slot_key ? (
-                              <button
+                              <Button
                                 type="button"
-                                className="ct-btn"
-                                style={{ marginTop: "0.35rem" }}
+                                size="sm"
+                                variant="danger-outline"
                                 disabled={cancellingKey === post.slot_key}
                                 onClick={() => void cancelCalendarSlot(post)}
                               >
                                 {cancellingKey === post.slot_key ? "Removing…" : "Cancel / Unapprove"}
-                              </button>
+                              </Button>
                             ) : null}
                             {!post.facebook_schedulable && facebookBlockedReason(post) ? (
-                              <div className="ct-muted" style={{ marginTop: "0.35rem" }}>
-                                {facebookBlockedReason(post)}
-                              </div>
+                              <div className="max-w-[14rem] text-xs text-muted-foreground">{facebookBlockedReason(post)}</div>
                             ) : null}
-                          </td>
-                        ) : null}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          </div>
+                        </TableCell>
+                      ) : null}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </>
         ) : null}

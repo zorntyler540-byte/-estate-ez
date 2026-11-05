@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLotPhotoBlob, replaceLotPhotoBlob } from "../lib/lotPhotoReplace";
+import { Button } from "./ui/button";
+import { useToast } from "./ui/toast";
 import { ZoomablePreview } from "./ZoomablePreview";
 import {
   cropImageBlob,
@@ -32,6 +34,8 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const toast = useToast();
+  const seenError = useRef("");
   const [previewUrl, setPreviewUrl] = useState("");
   const workBlobRef = useRef<Blob | null>(null);
   const baseBlobRef = useRef<Blob | null>(null);
@@ -41,6 +45,17 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
   const [cropAnchor, setCropAnchor] = useState<DisplayPoint | null>(null);
   const [cropCurrent, setCropCurrent] = useState<DisplayPoint | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    const text = error.trim();
+    if (!text) {
+      seenError.current = "";
+      return;
+    }
+    if (text === seenError.current) return;
+    seenError.current = text;
+    toast.error(text);
+  }, [error, toast]);
 
   const revokePreview = useCallback(() => {
     if (previewUrlRef.current) {
@@ -176,6 +191,7 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
       setPreviewUrl(u);
       setDirty(false);
       onSaved(photo.id);
+      toast.success("Photo saved to catalog.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save photo");
     } finally {
@@ -204,37 +220,31 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(96vw, 1200px)",
-          maxHeight: "92vh",
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.65rem"
-        }}
+        className="flex max-h-[92vh] w-[min(96vw,1200px)] flex-col gap-3 rounded-xl border border-border bg-card p-3 text-foreground shadow-lg shadow-black/50"
       >
         <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="ct-muted" style={{ fontSize: "0.9rem" }}>
             Photo {index + 1}/{photos.length}
             {photo ? ` · ${photo.original_name}` : ""}
           </div>
-          <button type="button" className="ct-btn ct-btn--ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
 
         <div
           className="ct-row ct-row--gap-lg"
           style={{ flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}
         >
-          <button type="button" className="ct-btn" disabled={loading || saving} onClick={() => void handleRotate(-90)}>
+          <Button type="button" variant="outline" disabled={loading || saving} onClick={() => void handleRotate(-90)}>
             Rotate left
-          </button>
-          <button type="button" className="ct-btn" disabled={loading || saving} onClick={() => void handleRotate(90)}>
+          </Button>
+          <Button type="button" variant="outline" disabled={loading || saving} onClick={() => void handleRotate(90)}>
             Rotate right
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="ct-btn"
+            variant="outline"
             disabled={loading || saving}
             onClick={() => {
               setCropMode((v) => !v);
@@ -244,23 +254,23 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
             }}
           >
             {cropMode ? "Cancel crop" : "Crop"}
-          </button>
+          </Button>
           {cropMode ? (
-            <button type="button" className="ct-btn ct-btn--primary" disabled={loading || saving} onClick={() => void applyCrop()}>
+            <Button type="button" variant="default" disabled={loading || saving} onClick={() => void applyCrop()}>
               Apply crop
-            </button>
+            </Button>
           ) : null}
-          <button type="button" className="ct-btn" disabled={loading || saving || !dirty} onClick={resetEdits}>
+          <Button type="button" variant="outline" disabled={loading || saving || !dirty} onClick={resetEdits}>
             Reset
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="ct-btn ct-btn--primary"
+            variant="default"
             disabled={loading || saving || !dirty}
             onClick={() => void saveEdits()}
           >
             {saving ? "Saving…" : "Save to catalog"}
-          </button>
+          </Button>
         </div>
 
         {cropMode ? (
@@ -331,22 +341,22 @@ export function LotPhotoViewer({ lotId, token, photos, index, onClose, onIndexCh
         ) : null}
 
         <div className="ct-row ct-row--gap-lg" style={{ justifyContent: "space-between" }}>
-          <button
+          <Button
             type="button"
-            className="ct-btn"
+            variant="outline"
             disabled={loading || saving || index <= 0}
             onClick={() => onIndexChange(index - 1)}
           >
             Previous
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="ct-btn"
+            variant="outline"
             disabled={loading || saving || index >= photos.length - 1}
             onClick={() => onIndexChange(index + 1)}
           >
             Next
-          </button>
+          </Button>
         </div>
       </div>
     </div>
