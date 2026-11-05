@@ -17,7 +17,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -25,10 +24,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import FacebookPagePost, Lot, TrackedLink, TrackedLinkClick, TrackedLinkDailyCount
+from app.models import Account, FacebookPagePost, Lot, TrackedLink, TrackedLinkClick, TrackedLinkDailyCount
 from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_link_line
+from app.services.franchise_time import to_local
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
 PRODUCTION_API_ORIGIN = "https://caringtransitions-ai-production.up.railway.app"
 CHANNEL_PAGE_POST = "page_post"
 CHANNEL_GROUP_SHARE = "group_share"
@@ -421,6 +420,25 @@ def rewrite_copy_with_tracked_links(
         item_url=item_url,
         sale_url=sale_url,
     )
+    return _swap_and_append(
+        text,
+        dest_item=dest_item,
+        dest_sale=dest_sale,
+        short_item=short_item,
+        short_sale=short_sale,
+        append_if_missing=append_if_missing,
+    )
+
+
+def _swap_and_append(
+    text: str,
+    *,
+    dest_item: str,
+    dest_sale: str,
+    short_item: str,
+    short_sale: str,
+    append_if_missing: bool,
+) -> str:
     out = apply_tracked_urls(
         text,
         dest_item=dest_item,
@@ -436,6 +454,70 @@ def rewrite_copy_with_tracked_links(
         if sale_line and sale_line not in out and SALE_LINK_PREFIX not in out:
             out = f"{out.rstrip()}\n\n{sale_line}"
     return out
+
+
+class TrackedLinkIndex:
+    """One query for many lots' tracked links on a channel. Never creates rows (safe on GET)."""
+
+    def __init__(self, db: Session, *, account_id: str, lot_ids: list[str], channel: str) -> None:
+        self.enabled = click_tracking_in_captions()
+        self._codes: dict[tuple[str, str, str, str], str] = {}
+        ids = sorted({lid for lid in lot_ids if lid})
+        if not self.enabled or not ids:
+            return
+        for row in (
+            db.query(TrackedLink)
+            .filter(
+                TrackedLink.account_id == account_id,
+                TrackedLink.channel == channel,
+                TrackedLink.lot_id.in_(ids),
+            )
+            .all()
+        ):
+            key = (str(row.lot_id), row.destination_kind, row.destination_url, row.calendar_key or "")
+            self._codes.setdefault(key, row.code)
+
+    def short(self, *, lot_id: str, kind: str, destination_url: str, calendar_key: str = "") -> str:
+        dest = canonicalize_destination(destination_url)
+        if not dest:
+            return ""
+        code = self._codes.get((lot_id, kind, dest, (calendar_key or "").strip()))
+        return tracked_url_for_code(code) if code else ""
+
+    def has_links(self, *, lot_id: str, calendar_key: str, dest_item: str, dest_sale: str) -> bool:
+        if not self.enabled:
+            return True
+        if dest_item and not self.short(lot_id=lot_id, kind=KIND_LOT, destination_url=dest_item, calendar_key=calendar_key):
+            return False
+        if dest_sale and not self.short(lot_id=lot_id, kind=KIND_SALE, destination_url=dest_sale, calendar_key=calendar_key):
+            return False
+        return True
+
+    def rewrite(
+        self,
+        text: str,
+        *,
+        lot_id: str,
+        calendar_key: str,
+        dest_item: str,
+        dest_sale: str,
+        append_if_missing: bool = False,
+    ) -> str:
+        """Like ``rewrite_copy_with_tracked_links`` but from preloaded codes. Missing links keep the CT Bids URL."""
+        if not self.enabled:
+            return text
+        dest_item = (dest_item or "").strip().rstrip("/")
+        dest_sale = (dest_sale or "").strip().rstrip("/")
+        short_item = self.short(lot_id=lot_id, kind=KIND_LOT, destination_url=dest_item, calendar_key=calendar_key)
+        short_sale = self.short(lot_id=lot_id, kind=KIND_SALE, destination_url=dest_sale, calendar_key=calendar_key)
+        return _swap_and_append(
+            text,
+            dest_item=dest_item,
+            dest_sale=dest_sale,
+            short_item=short_item or dest_item,
+            short_sale=short_sale or dest_sale,
+            append_if_missing=append_if_missing,
+        )
 
 
 def bind_links_to_post(
@@ -490,24 +572,23 @@ def follow_tracked_link(db: Session, *, code: str, request: Request) -> Redirect
     return response
 
 
-def _pacific_day(when: datetime | None = None) -> str:
-    now = when or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    return now.astimezone(PACIFIC).date().isoformat()
+def _local_day(when: datetime | None = None, tz: str | None = None) -> str:
+    return to_local(when or datetime.now(timezone.utc), tz).date().isoformat()
 
 
-def _pacific_day_start_utc(when: datetime | None = None) -> datetime:
-    now = when or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    local = now.astimezone(PACIFIC)
-    start_local = datetime(local.year, local.month, local.day, tzinfo=PACIFIC)
+def _local_day_start_utc(when: datetime | None = None, tz: str | None = None) -> datetime:
+    local = to_local(when or datetime.now(timezone.utc), tz)
+    start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
     return start_local.astimezone(timezone.utc)
 
 
-def _bump_daily_count(db: Session, row: TrackedLink) -> TrackedLinkDailyCount:
-    day = _pacific_day()
+def _account_tz(db: Session, account_id: str) -> str | None:
+    return db.query(Account.timezone).filter(Account.id == account_id).scalar()
+
+
+def _bump_daily_count(db: Session, row: TrackedLink, *, tz: str | None = None) -> TrackedLinkDailyCount:
+    # Column is still named ``day_pacific``; it holds the franchise-local day.
+    day = _local_day(tz=tz)
     stat = (
         db.query(TrackedLinkDailyCount)
         .filter(
@@ -539,14 +620,15 @@ def _bump_daily_count(db: Session, row: TrackedLink) -> TrackedLinkDailyCount:
 
 
 def _record_click(db: Session, row: TrackedLink, dest: str, *, referrer: str) -> None:
-    _bump_daily_count(db, row)
+    tz = _account_tz(db, row.account_id)
+    _bump_daily_count(db, row, tz=tz)
     cap = int(settings.click_raw_per_code_per_day)
     raw_n = int(
         db.query(func.count())
         .select_from(TrackedLinkClick)
         .where(
             TrackedLinkClick.code == row.code,
-            TrackedLinkClick.clicked_at >= _pacific_day_start_utc(),
+            TrackedLinkClick.clicked_at >= _local_day_start_utc(tz=tz),
         )
         .scalar()
         or 0

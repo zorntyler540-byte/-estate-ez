@@ -13,6 +13,7 @@ export type FacebookCalendarSlot = {
   platform: string;
   hook?: string;
   local_time?: string;
+  zone_label?: string;
 };
 
 type ExistingPost = {
@@ -67,6 +68,9 @@ type PublishResult = {
   needs_reconnect?: boolean;
   error?: string | null;
   calendar_key?: string | null;
+  publish_target?: string | null;
+  instagram_media_id?: string | null;
+  note?: string | null;
 };
 
 type PublishOut = {
@@ -77,8 +81,27 @@ type PublishOut = {
   done?: number;
   posted?: number;
   failed?: number;
+  retrying?: number;
+  waiting_for_worker?: boolean;
   results?: PublishResult[];
 };
+
+const TARGET_LABELS: Record<string, string> = {
+  facebook_page: "Facebook Page feed",
+  instagram_feed: "Instagram feed",
+  stories: "Facebook + Instagram Stories",
+  copy_only: "Copy only"
+};
+
+function targetLabel(target?: string | null, intended?: string | null): string {
+  if (target && TARGET_LABELS[target]) return TARGET_LABELS[target];
+  return intended && intended !== "Facebook" ? intended : TARGET_LABELS.facebook_page;
+}
+
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 type Props = {
   token: string;
@@ -181,6 +204,9 @@ export function FacebookPagePostModal({
   const [results, setResults] = useState<PublishResult[] | null>(null);
   const [batchProgress, setBatchProgress] = useState("");
   const [copiedGroup, setCopiedGroup] = useState("");
+  // Reused when a submit is retried after a dropped response, so the server returns the
+  // batch it already queued instead of posting twice.
+  const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
   const immediate = publishNow || (!calendarMode && scheduleMode === "now");
 
   const loadPreview = useCallback(
@@ -207,6 +233,7 @@ export function FacebookPagePostModal({
           }
         )) as Preview;
         setPreview(data);
+        setIdempotencyKey(newIdempotencyKey());
         setFollowHook(Boolean(data.include_follow_hook));
         setConfirmImmediate(false);
         const next: Record<string, string> = {};
@@ -270,7 +297,18 @@ export function FacebookPagePostModal({
       const row = (await apiFetch(`/facebook/posts/batches/${batchId}`, token)) as PublishOut;
       const done = Number(row.done || 0);
       const total = Number(row.total || 0);
-      if (total > 0) setBatchProgress(`Posting ${done} of ${total}…`);
+      const retrying = Number(row.retrying || 0);
+      if (row.waiting_for_worker) {
+        setBatchProgress(
+          `Queued ${total - done} of ${total} — waiting for the publisher to start. You can close this; posts stay queued.`
+        );
+      } else if (retrying > 0) {
+        setBatchProgress(
+          `Posted ${done} of ${total}. ${retrying} will retry after a temporary Meta error — you can close this.`
+        );
+      } else if (total > 0) {
+        setBatchProgress(`Posting ${done} of ${total}…`);
+      }
       if (!row.active) return row.results || [];
       await new Promise((resolve) => setTimeout(resolve, 1200));
     }
@@ -279,7 +317,7 @@ export function FacebookPagePostModal({
   async function publish() {
     if (!preview?.connected || posting) return;
     if (immediate && !confirmImmediate) {
-      setError("Check the confirmation box before posting now. It will go live on the Page immediately.");
+      setError("Check the confirmation box before posting now. It will go live immediately.");
       return;
     }
     const items = (preview.lots || [])
@@ -346,12 +384,14 @@ export function FacebookPagePostModal({
             };
       const res = (await apiFetch(path, token, {
         method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
         body: JSON.stringify(body)
       })) as PublishOut;
       let rows = res.results || [];
       if (res.queued && res.batch_id) {
         rows = await waitForBatch(res.batch_id);
       }
+      setIdempotencyKey(newIdempotencyKey());
       setResults(rows);
       if (rows.some((row) => row.ok)) onPosted?.();
     } catch (e) {
@@ -362,14 +402,23 @@ export function FacebookPagePostModal({
     }
   }
 
+  function resultLabel(row: PublishResult): string {
+    const lot = preview?.lots.find(
+      (item) => (row.calendar_key && item.calendar_key === row.calendar_key) || item.lot_id === row.lot_id
+    );
+    const sku = (lot?.sku || "").trim() || (lot?.title || "").trim() || "Lot";
+    const slot = row.calendar_key ? calendarSlots?.find((item) => item.slot_key === row.calendar_key) : undefined;
+    return slot?.local_time ? `${sku} · ${slot.local_time} ${slot.zone_label || ""}`.trim() : sku;
+  }
+
   const title = calendarMode
     ? publishNow
       ? lotIds.length === 1
-        ? "Post this Push-calendar Facebook slot now"
-        : `Post ${lotIds.length} Push-calendar Facebook slots now`
+        ? "Post this Push-calendar slot now"
+        : `Post ${lotIds.length} Push-calendar slots now`
       : lotIds.length === 1
-        ? "Approve this Push-calendar Facebook slot"
-        : `Approve ${lotIds.length} Push-calendar Facebook slots`
+        ? "Approve this Push-calendar slot"
+        : `Approve ${lotIds.length} Push-calendar slots`
     : lotIds.length === 1
       ? "Post this lot to Facebook Page"
       : `Post ${lotIds.length} lots to Facebook Page`;
@@ -384,8 +433,9 @@ export function FacebookPagePostModal({
           </button>
         </div>
         <p className="ct-muted" style={{ marginTop: "0.35rem" }}>
-          Nothing goes to Facebook until you click Post to Page. SKU-tape photos stay off the Page.
-          Native Instagram, Stories, Groups, Marketplace, and TikTok publishers are not wired yet.
+          Nothing is published until you click {calendarMode ? (publishNow ? "Post now" : "Approve") : "Post to Page"}.
+          SKU-tape photos are never posted. Groups and Marketplace are copy-and-paste; TikTok slots are
+          copy only.
         </p>
         {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
         {loading ? <p className="ct-muted">Drafting captions…</p> : null}
@@ -423,8 +473,8 @@ export function FacebookPagePostModal({
             {calendarMode ? (
               <p className="ct-muted">
                 {publishNow
-                  ? "This publishes to the Facebook Page immediately. The spreadsheet time is ignored, and Facebook's 10-minute schedule window does not apply. Nothing is sent until you confirm and click Post to Page now."
-                  : "Each spreadsheet slot is scheduled as a Facebook Page feed post at its calendar time. Captions and photos vary by slot. Nothing is sent until you click Schedule on Page."}
+                  ? "This publishes each slot to its platform immediately. The spreadsheet time is ignored, and Facebook's 10-minute schedule window does not apply. Nothing is sent until you confirm and click Post now."
+                  : "Facebook slots are scheduled on the Page at their calendar time. Instagram and Stories slots are held and published by Estate-EZ at the slot time, because Meta cannot schedule them. Captions and photos vary by slot. Nothing is sent until you click Approve."}
               </p>
             ) : (
             <div className="ct-field" style={{ marginBottom: "0.75rem" }}>
@@ -500,7 +550,7 @@ export function FacebookPagePostModal({
                   onChange={(e) => setConfirmImmediate(e.target.checked)}
                 />
                 <span>
-                  Post now — this goes live on the Page immediately. I have checked the listing.
+                  Post now — this goes live immediately. I have checked the listing.
                 </span>
               </label>
             ) : null}
@@ -513,10 +563,12 @@ export function FacebookPagePostModal({
                   </strong>
                   {calendarMode && (lot.intended_platform || lot.local_time) ? (
                     <p className="ct-muted" style={{ margin: "0.25rem 0 0" }}>
-                      {lot.local_time ? `${lot.local_time} PT · ` : ""}
-                      {lot.intended_platform && lot.intended_platform !== "Facebook"
-                        ? `Posting to Facebook in place of ${lot.intended_platform}`
-                        : "Facebook Page feed"}
+                      {lot.local_time
+                        ? `${lot.local_time} ${
+                            calendarSlots?.find((slot) => slot.slot_key === lot.calendar_key)?.zone_label || "PT"
+                          } · `
+                        : ""}
+                      {targetLabel(lot.publish_target, lot.intended_platform)}
                       {lot.hook ? ` · ${lot.hook}` : ""}
                     </p>
                   ) : null}
@@ -608,11 +660,25 @@ export function FacebookPagePostModal({
 
             {results ? (
               <div className="ct-banner" style={{ marginBottom: "0.75rem" }}>
-                {results.map((row) => (
-                  <div key={row.calendar_key || row.lot_id}>
+                {results.map((row, index) => (
+                  <div key={row.calendar_key || `${row.lot_id}-${index}`}>
+                    <strong>{resultLabel(row)}</strong>
+                    {": "}
+                    {row.publish_target && row.publish_target !== "facebook_page"
+                      ? `${targetLabel(row.publish_target)} · `
+                      : ""}
                     {row.ok
-                      ? `${row.status === "scheduled" ? "Scheduled" : "Posted"} ${row.facebook_post_id || ""}`
-                      : row.error || "Failed"}
+                      ? row.status === "scheduled" && row.publish_target && row.publish_target !== "facebook_page"
+                        ? "Approved — Estate-EZ publishes it at the slot time"
+                        : `${row.status === "scheduled" ? "Scheduled" : "Posted"}${
+                            row.facebook_post_id || row.instagram_media_id
+                              ? ` (${row.facebook_post_id || row.instagram_media_id})`
+                              : ""
+                          }`
+                      : row.skipped
+                        ? `Skipped — ${row.error || "not sent"}`
+                        : row.error || "Failed"}
+                    {row.note ? <div className="ct-muted">{row.note}</div> : null}
                   </div>
                 ))}
               </div>
@@ -628,9 +694,13 @@ export function FacebookPagePostModal({
               >
                 {posting
                   ? batchProgress || "Posting…"
-                  : immediate
-                    ? "Post to Page now"
-                    : "Schedule on Page"}
+                  : calendarMode
+                    ? publishNow
+                      ? "Post now"
+                      : "Approve"
+                    : immediate
+                      ? "Post to Page now"
+                      : "Schedule on Page"}
               </button>
               <button type="button" className="ct-btn ct-btn--ghost" onClick={() => void loadPreview(followHook)}>
                 Redraft captions

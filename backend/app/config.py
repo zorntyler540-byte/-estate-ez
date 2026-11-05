@@ -259,6 +259,10 @@ class Settings(BaseSettings):
     meta_app_secret: str = Field(default="", alias="META_APP_SECRET")
     meta_oauth_redirect_uri: str = Field(default="", alias="META_OAUTH_REDIRECT_URI")
     meta_token_encryption_key: str = Field(default="", alias="META_TOKEN_ENCRYPTION_KEY")
+    # Request instagram_basic + instagram_content_publish on Connect and publish Instagram feed /
+    # story slots. Leave off until the Meta app passed App Review for those permissions (asking
+    # for unapproved scopes breaks Connect for non-admin owners). Needs R2 for public image URLs.
+    meta_instagram_publishing: bool = Field(default=False, alias="META_INSTAGRAM_PUBLISHING")
     # Where the OAuth callback sends the browser after connecting a Page (Account settings).
     public_web_origin: str = Field(default="", alias="PUBLIC_WEB_ORIGIN")
     # Optional dedicated origin for public ``/go/<code>`` Facebook click-tracking.

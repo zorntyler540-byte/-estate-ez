@@ -46,8 +46,8 @@ def test_fresh_database_upgrade_matches_models(tmp_path):
     assert schema_check.schema_problems(engine) == []
 
 
-def test_head_revision_is_0052():
-    assert schema_check.alembic_head_revisions() == {"0052_worker_heartbeats"}
+def test_head_revision_is_0054():
+    assert schema_check.alembic_head_revisions() == {"0054_worker_heartbeats"}
 
 
 def test_0050_adds_objects_only_startup_used_to_create(tmp_path):
@@ -57,7 +57,7 @@ def test_0050_adds_objects_only_startup_used_to_create(tmp_path):
     assert "engagement_json" not in _columns(engine, "lots")
     assert "assigned_sale_id" not in _columns(engine, "users")
     problems = schema_check.schema_problems(engine)
-    assert any(p.startswith("Missing tables: engagement_snapshots") for p in problems)
+    assert any(p.startswith("Missing tables:") and "engagement_snapshots" in p for p in problems)
     assert any("lots is missing columns engagement_json" in p for p in problems)
     assert any(PREVIOUS in p for p in problems)
 

@@ -1,8 +1,8 @@
-"""Pinned Meta Graph API client for Facebook Page posting.
+"""Pinned Meta Graph API client: Page feed posts, Page photo stories, and Instagram
+content publishing (``/{ig-user-id}/media`` containers -> ``media_publish``).
 
-Instagram, Stories, Groups, and Marketplace are out of v1. Keep Instagram
-publish calls out of this module until a dedicated publisher exists — Graph
-``/{ig-user-id}/media`` is a different object type and token shape.
+Instagram calls use the connected Page's token; the IG professional account must be
+linked to that Page. Groups and Marketplace are not supported by Graph for this app.
 """
 
 from __future__ import annotations
@@ -19,14 +19,17 @@ GRAPH_API_VERSION = "v26.0"
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 OAUTH_DIALOG_URL = f"https://www.facebook.com/{GRAPH_API_VERSION}/dialog/oauth"
 
-# Page posting v1. Instagram later: instagram_basic + instagram_content_publish (app review).
+# Page feed posts and Page stories. Instagram adds instagram_basic + instagram_content_publish
+# (both need Meta App Review before non-admin users can grant them).
 PAGE_OAUTH_SCOPES = ("pages_show_list", "pages_manage_posts", "pages_read_engagement")
-INSTAGRAM_SCOPES_FUTURE = ("instagram_basic", "instagram_content_publish")
+INSTAGRAM_SCOPES = ("instagram_basic", "instagram_content_publish")
 
 _LOG = logging.getLogger(__name__)
 
 # Graph OAuthException codes that mean "reconnect the Page".
 _TOKEN_ERROR_CODES = frozenset({102, 190, 463, 467})
+# Throttling / temporary Graph errors that are safe to retry later.
+_TRANSIENT_CODES = frozenset({1, 2, 4, 17, 32, 341, 613, 80001, 80002})
 
 
 class MetaGraphError(RuntimeError):
@@ -39,21 +42,32 @@ class MetaGraphError(RuntimeError):
         status_code: int | None = None,
         code: int | None = None,
         is_token_error: bool = False,
+        is_transient: bool = False,
+        unknown_outcome: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.is_token_error = is_token_error
+        # Facebook said "try again later" (throttling, 5xx).
+        self.is_transient = is_transient
+        # The request may have reached Facebook (read timeout, dropped connection). Retrying a
+        # non-idempotent call (feed post, story) could post twice.
+        self.unknown_outcome = unknown_outcome
 
 
-def oauth_dialog_url(*, app_id: str, redirect_uri: str, state: str) -> str:
+def oauth_scopes(*, instagram: bool = False) -> tuple[str, ...]:
+    return PAGE_OAUTH_SCOPES + (INSTAGRAM_SCOPES if instagram else ())
+
+
+def oauth_dialog_url(*, app_id: str, redirect_uri: str, state: str, instagram: bool = False) -> str:
     query = urlencode(
         {
             "client_id": app_id,
             "redirect_uri": redirect_uri,
             "state": state,
             "response_type": "code",
-            "scope": ",".join(PAGE_OAUTH_SCOPES),
+            "scope": ",".join(oauth_scopes(instagram=instagram)),
         }
     )
     return f"{OAUTH_DIALOG_URL}?{query}"
@@ -97,7 +111,18 @@ def _parse_graph_error(payload: Any, status_code: int | None) -> MetaGraphError:
     )
     if is_token and "reconnect" not in low:
         message = f"{message} Reconnect the Facebook Page on Account settings."
-    return MetaGraphError(message, status_code=status_code, code=code, is_token_error=is_token)
+    transient = (not is_token) and (
+        err.get("is_transient") is True
+        or code in _TRANSIENT_CODES
+        or (status_code is not None and status_code >= 500)
+    )
+    return MetaGraphError(
+        message,
+        status_code=status_code,
+        code=code,
+        is_token_error=is_token,
+        is_transient=transient,
+    )
 
 
 def graph_request(
@@ -120,8 +145,14 @@ def graph_request(
             files=files,
             timeout=timeout,
         )
+    except requests.ConnectTimeout as exc:
+        raise MetaGraphError(f"Could not reach Facebook Graph API: {exc}", is_transient=True) from exc
     except requests.RequestException as exc:
-        raise MetaGraphError(f"Could not reach Facebook Graph API: {exc}") from exc
+        raise MetaGraphError(
+            f"Facebook Graph API did not answer: {exc}",
+            is_transient=True,
+            unknown_outcome=True,
+        ) from exc
     payload: Any
     try:
         payload = response.json()
@@ -298,3 +329,95 @@ def delete_page_post(*, post_id: str, page_token: str) -> None:
         params={"access_token": page_token},
         timeout=60.0,
     )
+
+
+def create_page_photo_story(*, page_id: str, page_token: str, photo_id: str) -> str:
+    """Publish an uploaded unpublished photo as a Page story (stories cannot be scheduled)."""
+    payload = graph_request(
+        "POST",
+        f"/{page_id}/photo_stories",
+        data={"access_token": page_token, "photo_id": photo_id},
+        timeout=90.0,
+    )
+    post_id = str(payload.get("post_id") or payload.get("id") or "").strip()
+    if not post_id:
+        raise MetaGraphError("Facebook accepted the story but returned no id")
+    return post_id
+
+
+def get_instagram_account(*, page_id: str, page_token: str) -> dict[str, str] | None:
+    """The Instagram professional account linked to a Page, or None."""
+    payload = graph_request(
+        "GET",
+        f"/{page_id}",
+        params={"access_token": page_token, "fields": "instagram_business_account{id,username}"},
+    )
+    linked = payload.get("instagram_business_account") if isinstance(payload, dict) else None
+    if not isinstance(linked, dict) or not str(linked.get("id") or "").strip():
+        return None
+    return {"id": str(linked["id"]).strip(), "username": str(linked.get("username") or "").strip()}
+
+
+def create_instagram_container(
+    *,
+    ig_user_id: str,
+    page_token: str,
+    image_url: str,
+    caption: str | None = None,
+    media_type: str | None = None,
+    is_carousel_item: bool = False,
+) -> str:
+    """One image container. ``media_type="STORIES"`` for a story; carousel children skip the caption."""
+    data: dict[str, Any] = {"access_token": page_token, "image_url": image_url}
+    if media_type:
+        data["media_type"] = media_type
+    if is_carousel_item:
+        data["is_carousel_item"] = "true"
+    elif caption:
+        data["caption"] = caption
+    payload = graph_request("POST", f"/{ig_user_id}/media", data=data, timeout=90.0)
+    container = str(payload.get("id") or "").strip()
+    if not container:
+        raise MetaGraphError("Instagram accepted the image but returned no container id")
+    return container
+
+
+def create_instagram_carousel(*, ig_user_id: str, page_token: str, children: list[str], caption: str) -> str:
+    payload = graph_request(
+        "POST",
+        f"/{ig_user_id}/media",
+        data={
+            "access_token": page_token,
+            "media_type": "CAROUSEL",
+            "children": ",".join(children),
+            "caption": caption,
+        },
+        timeout=90.0,
+    )
+    container = str(payload.get("id") or "").strip()
+    if not container:
+        raise MetaGraphError("Instagram accepted the carousel but returned no container id")
+    return container
+
+
+def instagram_container_status(*, container_id: str, page_token: str) -> str:
+    """``IN_PROGRESS`` / ``FINISHED`` / ``PUBLISHED`` / ``ERROR`` / ``EXPIRED``."""
+    payload = graph_request(
+        "GET",
+        f"/{container_id}",
+        params={"access_token": page_token, "fields": "status_code"},
+    )
+    return str(payload.get("status_code") or "").strip().upper()
+
+
+def publish_instagram_container(*, ig_user_id: str, page_token: str, container_id: str) -> str:
+    payload = graph_request(
+        "POST",
+        f"/{ig_user_id}/media_publish",
+        data={"access_token": page_token, "creation_id": container_id},
+        timeout=90.0,
+    )
+    media_id = str(payload.get("id") or "").strip()
+    if not media_id:
+        raise MetaGraphError("Instagram published the post but returned no media id")
+    return media_id

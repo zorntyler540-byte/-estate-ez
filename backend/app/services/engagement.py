@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from app.services.ctbids_urls import ctbids_sale_url, sale_link_line
 from app.services.facebook_caption import group_post_copy
+from app.services.franchise_time import to_local, zone_label, zone_name
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
 
 # Watcher floor for Push once there is at least one bid. Under $100 the floor
 # stays 2 so every previous Push lot still qualifies. Above that it rises
@@ -239,20 +238,17 @@ def assign_push_ranks(readings: list[EngagementReading]) -> list[EngagementReadi
     return out
 
 
-def _pacific(moment: datetime | None) -> datetime:
-    if moment is None:
-        return datetime.now(PACIFIC)
-    if moment.tzinfo is None:
-        return moment.replace(tzinfo=PACIFIC)
-    return moment.astimezone(PACIFIC)
-
-
-def calendar_days(captured_at: datetime | None, sale_ends_at: datetime | None) -> list[date]:
-    start = _pacific(captured_at).date()
+def calendar_days(
+    captured_at: datetime | None,
+    sale_ends_at: datetime | None,
+    *,
+    tz: str | None = None,
+) -> list[date]:
+    start = to_local(captured_at, tz).date()
     if sale_ends_at is None:
         end = start + timedelta(days=5)
     else:
-        end = _pacific(sale_ends_at).date()
+        end = to_local(sale_ends_at, tz).date()
         if end < start:
             end = start
         if (end - start).days > 13:
@@ -349,6 +345,7 @@ def build_social_calendar(
     auction_url: str = "",
     ctseller_sale_id: int | None = None,
     pinned: list[dict] | None = None,
+    tz: str | None = None,
 ) -> list[dict]:
     """Push lots get multiple slots; Needs eyes fill leftovers lightly. Status stays Planned.
 
@@ -362,8 +359,9 @@ def build_social_calendar(
     pins = list(pinned or [])
     if not ordered and not needs_eyes and not pins:
         return []
-    days = calendar_days(captured_at, sale_ends_at)
-    end_day = _pacific(sale_ends_at).date() if sale_ends_at is not None else None
+    zone = zone_name(tz)
+    days = calendar_days(captured_at, sale_ends_at, tz=zone)
+    end_day = to_local(sale_ends_at, zone).date() if sale_ends_at is not None else None
 
     class _Cell:
         __slots__ = ("day", "slot_time", "platform", "hook", "fmt", "row", "pinned")
@@ -497,7 +495,8 @@ def build_social_calendar(
                 "order": 0,
                 "post_date": day.isoformat(),
                 "local_time": local_time,
-                "zone": "PT",
+                "zone": zone,
+                "zone_label": zone_label(zone),
                 "platform": platform,
                 "hook": hook,
                 "post_type": fmt,
@@ -523,6 +522,7 @@ def build_social_calendar(
                     item_url=url,
                     close_at=sale_ends_at,
                     sale_url=sale_url,
+                    tz=zone,
                 ),
                 "status": "Planned",
                 "preflight": PREFLIGHT,
