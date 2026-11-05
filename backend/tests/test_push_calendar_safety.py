@@ -30,7 +30,6 @@ def _meta(monkeypatch) -> None:
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     monkeypatch.setattr(settings, "google_api_key", "")
-    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
 
 
 def _morning(client) -> dict:
@@ -275,7 +274,11 @@ def test_force_cannot_repost_a_posted_calendar_slot(tmp_path, monkeypatch) -> No
 
 
 def test_auto_approve_backs_off_then_stops_after_the_cap(tmp_path, monkeypatch) -> None:
+    from app.services import facebook_calendar
+
     _meta(monkeypatch)
+    # Page feed retries only: reserved Story slots would fill this one-lot calendar's quota.
+    monkeypatch.setitem(facebook_calendar.PLATFORM_PUBLISH_TARGETS, "FB + IG Stories", "copy_only")
     client, db, account, _user, lot = _client(tmp_path, connected=True)
     account.facebook_calendar_auto_approve = True
     db.add(account)

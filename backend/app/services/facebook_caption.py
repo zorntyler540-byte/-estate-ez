@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import google_api_key
 from app.services.ctbids_urls import SALE_LINK_PREFIX, ctbids_sale_url, sale_link_line
+from app.services.franchise_time import to_local, zone_label
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
 FOLLOW_HOOK_LINE = "Follow our Page for upcoming sales."
 SHIPS_NATIONWIDE_LINE = "Ships nationwide."
 _LOG = logging.getLogger(__name__)
@@ -64,18 +65,18 @@ class FacebookCaptionDraft(BaseModel):
     )
 
 
-def _format_close_time_portable(moment: datetime | None) -> str:
+def _format_close_time_portable(moment: datetime | None, tz: str | None = None) -> str:
     """strftime %-d is glibc-only; keep a portable fallback for tests/Windows."""
     if moment is None:
         return ""
-    local = moment.astimezone(PACIFIC) if moment.tzinfo else moment.replace(tzinfo=PACIFIC)
+    local = to_local(moment, tz)
     day = local.day
     hour = local.strftime("%I").lstrip("0") or "12"
     ampm = local.strftime("%p")
     weekday = local.strftime("%A")
     month = local.strftime("%B")
     minute = local.strftime("%M")
-    return f"{weekday}, {month} {day} at {hour}:{minute} {ampm} PT"
+    return f"{weekday}, {month} {day} at {hour}:{minute} {ampm} {zone_label(tz, at=local)}"
 
 
 def template_caption(
@@ -89,6 +90,7 @@ def template_caption(
     watchers: int | None = None,
     angle: str = "",
     sale_url: str = "",
+    tz: str | None = None,
 ) -> str:
     lines: list[str] = []
     name = (title or "").strip() or "Estate lot"
@@ -112,7 +114,7 @@ def template_caption(
     if extras:
         lines.append("")
         lines.append(", ".join(extras) + ".")
-    close_s = _format_close_time_portable(close_at)
+    close_s = _format_close_time_portable(close_at, tz)
     if close_s:
         lines.append("")
         lines.append(f"Bidding closes {close_s}.")
@@ -236,11 +238,12 @@ def group_post_copy(
     item_url: str = "",
     close_at: datetime | None = None,
     sale_url: str = "",
+    tz: str | None = None,
 ) -> str:
     """Shorter paste for Facebook Groups: hook, close time, lot URL, sale URL. No follow, no hashtags."""
     lot_url = (item_url or "").strip()
     sale_line = sale_link_line(sale_url or ctbids_sale_url(item_url=lot_url))
-    close_s = _format_close_time_portable(close_at)
+    close_s = _format_close_time_portable(close_at, tz)
     hook_line = ""
     bidding = ""
     source = (caption or "").strip()
@@ -315,6 +318,7 @@ def draft_facebook_caption(
     sale_title: str = "",
     angle: str = "",
     sale_url: str = "",
+    tz: str | None = None,
 ) -> str:
     """Gemini Flash JSON caption, or the local template if the key is missing/fails."""
     sale_url = sale_url or ctbids_sale_url(item_url=item_url)
@@ -328,6 +332,7 @@ def draft_facebook_caption(
         watchers=watchers,
         angle=angle,
         sale_url=sale_url,
+        tz=tz,
     )
     if not google_api_key():
         return fallback
@@ -345,6 +350,7 @@ def draft_facebook_caption(
             fallback=fallback,
             angle=angle,
             sale_url=sale_url,
+            tz=tz,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.warning("Facebook caption Gemini failed; using template: %s", exc)
@@ -365,6 +371,7 @@ def _draft_with_gemini(
     fallback: str,
     angle: str = "",
     sale_url: str = "",
+    tz: str | None = None,
 ) -> str:
     from google.genai import types
 
@@ -372,7 +379,7 @@ def _draft_with_gemini(
     from pipeline.pipeline import GEMINI_FLASH_MODEL, _get_client
 
     client = _get_client()
-    close_s = _format_close_time_portable(close_at) or "(close time unknown)"
+    close_s = _format_close_time_portable(close_at, tz) or "(close time unknown)"
     hook = (
         f'End with this exact line on its own: "{FOLLOW_HOOK_LINE}"'
         if include_follow_hook
@@ -436,3 +443,23 @@ def _draft_with_gemini(
         sale_url=sale_url or ctbids_sale_url(item_url=item_url),
         include_follow_hook=include_follow_hook,
     )
+
+
+# Gemini caption calls that may overlap for one preview / approve / auto-approve pass.
+CAPTION_DRAFT_CONCURRENCY = 4
+
+
+def draft_captions(
+    requests: list[dict[str, Any]],
+    *,
+    drafter: Callable[..., str] = draft_facebook_caption,
+) -> list[str]:
+    """``draft_facebook_caption`` for many lots; Gemini calls overlap, order is kept.
+
+    Each request is the keyword arguments for one caption. No DB access happens here.
+    """
+    if len(requests) <= 1:
+        return [drafter(**kwargs) for kwargs in requests]
+    workers = min(CAPTION_DRAFT_CONCURRENCY, len(requests))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="fb-caption") as pool:
+        return list(pool.map(lambda kwargs: drafter(**kwargs), requests))

@@ -52,6 +52,23 @@ function isAuthFailureMessage(message: string): boolean {
   );
 }
 
+type InstagramLink = {
+  enabled?: boolean;
+  connected?: boolean;
+  username?: string | null;
+  instagram_enabled?: boolean;
+  instagram_connected?: boolean;
+  instagram_username?: string | null;
+};
+
+function instagramLink(status: InstagramLink): InstagramLink {
+  return {
+    enabled: Boolean(status.instagram_enabled),
+    connected: Boolean(status.instagram_connected),
+    username: status.instagram_username || null
+  };
+}
+
 export default function AccountPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
@@ -106,6 +123,7 @@ export default function AccountPage() {
   const [facebookNeedsReconnect, setFacebookNeedsReconnect] = useState(false);
   const [facebookCalendarAuto, setFacebookCalendarAuto] = useState(false);
   const [facebookPageName, setFacebookPageName] = useState("");
+  const [instagram, setInstagram] = useState<InstagramLink>({});
   const [facebookPages, setFacebookPages] = useState<Array<{ id: string; name: string; can_post: boolean; selected: boolean }>>(
     []
   );
@@ -167,8 +185,9 @@ export default function AccountPage() {
                 needs_reconnect?: boolean;
                 page_name?: string | null;
                 calendar_auto_approve?: boolean;
-              };
+              } & InstagramLink;
               setFacebookConfigured(Boolean(fb.configured));
+              setInstagram(instagramLink(fb));
               setFacebookConnected(Boolean(fb.connected));
               setFacebookNeedsReconnect(Boolean(fb.needs_reconnect));
               setFacebookPageName((fb.page_name || "").trim());
@@ -332,8 +351,9 @@ export default function AccountPage() {
       const res = (await apiFetch("/integrations/facebook/pages/select", token, {
         method: "POST",
         body: JSON.stringify({ page_id: pageId })
-      })) as { connected?: boolean; page_name?: string | null; needs_reconnect?: boolean };
+      })) as { connected?: boolean; page_name?: string | null; needs_reconnect?: boolean } & InstagramLink;
       setFacebookConnected(Boolean(res.connected));
+      setInstagram(instagramLink(res));
       setFacebookNeedsReconnect(Boolean(res.needs_reconnect));
       setFacebookPageName((res.page_name || "").trim());
       setFacebookMsg(`Posting as ${res.page_name || "that Page"}.`);
@@ -356,11 +376,33 @@ export default function AccountPage() {
       setFacebookCalendarAuto(Boolean(res.calendar_auto_approve));
       setFacebookMsg(
         next
-          ? "New Push-calendar slots will be scheduled automatically as Facebook Page posts."
-          : "Push-calendar slots need an approve click before they go to the Page."
+          ? "New Push-calendar slots will be approved automatically for their platform."
+          : "Push-calendar slots need an approve click before anything is published."
       );
     } catch (e) {
       setFacebookErr(e instanceof Error ? e.message : "Could not save Facebook calendar setting");
+    } finally {
+      setFacebookBusy(false);
+    }
+  }
+
+  async function refreshInstagramLink() {
+    if (!token) return;
+    setFacebookBusy(true);
+    setFacebookErr("");
+    try {
+      const res = (await apiFetch("/integrations/facebook/instagram/refresh", token, {
+        method: "POST"
+      })) as InstagramLink;
+      const next = instagramLink(res);
+      setInstagram(next);
+      setFacebookMsg(
+        next.connected
+          ? `Instagram @${next.username || "account"} is linked. Instagram and Stories slots will publish there.`
+          : "No Instagram professional account is linked to this Page yet. Link it in Meta Business settings, then check again."
+      );
+    } catch (e) {
+      setFacebookErr(e instanceof Error ? e.message : "Could not check Instagram");
     } finally {
       setFacebookBusy(false);
     }
@@ -377,6 +419,7 @@ export default function AccountPage() {
       setFacebookConnected(false);
       setFacebookNeedsReconnect(false);
       setFacebookPageName("");
+      setInstagram({});
       setFacebookPages([]);
       setFacebookPosts([]);
       setFacebookMsg("Facebook Page disconnected.");
@@ -926,8 +969,8 @@ export default function AccountPage() {
           </h2>
           <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.55rem", fontSize: "0.95rem" }}>
             {watcherAccount
-              ? "Connect the franchise Facebook Page, then approve posts from the Push queue. Staff still post. Native Instagram, Groups, and Marketplace are not available here."
-              : "Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption). Push-calendar Instagram, Stories, and TikTok slots currently publish as Page feed posts. Native Instagram, Groups, and Marketplace are not available here. Owners only to connect."}
+              ? "Connect the franchise Facebook Page, then approve posts from the Push queue. Instagram and Stories slots publish to the Instagram account linked to the Page. Groups, Marketplace, and TikTok stay copy-and-paste."
+              : "Connect the franchise Facebook Page to post catalog lots (multi-photo, editable caption). Push-calendar Instagram slots publish to the Instagram account linked to the Page, and Stories slots to Page and Instagram Stories. TikTok, Groups, and Marketplace stay copy-and-paste. Owners only to connect."}
           </p>
           {facebookMsg ? <div className="ct-banner ct-banner--success">{facebookMsg}</div> : null}
           {facebookErr ? <div className="ct-banner ct-banner--error">{facebookErr}</div> : null}
@@ -937,6 +980,21 @@ export default function AccountPage() {
           {facebookConnected ? (
             <p style={{ marginTop: 0 }}>
               Connected to <strong>{facebookPageName || "a Facebook Page"}</strong>
+              {instagram.enabled ? (
+                <>
+                  <br />
+                  {instagram.connected ? (
+                    <span>
+                      Instagram: <strong>@{instagram.username || "linked"}</strong>
+                    </span>
+                  ) : (
+                    <span className="ct-muted">
+                      Instagram: not linked, so Instagram slots are copy only and Stories post to the Page only.
+                      If you just linked it, reconnect Facebook to grant Instagram access, then check again.
+                    </span>
+                  )}
+                </>
+              ) : null}
             </p>
           ) : (
             <p className="ct-muted" style={{ marginTop: 0 }}>
@@ -957,6 +1015,11 @@ export default function AccountPage() {
                     ? "Reconnect Facebook"
                     : "Connect Facebook Page"}
               </button>
+              {facebookConnected && instagram.enabled ? (
+                <button type="button" className="ct-btn" disabled={facebookBusy} onClick={() => void refreshInstagramLink()}>
+                  Check Instagram link
+                </button>
+              ) : null}
               {facebookConnected ? (
                 <button type="button" className="ct-btn" disabled={facebookBusy} onClick={() => void disconnectFacebook()}>
                   Disconnect
@@ -975,9 +1038,9 @@ export default function AccountPage() {
                 onChange={(e) => void toggleFacebookCalendarAuto(e.target.checked)}
               />
               <span>
-                Auto-approve new Push-calendar slots as Facebook Page posts (off by default). Every
-                spreadsheet slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing
-                17:40) is scheduled on the Page until a native publisher exists.
+                Auto-approve new Push-calendar slots (off by default). Facebook slots are scheduled on
+                the Page; Instagram and Stories slots are published by Estate-EZ at slot time. TikTok
+                slots, and Instagram slots without a linked account, are never auto-posted.
               </span>
             </label>
           ) : null}

@@ -56,7 +56,7 @@ class Account(Base):
     ctseller_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_access_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     ctseller_refresh_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Facebook Page (Graph API). One Page per account in v1; Instagram would be a sibling connection.
+    # Facebook Page (Graph API). One Page per account; Instagram is the IG professional account linked to it.
     facebook_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     facebook_user_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     facebook_user_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -65,10 +65,15 @@ class Account(Base):
     facebook_page_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     facebook_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     facebook_token_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Instagram professional account linked to the selected Page (publishes with the Page token).
+    instagram_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    instagram_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # When true, new in-window Push-calendar slots are scheduled as Page posts without a second click.
     facebook_calendar_auto_approve: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # IANA zone for Push-calendar slot times, caption close times, and click days. NULL = Pacific.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")
@@ -437,11 +442,12 @@ class AudienceHuntEvent(Base):
 
 
 class FacebookPagePost(Base):
-    """One Facebook Page feed post (or scheduled post) for catalog lot(s).
+    """One published (or scheduled) social post for catalog lot(s).
 
-    Push-calendar rows keep an intended spreadsheet platform; v1 still stores a
-    Page feed post here. Native Instagram / Stories / TikTok publishers should
-    get their own tables rather than reuse this row.
+    ``publish_target`` is ``facebook_page`` (feed; Facebook schedules it natively),
+    ``instagram_feed``, or ``stories`` (Page story + IG story). Instagram and Stories
+    cannot be scheduled through Graph: an approved row sits in ``scheduled`` with no
+    ``facebook_post_id`` and the publish queue posts it at slot time.
 
     A calendar slot owns exactly one row (unique ``account_id`` + ``calendar_key``).
     ``publishing`` is claimed before any Graph call so a second publisher skips it.
@@ -478,6 +484,75 @@ class FacebookPagePost(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_target: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="facebook_page", server_default="facebook_page"
+    )
+    instagram_media_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SocialPublishBatch(Base):
+    """One owner click (or auto-approve pass) worth of posts. Status is derived from its jobs."""
+
+    __tablename__ = "social_publish_batches"
+    __table_args__ = (
+        Index("uq_social_publish_batches_account_idem", "account_id", "idempotency_key", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="lot", server_default="lot")
+    include_follow_hook: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    force: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # Client ``Idempotency-Key``: the same key returns the same batch instead of posting twice.
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SocialPublishJob(Base):
+    """One post on one target, drained by the worker (``python -m app.worker --social-publish``).
+
+    ``status``: ``queued`` -> ``running`` -> ``done`` / ``failed`` / ``skipped``. Instagram and
+    Stories slots go ``queued`` -> ``waiting`` (slot reserved and pinned) -> ``queued`` at
+    ``run_at`` = slot time. ``active_key`` is non-NULL only while the job is live, so a calendar
+    slot can have at most one live job. ``state_json`` keeps Graph progress (container ids,
+    story ids) so a retry resumes instead of posting twice.
+    """
+
+    __tablename__ = "social_publish_jobs"
+    __table_args__ = (
+        Index("ix_social_publish_jobs_account_status", "account_id", "status"),
+        Index("ix_social_publish_jobs_status_run_at", "status", "run_at"),
+        Index("uq_social_publish_jobs_account_active_key", "account_id", "active_key", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    batch_id: Mapped[str] = mapped_column(
+        ForeignKey("social_publish_batches.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    calendar_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    publish_target: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="facebook_page", server_default="facebook_page"
+    )
+    item_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", server_default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    active_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    post_record_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    state_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

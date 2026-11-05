@@ -1,7 +1,7 @@
 """processing_jobs.parent_job_id (website batch split into per-lot jobs).
 
-Revision ID: 0053_job_parent_id
-Revises: 0052_worker_heartbeats
+Revision ID: 0055_job_parent_id
+Revises: 0054_worker_heartbeats
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0053_job_parent_id"
-down_revision = "0052_worker_heartbeats"
+revision = "0055_job_parent_id"
+down_revision = "0054_worker_heartbeats"
 branch_labels = None
 depends_on = None
 

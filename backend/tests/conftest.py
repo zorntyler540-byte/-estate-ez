@@ -23,3 +23,13 @@ def _inline_snapshot_calendar_sync(monkeypatch):
     monkeypatch.setattr(engagement_tasks, "_start_thread", lambda target, name: target())
     yield
     engagement_tasks.reset_engagement_task_state()
+
+@pytest.fixture(autouse=True)
+def _inline_facebook_post_batches(monkeypatch):
+    """Run queued Page-post batches before the POST returns so tests can read results."""
+    from app import facebook_post_tasks
+
+    facebook_post_tasks.reset_facebook_post_runtime_state()
+    monkeypatch.setattr(facebook_post_tasks, "_start_thread", lambda target, name: target())
+    yield
+    facebook_post_tasks.reset_facebook_post_runtime_state()
