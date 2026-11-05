@@ -38,8 +38,12 @@ PROCESSING_STALE_SECONDS = 3600
 WORKER_ORPHAN_PROCESSING_SECONDS = 20 * 60
 
 # Dedicated worker should claim within a couple of seconds. If a job is still queued after
-# this grace (and nothing is processing), the API starts it so field uploads do not sit forever.
+# this grace, nothing is processing for the account, and no worker heartbeat is fresh, the API
+# starts it so field uploads do not sit forever while the worker is down.
 WORKER_CLAIM_GRACE_SECONDS = 8
+# Emergency API fallback (worker heartbeat stale) never runs more than this many jobs at once
+# on the web process; each one is an unisolated Gemini/Pillow thread.
+API_FALLBACK_MAX_JOBS = 1
 # Dashboard + phones hit GET /jobs often while lots are queued. Each kick opens extra
 # sessions; debounce so poll storms cannot stack QueuePool checkouts.
 KICK_QUEUE_DEBOUNCE_SECONDS = 5.0
@@ -803,8 +807,9 @@ def start_job_in_background(
     Returns False when the job should stay queued (another lot is still running),
     or when this process is configured not to run catalog jobs (dedicated worker mode).
 
-    ``force_in_process=True`` (dashboard **Run now**) starts on this API process even when
-    ``RUN_CATALOG_JOBS_IN_PROCESS=false``, so staff are not stuck if the worker queue is wedged.
+    ``force_in_process=True`` starts on this API process even when
+    ``RUN_CATALOG_JOBS_IN_PROCESS=false``. Callers must only pass it when
+    ``in_process_fallback_allowed()`` (no fresh worker heartbeat).
 
     ``already_claimed=True`` skips the queued→processing UPDATE (the worker parent already
     claimed with SKIP LOCKED). Capacity is not re-checked so the claimed row is not blocked
@@ -906,12 +911,31 @@ def _oldest_queued_job(account_id: str) -> tuple[str, float] | None:
         return str(row.id), age
 
 
+def worker_heartbeat_is_fresh() -> bool:
+    """A dedicated worker beat recently (busy or idle) and will claim queued jobs."""
+    from app.worker_heartbeat import worker_heartbeat_fresh
+
+    return worker_heartbeat_fresh()
+
+
+def in_process_fallback_allowed() -> bool:
+    """Worker mode: the API may run a catalog job itself only when no worker heartbeat is fresh."""
+    return not worker_heartbeat_is_fresh()
+
+
+def _local_job_thread_count() -> int:
+    with _job_cancels_lock:
+        return len(_job_cancels)
+
+
 def kick_queue_if_idle(account_id: str) -> None:
     """Start waiting queued jobs when nothing is processing (e.g. after API restart or stale reconcile).
 
-    In dedicated-worker mode the worker normally claims within a couple of seconds. If a job is
-    still queued after ``WORKER_CLAIM_GRACE_SECONDS`` with no processing slot in use, start it
-    on this API process (same as dashboard Run now) so phone uploads do not sit forever.
+    In dedicated-worker mode the worker claims queued jobs (fairly, across franchises). Its slots
+    being busy with other accounts is normal and is **not** a reason to run Gemini on the API.
+    Only when no worker heartbeat is fresh (worker down / wedged / mid-deploy) and a job has
+    waited past ``WORKER_CLAIM_GRACE_SECONDS`` does this process start it, at most
+    ``API_FALLBACK_MAX_JOBS`` at a time, so phone uploads do not sit forever.
     """
     reconcile_memory_threads_for_account(account_id)
     if effective_running_count(account_id) > 0:
@@ -929,8 +953,12 @@ def kick_queue_if_idle(account_id: str) -> None:
     job_id, age = queued
     if age < WORKER_CLAIM_GRACE_SECONDS:
         return
+    if not in_process_fallback_allowed():
+        return
+    if _local_job_thread_count() >= API_FALLBACK_MAX_JOBS:
+        return
     _LOG.warning(
-        "Worker did not claim queued job after %.0fs — starting on API job_id=%s account_id=%s",
+        "No fresh worker heartbeat and job queued %.0fs — starting on API job_id=%s account_id=%s",
         age,
         job_id,
         account_id,
