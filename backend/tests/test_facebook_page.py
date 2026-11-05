@@ -894,21 +894,15 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         _clear_overrides()
 
 
-def test_push_calendar_reschedule_and_removal(tmp_path, monkeypatch) -> None:
+def test_snapshot_never_moves_or_deletes_an_approved_post(tmp_path, monkeypatch) -> None:
+    """Approved slots are pinned: a next-day snapshot or a bucket drop leaves the Graph post alone."""
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     client, db, account, _user, lot = _client(tmp_path, connected=True)
-    updates: list[int] = []
-    deletes: list[str] = []
+    graph_writes: list[str] = []
 
     def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
         return "111_move"
-
-    def fake_update(*, post_id, page_token, scheduled_unix):
-        updates.append(int(scheduled_unix))
-
-    def fake_delete(*, post_id, page_token):
-        deletes.append(post_id)
 
     try:
         body = _future_push_body(lot)
@@ -928,35 +922,34 @@ def test_push_calendar_reschedule_and_removal(tmp_path, monkeypatch) -> None:
                 ).status_code
                 == 200
             )
+        stored = db.query(FacebookPagePost).one()
+        original_time = stored.scheduled_publish_time
         later = dict(body)
         later["captured_at"] = (
             datetime.fromisoformat(body["captured_at"]) + timedelta(days=1)
         ).isoformat()
-        with (
-            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
-            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
-        ):
-            moved = client.post("/integrations/engagement/snapshots", json=later)
-        assert moved.status_code == 200, moved.text
-        assert updates
         rescued = dict(later)
-        rescued["items"] = [
-            {
-                **body["items"][0],
-                "watchers": 0,
-                "bids": 0,
-                "views": 1,
-            }
-        ]
+        rescued["captured_at"] = (
+            datetime.fromisoformat(later["captured_at"]) + timedelta(minutes=5)
+        ).isoformat()
+        rescued["items"] = [{**body["items"][0], "watchers": 0, "bids": 0, "views": 1}]
         with (
-            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
-            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
+            patch("app.services.meta_graph.graph_request", side_effect=lambda *a, **k: graph_writes.append(a[0])),
         ):
-            gone = client.post("/integrations/engagement/snapshots", json=rescued)
-        assert gone.status_code == 200, gone.text
-        assert "111_move" in deletes
-        stored = db.query(FacebookPagePost).one()
-        assert stored.status == "cancelled"
+            assert client.post("/integrations/engagement/snapshots", json=later).status_code == 200
+            assert client.post("/integrations/engagement/snapshots", json=rescued).status_code == 200
+        assert graph_writes == []
+        db.refresh(stored)
+        assert stored.status == "scheduled"
+        assert stored.facebook_post_id == "111_move"
+        assert stored.calendar_key == slot["slot_key"]
+        assert stored.scheduled_publish_time == original_time
+        pinned = next(
+            row for row in client.get("/engagement/sales/12/calendar").json() if row["slot_key"] == slot["slot_key"]
+        )
+        assert pinned["pinned"] is True
+        assert pinned["facebook_status"] == "scheduled"
+        assert pinned["post_date"] == slot["post_date"]
     finally:
         _clear_overrides()
 
@@ -1013,10 +1006,7 @@ def test_partial_snapshot_does_not_cancel_scheduled_page_posts(tmp_path, monkeyp
             "captured_at": (captured + timedelta(minutes=5)).isoformat(),
             "items": [other_item],
         }
-        with (
-            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
-            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
-        ):
+        with patch("app.services.facebook_calendar.delete_page_post", fake_delete):
             res = client.post("/integrations/engagement/snapshots", json=partial)
         assert res.status_code == 200, res.text
         assert res.json()["pruned"] == 0
@@ -1026,18 +1016,17 @@ def test_partial_snapshot_does_not_cancel_scheduled_page_posts(tmp_path, monkeyp
         assert stored.status == "scheduled"
         assert stored.facebook_post_id == "111_keep"
 
-        # A complete pass that no longer lists the lot does cancel it.
+        # A complete pass that no longer lists the lot flags the slot for the owner;
+        # the post Facebook already accepted is never deleted by a snapshot.
         complete = {**partial, "captured_at": (captured + timedelta(minutes=10)).isoformat(), "complete": True}
-        with (
-            patch("app.services.facebook_calendar.update_scheduled_page_post", fake_update),
-            patch("app.services.facebook_calendar.delete_page_post", fake_delete),
-        ):
+        with patch("app.services.facebook_calendar.delete_page_post", fake_delete):
             done = client.post("/integrations/engagement/snapshots", json=complete)
         assert done.status_code == 200, done.text
         assert done.json()["pruned"] == 1
-        assert deletes == ["111_keep"]
+        assert deletes == []
         db.refresh(stored)
-        assert stored.status == "cancelled"
+        assert stored.status == "scheduled"
+        assert "no longer in the latest Watcher snapshot" in (stored.review_note or "")
     finally:
         _clear_overrides()
 
