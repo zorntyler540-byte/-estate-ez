@@ -454,10 +454,13 @@ def test_instagram_transient_publish_error_resumes_the_same_container(tmp_path, 
     db.commit()
     fake = FakeGraph()
     fake.publish_errors = [MetaGraphError("(#4) Application request limit reached", code=4, is_transient=True)]
+    discarded: list[dict] = []
     try:
         by_time = _four_lot_sale(client, db, account, user, lot)
         p1, p2, p3 = _graph(fake)
-        with p1, p2, p3:
+        with p1, p2, p3, patch(
+            "app.services.social_targets.discard_staged_media", lambda **kw: discarded.append(kw)
+        ):
             client.post(
                 "/engagement/sales/12/calendar/facebook",
                 json={"confirm": True, "post_now": True, "slot_keys": [by_time["12:15"]["slot_key"]]},
@@ -466,9 +469,11 @@ def test_instagram_transient_publish_error_resumes_the_same_container(tmp_path, 
             _drain(db, at=t0)
             containers_after_first = len([c for c in fake.calls if c[1].endswith("/media")])
             assert db.query(SocialPublishJob).one().status == "queued"
+            assert discarded == [], "a retry may still need the staged image URLs"
             _drain(db, at=t0 + timedelta(minutes=1))
         assert len([c for c in fake.calls if c[1].endswith("/media")]) == containers_after_first
         assert len(fake.paths("/media_publish")) == 2
+        assert len(discarded) == 1 and discarded[0]["photo_ids"]
         db.expire_all()
         assert db.query(FacebookPagePost).one().status == "posted"
     finally:

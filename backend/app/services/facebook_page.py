@@ -744,6 +744,17 @@ def _item_target(item: dict) -> str:
     return str(item.get("publish_target") or "").strip() or PUBLISH_TARGET_FACEBOOK_PAGE
 
 
+def _discard_staged(target: str, account_id: str, record_id: str, photo_refs: list) -> None:
+    from app.services.social_targets import PUBLISH_TARGET_FACEBOOK_PAGE, discard_staged_media
+
+    if target == PUBLISH_TARGET_FACEBOOK_PAGE:
+        return
+    try:
+        discard_staged_media(account_id=account_id, record_id=record_id, photo_ids=[ref.id for ref in photo_refs])
+    except Exception:  # noqa: BLE001
+        _LOG.warning("Could not delete staged social media for post %s", record_id, exc_info=True)
+
+
 def _as_aware_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -1077,6 +1088,9 @@ def publish_item(
             )
         db.add(record)
         db.commit()
+        retryable = bool(error.is_transient and not unknown and not error.is_token_error)
+        if not retryable:
+            _discard_staged(target, account_id, record_id, photo_refs)
         if error.is_token_error:
             _mark_token_error(db, account, str(error))
             return out(ok=False, post_id=record_id, needs_reconnect=True, error=str(error))
@@ -1084,7 +1098,7 @@ def publish_item(
             ok=False,
             post_id=record_id,
             error=record.error_message,
-            retryable=bool(error.is_transient and not unknown),
+            retryable=retryable,
         )
 
     record.facebook_post_id = result.post_id
@@ -1099,6 +1113,7 @@ def publish_item(
     _clear_token_error(db, account)
     db.add(record)
     db.commit()
+    _discard_staged(target, account_id, record_id, photo_refs)
     return out(
         ok=True,
         post_id=record_id,

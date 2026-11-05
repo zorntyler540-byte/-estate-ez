@@ -102,9 +102,24 @@ def stage_public_jpeg(*, account_id: str, record_id: str, photo_id: str, jpeg: b
         raise MetaGraphError(
             "Instagram needs R2 storage for public image URLs (set R2_* on the API and worker)."
         )
-    key = f"{SOCIAL_MEDIA_PREFIX}/{account_id}/{record_id}/{photo_id}-{kind}.jpg"
+    key = _staged_key(account_id, record_id, photo_id, kind)
     put_bytes(key, jpeg, content_type="image/jpeg")
     return presigned_get_url(key, expires_seconds=MEDIA_URL_SECONDS)
+
+
+def _staged_key(account_id: str, record_id: str, photo_id: str, kind: str) -> str:
+    return f"{SOCIAL_MEDIA_PREFIX}/{account_id}/{record_id}/{photo_id}-{kind}.jpg"
+
+
+def discard_staged_media(*, account_id: str, record_id: str, photo_ids: list[str]) -> None:
+    """Best-effort delete of the R2 copies once Instagram no longer needs to fetch them."""
+    from app.object_storage import delete_object, r2_configured
+
+    if not r2_configured():
+        return
+    for photo_id in photo_ids:
+        for kind in ("feed", "story"):
+            delete_object(_staged_key(account_id, record_id, photo_id, kind))
 
 
 def _wait_finished(container_id: str, page_token: str, *, sleep: Callable[[float], None]) -> None:
