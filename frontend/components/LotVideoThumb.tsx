@@ -1,8 +1,9 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { Play } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { API_BASE } from "../lib/api";
+import { cn } from "../lib/utils";
 
 type Props = {
   lotId: string;
@@ -72,32 +73,15 @@ function LotVideoThumbInner({
     };
   }, [lotId, videoId, token, fileOnDisk]);
 
-  const shell: CSSProperties = {
-    borderRadius: "var(--ct-radius-sm)",
-    border: "1px solid var(--ct-border)",
-    background: failed ? "var(--ct-error-bg)" : "var(--ct-thumb-placeholder)",
-    minHeight,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    position: "relative"
-  };
+  const shell = cn(
+    "relative flex flex-col overflow-hidden rounded-xl border shadow-sm shadow-black/30",
+    failed ? "border-[rgba(248,113,113,0.35)] bg-[rgba(239,68,68,0.12)]" : "border-border bg-[var(--ct-thumb-placeholder)]"
+  );
 
   if (failed) {
     return (
-      <div style={shell} title={label}>
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "0.5rem",
-            color: "var(--ct-error)",
-            fontSize: "0.78rem",
-            textAlign: "center"
-          }}
-        >
+      <div className={shell} style={{ minHeight }} title={label}>
+        <div className="flex flex-1 items-center justify-center px-2 py-2 text-center text-xs text-[#fca5a5]">
           {fileOnDisk ? "Could not load video" : "Missing on server"}
         </div>
       </div>
@@ -107,7 +91,8 @@ function LotVideoThumbInner({
   if (!src) {
     return (
       <div
-        style={{ ...shell, background: "var(--ct-thumb-loading)" }}
+        className={cn(shell, "animate-pulse bg-[var(--ct-thumb-loading)]")}
+        style={{ minHeight }}
         title={label}
         aria-busy
       />
@@ -115,7 +100,7 @@ function LotVideoThumbInner({
   }
 
   return (
-    <div style={shell}>
+    <div className={shell} style={{ minHeight }}>
       <video
         src={src}
         muted
@@ -125,15 +110,13 @@ function LotVideoThumbInner({
           setFailed(true);
           setSrc(null);
         }}
-        style={{
-          width: "100%",
-          height: "auto",
-          maxHeight,
-          objectFit: "contain",
-          display: "block",
-          background: "#111"
-        }}
+        className="block h-auto w-full bg-[#111] object-contain"
+        style={{ maxHeight }}
       />
+      <span className="pointer-events-none absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md border border-primary/40 bg-black/70 px-1.5 py-0.5 text-[0.68rem] font-semibold uppercase tracking-wide text-primary">
+        <Play size={10} aria-hidden />
+        Video
+      </span>
     </div>
   );
 }

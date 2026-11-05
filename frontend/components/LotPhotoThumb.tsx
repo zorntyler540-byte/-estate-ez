@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../lib/api";
 import { nextThumbStep, thumbFailedMessage, type ThumbStep } from "../lib/lotPhotoThumbLoad";
+import { cn } from "../lib/utils";
 
 type Props = {
   lotId: string;
@@ -184,31 +185,15 @@ function LotPhotoThumbInner({
     })();
   };
 
-  const shell: CSSProperties = {
-    borderRadius: "var(--ct-radius-sm)",
-    border: "1px solid var(--ct-border)",
-    background: failed ? "var(--ct-error-bg)" : "var(--ct-thumb-placeholder)",
-    minHeight,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column"
-  };
+  const shell = cn(
+    "flex flex-col overflow-hidden rounded-xl border shadow-sm shadow-black/30",
+    failed ? "border-[rgba(248,113,113,0.35)] bg-[rgba(239,68,68,0.12)]" : "border-border bg-[var(--ct-thumb-placeholder)]"
+  );
 
   if (failed) {
     return (
-      <div style={shell} title={label}>
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "0.5rem",
-            color: "var(--ct-error)",
-            fontSize: "0.78rem",
-            textAlign: "center"
-          }}
-        >
+      <div className={shell} style={{ minHeight }} title={label}>
+        <div className="flex flex-1 items-center justify-center px-2 py-2 text-center text-xs text-[#fca5a5]">
           {thumbFailedMessage(fileOnDisk)}
         </div>
       </div>
@@ -218,7 +203,8 @@ function LotPhotoThumbInner({
   if (!src) {
     return (
       <div
-        style={{ ...shell, background: "var(--ct-thumb-loading)" }}
+        className={cn(shell, "animate-pulse bg-[var(--ct-thumb-loading)]")}
+        style={{ minHeight }}
         title={label}
         aria-busy
       />
@@ -226,22 +212,18 @@ function LotPhotoThumbInner({
   }
 
   return (
-    <div style={shell}>
+    <div className={shell} style={{ minHeight }}>
       <img
         src={src}
         alt={label}
         title={label}
         draggable={false}
         onError={onImgError}
+        className="block h-auto w-full object-contain"
         style={
           {
-            width: "100%",
-            height: "auto",
             maxHeight,
-            objectFit: "contain",
-            display: "block",
             imageOrientation: "from-image",
-            // Avoid browser “optimize for speed” softening when upscaling thumbs on retina.
             imageRendering: "auto",
             WebkitUserDrag: "none"
           } as CSSProperties
