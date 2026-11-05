@@ -15,6 +15,11 @@ export function getStagedUploadRel(file: File): string {
   return stagedUploadRel.get(file) || file.name;
 }
 
+/** Server path for a staged file, including a not-yet-converted folder pick's ``webkitRelativePath``. */
+export function stagedUploadRelOrNull(file: File): string | null {
+  return stagedUploadRel.get(file) || readSourceUploadRel(file);
+}
+
 /** Unique leaf name within one staging batch (``IMG.jpg``, ``IMG_2.jpg``, …). */
 export function allocateUniqueLeafName(leaf: string, used: Set<string>): string {
   const safe = leaf.replace(/\\/g, "/").split("/").pop() || leaf || "photo.jpg";
