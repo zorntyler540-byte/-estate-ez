@@ -79,6 +79,7 @@ import {
   getStagedUploadRel,
   markStagedUploadRel
 } from "../../lib/stagedUploadPath";
+import { newWebUploadBatchId, webUploadName } from "../../lib/webUploadNames";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 const SHOW_CLOSED_SALES_KEY = "ct_show_closed_sales";
@@ -5453,6 +5454,13 @@ export default function DashboardPage() {
     if (isSingleLot) {
       clearFolderPick();
     }
+    // Camera names (image.jpg, IMG_1234.JPG) repeat across sessions; the server only trusts
+    // web-<batch>-NNNN names as photo identity. NNNN is pick order.
+    const uploadBatchId = newWebUploadBatchId();
+    const uploadNames = new Map<File, string>(
+      readyFiles.map((file, i) => [file, webUploadName(uploadBatchId, i + 1, getStagedUploadRel(file))])
+    );
+    const uploadNameFor = (file: File) => uploadNames.get(file) || getStagedUploadRel(file);
     try {
       const buildFormForSlice = (slice: File[]) => {
         const form = new FormData();
@@ -5463,7 +5471,7 @@ export default function DashboardPage() {
           form.append("single_lot_manual_sku", manualSkuBackup.trim());
         }
         for (const file of slice) {
-          form.append("files", file, getStagedUploadRel(file));
+          form.append("files", file, uploadNameFor(file));
         }
         return form;
       };
@@ -5507,7 +5515,7 @@ export default function DashboardPage() {
           );
           const form = new FormData();
           for (const file of slice) {
-            form.append("files", file, getStagedUploadRel(file));
+            form.append("files", file, uploadNameFor(file));
           }
           created = jobFromUploadResponse(
             await apiUploadFiles(
@@ -5525,7 +5533,9 @@ export default function DashboardPage() {
       }
       setJobs((prev) => [created, ...prev]);
       if (!isSingleLot) {
-        persistStagingAwaitingGemini(created.id, total);
+        // Every photo is on the server now. Keeping the box filled let a second Upload tap
+        // send the same batch again as a new job (duplicate lots + a second Gemini bill).
+        clearFolderPick();
       }
       setUploadProgress("Starting catalog job…");
       try {
@@ -5550,8 +5560,8 @@ export default function DashboardPage() {
               ? `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — queued. It will start automatically when the current lot finishes. You can add another lot now.`
               : `Uploaded ${total} photo${total === 1 ? "" : "s"} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
             : running.status === "queued"
-              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} — queued until the current job finishes.`
-              : `Uploaded ${total} photo${total === 1 ? "" : "s"} — catalog is running. Staged previews clear automatically once all ${total} photo${total === 1 ? " has" : "s have"} been sent to Gemini (catalog may still be building lots).`
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"} — upload box cleared. Queued for the catalog worker; it starts automatically.`
+              : `Uploaded ${total} photo${total === 1 ? "" : "s"} — upload box cleared. Catalog is running; lots appear below as they finish.`
         );
       } catch (runErr) {
         const runMsg = parseApiErrorMessage(
@@ -5561,7 +5571,7 @@ export default function DashboardPage() {
         setError(
           isSingleLot
             ? `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”.`
-            : `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}”. Staged previews clear after Gemini analyzes them, then you can stage the next lot.`
+            : `${runMsg} Your ${total} photo${total === 1 ? "" : "s"} are on the server — tap Run on batch “${jobInputLabel(created.input_folder)}” (do not upload them again).`
         );
       }
     } catch (e) {
@@ -5610,7 +5620,7 @@ export default function DashboardPage() {
     setRetryingFailed(true);
     try {
       const result = (await apiFetch(
-        `/jobs/retry-failed?sale_id=${encodeURIComponent(sid)}&force_in_process=true`,
+        `/jobs/retry-failed?sale_id=${encodeURIComponent(sid)}`,
         token,
         { method: "POST" }
       )) as { retried?: number; skipped?: number; started?: boolean; jobs?: Job[] };
@@ -5632,8 +5642,8 @@ export default function DashboardPage() {
       if (retried > 0) {
         setStagingSuccess(
           skipped > 0
-            ? `Retrying ${retried} failed job${retried === 1 ? "" : "s"} — catalog runs one lot at a time. ${skipped} leftover still needs a phone Sync (photos missing).`
-            : `Retrying ${retried} failed job${retried === 1 ? "" : "s"} — catalog runs one lot at a time.`
+            ? `Re-queued ${retried} failed job${retried === 1 ? "" : "s"} for the catalog worker. ${skipped} leftover still needs a phone Sync (photos missing).`
+            : `Re-queued ${retried} failed job${retried === 1 ? "" : "s"} for the catalog worker.`
         );
       } else if (skipped > 0) {
         setError(
@@ -5671,12 +5681,8 @@ export default function DashboardPage() {
       );
     }
     try {
-      // force_in_process: dedicated-worker mode otherwise leaves Queued forever when the worker is wedged.
-      const updated = (await apiFetch(
-        `/jobs/${jobId}/run?force_in_process=true`,
-        token,
-        { method: "POST" }
-      )) as Job;
+      // Queues for the catalog worker. The API only runs it itself when the worker heartbeat is stale.
+      const updated = (await apiFetch(`/jobs/${jobId}/run`, token, { method: "POST" })) as Job;
       if (updated.status === "processing") {
         liveProgressJobIdRef.current = updated.id;
         setLiveProgressJobId(updated.id);
@@ -5686,7 +5692,7 @@ export default function DashboardPage() {
       setCatalogPollEpoch((n) => n + 1);
       if (updated.status === "queued") {
         setStagingSuccess(
-          "Still queued — the catalog worker may be busy or stuck. Wait a moment and try Run now again, or restart the worker on Railway."
+          "Queued for the catalog worker — it starts automatically when a slot frees up. If it stays queued for 10+ minutes, the worker may be down (restart it on Railway)."
         );
       }
     } catch (e) {

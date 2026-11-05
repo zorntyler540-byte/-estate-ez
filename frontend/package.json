@@ -9,7 +9,8 @@
     "start": "next start",
     "test:quote": "node --experimental-strip-types --test lib/quote.test.ts",
     "test:catalog-poll": "node --experimental-strip-types --test lib/catalogPoll.test.ts",
-    "test:lot-media": "node --experimental-strip-types --test lib/lotMediaGallery.test.ts lib/lotPhotoThumbLoad.test.ts"
+    "test:lot-media": "node --experimental-strip-types --test lib/lotMediaGallery.test.ts lib/lotPhotoThumbLoad.test.ts",
+    "test:upload-names": "node --experimental-strip-types --test lib/webUploadNames.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",

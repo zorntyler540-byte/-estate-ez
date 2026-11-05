@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { apiFetch, apiUploadFiles } from "../../lib/api";
 import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
+import { newWebUploadBatchId, webUploadName } from "../../lib/webUploadNames";
 
 const MAX_PHOTOS = 40;
 
@@ -133,7 +134,9 @@ export default function ClientUploadPage() {
       form.append("single_lot_mode", "true");
       form.append("client_draft_id", crypto.randomUUID());
       if (sku.trim()) form.append("single_lot_manual_sku", sku.trim());
-      for (const file of files) form.append("files", file, file.name);
+      // iOS names every picked photo image.jpg; the server only dedupes web-<batch>-NNNN names.
+      const batchId = newWebUploadBatchId();
+      files.forEach((file, i) => form.append("files", file, webUploadName(batchId, i + 1, file.name)));
       const created = (await apiUploadFiles("/jobs/upload", token, form)) as JobRow;
       await apiFetch(`/jobs/${encodeURIComponent(created.id)}/run`, token, { method: "POST" });
       try {
