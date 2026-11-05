@@ -151,6 +151,10 @@ def _client(tmp_path):
     Session = _session(tmp_path)
     db = Session()
     user = _seed(db)
+    # Concurrent requests read this user; an expired instance would lazy-load through
+    # the shared seeding connection from several threads at once.
+    db.refresh(user)
+    db.expunge(user)
 
     def override_db():
         inner = Session()
