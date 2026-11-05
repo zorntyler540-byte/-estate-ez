@@ -7,6 +7,8 @@ import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { Label } from "../../components/ui/input";
+import { Select } from "../../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useToast } from "../../components/ui/toast";
 import { cn } from "../../lib/utils";
@@ -57,11 +59,25 @@ type QueueItem = {
 
 type SaleDetail = SaleSummary & { items: QueueItem[] };
 
+type FacebookStatus = {
+  configured?: boolean;
+  connected?: boolean;
+  needs_reconnect?: boolean;
+  page_name?: string | null;
+  instagram_enabled?: boolean;
+  instagram_connected?: boolean;
+  instagram_username?: string | null;
+  timezone?: string;
+  timezone_label?: string;
+  timezone_choices?: { value: string; label: string }[];
+};
+
 type CalendarPost = {
   order: number;
   post_date: string;
   local_time: string;
   zone: string;
+  zone_label?: string;
   platform: string;
   hook: string;
   post_type: string;
@@ -87,7 +103,30 @@ type CalendarPost = {
   facebook_slot_at?: string | null;
   facebook_post_id?: string | null;
   facebook_error?: string | null;
+  facebook_review_note?: string | null;
+  facebook_caption?: string | null;
+  pinned?: boolean;
 };
+
+// A snapshot older than this may rank lots that have since sold or moved.
+const STALE_SNAPSHOT_HOURS = 6;
+
+function calendarRowKey(post: CalendarPost): string {
+  return post.slot_key || `${post.post_date}-${post.local_time}-${post.lot_id || post.sku}`;
+}
+
+function saleIsClosed(sale: SaleSummary, now = Date.now()): boolean {
+  if (!sale.sale_ends_at) return false;
+  const ends = new Date(sale.sale_ends_at).getTime();
+  return !Number.isNaN(ends) && ends <= now;
+}
+
+function hoursSince(value?: string | null): number | null {
+  if (!value) return null;
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return null;
+  return (Date.now() - at) / 3_600_000;
+}
 
 const FACEBOOK_STATUS_LABELS: Record<string, string> = {
   planned: "Planned",
@@ -95,12 +134,31 @@ const FACEBOOK_STATUS_LABELS: Record<string, string> = {
   too_soon: "Too soon (under 10 min)",
   out_of_window: "Too far (over 75 days)",
   scheduled: "Scheduled",
+  publishing: "Publishing…",
   posted: "Posted",
   failed: "Failed",
   cancelled: "Cancelled",
   no_lot: "No cataloged lot",
-  not_applicable: "Not posting to the Page"
+  not_applicable: "Not posting to the Page",
+  copy_only: "Copy only"
 };
+
+const PUBLISH_TARGET_LABELS: Record<string, string> = {
+  facebook_page: "Facebook Page feed",
+  instagram_feed: "Instagram feed",
+  stories: "FB + IG Stories",
+  copy_only: "Copy only — paste it yourself"
+};
+
+function publishTargetLabel(post: CalendarPost): string {
+  const target = post.publish_target || "";
+  if (target === "copy_only" && post.platform === "TikTok") return "TikTok — copy only";
+  return PUBLISH_TARGET_LABELS[target] || "";
+}
+
+function isCopyOnly(post: CalendarPost): boolean {
+  return post.publish_target === "copy_only" || post.facebook_status === "copy_only";
+}
 
 function facebookStatusLabel(post: CalendarPost): string {
   const raw = (post.facebook_status_label || "").trim();
@@ -114,8 +172,9 @@ function facebookBlockedReason(post: CalendarPost): string {
   const status = post.facebook_status || "";
   if (status === "missed") return "Can't schedule: this slot time has already passed. Use Post now.";
   if (status === "too_soon") return "Can't schedule: under 10 minutes. Facebook needs 10 minutes — use Post now.";
-  if (status === "scheduled") return "Already scheduled on the Page.";
-  if (status === "posted") return "Already posted to the Page.";
+  if (status === "scheduled") return "Already approved for this slot.";
+  if (status === "publishing") return "Being published right now.";
+  if (status === "posted") return "Already posted.";
   if (status === "out_of_window") return "Can't schedule: more than 75 days ahead. Use Post now to publish immediately.";
   if (status === "no_lot") return "Catalog this lot before posting to the Page.";
   return "";
@@ -128,7 +187,8 @@ function toCalendarSlot(post: CalendarPost): FacebookCalendarSlot {
     at: post.facebook_slot_at || "",
     platform: post.platform,
     hook: post.hook,
-    local_time: post.local_time
+    local_time: post.local_time,
+    zone_label: post.zone_label || post.zone
   };
 }
 
@@ -152,7 +212,7 @@ function facebookBadgeVariant(status?: string): "positive" | "negative" | "warni
   if (status === "posted" || status === "scheduled") return "positive";
   if (status === "failed") return "negative";
   if (status === "missed" || status === "too_soon" || status === "out_of_window") return "warning";
-  if (status === "planned") return "info";
+  if (status === "planned" || status === "publishing") return "info";
   return "neutral";
 }
 
@@ -301,9 +361,11 @@ export default function EngagementPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState<number | null>(null);
-  const [copiedGroup, setCopiedGroup] = useState<number | null>(null);
-  const [facebookConfigured, setFacebookConfigured] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [copiedGroup, setCopiedGroup] = useState<string | null>(null);
+  const [facebook, setFacebook] = useState<FacebookStatus>({});
+  const [showClosed, setShowClosed] = useState(false);
+  const [savingZone, setSavingZone] = useState(false);
   const [accountRole, setAccountRole] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(() => new Set());
   const [facebookLotIds, setFacebookLotIds] = useState<string[] | null>(null);
@@ -312,9 +374,21 @@ export default function EngagementPage() {
   const [facebookModalSource, setFacebookModalSource] = useState<FacebookPostSource>("push_queue");
   const [facebookPublishNow, setFacebookPublishNow] = useState(false);
   const [cancellingKey, setCancellingKey] = useState("");
+  const [refreshingInstagram, setRefreshingInstagram] = useState(false);
   const toast = useToast();
   const seenError = useRef("");
-  const canPostFacebook = facebookConfigured && isOwnerRole(accountRole);
+  const isOwner = isOwnerRole(accountRole);
+  const facebookReady = Boolean(facebook.configured && facebook.connected && !facebook.needs_reconnect);
+  const canPostFacebook = facebookReady && isOwner;
+  const openSales = useMemo(() => sales.filter((sale) => !saleIsClosed(sale)), [sales]);
+  const saleChoices = useMemo(() => {
+    const rows = showClosed ? sales : openSales;
+    const current = sales.find((sale) => sale.ctseller_sale_id === saleId);
+    return current && !rows.includes(current) ? [current, ...rows] : rows;
+  }, [sales, openSales, showClosed, saleId]);
+  const snapshotAgeHours = hoursSince(detail?.captured_at);
+  const snapshotStale = snapshotAgeHours != null && snapshotAgeHours > STALE_SNAPSHOT_HOURS;
+  const zoneLabel = facebook.timezone_label || posts[0]?.zone_label || "PT";
   const upcomingSlots = posts.filter((post) => post.facebook_schedulable && post.lot_id && post.slot_key);
 
   function openCalendarApprove(rows: CalendarPost[], { postNow = false } = {}) {
@@ -329,7 +403,8 @@ export default function EngagementPage() {
 
   async function cancelCalendarSlot(post: CalendarPost) {
     if (!token || !saleId || !post.slot_key || cancellingKey) return;
-    if (!window.confirm("Remove this scheduled Facebook Page post? It will not go live.")) return;
+    const target = publishTargetLabel(post) || "Facebook Page";
+    if (!window.confirm(`Unapprove this ${target} slot? It will not go live.`)) return;
     setCancellingKey(post.slot_key);
     setError("");
     try {
@@ -338,7 +413,7 @@ export default function EngagementPage() {
         body: JSON.stringify({ slot_keys: [post.slot_key] })
       });
       await loadSale(token, saleId);
-      toast.success("Removed the scheduled Facebook Page post.");
+      toast.success(`Unapproved the ${target} slot.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not unapprove this slot");
     } finally {
@@ -374,13 +449,14 @@ export default function EngagementPage() {
       })
       .catch(() => setAccountRole(""));
     void apiFetch("/integrations/facebook/status", t)
-      .then((data) => setFacebookConfigured(Boolean((data as { configured?: boolean }).configured)))
-      .catch(() => setFacebookConfigured(false));
+      .then((data) => setFacebook(data as FacebookStatus))
+      .catch(() => setFacebook({}));
     void apiFetch("/engagement/sales", t)
       .then((data) => {
         const rows = data as SaleSummary[];
         setSales(rows);
-        if (rows[0]) setSaleId(rows[0].ctseller_sale_id);
+        const first = rows.find((sale) => !saleIsClosed(sale)) || rows[0];
+        if (first) setSaleId(first.ctseller_sale_id);
         else setLoading(false);
       })
       .catch((e) => {
@@ -434,10 +510,46 @@ export default function EngagementPage() {
     router.replace("/");
   }
 
+  async function saveTimezone(zone: string) {
+    if (!token || !zone || zone === facebook.timezone) return;
+    setSavingZone(true);
+    try {
+      const next = (await apiFetch("/integrations/facebook/settings", token, {
+        method: "PATCH",
+        body: JSON.stringify({ timezone: zone })
+      })) as FacebookStatus;
+      setFacebook(next);
+      if (saleId != null) await loadSale(token, saleId);
+      toast.success(`Calendar times now in ${next.timezone_label || zone}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save the time zone");
+    } finally {
+      setSavingZone(false);
+    }
+  }
+
+  async function refreshInstagram() {
+    if (!token || refreshingInstagram) return;
+    setRefreshingInstagram(true);
+    try {
+      const next = (await apiFetch("/integrations/facebook/instagram/refresh", token, {
+        method: "POST"
+      })) as FacebookStatus;
+      setFacebook(next);
+      if (saleId != null) await loadSale(token, saleId);
+      if (next.instagram_connected) toast.success(`Instagram linked: @${next.instagram_username || "account"}.`);
+      else toast.error("No Instagram professional account is linked to this Facebook Page yet.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not check Instagram");
+    } finally {
+      setRefreshingInstagram(false);
+    }
+  }
+
   async function copyPost(post: CalendarPost) {
     try {
-      await navigator.clipboard.writeText(post.paste_copy);
-      setCopied(post.order);
+      await navigator.clipboard.writeText(post.facebook_caption || post.paste_copy);
+      setCopied(calendarRowKey(post));
       setCopiedGroup(null);
       toast.success("Copied post.");
     } catch {
@@ -451,7 +563,7 @@ export default function EngagementPage() {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedGroup(post.order);
+      setCopiedGroup(calendarRowKey(post));
       setCopied(null);
       toast.success("Copied group caption.");
     } catch {
@@ -484,10 +596,54 @@ export default function EngagementPage() {
           <h1 className="m-0 text-2xl font-bold tracking-tight text-foreground">Push queue</h1>
           <p className="mb-0 mt-1 max-w-3xl text-sm text-muted-foreground">
             The Watcher sends views, watchers, bids, price, and the lot link after each refresh.
-            Check cataloged lots and approve Facebook Page posts from the social calendar.
-            Spreadsheet Instagram, Stories, and TikTok slots currently publish as Page feed posts.
+            Check cataloged lots and approve posts from the social calendar. Facebook slots go to the
+            Page feed, Instagram slots to the linked Instagram account, and Stories slots to Page and
+            Instagram Stories. TikTok slots are copy only.
           </p>
         </header>
+
+        {isOwner && facebookReady && facebook.instagram_enabled ? (
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-sm text-muted-foreground"
+            role="status"
+          >
+            <span>
+              {facebook.instagram_connected ? (
+                <>
+                  Instagram: <span className="text-foreground">@{facebook.instagram_username || "linked"}</span>{" "}
+                  (linked to {facebook.page_name || "the Page"})
+                </>
+              ) : (
+                "Instagram is not linked to this Facebook Page, so Instagram slots are copy only. Link an Instagram professional account to the Page in Meta, then check again."
+              )}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={refreshingInstagram}
+              onClick={() => void refreshInstagram()}
+            >
+              {refreshingInstagram ? "Checking…" : "Check Instagram link"}
+            </Button>
+          </div>
+        ) : null}
+
+        {isOwner && facebook.configured && (facebook.needs_reconnect || !facebook.connected) ? (
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgba(245,158,11,0.45)] bg-[rgba(251,191,36,0.12)] px-3 py-2.5 text-sm text-[#fde68a]"
+            role="status"
+          >
+            <span>
+              {facebook.needs_reconnect
+                ? "Facebook access expired or was revoked. Nothing posts (including auto-approve) until you reconnect the Page."
+                : "Connect a Facebook Page to approve Push-calendar posts."}
+            </span>
+            <Button asChild size="sm">
+              <Link href="/account">{facebook.needs_reconnect ? "Reconnect Facebook" : "Connect Facebook Page"}</Link>
+            </Button>
+          </div>
+        ) : null}
 
         {error ? (
           <div
@@ -499,20 +655,52 @@ export default function EngagementPage() {
         ) : null}
 
         {sales.length > 0 ? (
-          <label className="block max-w-md text-sm text-muted-foreground">
-            CT Bids sale
-            <select
-              className="ct-input mt-1.5 block w-full"
-              value={saleId ?? ""}
-              onChange={(e) => setSaleId(Number(e.target.value))}
-            >
-              {sales.map((sale) => (
-                <option key={sale.ctseller_sale_id} value={sale.ctseller_sale_id}>
-                  {sale.sale_title || `Sale ${sale.ctseller_sale_id}`} · {sale.push} Push
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            <Label className="w-full max-w-md">
+              CT Bids sale
+              <Select
+                value={saleId ?? ""}
+                onChange={(e) => setSaleId(Number(e.target.value))}
+                aria-describedby="sale-select-help"
+              >
+                {saleChoices.map((sale) => (
+                  <option key={sale.ctseller_sale_id} value={sale.ctseller_sale_id}>
+                    {sale.sale_title || `Sale ${sale.ctseller_sale_id}`} · {sale.push} Push
+                    {saleIsClosed(sale) ? " · closed" : ""}
+                  </option>
+                ))}
+              </Select>
+            </Label>
+            {isOwner && facebook.configured && facebook.timezone_choices?.length ? (
+              <Label className="w-full max-w-[14rem]">
+                Calendar time zone
+                <Select
+                  value={facebook.timezone || ""}
+                  disabled={savingZone}
+                  onChange={(e) => void saveTimezone(e.target.value)}
+                >
+                  {facebook.timezone_choices.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </Select>
+              </Label>
+            ) : null}
+            {sales.length > openSales.length ? (
+              <label className="flex h-10 items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={showClosed}
+                  onChange={(e) => setShowClosed(e.target.checked)}
+                />
+                Show closed sales ({sales.length - openSales.length})
+              </label>
+            ) : null}
+            <p id="sale-select-help" className="sr-only">
+              Closed sales are hidden unless Show closed sales is checked.
+            </p>
+          </div>
         ) : null}
 
         {loading ? (
@@ -548,6 +736,15 @@ export default function EngagementPage() {
                 </>
               ) : null}
             </p>
+            {snapshotStale ? (
+              <div
+                className="rounded-lg border border-[rgba(245,158,11,0.45)] bg-[rgba(251,191,36,0.12)] px-3 py-2.5 text-sm text-[#fde68a]"
+                role="status"
+              >
+                This snapshot is {Math.floor(snapshotAgeHours as number)} hours old. Refresh the sale in the
+                Watcher before approving so ranks, bids, and lots are current.
+              </div>
+            ) : null}
             <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" aria-label="Engagement buckets">
               {FILTERS.map((name) => {
                 const count = filterCount(detail, name);
@@ -712,9 +909,12 @@ export default function EngagementPage() {
               Top Push lots get two or three slots before close (09:00 and 16:30 on different days,
               plus a closing-day 17:40 countdown for #1). Lower-ranked Push lots get at least one;
               Needs eyes lots fill leftover slots lightly (at most one per day). No interest lots
-              stay off the calendar. Every spreadsheet slot is scheduled on the connected Facebook
-              Page after you approve it. Native Instagram and TikTok publishers are not wired yet.
+              stay off the calendar. Approved Facebook slots are scheduled on the Page; Instagram and
+              Stories slots are held and published by Estate-EZ at slot time (Meta cannot schedule
+              them). TikTok slots, and Instagram slots without a linked account, are copy only.
               Missed or too-soon slots cannot be scheduled — use Post now to publish them immediately.
+              Approved slots are pinned: later snapshots keep them on the same day and time. Times are{" "}
+              {zoneLabel}.
             </p>
             {canPostFacebook && posts.length > 0 ? (
               <div>
@@ -743,20 +943,25 @@ export default function EngagementPage() {
                     <TableHead>When</TableHead>
                     <TableHead>Platform</TableHead>
                     <TableHead>Lot</TableHead>
-                    <TableHead>Copy</TableHead>
-                    {canPostFacebook ? <TableHead>Page post</TableHead> : null}
+                          <TableHead>Copy</TableHead>
+                    {canPostFacebook ? <TableHead>Publish</TableHead> : null}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {posts.map((post) => (
-                    <TableRow key={post.order}>
+                    <TableRow key={calendarRowKey(post)}>
                       <TableCell>
                         <div>{post.post_date}</div>
                         <div>
-                          {post.local_time} {post.zone}
+                          {post.local_time} {post.zone_label || post.zone}
                         </div>
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           <Badge variant="neutral">{post.status}</Badge>
+                          {post.pinned ? (
+                            <Badge variant="outline" title="Approved or posted: later snapshots keep this slot in place">
+                              Pinned
+                            </Badge>
+                          ) : null}
                           {post.publish_target === "facebook_page" || post.facebook_status ? (
                             <Badge variant={facebookBadgeVariant(post.facebook_status)}>
                               {facebookStatusLabel(post)}
@@ -766,16 +971,24 @@ export default function EngagementPage() {
                         {post.facebook_post_id ? (
                           <div className="mt-1 text-xs text-muted-foreground">{post.facebook_post_id}</div>
                         ) : null}
-                        {post.facebook_error ? (
+                        {post.facebook_error && post.facebook_status !== "posted" && post.facebook_status !== "scheduled" ? (
                           <div className="mt-1 text-xs text-[#fca5a5]">{post.facebook_error}</div>
+                        ) : null}
+                        {post.facebook_review_note ? (
+                          <div className="mt-1 max-w-[16rem] text-xs text-[#fde68a]">{post.facebook_review_note}</div>
                         ) : null}
                       </TableCell>
                       <TableCell>
                         <div>{post.platform}</div>
-                        {post.publish_target === "facebook_page" && post.platform !== "Facebook" ? (
-                          <div className="text-muted-foreground">Posting to Facebook in place of {post.platform}</div>
-                        ) : post.publish_target === "facebook_page" ? (
-                          <div className="text-muted-foreground">Facebook Page feed</div>
+                        {publishTargetLabel(post) ? (
+                          <div className="mt-1">
+                            <Badge
+                              variant={isCopyOnly(post) ? "outline" : "info"}
+                              title={isCopyOnly(post) ? facebookBlockedReason(post) : undefined}
+                            >
+                              {publishTargetLabel(post)}
+                            </Badge>
+                          </div>
                         ) : null}
                         <div className="text-muted-foreground">{post.hook}</div>
                         <div className="text-muted-foreground">{post.post_type}</div>
@@ -797,10 +1010,17 @@ export default function EngagementPage() {
                         ) : null}
                       </TableCell>
                       <TableCell className="min-w-[16rem]">
-                        <pre className="m-0 whitespace-pre-wrap font-sans text-sm text-foreground">{post.paste_copy}</pre>
+                        {post.facebook_caption ? (
+                          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {post.facebook_status === "posted" ? "Posted caption" : "Approved caption"}
+                          </div>
+                        ) : null}
+                        <pre className="m-0 whitespace-pre-wrap font-sans text-sm text-foreground">
+                          {post.facebook_caption || post.paste_copy}
+                        </pre>
                         <div className="mt-2 flex flex-wrap gap-2">
                           <Button type="button" variant="ghost" size="sm" onClick={() => void copyPost(post)}>
-                            {copied === post.order ? "Copied" : "Copy"}
+                            {copied === calendarRowKey(post) ? "Copied" : "Copy"}
                           </Button>
                           {post.group_copy ? (
                             <Button
@@ -810,7 +1030,7 @@ export default function EngagementPage() {
                               title="Shorter caption for sharing a Page post into a Facebook group"
                               onClick={() => void copyGroupPost(post)}
                             >
-                              {copiedGroup === post.order ? "Copied for groups" : "Copy for groups"}
+                              {copiedGroup === calendarRowKey(post) ? "Copied for groups" : "Copy for groups"}
                             </Button>
                           ) : null}
                         </div>
@@ -819,19 +1039,21 @@ export default function EngagementPage() {
                       {canPostFacebook ? (
                         <TableCell>
                           <div className="flex flex-col items-start gap-1.5">
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={!post.facebook_schedulable || !post.lot_id || !post.slot_key}
-                              title={
-                                post.facebook_schedulable
-                                  ? "Preview caption and photos, then schedule this slot on the Page"
-                                  : facebookBlockedReason(post)
-                              }
-                              onClick={() => openCalendarApprove([post])}
-                            >
-                              Approve
-                            </Button>
+                            {isCopyOnly(post) ? null : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={!post.facebook_schedulable || !post.lot_id || !post.slot_key}
+                                title={
+                                  post.facebook_schedulable
+                                    ? `Preview caption and photos, then approve this ${publishTargetLabel(post) || "Page"} slot`
+                                    : facebookBlockedReason(post)
+                                }
+                                onClick={() => openCalendarApprove([post])}
+                              >
+                                Approve
+                              </Button>
+                            )}
                             {post.facebook_can_post_now && post.lot_id && post.slot_key ? (
                               <Button
                                 type="button"

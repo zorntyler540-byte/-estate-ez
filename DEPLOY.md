@@ -59,6 +59,7 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `META_APP_ID` / `META_APP_SECRET` | Optional. Facebook Page posting. Leave unset to hide Connect/Post in the dashboard. See **§9 Facebook Page**. |
 | `META_OAUTH_REDIRECT_URI` | API callback, e.g. `https://<your-api-domain>/integrations/facebook/oauth/callback`. Must match the Meta app exactly. |
 | `PUBLIC_WEB_ORIGIN` | Dashboard origin the OAuth callback returns to (Account settings), e.g. `https://your-web.up.railway.app`. Falls back to the first `CORS_ORIGINS` value. |
+| `META_INSTAGRAM_PUBLISHING` | Optional, default `false`. `true` on the API **and** worker to publish Push-calendar Instagram feed and Instagram Story slots (needs R2 and the Instagram permissions in **§9**). |
 | `META_TOKEN_ENCRYPTION_KEY` | Optional. If unset, Page tokens are encrypted with a key derived from `SECRET_KEY`. |
 | Optional | Copy other keys from `backend/.env.example` (SMTP, model flags, etc.). |
 
@@ -255,7 +256,7 @@ You are not using the Docker image. Switch the service to the **Dockerfile** bui
 
 Estate-EZ can post **multi-photo feed posts to a Facebook Page** the account owner connects (per franchise). v1 is aimed at the owner’s own Page. Other franchises can connect later; that will need Meta **App Review** and business verification (out of scope here).
 
-Instagram, Stories, Groups, and Marketplace are **not** implemented. There is no Groups posting API.
+Push-calendar **Instagram** slots publish to the Instagram professional account linked to the Page, and **Stories** slots publish a Page photo story plus an Instagram story (see **Instagram and Stories** below). TikTok slots are copy only. Groups and Marketplace are **not** implemented. There is no Groups posting API.
 
 ### Create the Meta app (no App Review for the owner’s Page)
 
@@ -278,6 +279,18 @@ Graph API version is pinned in code (`GRAPH_API_VERSION` in `backend/app/service
 
 **If posting says reconnect:** Graph returned a real token error (revoked/invalid Page token). Connect again from Account settings. A still-valid Page token does not show this warning just because the user token’s 60-day expiry passed, or because a Page has not been picked yet.
 
-Owners/admins post; cataloggers do not. Multi-lot Push-queue posts run in the background so the dashboard request cannot time out.
+Owners/admins post; cataloggers do not. Posts go through a durable publish queue in Postgres (migration `0053_social_publish_queue`): the API only enqueues, and the **catalog worker** publishes in a `python -m app.worker --social-publish` child within a few seconds. Queued posts survive API and worker restarts, transient Meta errors retry up to 3 times, and a request that times out after Meta may have posted is never retried (the slot says to check the Page). **Deploy the API and worker together** for this change, and keep the worker running — with `RUN_CATALOG_JOBS_IN_PROCESS=false` on the API, nothing posts while the worker is down (the dashboard says it is waiting for the publisher).
 
-The Push tab **Social calendar** is computed from the latest Watcher snapshot (not a stored slot table). Every spreadsheet slot (9:00 Facebook, 12:15 Instagram, 16:30 Stories, 18:00 TikTok, closing-day 17:40) can be scheduled on the connected Page after an owner approves it (optional per-account auto-approve, off by default). Each slot keeps its intended platform and a current publish target; today the target is always the Facebook Page feed. Captions and photos vary by slot. Missed slots are skipped. Once a slot is scheduled or posted it is pinned: later snapshots keep it on the same day and time and never delete, move, or edit the Graph post. If its lot leaves the sale, the slot is flagged for the owner, who can Unapprove it until 2 minutes before it goes live. Native Instagram / TikTok publishers are not wired yet.
+The Push tab **Social calendar** is computed from the latest Watcher snapshot (not a stored slot table). Each spreadsheet slot goes to its own platform after an owner approves it (optional per-account auto-approve, off by default): 9:00 Facebook and the closing-day 17:40 countdown → scheduled Page feed post; 12:15 Instagram → Instagram feed; 16:30 Stories → Page story + Instagram story; 18:00 TikTok → copy only (never posted). Instagram and Stories cannot be scheduled through Meta, so approving reserves the slot and Estate-EZ publishes it at slot time (skipped if the publisher is more than 2 hours late). Captions and photos vary by slot. Missed slots are skipped. Once a slot is scheduled or posted it is pinned: later snapshots keep it on the same day and time and never delete, move, or edit the Graph post. If its lot leaves the sale, the slot is flagged for the owner, who can Unapprove it until 2 minutes before it goes live.
+
+### Instagram and Stories
+
+1. Set `META_INSTAGRAM_PUBLISHING=true` on the **API and worker**. While it is off, Instagram slots are copy only and Stories slots post to the Page only. Connect does not ask for Instagram permissions.
+2. R2 (`R2_*`) must be configured on the **API and worker**. Instagram fetches images by URL, so Estate-EZ uploads a copy to `social-media/{account}/{post}/…` in the bucket and passes Meta a 2-hour presigned URL. The copies are deleted after the post finishes.
+3. Link an **Instagram professional (Business or Creator) account** to the Facebook Page (Meta Business Suite → Settings → Instagram accounts).
+4. Meta app: add the **Instagram Graph API** product. Connect then also requests `instagram_basic` and `instagram_content_publish`. For the owner's own Page with app roles no App Review is needed; any other franchise needs **App Review for `instagram_content_publish` and `instagram_basic`** (plus `pages_manage_posts`, `pages_read_engagement`, `pages_show_list`, which Page stories also use).
+5. After step 1 is deployed, the owner must **Reconnect Facebook** (Account settings) to grant the new scopes. Then use **Check Instagram link** on Account settings or the Push tab.
+
+Instagram feed posts are a single image or a carousel of up to 10 photos (center-cropped into Instagram's 4:5–1.91:1 range) with the caption cut to 2,200 characters. Stories use the first listing photo.
+
+Slot times use the franchise time zone (Push tab → **Calendar time zone**; default Pacific). Run migration `0052_account_timezone` before this API deploys. Calendar auto-approve is swept by the catalog worker (`--social-sweep` child), so deploy the API and worker together.
