@@ -11,6 +11,9 @@ import { LotVideoThumb } from "../../../components/LotVideoThumb";
 import { MoveLotsToSale, type MoveSaleOption } from "../../../components/MoveLotsToSale";
 import { AppShell } from "../../../components/AppShell";
 import { ShellActions } from "../../../components/ShellActions";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
+import { useToast, type ToastTone } from "../../../components/ui/toast";
 import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
 import {
   AudienceHuntProgress,
@@ -270,6 +273,29 @@ function readStoredToken(): string {
   return localStorage.getItem("token") || "";
 }
 
+/** Toast a banner message when it changes. Progress lines stay on the page only. */
+function useOutcomeToast(message: string, tone: ToastTone, skipProgress = false) {
+  const toast = useToast();
+  const seen = useRef("");
+  useEffect(() => {
+    const text = message.trim();
+    if (!text) {
+      seen.current = "";
+      return;
+    }
+    if (text === seen.current) return;
+    seen.current = text;
+    if (skipProgress && /^(Posting…|Adding photos…|Adding photos to |Queued —)/.test(text)) return;
+    toast.push(text, tone);
+  }, [message, tone, skipProgress, toast]);
+}
+
+function sellerStatusVariant(label: string, posted: boolean): "neutral" | "positive" | "warning" {
+  if (!posted) return "neutral";
+  if (/unsold|no sale/i.test(label)) return "warning";
+  return "positive";
+}
+
 export default function LotDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -344,6 +370,18 @@ export default function LotDetailPage() {
   const [reorderBusy, setReorderBusy] = useState(false);
   /** Long lot page: show fixed jump scroll buttons (hidden while full-screen photo viewer is open). */
   const [showScrollJumpNav, setShowScrollJumpNav] = useState(false);
+  const toast = useToast();
+  useOutcomeToast(error, "error");
+  useOutcomeToast(photosError, "error");
+  useOutcomeToast(videoError, "error");
+  useOutcomeToast(ctSellerErr, "error");
+  useOutcomeToast(aiRegenError, "error");
+  useOutcomeToast(audienceHuntError, "error");
+  useOutcomeToast(organizeMsg, "success");
+  useOutcomeToast(aiRegenNotice, "success");
+  useOutcomeToast(audienceHuntNotice, "success");
+  useOutcomeToast(audienceCopyMsg, audienceCopyMsg.startsWith("Could not") ? "error" : "info");
+  useOutcomeToast(ctSellerMsg, "success", true);
 
   const editorPhotos = useMemo(() => photosForEditorGrid(catalogPhotos), [catalogPhotos]);
   const photoFileHealth = useMemo(() => {
@@ -1135,6 +1173,7 @@ export default function LotDetailPage() {
       });
       setLot(updated);
       setListingDirty(false);
+      toast.success("Listing saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -1430,6 +1469,7 @@ export default function LotDetailPage() {
         body: JSON.stringify({ photo_ids: orderedIds })
       });
       await refetchLotAndPhotos();
+      toast.success("Photo order saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save photo order");
     } finally {
@@ -1891,9 +1931,9 @@ export default function LotDetailPage() {
           <section className="ct-dash-panel">
             <p style={{ margin: 0 }}>Please sign in first.</p>
             <p style={{ margin: "0.75rem 0 0" }}>
-              <Link href="/" className="ct-btn ct-btn--primary">
-                Go to sign in
-              </Link>
+              <Button asChild>
+                <Link href="/">Go to sign in</Link>
+              </Button>
             </p>
           </section>
         </div>
@@ -1960,45 +2000,52 @@ export default function LotDetailPage() {
               <p className="ct-lot-detail-hero__title ct-muted">No auction title yet</p>
             )}
             {lot.engagement?.bucket ? (
-              <p className="ct-muted" style={{ margin: "0.45rem 0 0" }}>
-                <strong>{lot.engagement.bucket}</strong>
-                {lot.engagement.push_rank ? ` · Push rank ${lot.engagement.push_rank}` : ""}
-                {" · "}
-                {lot.engagement.views ?? 0} views, {lot.engagement.watchers ?? 0} watchers,{" "}
-                {lot.engagement.bids ?? 0} bids
-                {lot.engagement.notes ? ` — ${lot.engagement.notes}` : ""}
-                {" · "}
+              <p className="ct-muted mb-0 mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant={lot.engagement.bucket === "Push" ? "default" : "info"}>
+                  {lot.engagement.bucket}
+                </Badge>
+                {lot.engagement.push_rank ? <span>Push rank {lot.engagement.push_rank}</span> : null}
+                <span>
+                  {lot.engagement.views ?? 0} views, {lot.engagement.watchers ?? 0} watchers,{" "}
+                  {lot.engagement.bids ?? 0} bids
+                </span>
+                {lot.engagement.notes ? <span>{lot.engagement.notes}</span> : null}
                 <Link href="/engagement">Open Push queue</Link>
               </p>
             ) : null}
           </div>
           <div className="ct-lot-detail-hero__side">
-            <span
-              className={`ct-lot-detail-status${
-                lot.ctseller_item_id || lot.ctseller_posted_at ? " ct-lot-detail-status--done" : ""
-              }`}
-              title={
-                lot.ctseller_item_id || lot.ctseller_posted_at
-                  ? [
-                      lot.ctseller_item_status || "Posted to CT Seller",
-                      lot.ctseller_sale_id ? `sale #${lot.ctseller_sale_id}` : "",
-                      lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
-                        ? `$${lot.ctseller_sold_price}`
-                        : ""
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")
-                  : "Not posted to CT Seller yet"
-              }
-            >
-              {lot.ctseller_item_id || lot.ctseller_posted_at
+            {(() => {
+              const posted = Boolean(lot.ctseller_item_id || lot.ctseller_posted_at);
+              const statusLabel = posted
                 ? lot.ctseller_item_status
                   ? lot.ctseller_item_status
                   : lot.ctseller_sale_id
                     ? `Posted · #${lot.ctseller_sale_id}`
                     : "Posted"
-                : "Not posted"}
-            </span>
+                : "Not posted";
+              return (
+                <Badge
+                  variant={sellerStatusVariant(statusLabel, posted)}
+                  className="px-2.5 py-1 text-sm"
+                  title={
+                    posted
+                      ? [
+                          lot.ctseller_item_status || "Posted to CT Seller",
+                          lot.ctseller_sale_id ? `sale #${lot.ctseller_sale_id}` : "",
+                          lot.ctseller_sold_price != null && lot.ctseller_sold_price > 0
+                            ? `$${lot.ctseller_sold_price}`
+                            : ""
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "Not posted to CT Seller yet"
+                  }
+                >
+                  {statusLabel}
+                </Badge>
+              );
+            })()}
             <div className="ct-lot-detail-hero__actions">
               <label className="ct-row" style={{ gap: "0.4rem", fontSize: "0.82rem" }}>
                 <input
@@ -2009,9 +2056,9 @@ export default function LotDetailPage() {
                 />
                 <span className="ct-muted">Keep SKU</span>
               </label>
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary"
+                variant="default"
                 onClick={() => void regenerateListingWithAi()}
                 disabled={showAiRegenProgress || saving || !catalogPhotos.length}
                 aria-busy={showAiRegenProgress}
@@ -2024,11 +2071,11 @@ export default function LotDetailPage() {
                 ) : (
                   "Regenerate with AI"
                 )}
-              </button>
+              </Button>
               {lot.ctseller_item_id ? (
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-btn--primary"
+                  variant="default"
                   onClick={() => void updatePhotosOnCtSeller()}
                   disabled={ctSellerPostBusy || showAiRegenProgress}
                   aria-busy={ctSellerPostBusy && ctSellerPostMode === "photos"}
@@ -2037,22 +2084,22 @@ export default function LotDetailPage() {
                   {ctSellerPostBusy && ctSellerPostMode === "photos"
                     ? "Adding photos…"
                     : "Add photos to CT Seller"}
-                </button>
+                </Button>
               ) : null}
               {facebookConfigured && isAccountOwner ? (
-                <button
+                <Button
                   type="button"
-                  className="ct-btn"
+                  variant="outline"
                   onClick={() => setFacebookPostOpen(true)}
                   disabled={saving || showAiRegenProgress}
                   title="Draft a Facebook Page post. Nothing is sent until you approve it."
                 >
                   Post to Facebook Page
-                </button>
+                </Button>
               ) : null}
-              <button
+              <Button
                 type="button"
-                className={lot.ctseller_item_id ? "ct-btn ct-btn--ghost" : "ct-btn"}
+                variant={lot.ctseller_item_id ? "ghost" : "outline"}
                 onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
                 disabled={
                   ctSellerPostBusy ||
@@ -2079,7 +2126,7 @@ export default function LotDetailPage() {
                   : lot.ctseller_item_id
                     ? "Post as new item"
                     : "Post to CT Seller"}
-              </button>
+              </Button>
             </div>
           </div>
         </header>
@@ -2124,9 +2171,9 @@ export default function LotDetailPage() {
           ) : null}
           <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
             {isAccountOwner ? (
-              <Link href="/facebook" className="ct-btn">
-                Find groups
-              </Link>
+              <Button variant="outline" asChild>
+                <Link href="/facebook">Find groups</Link>
+              </Button>
             ) : (
               <p className="ct-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
                 Ask an owner to run a group hunt on the Facebook tab. Existing results stay visible.
@@ -2181,14 +2228,14 @@ export default function LotDetailPage() {
                     value={lot.audience?.blurb_ctbids || ""}
                     style={{ resize: "vertical" }}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn"
+                    variant="outline"
                     style={{ marginTop: "0.4rem" }}
                     onClick={() => void copyAudienceText("CT Bids blurb", lot.audience?.blurb_ctbids || "")}
                   >
                     Copy
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {lot.audience?.blurb_hold ? (
@@ -2204,14 +2251,14 @@ export default function LotDetailPage() {
                     value={lot.audience?.blurb_hold || ""}
                     style={{ resize: "vertical" }}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn"
+                    variant="outline"
                     style={{ marginTop: "0.4rem" }}
                     onClick={() => void copyAudienceText("hold blurb", lot.audience?.blurb_hold || "")}
                   >
                     Copy
-                  </button>
+                  </Button>
                 </div>
               ) : null}
             </div>
@@ -2277,19 +2324,19 @@ export default function LotDetailPage() {
               ) : null}
             </div>
             {lot.ctseller_item_id ? (
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary"
+                variant="default"
                 onClick={() => void updatePhotosOnCtSeller()}
                 disabled={ctSellerPostBusy}
                 title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
               >
                 {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos"}
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               type="button"
-              className={lot.ctseller_item_id ? "ct-btn ct-btn--ghost" : "ct-btn ct-btn--primary"}
+              variant={lot.ctseller_item_id ? "ghost" : "default"}
               onClick={() => void postToCtSeller(Boolean(lot.ctseller_item_id))}
               disabled={
                 ctSellerPostBusy ||
@@ -2313,7 +2360,7 @@ export default function LotDetailPage() {
                 : lot.ctseller_item_id
                   ? "Post as new item"
                   : "Post lot"}
-            </button>
+            </Button>
           </div>
         </section>
 
@@ -2350,9 +2397,9 @@ export default function LotDetailPage() {
                   {CTBIDS_MAX_PHOTOS_PER_LOT != null ? ` (max ${CTBIDS_MAX_PHOTOS_PER_LOT})` : ""}.
                 </span>
               </div>
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary ct-upload-option__btn"
+                variant="default" className="ct-upload-option__btn"
                 disabled={
                   addPhotosBusy ||
                   organizeBusy ||
@@ -2369,7 +2416,7 @@ export default function LotDetailPage() {
                       catalogPhotos.length >= CTBIDS_MAX_PHOTOS_PER_LOT
                     ? "Limit reached"
                     : "Add photos…"}
-              </button>
+              </Button>
             </div>
             {catalogPhotos.length > 1 ? (
               <div className="ct-upload-option">
@@ -2382,14 +2429,14 @@ export default function LotDetailPage() {
                     Group shots first, then each item with its angles, then labels, then measurements. SKU tape last.
                   </span>
                 </div>
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-upload-option__btn"
+                  variant="outline" className="ct-upload-option__btn"
                   disabled={organizeBusy || reorderBusy || addPhotosBusy}
                   onClick={() => void sortCatalogPhotosForListing()}
                 >
                   {reorderBusy ? "Sorting…" : "Sort for listing"}
-                </button>
+                </Button>
               </div>
             ) : null}
             {catalogPhotos.length > 0 ? (
@@ -2403,14 +2450,14 @@ export default function LotDetailPage() {
                     Full-resolution files for this lot — same images used for export and CT Seller.
                   </span>
                 </div>
-                <button
+                <Button
                   type="button"
-                  className="ct-btn ct-upload-option__btn"
+                  variant="outline" className="ct-upload-option__btn"
                   disabled={zipDownloading || addPhotosBusy}
                   onClick={() => void downloadLotPhotosZip()}
                 >
                   {zipDownloading ? "Preparing…" : "Download ZIP"}
-                </button>
+                </Button>
               </div>
             ) : null}
             {catalogPhotos.length > 0 ? (
@@ -2431,9 +2478,9 @@ export default function LotDetailPage() {
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-upload-option__btn"
+                    variant="outline" className="ct-upload-option__btn"
                     disabled={
                       batchRotating ||
                       quickRotatingId !== null ||
@@ -2455,10 +2502,10 @@ export default function LotDetailPage() {
                         <RotateCcw size={16} strokeWidth={2} aria-hidden /> ↺
                       </>
                     )}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    variant="default" className="ct-upload-option__btn"
                     disabled={
                       batchRotating ||
                       quickRotatingId !== null ||
@@ -2480,7 +2527,7 @@ export default function LotDetailPage() {
                         <RotateCw size={16} strokeWidth={2} aria-hidden /> ↻
                       </>
                     )}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -2505,10 +2552,10 @@ export default function LotDetailPage() {
                       ["gray", "#e2e2e5", "Gray"]
                     ] as const
                   ).map(([id, swatch, label]) => (
-                    <button
+                    <Button
                       key={`hero-${id}`}
                       type="button"
-                      className={`ct-btn ct-upload-option__btn${plainBgColor === id ? " ct-btn--primary" : ""}`}
+                      variant={plainBgColor === id ? "default" : "outline"} className="ct-upload-option__btn"
                       disabled={plainBgBusy}
                       onClick={() => setPlainBgColor(id)}
                       title={label}
@@ -2527,20 +2574,20 @@ export default function LotDetailPage() {
                         }}
                       />
                       {label}
-                    </button>
+                    </Button>
                   ))}
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    variant="default" className="ct-upload-option__btn"
                     disabled={plainBgBusy || batchRotating || addPhotosBusy}
                     onClick={() => void applyHeroBackground()}
                   >
                     {plainBgBusy ? "Working…" : "Apply with AI"}
-                  </button>
+                  </Button>
                   {catalogPhotos.some((photo) => photo.plain_background) ? (
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn ct-upload-option__btn"
+                      variant="outline" className="ct-upload-option__btn"
                       disabled={plainBgBusy}
                       onClick={() => {
                         const saved = catalogPhotos.filter((photo) => photo.plain_background).map((photo) => photo.id);
@@ -2548,7 +2595,7 @@ export default function LotDetailPage() {
                       }}
                     >
                       Restore original
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </div>
@@ -2576,10 +2623,10 @@ export default function LotDetailPage() {
                       ["gray", "#e2e2e5", "Gray"]
                     ] as const
                   ).map(([id, swatch, label]) => (
-                    <button
+                    <Button
                       key={id}
                       type="button"
-                      className={`ct-btn ct-upload-option__btn${plainBgColor === id ? " ct-btn--primary" : ""}`}
+                      variant={plainBgColor === id ? "default" : "outline"} className="ct-upload-option__btn"
                       disabled={plainBgBusy}
                       onClick={() => setPlainBgColor(id)}
                       title={label}
@@ -2598,25 +2645,25 @@ export default function LotDetailPage() {
                         }}
                       />
                       {label}
-                    </button>
+                    </Button>
                   ))}
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-btn--primary ct-upload-option__btn"
+                    variant="default" className="ct-upload-option__btn"
                     disabled={plainBgBusy || batchRotating || addPhotosBusy}
                     onClick={() => void applyPlainBackground()}
                   >
                     {plainBgBusy ? "Working…" : "Apply color"}
-                  </button>
+                  </Button>
                   {catalogPhotos.some((p) => p.plain_background) ? (
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn ct-upload-option__btn"
+                      variant="outline" className="ct-upload-option__btn"
                       disabled={plainBgBusy}
                       onClick={() => void restorePlainBackground()}
                     >
                       Restore original
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </div>
@@ -2719,45 +2766,14 @@ export default function LotDetailPage() {
                 }}
               >
                 <div style={{ position: "relative" }}>
-                  <span
-                    className="ct-muted"
-                    style={{
-                      position: "absolute",
-                      top: 6,
-                      left: 6,
-                      zIndex: 1,
-                      fontSize: "0.72rem",
-                      fontWeight: 700,
-                      background: "rgba(12, 15, 18, 0.82)",
-                      color: "var(--ct-primary)",
-                      padding: "0.12rem 0.4rem",
-                      borderRadius: 6,
-                      border: "1px solid var(--ct-border)"
-                    }}
-                  >
-                    {index + 1}
-                    {(() => {
-                      const badge = listingRoleBadge(p);
-                      return badge ? (
-                      <span style={{ fontWeight: 600, marginLeft: "0.28rem", opacity: 0.9 }}>
-                        {badge}
-                      </span>
-                      ) : null;
-                    })()}
+                  <span className="absolute left-1.5 top-1.5 z-[1] flex flex-wrap items-center gap-1">
+                    <Badge variant="info">{index + 1}</Badge>
+                    {listingRoleBadge(p) ? <Badge variant="neutral">{listingRoleBadge(p)}</Badge> : null}
                   </span>
                   {p.added_later ? (
-                    <span
-                      className="ct-photo-added-flag"
-                      style={{
-                        position: "absolute",
-                        top: 34,
-                        left: 6,
-                        zIndex: 1,
-                        textTransform: "uppercase"
-                      }}
-                    >
+                    <Badge variant="warning" className="absolute left-1.5 top-8 z-[1] uppercase">
                       Added
-                    </span>
+                    </Badge>
                   ) : null}
                   <span
                     draggable={!organizeBusy && !reorderBusy}
@@ -2824,9 +2840,11 @@ export default function LotDetailPage() {
                       gap: "0.2rem"
                     }}
                   >
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 min-h-0 bg-black/75 px-1.5 text-xs text-foreground hover:bg-black/90"
                       title="Rotate left 90°"
                       aria-label="Rotate left"
                       disabled={
@@ -2840,18 +2858,14 @@ export default function LotDetailPage() {
                         e.stopPropagation();
                         void quickRotatePhoto(p, -90);
                       }}
-                      style={{
-                        padding: "0.15rem 0.35rem",
-                        fontSize: "0.72rem",
-                        lineHeight: 1,
-                        minHeight: 0
-                      }}
                     >
                       {quickRotatingId === p.id ? "…" : "↺"}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="ct-btn"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 min-h-0 bg-black/75 px-1.5 text-xs text-foreground hover:bg-black/90"
                       title="Rotate right 90°"
                       aria-label="Rotate right"
                       disabled={
@@ -2865,15 +2879,9 @@ export default function LotDetailPage() {
                         e.stopPropagation();
                         void quickRotatePhoto(p, 90);
                       }}
-                      style={{
-                        padding: "0.15rem 0.35rem",
-                        fontSize: "0.72rem",
-                        lineHeight: 1,
-                        minHeight: 0
-                      }}
                     >
                       {quickRotatingId === p.id ? "…" : "↻"}
-                    </button>
+                    </Button>
                   </div>
                   <button
                     type="button"
@@ -2919,12 +2927,12 @@ export default function LotDetailPage() {
                   }
                 >
                   {p.file_on_disk === false ? (
-                    <span style={{ color: "var(--ct-error)" }}>Missing on server · </span>
+                    <span className="text-[#fca5a5]">Missing on server · </span>
                   ) : null}
                   {p.added_later ? (
-                    <span className="ct-photo-added-flag">
+                    <Badge variant="warning" className="mr-1 uppercase">
                       Added{formatPhotoAddedAt(p.created_at) ? ` ${formatPhotoAddedAt(p.created_at)}` : ""}
-                    </span>
+                    </Badge>
                   ) : null}
                   {p.original_name}
                 </figcaption>
@@ -2941,24 +2949,9 @@ export default function LotDetailPage() {
                 }}
               >
                 <div style={{ position: "relative" }}>
-                  <span
-                    className="ct-muted"
-                    style={{
-                      position: "absolute",
-                      top: 6,
-                      left: 6,
-                      zIndex: 1,
-                      fontSize: "0.72rem",
-                      fontWeight: 700,
-                      background: "rgba(12, 15, 18, 0.82)",
-                      color: "var(--ct-primary)",
-                      padding: "0.12rem 0.4rem",
-                      borderRadius: 6,
-                      border: "1px solid var(--ct-border)"
-                    }}
-                  >
-                    {editorPhotos.length + index + 1}
-                    <span style={{ fontWeight: 600, marginLeft: "0.28rem", opacity: 0.9 }}>Video</span>
+                  <span className="absolute left-1.5 top-1.5 z-[1] flex items-center gap-1">
+                    <Badge variant="info">{editorPhotos.length + index + 1}</Badge>
+                    <Badge variant="default">Video</Badge>
                   </span>
                   <button
                     type="button"
@@ -3029,14 +3022,14 @@ export default function LotDetailPage() {
                 <span className="ct-upload-option__title">Add video</span>
                 <span className="ct-upload-option__desc">MP4 or MOV, up to 80 MB, max 8 per lot.</span>
               </div>
-              <button
+              <Button
                 type="button"
-                className="ct-btn ct-btn--primary ct-upload-option__btn"
+                variant="default" className="ct-upload-option__btn"
                 disabled={videoBusy}
                 onClick={() => addVideosInputRef.current?.click()}
               >
                 {videoBusy ? "Uploading…" : "Add video…"}
-              </button>
+              </Button>
             </div>
           </div>
           {videoError ? (
@@ -3070,12 +3063,12 @@ export default function LotDetailPage() {
                     {index + 1}
                   </span>
                   <span style={{ flex: 1, wordBreak: "break-word" }}>{video.original_name}</span>
-                  <button type="button" className="ct-btn" disabled={videoBusy} onClick={() => void playLotVideo(video.id)}>
+                  <Button type="button" variant="outline" disabled={videoBusy} onClick={() => void playLotVideo(video.id)}>
                     Play
-                  </button>
-                  <button type="button" className="ct-btn" disabled={videoBusy} onClick={() => void deleteLotVideo(video.id)}>
+                  </Button>
+                  <Button type="button" variant="danger" size="sm" disabled={videoBusy} onClick={() => void deleteLotVideo(video.id)}>
                     Delete
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -3115,9 +3108,9 @@ export default function LotDetailPage() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn ct-upload-option__field-btn"
+                      variant="outline" className="ct-upload-option__field-btn"
                       disabled={
                         organizeBusy ||
                         reorderBusy ||
@@ -3134,10 +3127,10 @@ export default function LotDetailPage() {
                       }
                     >
                       {batchRotating ? "Rotating…" : "↺ Left"}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="ct-btn ct-btn--primary ct-upload-option__field-btn"
+                      variant="default" className="ct-upload-option__field-btn"
                       disabled={
                         organizeBusy ||
                         reorderBusy ||
@@ -3154,7 +3147,7 @@ export default function LotDetailPage() {
                       }
                     >
                       {batchRotating ? "Rotating…" : "↻ Right"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -3172,9 +3165,9 @@ export default function LotDetailPage() {
                       <span className="ct-upload-option__meta ct-muted">{selectedPhotoIds.size} selected</span>
                     </div>
                   </div>
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-btn--danger ct-upload-option__field-btn"
+                    variant="danger" className="ct-upload-option__field-btn"
                     onClick={() => void deleteSelectedPhotos()}
                     disabled={
                       organizeBusy ||
@@ -3185,7 +3178,7 @@ export default function LotDetailPage() {
                     }
                   >
                     {organizeBusy ? "Working…" : "Delete photos"}
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {catalogPhotos.length > 0 ? (
@@ -3203,22 +3196,22 @@ export default function LotDetailPage() {
                   </div>
                   <div className="ct-upload-option__body">
                     <div className="ct-upload-option__body-actions">
-                      <button
+                      <Button
                         type="button"
-                        className="ct-btn ct-btn--ghost"
+                        variant="ghost"
                         disabled={organizeBusy || reorderBusy || catalogPhotos.length === 0}
                         onClick={selectAllCatalogPhotos}
                       >
                         Select all
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="ct-btn ct-btn--ghost"
+                        variant="ghost"
                         disabled={organizeBusy || reorderBusy || selectedPhotoIds.size === 0}
                         onClick={clearPhotoSelection}
                       >
                         Clear selection
-                      </button>
+                      </Button>
                     </div>
                     {transferTargetId === TRANSFER_DEST_NEW_LOT ? (
                       <label className="ct-upload-option__field ct-muted">
@@ -3250,9 +3243,9 @@ export default function LotDetailPage() {
                           </option>
                         ))}
                     </select>
-                    <button
+                    <Button
                       type="button"
-                      className={`ct-btn ct-upload-option__field-btn${transferTargetId === TRANSFER_DEST_NEW_LOT ? " ct-btn--primary" : ""}`}
+                      variant={transferTargetId === TRANSFER_DEST_NEW_LOT ? "default" : "outline"} className="ct-upload-option__field-btn"
                       disabled={
                         organizeBusy ||
                         reorderBusy ||
@@ -3269,7 +3262,7 @@ export default function LotDetailPage() {
                         : transferTargetId === TRANSFER_DEST_NEW_LOT
                           ? "Create new lot"
                           : "Move selected"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -3303,16 +3296,16 @@ export default function LotDetailPage() {
                           </option>
                         ))}
                     </select>
-                    <button
+                    <Button
                       type="button"
-                      className="ct-btn ct-upload-option__field-btn"
+                      variant="outline" className="ct-upload-option__field-btn"
                       disabled={
                         organizeBusy || reorderBusy || !mergeSourceId || !saleLots.some((x) => x.id === mergeSourceId)
                       }
                       onClick={() => void mergeSourceIntoThisLot()}
                     >
                       {organizeBusy || reorderBusy ? "Working…" : "Merge into this lot"}
-                    </button>
+                    </Button>
                     <label className="ct-row" style={{ gap: "0.45rem" }}>
                       <input
                         type="checkbox"
@@ -3512,15 +3505,15 @@ export default function LotDetailPage() {
                     Posted to CT Seller tags so shoppers can find this lot. Use words they would type for this
                     piece — not Rolex or Porsche unless that is actually on the item.
                   </p>
-                  <button
+                  <Button
                     type="button"
-                    className="ct-btn ct-btn--ghost"
+                    variant="ghost"
                     style={{ marginTop: "0.45rem" }}
                     disabled={searchTagsBusy}
                     onClick={() => void fillSearchTagsFromListing()}
                   >
                     {searchTagsBusy ? "Filling…" : "Fill from listing"}
-                  </button>
+                  </Button>
                 </div>
                 <div>
                   <label className="ct-label" htmlFor="price">
@@ -3596,18 +3589,18 @@ export default function LotDetailPage() {
           </div>
 
           <div className="ct-listing-form__actions">
-            <button
+            <Button
               type="button"
-              className="ct-btn ct-btn--primary ct-listing-form__save-desktop"
+              variant="default" className="ct-listing-form__save-desktop"
               onClick={() => void save()}
               disabled={saving}
             >
               {saving ? "Saving…" : "Save"}
-            </button>
+            </Button>
             {isAccountOwner ? (
-              <button type="button" className="ct-btn ct-btn--danger-outline" onClick={() => void removeLot()}>
+              <Button type="button" variant="danger-outline" onClick={() => void removeLot()}>
                 Delete lot
-              </button>
+              </Button>
             ) : null}
           </div>
           {error ? (
@@ -3642,9 +3635,9 @@ export default function LotDetailPage() {
             gap: 6
           }}
         >
-          <button
+          <Button
             type="button"
-            className="ct-btn"
+            variant="outline"
             title="Top of page"
             aria-label="Scroll to top of page"
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -3660,10 +3653,10 @@ export default function LotDetailPage() {
             }}
           >
             <ChevronUp size={22} strokeWidth={2.25} aria-hidden />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="ct-btn"
+            variant="outline"
             title="Bottom of page"
             aria-label="Scroll to bottom of page"
             onClick={() =>
@@ -3684,7 +3677,7 @@ export default function LotDetailPage() {
             }}
           >
             <ChevronDown size={22} strokeWidth={2.25} aria-hidden />
-          </button>
+          </Button>
         </div>
       ) : null}
       </div>
