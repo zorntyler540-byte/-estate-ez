@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -50,38 +50,34 @@ def job_photo_count_error(*, current: int, delta: int, single_lot_mode: bool) ->
     return None
 
 
-def assert_account_catalog_quota(
-    db: Session,
-    account_id: str,
-    *,
-    extra_jobs: int = 0,
-    extra_photos: int = 0,
-) -> None:
-    """Reject when the account is over queued-job or daily-photo spend brakes."""
+def _quota_day_start(now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def catalog_quota_usage(db: Session, account_id: str) -> dict:
+    """Current spend-brake usage (also served by ``GET /jobs/quota`` so uploads can preflight).
+
+    ``queued_jobs`` counts uploads waiting to catalog. Per-lot jobs the server split out of a
+    batch (``parent_job_id``) are not counted: the batch was already admitted, and a 250-photo
+    folder can become 60+ lots.
+    """
     from app.config import settings
+    from app.job_batch_storage import confined_job_folder
     from app.models import JobStatus, Photo, ProcessingJob
 
-    queued_cap = int(settings.catalog_max_queued_jobs_per_account)
-    photo_cap = int(settings.catalog_max_photos_per_account_per_day)
+    start = _quota_day_start()
     queued_n = int(
         db.query(func.count())
         .select_from(ProcessingJob)
         .where(
             ProcessingJob.account_id == account_id,
             ProcessingJob.status.in_((JobStatus.receiving, JobStatus.queued)),
+            ProcessingJob.parent_job_id.is_(None),
         )
         .scalar()
         or 0
     )
-    if extra_jobs and queued_n + extra_jobs > queued_cap:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"This account already has {queued_n} catalog job(s) waiting "
-                f"(limit {queued_cap}). Wait for them to finish or cancel extras."
-            ),
-        )
-    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     stored_photos = int(
         db.query(func.count())
         .select_from(Photo)
@@ -99,21 +95,56 @@ def assert_account_catalog_quota(
         )
         .all()
     )
-    from app.job_batch_storage import confined_job_folder
-
     for job in pending_jobs:
         folder = confined_job_folder(Path(job.input_folder), account_id)
         if folder is None:
             continue
         pending_photos += count_catalog_image_files(folder)
-    if stored_photos + pending_photos + extra_photos > photo_cap:
+    photo_cap = int(settings.catalog_max_photos_per_account_per_day)
+    used = stored_photos + pending_photos
+    return {
+        "queued_jobs": queued_n,
+        "max_queued_jobs": int(settings.catalog_max_queued_jobs_per_account),
+        "photos_today": used,
+        "max_photos_per_day": photo_cap,
+        "photos_remaining_today": max(0, photo_cap - used),
+        "max_photos_per_job": int(settings.catalog_max_photos_per_job),
+        "max_photos_per_lot": CTBIDS_MAX_PHOTOS_PER_LOT,
+        "resets_at": start + timedelta(days=1),
+    }
+
+
+def assert_account_catalog_quota(
+    db: Session,
+    account_id: str,
+    *,
+    extra_jobs: int = 0,
+    extra_photos: int = 0,
+) -> None:
+    """Reject when the account is over queued-job or daily-photo spend brakes."""
+    usage = catalog_quota_usage(db, account_id)
+    queued_n = usage["queued_jobs"]
+    queued_cap = usage["max_queued_jobs"]
+    if extra_jobs and queued_n + extra_jobs > queued_cap:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"This account has already cataloged or queued {stored_photos + pending_photos} "
+                f"This account already has {queued_n} catalog job(s) waiting "
+                f"(limit {queued_cap}). Wait for them to finish or cancel extras."
+            ),
+        )
+    used = usage["photos_today"]
+    photo_cap = usage["max_photos_per_day"]
+    if used + extra_photos > photo_cap:
+        retry_after = max(60, int((usage["resets_at"] - datetime.now(timezone.utc)).total_seconds()))
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"This account has already cataloged or queued {used} "
                 f"photos today (limit {photo_cap}). Try again tomorrow or ask an admin to raise "
                 "CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY."
             ),
+            headers={"Retry-After": str(retry_after)},
         )
 
 

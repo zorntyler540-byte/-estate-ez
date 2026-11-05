@@ -101,6 +101,7 @@ from app.schemas import (
     HealthResponse,
     JobOut,
     JobReceivedFilesOut,
+    CatalogQuotaOut,
     JobSseTicketOut,
     LoginRequest,
     MergeLotsIn,
@@ -323,6 +324,7 @@ from app.catalog_limits import (
     CTBIDS_MAX_PHOTOS_PER_LOT,
     MAX_VIDEO_BYTES,
     assert_account_catalog_quota,
+    catalog_quota_usage,
     count_catalog_image_files,
     ctbids_lot_photo_delta_error,
     is_catalog_video_filename,
@@ -680,6 +682,7 @@ def _job_out(job: ProcessingJob, *, received_files: list[str] | None = None) -> 
         single_lot_manual_sku=job.single_lot_manual_sku,
         listing_channel=normalize_listing_channel(getattr(job, "listing_channel", None)),
         client_draft_id=getattr(job, "client_draft_id", None),
+        parent_job_id=getattr(job, "parent_job_id", None),
         progress_phase=getattr(job, "progress_phase", None),
         progress_done=int(getattr(job, "progress_done", 0) or 0),
         progress_total=int(getattr(job, "progress_total", 0) or 0),
@@ -5878,8 +5881,14 @@ async def create_job_from_upload(
     listing_channel: str = Form("ctseller"),
     captured_at_ms: str | None = Form(None),
     client_draft_id: str | None = Form(None),
+    expected_photos: int | None = Form(None, ge=1, le=5000),
 ) -> JobOut:
-    """Queue a job from a folder chosen in the browser (files uploaded to server disk)."""
+    """Queue a job from a folder chosen in the browser (files uploaded to server disk).
+
+    ``expected_photos`` (website bulk upload): the whole batch's size, checked against the
+    per-job and daily caps on the first chunk so a too-big batch is refused before most of it
+    is sent, instead of 429-ing halfway and leaving a ``receiving`` job behind.
+    """
     account_id = current.account_id
     user_id = current.id
     inherit = bool(inherit_sku_from_subfolder)
@@ -5920,11 +5929,12 @@ async def create_job_from_upload(
                 raise HTTPException(status_code=400, detail=photo_err)
             assert_account_catalog_quota(db, account_id, extra_jobs=0, extra_photos=new_n)
         else:
-            photo_err = job_photo_count_error(current=0, delta=len(files), single_lot_mode=single)
+            batch_n = max(len(files), int(expected_photos or 0))
+            photo_err = job_photo_count_error(current=0, delta=batch_n, single_lot_mode=single)
             if photo_err:
                 raise HTTPException(status_code=400, detail=photo_err)
             assert_account_catalog_quota(
-                db, account_id, extra_jobs=1, extra_photos=len(files)
+                db, account_id, extra_jobs=1, extra_photos=batch_n
             )
     dest = reuse_folder if reuse_folder is not None else new_batch_dir(account_id)
     # Pillow + R2 mirror can take tens of seconds — do not pin QueuePool during that I/O
@@ -6213,6 +6223,15 @@ def catalog_job_status(
         jobs=jobs_out,
         stuck=stuck_out,
     )
+
+
+@app.get("/jobs/quota", response_model=CatalogQuotaOut)
+def catalog_quota(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatalogQuotaOut:
+    """Spend-brake usage so the dashboard can refuse an oversized batch before uploading it."""
+    return CatalogQuotaOut(**catalog_quota_usage(db, current.account_id))
 
 
 @app.get("/jobs/stuck", response_model=StuckJobsOut)
