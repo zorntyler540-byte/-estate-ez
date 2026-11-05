@@ -37,6 +37,18 @@ export default function CaptureScreen() {
     router.push("/capture-session");
   }
 
+  function startImport() {
+    if (gate.action === "pick-sale") {
+      router.push("/(tabs)/sale");
+      return;
+    }
+    if (gate.action === "wait-for-owner") {
+      Alert.alert("No sale assigned", gate.message);
+      return;
+    }
+    router.push("/import-photos");
+  }
+
   function confirmSignOut() {
     if (signingOut) return;
     Alert.alert(
@@ -107,6 +119,15 @@ export default function CaptureScreen() {
         <Text style={styles.primaryText}>Start lot capture</Text>
       </Pressable>
 
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Import lots from the camera roll"
+        style={styles.secondary}
+        onPress={startImport}
+      >
+        <Text style={styles.secondaryText}>Import from Photos</Text>
+      </Pressable>
+
       <Text style={styles.meta}>
         {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / failed)
       </Text>
@@ -163,6 +184,15 @@ const styles = StyleSheet.create({
     marginTop: 8
   },
   primaryText: { color: theme.onPrimary, fontSize: 17, fontWeight: "700" },
+  secondary: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.primary,
+    paddingVertical: 14,
+    alignItems: "center",
+    minHeight: MIN_TAP_PX
+  },
+  secondaryText: { color: theme.primary, fontSize: 16, fontWeight: "700" },
   signOut: {
     marginTop: 24,
     alignSelf: "flex-start",

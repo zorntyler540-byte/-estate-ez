@@ -106,6 +106,7 @@ function RootNav() {
           name="capture-session"
           options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }}
         />
+        <Stack.Screen name="import-photos" options={{ title: "Import from Photos" }} />
         <Stack.Screen name="lot/[id]" options={{ title: "Lot" }} />
       </Stack>
     </ThemeProvider>

@@ -44,6 +44,7 @@ import {
   requeueDraft,
   setDraftServerLotId
 } from "@/lib/queue/db";
+import { discardInterruptedImports } from "@/lib/queue/cameraRollImport";
 import { queueRowsFromDrafts } from "@/lib/queue/loadQueueRows";
 import { sweepArchiveConfirmedDrafts } from "@/lib/queue/sync";
 import type { LotDraft } from "@/lib/types";
@@ -99,6 +100,7 @@ export default function QueueScreen() {
 
   const refresh = useCallback(async (opts?: { archive?: boolean }) => {
     try {
+      await discardInterruptedImports().catch(() => 0);
       // Text-only first. Loading every JPEG URI and decoding thumbs is what
       // hard-killed the pink iPhone when this tab opened.
       const [drafts, blocked] = await Promise.all([
@@ -620,15 +622,17 @@ export default function QueueScreen() {
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle}>{title}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`${view.removeLabel} ${title}`}
-                  style={styles.deleteBtn}
-                  hitSlop={hitSlopFor(32)}
-                  onPress={() => confirmRemoveLot(item)}
-                >
-                  <Text style={styles.deleteBtnText}>{view.removeLabel}</Text>
-                </Pressable>
+                {item.status !== "importing" ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${view.removeLabel} ${title}`}
+                    style={styles.deleteBtn}
+                    hitSlop={hitSlopFor(32)}
+                    onPress={() => confirmRemoveLot(item)}
+                  >
+                    <Text style={styles.deleteBtnText}>{view.removeLabel}</Text>
+                  </Pressable>
+                ) : null}
               </View>
               <Text style={statusColor}>{view.label}</Text>
               <Text style={[styles.cardSale, otherSale && styles.cardSaleOther]}>
@@ -642,7 +646,7 @@ export default function QueueScreen() {
                 <Text style={view.tone === "error" ? styles.error : styles.progress}>{view.detail}</Text>
               ) : null}
               {blockedLine ? <Text style={styles.error}>{blockedLine}</Text> : null}
-              {item.status !== "uploading" ? (
+              {item.status !== "uploading" && item.status !== "importing" ? (
                 <View style={styles.draftActions}>
                   {!archived && (item.photo_count > 0 || item.video_count > 0) ? (
                     <Pressable
