@@ -4,11 +4,12 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import func, text, update
@@ -48,7 +49,7 @@ from app.services.listing_channels import normalize_listing_channel
 from pipeline.pipeline import PipelineCancelled
 from app.services.sku_sanity import recompute_sku_sanity_flags_for_sale
 from app.services.upload_names import is_stable_upload_name, natural_path_key
-from app.catalog_limits import looks_like_video_file
+from app.catalog_limits import CTBIDS_MAX_PHOTOS_PER_LOT, looks_like_video_file
 from app.catalog_storage import (
     catalog_photo_file_on_disk,
     persist_catalog_photo,
@@ -816,6 +817,130 @@ def _segment_batch_lots_by_tape(
     return segments
 
 
+SPLIT_TRIAGE_SIDECAR = ".split_triage.json"
+
+
+def cap_lot_segments(
+    segments: list[list[tuple[Path, str]]], cap: int | None = CTBIDS_MAX_PHOTOS_PER_LOT
+) -> list[tuple[list[tuple[Path, str]], int, int]]:
+    """``(entries, part, parts)`` per lot; a segment over the CT Bids cap becomes consecutive parts.
+
+    More than 40 frames between tape markers is almost always a missed boundary, and a lot over
+    the cap cannot be posted at all — split in capture order and flag the parts for review.
+    """
+    out: list[tuple[list[tuple[Path, str]], int, int]] = []
+    for seg in segments:
+        if not cap or len(seg) <= cap:
+            out.append((seg, 1, 1))
+            continue
+        parts = (len(seg) + cap - 1) // cap
+        for i in range(parts):
+            out.append((seg[i * cap : (i + 1) * cap], i + 1, parts))
+    return out
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copy2(src, dest)
+
+
+def _split_batch_into_lot_jobs(
+    db: Session,
+    job: ProcessingJob,
+    folder: Path,
+    lots: list[tuple[list[tuple[Path, str]], int, int]],
+    triage_by_key: dict[str, dict],
+) -> list[ProcessingJob]:
+    """Queue one single-lot job per lot (own folder, triage carried over) and complete ``job``.
+
+    Children are written to disk / R2 first and inserted together with the parent's completion
+    in one commit, so a crash mid-split re-runs the batch instead of leaving half the lots queued.
+    Each child runs in the account's bulk lane, in parallel with the other lots.
+    """
+    from app.job_batch_storage import mirror_local_file_to_r2
+
+    token = uuid.uuid4().hex[:6]
+    made_dirs: list[Path] = []
+    children: list[ProcessingJob] = []
+    base_time = datetime.now(timezone.utc)
+    try:
+        for idx, (entries, part, parts) in enumerate(lots, start=1):
+            child_dir = (folder.parent / f"{folder.name}.lot{idx:03d}-{token}").resolve()
+            child_dir.mkdir(parents=True, exist_ok=False)
+            made_dirs.append(child_dir)
+            rows: list[dict] = []
+            for path, key in entries:
+                try:
+                    rel = path.resolve().relative_to(folder.resolve())
+                except ValueError:
+                    rel = Path(path.name)
+                dest = child_dir / rel
+                _link_or_copy(path, dest)
+                side = Path(str(path) + ".captured_at")
+                if side.is_file():
+                    _link_or_copy(side, Path(str(dest) + ".captured_at"))
+                row = triage_by_key.get(key)
+                if row is not None:
+                    rows.append({**row, "filename": dest.name})
+            (child_dir / SPLIT_TRIAGE_SIDECAR).write_text(
+                json.dumps(
+                    {"parent_job_id": job.id, "part": part, "parts": parts, "rows": rows},
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            for f in child_dir.rglob("*"):
+                if f.is_file():
+                    mirror_local_file_to_r2(f, child_dir, job.account_id)
+            children.append(
+                ProcessingJob(
+                    id=str(uuid.uuid4()),
+                    account_id=job.account_id,
+                    user_id=job.user_id,
+                    sale_id=job.sale_id,
+                    status=JobStatus.queued,
+                    input_folder=str(child_dir),
+                    inherit_sku_from_subfolder=bool(job.inherit_sku_from_subfolder),
+                    single_lot_mode=True,
+                    listing_channel=getattr(job, "listing_channel", "ctseller") or "ctseller",
+                    parent_job_id=job.id,
+                    # FIFO within the bulk lane keeps lots in capture order.
+                    created_at=base_time + timedelta(microseconds=idx),
+                    updated_at=base_time,
+                )
+            )
+        for child in children:
+            db.add(child)
+        job.status = JobStatus.completed
+        job.cancel_requested = False
+        job.error_message = None
+        job.progress_phase = "split"
+        job.progress_done = len(children)
+        job.progress_total = len(children)
+        db.commit()
+    except BaseException:
+        db.rollback()
+        for d in made_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+        raise
+    return children
+
+
+def _load_split_triage(folder: Path | None) -> dict | None:
+    """Triage rows + part info written by ``_split_batch_into_lot_jobs`` (None for normal jobs)."""
+    if folder is None:
+        return None
+    path = folder / SPLIT_TRIAGE_SIDECAR
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _process_job_batch_pipeline(
     db: Session,
     job: ProcessingJob,
@@ -866,13 +991,36 @@ def _process_job_batch_pipeline(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    segments = _segment_batch_lots_by_tape(folder, ordered)
-    if not segments:
+    lots = cap_lot_segments(_segment_batch_lots_by_tape(folder, ordered))
+    if not lots:
         job.status = JobStatus.failed
         job.error_message = "No photos to catalog after triage"
         job.cancel_requested = False
         db.commit()
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
+        return
+    segments = [entries for entries, _part, _parts in lots]
+    parts_by_seg = {i: (part, parts) for i, (_e, part, parts) in enumerate(lots)}
+
+    if settings.catalog_batch_fanout and len(lots) > 1:
+        triage_rows = {key: row for _path, key, row in ordered}
+        job.analyzed_photos = int(total_photos)
+        job.failed_photos = 0
+        job.est_input_tokens = int(total_photos * EST_INPUT_TOKENS_PER_PHOTO)
+        job.est_output_tokens = 0
+        children = _split_batch_into_lot_jobs(db, job, folder, lots, triage_rows)
+        _note_isolated_job_persisted(job, lots=0)
+        _LOG.info(
+            "batch split into lot jobs job_id=%s photos=%d lots=%d",
+            job.id,
+            total_photos,
+            len(children),
+        )
+        _emit_job(
+            job,
+            {"type": "batch_split", "lots": len(children), "job_ids": [c.id for c in children]},
+        )
+        _emit_job(job, {"type": "status", "status": "completed"})
         return
 
     job.analyzed_photos = int(total_photos)
@@ -928,6 +1076,8 @@ def _process_job_batch_pipeline(
         batch_key = _subfolder_batch_key(folder, seg_paths[0])
         _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
         _strip_maker_stamp_misread_as_tape_sku(lot, None)
+        if parts_by_seg.get(seg_idx, (1, 1))[1] > 1:
+            lot.sku_needs_review = True
 
         # Persist photos in capture order first; _finalize_open_lot then groups by listing role.
         catalog_paths = list(seg_paths)
@@ -992,11 +1142,19 @@ def _process_job_single_lot_pipeline(
     job: ProcessingJob,
     photos: list[Path],
     *,
+    folder: Path | None = None,
     cancel_event: threading.Event | None = None,
 ) -> None:
     """Single-lot upload using triage + capped listing/Pro instead of full Flash on every photo."""
     total_photos = len(photos)
     pending_photo_ids: list[str] = []
+    split = _load_split_triage(folder) if getattr(job, "parent_job_id", None) else None
+    pre_triage: list[dict] | None = None
+    if split:
+        rows = [r for r in (split.get("rows") or []) if isinstance(r, dict)]
+        # Reuse the batch's triage only when it covers every frame (else triage again).
+        if {str(r.get("filename") or "") for r in rows} >= {p.name for p in photos}:
+            pre_triage = rows
 
     _emit_job(job, {"type": "batch_start", "total_photos": total_photos, "phase": "pipeline"})
 
@@ -1020,6 +1178,7 @@ def _process_job_single_lot_pipeline(
             manifest_tag=str(job.id),
             emit=_emit,
             should_cancel=_should_cancel,
+            pre_triage_rows=pre_triage,
         )
     except PipelineCancelled:
         job.status = JobStatus.failed
@@ -1049,7 +1208,11 @@ def _process_job_single_lot_pipeline(
     _emit_job(job, {"type": "batch_phase", "phase": "inventory", "total_photos": total_photos})
 
     _apply_single_lot_manual_sku(job, lot)
+    if folder is not None and photos:
+        _apply_inherit_sku_from_subfolder_name(job, lot, _subfolder_batch_key(folder, photos[0]))
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
+    if split and int(split.get("parts") or 1) > 1:
+        lot.sku_needs_review = True
 
     # Persist photos in capture order first; _finalize_open_lot then groups for listing
     # (true group shots → per-item chapters → labels → measurements → tape).
@@ -1261,7 +1424,7 @@ def _process_job_body(
     reset_usage_counters()
     try:
         if single_lot_mode:
-            _process_job_single_lot_pipeline(db, job, photos, cancel_event=cancel_event)
+            _process_job_single_lot_pipeline(db, job, photos, folder=folder, cancel_event=cancel_event)
         else:
             _process_job_batch_pipeline(db, job, photos, folder, cancel_event=cancel_event)
     except GeminiRetryableError as exc:
