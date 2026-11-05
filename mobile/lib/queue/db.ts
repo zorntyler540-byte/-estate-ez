@@ -169,6 +169,53 @@ export async function createLotDraft(
   return id;
 }
 
+/**
+ * One lot of a camera-roll import. Starts ``importing`` so the capture screen never resumes it
+ * (``findOpenDraft``) and Sync never sends it (``nextRound``) until every photo is copied.
+ */
+export async function createImportDraft(opts: {
+  saleId: string;
+  saleName: string | null;
+  manualSku?: string | null;
+  createdAt: number;
+}): Promise<string> {
+  const db = await getDb();
+  const id = newLocalId();
+  await db.runAsync(
+    `INSERT INTO lot_drafts (id, sale_id, sale_name, manual_sku, listing_channel, status, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'ctseller', 'importing', NULL, ?, ?)`,
+    [id, opts.saleId, opts.saleName?.trim() || null, opts.manualSku?.trim() || null, opts.createdAt, Date.now()]
+  );
+  return id;
+}
+
+/** Every photo is copied: hand the lot to Sync. False = the draft was deleted meanwhile. */
+export async function finishImportDraft(draftId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    "UPDATE lot_drafts SET status = 'queued', error_message = NULL, updated_at = ? WHERE id = ? AND status = 'importing'",
+    [Date.now(), draftId]
+  );
+  return Number(result.changes || 0) > 0;
+}
+
+/**
+ * Import lots left half-copied by an app kill (the photos are still in the camera roll).
+ * ``active`` = drafts this process is still copying.
+ */
+export async function discardStaleImports(active: ReadonlySet<string>): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: string }>("SELECT id FROM lot_drafts WHERE status = 'importing'");
+  let removed = 0;
+  for (const row of rows) {
+    const id = String(row.id);
+    if (active.has(id)) continue;
+    await deleteLotDraft(id);
+    removed += 1;
+  }
+  return removed;
+}
+
 /** Add photos session for a website lot: shots live in SQLite until Sync uploads them. */
 export async function createAppendDraft(opts: {
   saleId: string;
@@ -203,7 +250,7 @@ export async function addPhotoToDraft(
   draftId: string,
   fileUri: string,
   mediaKind: "image" | "video" = "image",
-  opts?: { processRatio?: string | null }
+  opts?: { processRatio?: string | null; capturedAt?: number | null }
 ): Promise<string> {
   const db = await getDb();
   const id = newLocalId();
@@ -222,7 +269,7 @@ export async function addPhotoToDraft(
       fileUri,
       sortOrder,
       kind,
-      capturedAtFromPhotoRow({ file_uri: fileUri, captured_at: 0 }) || Date.now(),
+      opts?.capturedAt || capturedAtFromPhotoRow({ file_uri: fileUri, captured_at: 0 }) || Date.now(),
       opts?.processRatio ?? null
     ]
   );

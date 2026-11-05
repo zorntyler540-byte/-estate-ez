@@ -67,7 +67,8 @@ export type Job = {
   received_files?: string[] | null;
 };
 
-export type LotDraftStatus = "draft" | "queued" | "uploading" | "uploaded" | "failed";
+/** ``importing`` = camera-roll import still copying photos; Sync and capture resume ignore it. */
+export type LotDraftStatus = "importing" | "draft" | "queued" | "uploading" | "uploaded" | "failed";
 
 export type ListingChannel = "ctseller" | "facebook";
 
