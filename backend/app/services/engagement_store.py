@@ -8,11 +8,11 @@ import threading
 import zlib
 from datetime import datetime, timezone
 
-from sqlalchemy import func, text
+from sqlalchemy import and_, case, func, literal, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import EngagementSnapshot, Lot, Photo
+from app.models import Account, EngagementSnapshot, Lot, Photo
 from app.schemas import (
     EngagementIngestOut,
     EngagementItemIn,
@@ -75,6 +75,45 @@ def engagement_out_for_lot(lot: Lot) -> EngagementOut | None:
     return out
 
 
+class _LotIndex:
+    """Every lot one snapshot can touch, loaded up front (no per-item queries)."""
+
+    def __init__(
+        self,
+        db: Session,
+        account_id: str,
+        *,
+        item_ids: list[int],
+        skus: list[str],
+        lot_ids: list[str],
+    ) -> None:
+        self.by_item: dict[int, Lot] = {}
+        self.by_sku: dict[str, list[Lot]] = {}
+        self.by_id: dict[str, Lot] = {}
+        if item_ids:
+            for lot in (
+                db.query(Lot)
+                .filter(Lot.account_id == account_id, Lot.ctseller_item_id.in_(sorted(set(item_ids))))
+                .order_by(Lot.updated_at.desc())
+                .all()
+            ):
+                self.by_item.setdefault(int(lot.ctseller_item_id), lot)
+                self.by_id[lot.id] = lot
+        tokens = sorted({t.strip().lower() for t in skus if (t or "").strip()})
+        if tokens:
+            for lot in (
+                db.query(Lot)
+                .filter(Lot.account_id == account_id, func.lower(Lot.sku).in_(tokens))
+                .all()
+            ):
+                self.by_sku.setdefault((lot.sku or "").strip().lower(), []).append(lot)
+                self.by_id[lot.id] = lot
+        wanted = sorted({lid for lid in lot_ids if lid and lid not in self.by_id})
+        if wanted:
+            for lot in db.query(Lot).filter(Lot.account_id == account_id, Lot.id.in_(wanted)).all():
+                self.by_id[lot.id] = lot
+
+
 def _match_lot(
     db: Session,
     *,
@@ -82,23 +121,17 @@ def _match_lot(
     item_id: int,
     sku: str,
     ctseller_sale_id: int,
+    index: _LotIndex | None = None,
 ) -> Lot | None:
-    by_item = (
-        db.query(Lot)
-        .filter(Lot.account_id == account_id, Lot.ctseller_item_id == int(item_id))
-        .order_by(Lot.updated_at.desc())
-        .first()
-    )
+    if index is None:
+        index = _LotIndex(db, account_id, item_ids=[int(item_id)], skus=[sku], lot_ids=[])
+    by_item = index.by_item.get(int(item_id))
     if by_item:
         return by_item
-    token = (sku or "").strip()
+    token = (sku or "").strip().lower()
     if not token:
         return None
-    candidates = (
-        db.query(Lot)
-        .filter(Lot.account_id == account_id, func.lower(Lot.sku) == token.lower())
-        .all()
-    )
+    candidates = index.by_sku.get(token, [])
     if not candidates:
         return None
     for lot in candidates:
@@ -109,12 +142,7 @@ def _match_lot(
     return None
 
 
-def _listing_photo_ids(db: Session, account_id: str, lot_id: str, limit: int = 4) -> list[str]:
-    photos = (
-        db.query(Photo)
-        .filter(Photo.account_id == account_id, Photo.lot_id == lot_id)
-        .all()
-    )
+def _pick_listing_photo_ids(photos: list[Photo], limit: int = 4) -> list[str]:
     if not photos:
         return []
     hero = pick_lot_hero_photo(photos)
@@ -128,6 +156,19 @@ def _listing_photo_ids(db: Session, account_id: str, lot_id: str, limit: int = 4
         if len(ids) >= limit:
             break
     return ids[:limit]
+
+
+def _listing_photo_ids_by_lot(
+    db: Session, account_id: str, lot_ids: list[str], limit: int = 4
+) -> dict[str, list[str]]:
+    """One photo query for every lot on the Push queue."""
+    ids = sorted({lid for lid in lot_ids if lid})
+    if not ids:
+        return {}
+    grouped: dict[str, list[Photo]] = {}
+    for photo in db.query(Photo).filter(Photo.account_id == account_id, Photo.lot_id.in_(ids)).all():
+        grouped.setdefault(str(photo.lot_id), []).append(photo)
+    return {lid: _pick_listing_photo_ids(photos, limit) for lid, photos in grouped.items()}
 
 
 def _write_lot_engagement(lot: Lot, row: EngagementSnapshot) -> None:
@@ -153,10 +194,8 @@ def _write_lot_engagement(lot: Lot, row: EngagementSnapshot) -> None:
     lot.engagement_json = json.dumps(payload)
 
 
-def _clear_lot_engagement(db: Session, account_id: str, lot_id: str | None) -> None:
-    if not lot_id:
-        return
-    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
+def _clear_lot_engagement(lots: _LotIndex, lot_id: str | None) -> None:
+    lot = lots.by_id.get(lot_id or "")
     if lot is not None:
         lot.engagement_json = "{}"
 
@@ -287,11 +326,18 @@ def _apply_snapshot_locked(
         )
     by_item = {int(row.ctseller_item_id): row for row in existing}
     incoming_ids = set(deduped)
+    lots = _LotIndex(
+        db,
+        account_id,
+        item_ids=list(incoming_ids),
+        skus=[item.sku for item in items],
+        lot_ids=[str(row.lot_id) for row in existing if row.lot_id],
+    )
     pruned = 0
     if complete:
         for row in existing:
             if int(row.ctseller_item_id) not in incoming_ids:
-                _clear_lot_engagement(db, account_id, row.lot_id)
+                _clear_lot_engagement(lots, row.lot_id)
                 db.delete(row)
                 by_item.pop(int(row.ctseller_item_id), None)
                 pruned += 1
@@ -344,9 +390,10 @@ def _apply_snapshot_locked(
             item_id=int(item.ctseller_item_id),
             sku=item.sku,
             ctseller_sale_id=sale_id,
+            index=lots,
         )
         if row.lot_id and (lot is None or lot.id != row.lot_id):
-            _clear_lot_engagement(db, account_id, row.lot_id)
+            _clear_lot_engagement(lots, row.lot_id)
         row.sku = (item.sku or "")[:80]
         row.title = (item.title or "")[:500]
         row.item_url = (item.item_url or "")[:600]
@@ -380,7 +427,7 @@ def _apply_snapshot_locked(
             continue
         row.push_rank = reading.push_rank
         if row.lot_id and row.lot_id not in seen_lots:
-            lot = db.query(Lot).filter(Lot.id == row.lot_id, Lot.account_id == account_id).first()
+            lot = lots.by_id.get(str(row.lot_id))
             if lot is not None:
                 _write_lot_engagement(lot, row)
                 seen_lots.add(lot.id)
@@ -444,42 +491,98 @@ def _rows_for_sale(db: Session, account_id: str, ctseller_sale_id: int) -> list[
     )
 
 
+_BUCKET_COUNT_KEYS = {
+    "No interest": ("no_interest", "rescue"),
+    "Needs eyes": ("needs_eyes", "rescue"),
+    "Push": ("push",),
+    "Protect": ("protect",),
+    "Let Ride": ("let_ride",),
+}
+
+
 def list_engagement_sales(db: Session, account_id: str) -> list[EngagementSaleSummary]:
-    rows = (
-        db.query(EngagementSnapshot)
-        .filter(EngagementSnapshot.account_id == account_id)
-        .all()
+    """Two grouped queries, not every snapshot row the account ever stored."""
+    no_interest = and_(
+        func.coalesce(EngagementSnapshot.watchers, 0) == 0,
+        func.coalesce(EngagementSnapshot.bids, 0) == 0,
     )
-    grouped: dict[int, list[EngagementSnapshot]] = {}
-    for row in rows:
-        grouped.setdefault(int(row.ctseller_sale_id), []).append(row)
+    bucket = case(
+        (
+            EngagementSnapshot.bucket == "Rescue",
+            case((no_interest, literal("No interest")), else_=literal("Needs eyes")),
+        ),
+        else_=func.coalesce(EngagementSnapshot.bucket, literal("")),
+    )
+    counts: dict[int, dict[str, int]] = {}
+    totals: dict[int, int] = {}
+    for sale_id, name, n in (
+        db.query(EngagementSnapshot.ctseller_sale_id, bucket, func.count())
+        .filter(EngagementSnapshot.account_id == account_id)
+        .group_by(EngagementSnapshot.ctseller_sale_id, bucket)
+        .all()
+    ):
+        sid = int(sale_id)
+        row = counts.setdefault(
+            sid,
+            {"no_interest": 0, "needs_eyes": 0, "rescue": 0, "push": 0, "protect": 0, "let_ride": 0},
+        )
+        totals[sid] = totals.get(sid, 0) + int(n)
+        for key in _BUCKET_COUNT_KEYS.get(str(name or ""), ()):
+            row[key] += int(n)
+    latest_at = (
+        db.query(
+            EngagementSnapshot.ctseller_sale_id.label("sale_id"),
+            func.max(EngagementSnapshot.captured_at).label("captured_at"),
+        )
+        .filter(EngagementSnapshot.account_id == account_id)
+        .group_by(EngagementSnapshot.ctseller_sale_id)
+        .subquery()
+    )
+    heads: dict[int, tuple] = {}
+    for sale_id, title, url, ends_at, captured_at in (
+        db.query(
+            EngagementSnapshot.ctseller_sale_id,
+            EngagementSnapshot.sale_title,
+            EngagementSnapshot.auction_url,
+            EngagementSnapshot.sale_ends_at,
+            EngagementSnapshot.captured_at,
+        )
+        .join(
+            latest_at,
+            and_(
+                EngagementSnapshot.ctseller_sale_id == latest_at.c.sale_id,
+                EngagementSnapshot.captured_at == latest_at.c.captured_at,
+            ),
+        )
+        .filter(EngagementSnapshot.account_id == account_id)
+        .distinct()
+        .all()
+    ):
+        heads.setdefault(int(sale_id), (title, url, ends_at, captured_at))
     summaries: list[EngagementSaleSummary] = []
-    for sale_id, group in grouped.items():
-        latest = max(group, key=lambda row: row.captured_at or datetime.min.replace(tzinfo=timezone.utc))
-        counts = _bucket_counts(group)
+    for sale_id, total in totals.items():
+        title, url, ends_at, captured_at = heads.get(sale_id, ("", "", None, None))
         summaries.append(
             EngagementSaleSummary(
                 ctseller_sale_id=sale_id,
-                sale_title=latest.sale_title or "",
-                auction_url=latest.auction_url or "",
-                sale_ends_at=latest.sale_ends_at,
-                captured_at=latest.captured_at,
-                item_count=len(group),
-                **counts,
+                sale_title=title or "",
+                auction_url=url or "",
+                sale_ends_at=ends_at,
+                captured_at=captured_at,
+                item_count=total,
+                **counts[sale_id],
             )
         )
-    summaries.sort(key=lambda row: row.captured_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    summaries.sort(key=lambda row: _as_utc(row.captured_at) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return summaries
 
 
 def _queue_item(
-    db: Session,
-    account_id: str,
     row: EngagementSnapshot,
     *,
+    photo_ids: list[str],
     facebook_clicks: int = 0,
 ) -> EngagementQueueItem:
-    photo_ids = _listing_photo_ids(db, account_id, row.lot_id) if row.lot_id else []
     return EngagementQueueItem(
         sku=row.sku or "",
         title=row.title or "",
@@ -520,8 +623,13 @@ def engagement_sale_detail(db: Session, account_id: str, ctseller_sale_id: int) 
         account_id,
         [str(row.lot_id) for row in rows if row.lot_id],
     )
+    photos_by_lot = _listing_photo_ids_by_lot(db, account_id, [str(row.lot_id) for row in rows if row.lot_id])
     items = [
-        _queue_item(db, account_id, row, facebook_clicks=click_map.get(str(row.lot_id or ""), 0))
+        _queue_item(
+            row,
+            photo_ids=photos_by_lot.get(str(row.lot_id or ""), []),
+            facebook_clicks=click_map.get(str(row.lot_id or ""), 0),
+        )
         for row in rows
     ]
     items.sort(key=lambda item: (item.push_rank is None, item.push_rank or 0, item.sku))
@@ -575,6 +683,7 @@ def engagement_calendar(db: Session, account_id: str, ctseller_sale_id: int) -> 
         auction_url=detail.auction_url,
         ctseller_sale_id=int(ctseller_sale_id),
         pinned=calendar_pins(db, account_id, records, payload_by_lot),
+        tz=db.query(Account.timezone).filter(Account.id == account_id).scalar(),
     )
     annotated = annotate_social_calendar(db, account_id, int(ctseller_sale_id), posts, records=records)
     return [SocialCalendarPost.model_validate(post) for post in annotated]

@@ -38,15 +38,16 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Account, EngagementSnapshot, FacebookPagePost, Lot, User
-from app.services.engagement import PACIFIC, build_social_calendar
+from app.services.engagement import build_social_calendar
+from app.services.franchise_time import DEFAULT_TIMEZONE, account_zone_name, zone_for
 from app.services.ctbids_urls import ctbids_sale_url
-from app.services.facebook_caption import draft_facebook_caption, group_post_copy
+from app.services.facebook_caption import draft_captions, draft_facebook_caption, group_post_copy
 from app.services.facebook_crypto import unseal_facebook_secret
 from app.services.facebook_page import (
     SCHEDULE_MAX_LEAD,
@@ -175,8 +176,9 @@ def _key_date_token(post_date: str | date | datetime | None) -> str:
     if post_date is None:
         return ""
     if isinstance(post_date, datetime):
+        # Only legacy undated keys reach here; those were written on Pacific days.
         moment = post_date if post_date.tzinfo else post_date.replace(tzinfo=UTC)
-        return moment.astimezone(PACIFIC).date().strftime("%Y%m%d")
+        return moment.astimezone(zone_for(DEFAULT_TIMEZONE)).date().strftime("%Y%m%d")
     if isinstance(post_date, date):
         return post_date.strftime("%Y%m%d")
     text = str(post_date).strip()
@@ -372,8 +374,7 @@ def slot_datetime(post_date: str, local_time: str, *, zone: str = "PT") -> datet
     parts = (local_time or "09:00").split(":")
     hour = int(parts[0]) if parts else 9
     minute = int(parts[1]) if len(parts) > 1 else 0
-    tz = PACIFIC if zone in {"PT", "America/Los_Angeles"} else ZoneInfo("America/Los_Angeles")
-    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone_for(zone))
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -517,6 +518,7 @@ def facebook_page_slots(
     ctseller_sale_id: int,
     *,
     records: list[FacebookPagePost] | None = None,
+    tz: str | None = None,
 ) -> list[dict[str, Any]]:
     rows = (
         db.query(EngagementSnapshot)
@@ -551,6 +553,7 @@ def facebook_page_slots(
         auction_url=latest.auction_url or "",
         ctseller_sale_id=int(ctseller_sale_id),
         pinned=calendar_pins(db, account_id, records, payload_by_lot),
+        tz=tz,
     )
     out: list[dict[str, Any]] = []
     for post in posts:
@@ -576,9 +579,10 @@ def annotate_social_calendar(
         records = calendar_rows(db, account_id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
     moment = _as_utc(now or datetime.now(UTC))
+    rows = [post if isinstance(post, dict) else post.model_dump() for post in posts]
+    links = _GroupLinks(db, account_id, ctseller_sale_id, [str(row.get("lot_id") or "") for row in rows])
     annotated: list[dict[str, Any]] = []
-    for post in posts:
-        data = post if isinstance(post, dict) else post.model_dump()
+    for data in rows:
         intended = str(data.get("platform") or "").strip() or FACEBOOK_PLATFORM
         target = current_publish_target(intended)
         lot_id = str(data.get("lot_id") or "").strip() or None
@@ -643,24 +647,92 @@ def annotate_social_calendar(
             }
         )
         group_copy = str(data.get("group_copy") or "")
-        if group_copy and lot_id:
-            lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
-            if lot is not None:
-                from app.services.click_tracking import CHANNEL_GROUP_SHARE, rewrite_copy_with_tracked_links
-
-                data["group_copy"] = rewrite_copy_with_tracked_links(
-                    db,
-                    account_id=account_id,
-                    lot=lot,
-                    text=group_copy,
-                    channel=CHANNEL_GROUP_SHARE,
+        if group_copy and lot_id in links.dests:
+            dest_item, dest_sale = links.dests[lot_id]
+            data = {
+                **data,
+                "group_copy": links.index.rewrite(
+                    group_copy,
+                    lot_id=lot_id,
                     calendar_key=key,
+                    dest_item=dest_item,
+                    dest_sale=dest_sale,
                     append_if_missing=True,
-                )
+                ),
+            }
         annotated.append({**data, **extra})
-    if posts:
-        db.commit()
     return annotated
+
+
+class _GroupLinks:
+    """Lots, CT Bids destinations, and Groups tracked links for one sale, in three queries."""
+
+    def __init__(self, db: Session, account_id: str, ctseller_sale_id: int, lot_ids: list[str]) -> None:
+        from app.services.click_tracking import CHANNEL_GROUP_SHARE, TrackedLinkIndex
+
+        ids = sorted({lid for lid in lot_ids if lid})
+        self.lots: dict[str, Lot] = {}
+        self.dests: dict[str, tuple[str, str]] = {}
+        if ids:
+            self.lots = {
+                lot.id: lot
+                for lot in db.query(Lot).filter(Lot.account_id == account_id, Lot.id.in_(ids)).all()
+            }
+        snaps: dict[str, EngagementSnapshot] = {}
+        if self.lots:
+            for row in (
+                db.query(EngagementSnapshot)
+                .filter(
+                    EngagementSnapshot.account_id == account_id,
+                    EngagementSnapshot.ctseller_sale_id == int(ctseller_sale_id),
+                    EngagementSnapshot.lot_id.in_(sorted(self.lots)),
+                )
+                .all()
+            ):
+                snaps.setdefault(str(row.lot_id), row)
+        for lid, lot in self.lots.items():
+            snap = snaps.get(lid)
+            item = ctbids_lot_url(lot, snapshot=snap)
+            sale = ctbids_sale_url(
+                sale_id=getattr(lot, "ctseller_sale_id", None),
+                auction_url=(snap.auction_url if snap else "") or "",
+                item_url=item,
+            )
+            self.dests[lid] = ((item or "").strip().rstrip("/"), (sale or "").strip().rstrip("/"))
+        self.index = TrackedLinkIndex(
+            db, account_id=account_id, lot_ids=list(self.lots), channel=CHANNEL_GROUP_SHARE
+        )
+
+
+def ensure_group_links(db: Session, account_id: str, ctseller_sale_id: int, slots: list[dict[str, Any]]) -> int:
+    """Create missing Groups tracked links for calendar slots, so the calendar GET stays read-only."""
+    from app.services.click_tracking import CHANNEL_GROUP_SHARE, tracked_pair
+
+    links = _GroupLinks(db, account_id, ctseller_sale_id, [str(slot.get("lot_id") or "") for slot in slots])
+    if not links.index.enabled:
+        return 0
+    created = 0
+    for slot in slots:
+        lot_id = str(slot.get("lot_id") or "")
+        key = str(slot.get("slot_key") or "")
+        if lot_id not in links.lots or not str(slot.get("group_copy") or "").strip():
+            continue
+        dest_item, dest_sale = links.dests[lot_id]
+        if links.index.has_links(lot_id=lot_id, calendar_key=key, dest_item=dest_item, dest_sale=dest_sale):
+            continue
+        tracked_pair(
+            db,
+            account_id=account_id,
+            lot=links.lots[lot_id],
+            channel=CHANNEL_GROUP_SHARE,
+            calendar_key=key,
+            item_url=dest_item,
+            sale_url=dest_sale,
+        )
+        created += 1
+    if created:
+        db.commit()
+    return created
 
 
 def _connected_page(account: Account) -> tuple[str, str] | None:
@@ -766,13 +838,14 @@ def _photos_for_slot(db: Session, lot: Lot, slot_id: str) -> list:
     return rotate_listing_photos(photos, photo_offset_for(slot_id))
 
 
-def _draft_item(
+def _draft_inputs(
     db: Session,
     account: Account,
     slot: dict[str, Any],
     *,
     include_follow_hook: bool = False,
 ) -> dict[str, Any] | None:
+    """DB half of a slot draft: lot, photos, snapshot, tracked links. No Gemini."""
     lot_id = str(slot.get("lot_id") or "").strip()
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account.id).first()
     if not lot:
@@ -793,12 +866,7 @@ def _draft_item(
         auction_url=(snapshot.auction_url if snapshot else "") or "",
         item_url=dest_item,
     )
-    from app.services.click_tracking import (
-        CHANNEL_GROUP_SHARE,
-        CHANNEL_PAGE_POST,
-        apply_tracked_urls,
-        tracked_pair,
-    )
+    from app.services.click_tracking import CHANNEL_GROUP_SHARE, CHANNEL_PAGE_POST, tracked_pair
 
     calendar_key = str(slot.get("slot_key") or "")
     _di, _ds, item_url, sale_url = tracked_pair(
@@ -819,21 +887,52 @@ def _draft_item(
         item_url=dest_item,
         sale_url=dest_sale,
     )
+    tz = account_zone_name(account)
     close_at = snapshot.sale_ends_at if snapshot else None
+    title = lot.auction_title or slot.get("title") or ""
     angle = str(slot.get("slot_angle") or slot_angle_for(str(slot.get("local_time") or ""), hook=str(slot.get("hook") or "")))
-    caption = draft_facebook_caption(
-        title=lot.auction_title or slot.get("title") or "",
-        description=lot.professional_description or "",
-        sku=lot.sku or slot.get("sku") or "",
-        item_url=item_url,
-        close_at=close_at,
-        include_follow_hook=include_follow_hook,
-        current_bid=float(snapshot.price) if snapshot else None,
-        watchers=int(snapshot.watchers) if snapshot else None,
-        sale_title=(snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
-        angle=angle,
-        sale_url=sale_url,
-    )
+    return {
+        "caption_request": {
+            "title": title,
+            "description": lot.professional_description or "",
+            "sku": lot.sku or slot.get("sku") or "",
+            "item_url": item_url,
+            "close_at": close_at,
+            "include_follow_hook": include_follow_hook,
+            "current_bid": float(snapshot.price) if snapshot else None,
+            "watchers": int(snapshot.watchers) if snapshot else None,
+            "sale_title": (snapshot.sale_title if snapshot else None) or _sale_title(db, lot),
+            "angle": angle,
+            "sale_url": sale_url,
+            "tz": tz,
+        },
+        "urls": (dest_item, dest_sale, item_url, sale_url, group_item_url, group_sale_url),
+        "hook": str(slot.get("hook") or ""),
+        "tz": tz,
+        "item": {
+            "lot_id": lot.id,
+            "sku": lot.sku,
+            "title": title,
+            "item_url": item_url,
+            "sale_ends_at": close_at,
+            "photo_ids": [p.id for p in photos],
+            "photo_count": len(photos),
+            "scheduled_publish_time": slot["when"],
+            "calendar_key": slot["slot_key"],
+            "calendar_sale_id": int(slot["ctseller_sale_id"]),
+            "intended_platform": slot.get("intended_platform") or slot.get("platform") or "",
+            "publish_target": slot.get("publish_target") or PUBLISH_TARGET_FACEBOOK_PAGE,
+            "local_time": slot.get("local_time") or "",
+            "hook": slot.get("hook") or "",
+        },
+    }
+
+
+def _finish_draft(inputs: dict[str, Any], caption: str) -> dict[str, Any]:
+    """Pure: swap tracked URLs into the caption and derive the Groups paste."""
+    from app.services.click_tracking import apply_tracked_urls
+
+    dest_item, dest_sale, item_url, sale_url, group_item_url, group_sale_url = inputs["urls"]
     caption = apply_tracked_urls(
         caption,
         dest_item=dest_item,
@@ -841,14 +940,16 @@ def _draft_item(
         short_item=item_url,
         short_sale=sale_url,
     )
+    request = inputs["caption_request"]
     group_caption = group_post_copy(
-        title=lot.auction_title or slot.get("title") or "",
-        hook=str(slot.get("hook") or ""),
-        description=lot.professional_description or "",
+        title=request["title"],
+        hook=inputs["hook"],
+        description=request["description"],
         caption=caption,
         item_url=group_item_url,
-        close_at=close_at,
+        close_at=request["close_at"],
         sale_url=group_sale_url,
+        tz=inputs["tz"],
     )
     group_caption = apply_tracked_urls(
         group_caption,
@@ -857,24 +958,34 @@ def _draft_item(
         short_item=group_item_url,
         short_sale=group_sale_url,
     )
-    return {
-        "lot_id": lot.id,
-        "sku": lot.sku,
-        "title": lot.auction_title or slot.get("title") or "",
-        "item_url": item_url,
-        "sale_ends_at": close_at,
-        "caption": caption,
-        "group_caption": group_caption,
-        "photo_ids": [p.id for p in photos],
-        "photo_count": len(photos),
-        "scheduled_publish_time": slot["when"],
-        "calendar_key": slot["slot_key"],
-        "calendar_sale_id": int(slot["ctseller_sale_id"]),
-        "intended_platform": slot.get("intended_platform") or slot.get("platform") or "",
-        "publish_target": slot.get("publish_target") or PUBLISH_TARGET_FACEBOOK_PAGE,
-        "local_time": slot.get("local_time") or "",
-        "hook": slot.get("hook") or "",
-    }
+    return {**inputs["item"], "caption": caption, "group_caption": group_caption}
+
+
+def _draft_items(
+    db: Session,
+    account: Account,
+    slots: list[dict[str, Any]],
+    *,
+    include_follow_hook: bool = False,
+    captions: list[str | None] | None = None,
+) -> list[dict[str, Any] | None]:
+    """Draft many slots: DB work in order, then only the missing captions go to Gemini, overlapped.
+
+    ``captions[i]`` (the text the owner already reviewed) skips Gemini for that slot.
+    """
+    given = list(captions or [None] * len(slots))
+    inputs = [_draft_inputs(db, account, slot, include_follow_hook=include_follow_hook) for slot in slots]
+    db.commit()
+    need = [i for i, inp in enumerate(inputs) if inp is not None and not (given[i] or "").strip()]
+    drafted = draft_captions([inputs[i]["caption_request"] for i in need], drafter=draft_facebook_caption)
+    text: dict[int, str] = dict(zip(need, drafted))
+    out: list[dict[str, Any] | None] = []
+    for i, inp in enumerate(inputs):
+        if inp is None:
+            out.append(None)
+            continue
+        out.append(_finish_draft(inp, (given[i] or "").strip() or text.get(i, "")))
+    return out
 
 
 def _record_for_slot(by_key: dict[str, FacebookPagePost], slot: dict[str, Any]) -> FacebookPagePost | None:
@@ -918,6 +1029,16 @@ def sync_facebook_calendar_after_snapshot(
     if not account:
         return
     reconcile_calendar_rows(db, account, ctseller_sale_id, now=now)
+    try:
+        ensure_group_links(
+            db,
+            account_id,
+            ctseller_sale_id,
+            facebook_page_slots(db, account_id, ctseller_sale_id, tz=account_zone_name(account)),
+        )
+    except Exception:
+        db.rollback()
+        _LOG.exception("Groups tracked links failed account=%s sale=%s", account_id, ctseller_sale_id)
     if not publish_new_slots:
         return
     if not bool(getattr(account, "facebook_calendar_auto_approve", False)):
@@ -935,42 +1056,30 @@ def sync_facebook_calendar_after_snapshot(
     moment = _as_utc(now or datetime.now(UTC))
     records = calendar_rows(db, account_id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
-    pending: list[dict[str, Any]] = []
-    for slot in facebook_page_slots(db, account_id, ctseller_sale_id, records=records):
-        if schedule_window_state(slot["when"], now=moment) != "ok":
-            continue
-        if not auto_retry_allowed(_record_for_slot(by_key, slot), now=moment):
-            continue
-        item = _draft_item(db, account, slot)
-        if item:
-            pending.append(item)
+    due = [
+        slot
+        for slot in facebook_page_slots(
+            db, account_id, ctseller_sale_id, records=records, tz=account_zone_name(account)
+        )
+        if schedule_window_state(slot["when"], now=moment) == "ok"
+        and auto_retry_allowed(_record_for_slot(by_key, slot), now=moment)
+    ]
+    pending = [item for item in _draft_items(db, account, due) if item]
     if not pending:
         return
-    from app import facebook_post_tasks
-
+    # Callers are already off the request thread (calendar task thread, worker sweep child).
     try:
-        if len(pending) > facebook_post_tasks.SYNC_LOT_LIMIT:
-            facebook_post_tasks.start_facebook_posts_in_background(
-                account_id=account_id,
-                user_id=owner.id,
-                items=pending,
-                include_follow_hook=False,
-                confirm=True,
-                force=False,
-                source=CALENDAR_SOURCE,
-            )
-        else:
-            publish_posts(
-                db,
-                account=account,
-                user=owner,
-                items=pending,
-                include_follow_hook=False,
-                confirm=True,
-                force=False,
-                source=CALENDAR_SOURCE,
-                now=now,
-            )
+        publish_posts(
+            db,
+            account=account,
+            user=owner,
+            items=pending,
+            include_follow_hook=False,
+            confirm=True,
+            force=False,
+            source=CALENDAR_SOURCE,
+            now=now,
+        )
     except Exception:
         _LOG.exception(
             "Auto-approve Facebook calendar failed account=%s sale=%s",
@@ -979,38 +1088,74 @@ def sync_facebook_calendar_after_snapshot(
         )
 
 
-def sweep_calendar_auto_approve(db: Session, *, now: datetime | None = None) -> int:
-    """Owner-configured auto-approve: publish pending Push slots without a catalogger trigger."""
-    accounts = (
-        db.query(Account)
-        .filter(Account.facebook_calendar_auto_approve.is_(True))
+# A sale with no close time stops getting auto-approve passes this long after its last snapshot.
+OPEN_SALE_NO_CLOSE_GRACE = timedelta(days=14)
+
+
+def open_calendar_sale_ids(db: Session, account_id: str, *, now: datetime | None = None) -> list[int]:
+    """CT Seller sales whose Push calendar can still publish: not closed, snapshot not stale."""
+    moment = _as_utc(now or datetime.now(UTC))
+    rows = (
+        db.query(
+            EngagementSnapshot.ctseller_sale_id,
+            func.max(EngagementSnapshot.sale_ends_at),
+            func.max(EngagementSnapshot.captured_at),
+        )
+        .filter(EngagementSnapshot.account_id == account_id)
+        .group_by(EngagementSnapshot.ctseller_sale_id)
         .all()
     )
-    n = 0
+    out: list[int] = []
+    for sale_id, ends_at, captured_at in rows:
+        if sale_id is None:
+            continue
+        ends = _as_aware(ends_at)
+        if ends is not None:
+            if ends > moment:
+                out.append(int(sale_id))
+            continue
+        captured = _as_aware(captured_at)
+        if captured is not None and moment - captured <= OPEN_SALE_NO_CLOSE_GRACE:
+            out.append(int(sale_id))
+    return sorted(out)
+
+
+def auto_approve_targets(db: Session, *, now: datetime | None = None) -> list[tuple[str, int]]:
+    """(account_id, sale_id) pairs the sweep should visit: auto-approve on, Page usable, sale open."""
+    accounts = (
+        db.query(Account)
+        .filter(
+            Account.facebook_calendar_auto_approve.is_(True),
+            Account.facebook_page_id.isnot(None),
+            Account.facebook_page_token_enc.isnot(None),
+        )
+        .all()
+    )
+    out: list[tuple[str, int]] = []
     for account in accounts:
         if not auto_approve_ready(account):
             continue
-        sale_ids = {
-            int(row[0])
-            for row in db.query(EngagementSnapshot.ctseller_sale_id)
-            .filter(EngagementSnapshot.account_id == account.id)
-            .distinct()
-            .all()
-            if row[0] is not None
-        }
-        for sale_id in sale_ids:
-            try:
-                sync_facebook_calendar_after_snapshot(
-                    db, account.id, int(sale_id), now=now, publish_new_slots=True
-                )
-                n += 1
-            except Exception:
-                db.rollback()
-                _LOG.exception(
-                    "Auto-approve sweep failed account=%s sale=%s",
-                    account.id,
-                    sale_id,
-                )
+        for sale_id in open_calendar_sale_ids(db, account.id, now=now):
+            out.append((account.id, sale_id))
+    return out
+
+
+def sweep_calendar_auto_approve(db: Session, *, now: datetime | None = None) -> int:
+    """Owner-configured auto-approve: publish pending Push slots without a catalogger trigger."""
+    n = 0
+    for account_id, sale_id in auto_approve_targets(db, now=now):
+        try:
+            sync_facebook_calendar_after_snapshot(
+                db, account_id, int(sale_id), now=now, publish_new_slots=True
+            )
+            n += 1
+        except Exception:
+            db.rollback()
+            _LOG.exception(
+                "Auto-approve sweep failed account=%s sale=%s",
+                account_id,
+                sale_id,
+            )
     return n
 
 
@@ -1040,7 +1185,9 @@ def calendar_publish_items(
     wanted = requested_slot_keys(slot_keys)
     records = calendar_rows(db, account.id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
-    slots = facebook_page_slots(db, account.id, ctseller_sale_id, records=records)
+    slots = facebook_page_slots(
+        db, account.id, ctseller_sale_id, records=records, tz=account_zone_name(account)
+    )
     chosen = [slot for slot in slots if migrate_calendar_key(str(slot["slot_key"])) in wanted]
     captions = captions or {}
     publishable: list[dict[str, Any]] = []
@@ -1052,6 +1199,7 @@ def calendar_publish_items(
         skipped.append(
             _skip(lot_id, key, "This slot is no longer on the Push calendar. Refresh and approve again.")
         )
+    eligible: list[dict[str, Any]] = []
     for slot in chosen:
         window = schedule_window_state(slot["when"], now=now)
         lot_id = str(slot["lot_id"])
@@ -1070,19 +1218,28 @@ def calendar_publish_items(
                 )
             )
             continue
-        drafted = _draft_item(db, account, slot, include_follow_hook=include_follow_hook)
+        eligible.append(slot)
+    # The owner already reviewed a caption in the preview; reuse it instead of a second Gemini call.
+    reviewed = [
+        captions.get(str(slot["slot_key"]))
+        or captions.get(migrate_calendar_key(str(slot["slot_key"])))
+        or captions.get(str(slot["lot_id"]))
+        for slot in eligible
+    ]
+    drafted_items = _draft_items(
+        db, account, eligible, include_follow_hook=include_follow_hook, captions=reviewed
+    )
+    for slot, drafted in zip(eligible, drafted_items):
         if not drafted:
             skipped.append(
-                _skip(lot_id, key, "Catalog the lot with listing photos before scheduling the Page post.", failed=True)
+                _skip(
+                    str(slot["lot_id"]),
+                    str(slot["slot_key"]),
+                    "Catalog the lot with listing photos before scheduling the Page post.",
+                    failed=True,
+                )
             )
             continue
-        caption = (
-            captions.get(key)
-            or captions.get(migrate_calendar_key(key))
-            or captions.get(lot_id)
-            or drafted["caption"]
-        ).strip()
-        drafted["caption"] = caption
         if post_now:
             drafted["scheduled_publish_time"] = None
         publishable.append(drafted)
@@ -1174,14 +1331,27 @@ def calendar_preview(
     wanted = requested_slot_keys(slot_keys)
     records = calendar_rows(db, account.id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
-    slots = facebook_page_slots(db, account.id, ctseller_sale_id, records=records)
+    slots = facebook_page_slots(
+        db, account.id, ctseller_sale_id, records=records, tz=account_zone_name(account)
+    )
     chosen = [slot for slot in slots if migrate_calendar_key(str(slot["slot_key"])) in wanted]
+    open_slots = [
+        slot for slot in chosen
+        if not ((row := _record_for_slot(by_key, slot)) is not None and row.status in PINNED_STATUSES)
+    ]
+    drafted_by_key = {
+        str(slot["slot_key"]): item
+        for slot, item in zip(
+            open_slots,
+            _draft_items(db, account, open_slots, include_follow_hook=include_follow_hook),
+        )
+    }
     drafts: list[dict[str, Any]] = []
     for slot in chosen:
         key = str(slot["slot_key"])
         row = _record_for_slot(by_key, slot)
         already = bool(row and row.status in PINNED_STATUSES)
-        drafted = None if already else _draft_item(db, account, slot, include_follow_hook=include_follow_hook)
+        drafted = None if already else drafted_by_key.get(key)
         if not drafted:
             drafts.append(
                 {
