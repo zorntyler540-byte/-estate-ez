@@ -813,6 +813,7 @@ class JobOut(BaseModel):
     single_lot_mode: bool = False
     single_lot_manual_sku: str | None = None
     client_draft_id: str | None = None
+    parent_job_id: str | None = None
     listing_channel: str = "ctseller"
     progress_phase: str | None = None
     progress_done: int = 0
@@ -820,6 +821,19 @@ class JobOut(BaseModel):
     progress_file_name: str | None = None
     # Stills already stored for this job (upload responses only) so a phone can resume.
     received_files: list[str] | None = None
+
+
+class CatalogQuotaOut(BaseModel):
+    """Per-account catalog spend brakes, for upload preflight (``GET /jobs/quota``)."""
+
+    queued_jobs: int
+    max_queued_jobs: int
+    photos_today: int
+    max_photos_per_day: int
+    photos_remaining_today: int
+    max_photos_per_job: int
+    max_photos_per_lot: int | None = None
+    resets_at: datetime
 
 
 class JobReceivedFilesOut(BaseModel):

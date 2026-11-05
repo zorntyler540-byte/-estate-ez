@@ -234,6 +234,8 @@ class ProcessingJob(Base):
     single_lot_manual_sku: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # Phone lot-draft UUID from Expo Queue/Sync (``POST /jobs/upload``). Optional for older app builds.
     client_draft_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Website batch split after triage: each tape-SKU lot runs as its own single-lot job.
+    parent_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     listing_channel: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ctseller", server_default="ctseller"
     )
