@@ -219,32 +219,24 @@ def test_graph_calls_run_without_an_open_db_transaction(tmp_path, monkeypatch) -
     _meta(monkeypatch)
     client, db, _account, _user, lot = _client(tmp_path, connected=True)
     seen: list[bool] = []
-    real_publish = facebook_post_tasks._run_facebook_posts
+    real_run = facebook_post_tasks.run_job
 
-    def capture(**kwargs):
-        from app.services import facebook_page
+    def capture(session, job_id, **kwargs):
+        def upload(**_kw):
+            seen.append(session.in_transaction())
+            return "m"
 
-        real = facebook_page.publish_posts
+        def feed(**_kw):
+            seen.append(session.in_transaction())
+            return "111_tx"
 
-        def wrapped(session, **inner):
-            def upload(**_kw):
-                seen.append(session.in_transaction())
-                return "m"
+        with (
+            patch("app.services.facebook_page.upload_unpublished_photo", upload),
+            patch("app.services.facebook_page.create_page_feed_post", feed),
+        ):
+            return real_run(session, job_id, **kwargs)
 
-            def feed(**_kw):
-                seen.append(session.in_transaction())
-                return "111_tx"
-
-            with (
-                patch("app.services.facebook_page.upload_unpublished_photo", upload),
-                patch("app.services.facebook_page.create_page_feed_post", feed),
-            ):
-                return real(session, **inner)
-
-        with patch("app.services.facebook_page.publish_posts", wrapped):
-            return real_publish(**kwargs)
-
-    monkeypatch.setattr(facebook_post_tasks, "_run_facebook_posts", capture)
+    monkeypatch.setattr(facebook_post_tasks, "run_job", capture)
     try:
         with patch("app.services.facebook_page._photo_jpeg", return_value=b"jpg"):
             res = client.post(

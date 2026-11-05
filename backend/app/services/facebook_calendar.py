@@ -9,10 +9,13 @@ stored slot table). Push lots fill daily Pacific slots in push-rank order:
 * 18:00 TikTok — reel hook
 * Closing-day 17:40 Stories countdown (top Push lot)
 
-Each row keeps its spreadsheet **intended platform**. A separate
-``PLATFORM_PUBLISH_TARGETS`` map chooses the **current publish target**.
-Today every target is the Facebook Page feed; flipping Instagram or TikTok
-to a native publisher later does not require new slot tables or keys.
+Each row keeps its spreadsheet **intended platform**. ``PLATFORM_PUBLISH_TARGETS``
+chooses the **publish target**: Facebook -> Page feed (Facebook schedules it),
+Instagram -> Instagram feed (copy-only until an IG account is linked and
+``META_INSTAGRAM_PUBLISHING`` is on), FB + IG Stories -> Page story (+ IG story),
+TikTok -> copy-only. Instagram and Stories cannot be scheduled through Graph: approving
+one pins the slot as ``scheduled`` and the publish queue posts it at slot time.
+A pinned row keeps the target it was approved with.
 
 Calendar identity is per lot + day + slot:
 ``pushcal:{sale}:{lot}:{YYYYMMDD}:{slot}`` (slot is ``0900`` / ``1215`` /
@@ -50,6 +53,8 @@ from app.services.ctbids_urls import ctbids_sale_url
 from app.services.facebook_caption import draft_captions, draft_facebook_caption, group_post_copy
 from app.services.facebook_crypto import unseal_facebook_secret
 from app.services.facebook_page import (
+    DEFERRED_MAX_LATE,
+    DEFERRED_MISSED_NOTE,
     SCHEDULE_MAX_LEAD,
     SCHEDULE_MIN_LEAD,
     _clear_token_error,
@@ -57,16 +62,23 @@ from app.services.facebook_page import (
     _mark_token_error,
     _sale_title,
     ctbids_lot_url,
-    publish_posts,
     rotate_listing_photos,
 )
 from app.services.meta_graph import MetaGraphError, delete_page_post
+from app.services.social_targets import (
+    DEFERRED_TARGETS,
+    PUBLISH_TARGET_COPY_ONLY,
+    PUBLISH_TARGET_FACEBOOK_PAGE,
+    PUBLISH_TARGET_INSTAGRAM_FEED,
+    PUBLISH_TARGET_STORIES,
+    PUBLISHABLE_TARGETS,
+    instagram_user_id,
+)
 
 _LOG = logging.getLogger(__name__)
 
 CALENDAR_SOURCE = "push_calendar"
 FACEBOOK_PLATFORM = "Facebook"
-PUBLISH_TARGET_FACEBOOK_PAGE = "facebook_page"
 UTC = timezone.utc
 
 # Rows in these states own their slot; rebuilds and auto-approve leave them alone.
@@ -88,13 +100,19 @@ INTERRUPTED_NOTE = (
     "slot again — it may already be live."
 )
 
-# Intended spreadsheet platform -> publisher that actually runs today.
-# Change a value here when a native Instagram/TikTok/Stories publisher exists.
+# Intended spreadsheet platform -> publisher. Nothing falls back to the Page feed.
 PLATFORM_PUBLISH_TARGETS: dict[str, str] = {
     "Facebook": PUBLISH_TARGET_FACEBOOK_PAGE,
-    "Instagram": PUBLISH_TARGET_FACEBOOK_PAGE,
-    "FB + IG Stories": PUBLISH_TARGET_FACEBOOK_PAGE,
-    "TikTok": PUBLISH_TARGET_FACEBOOK_PAGE,
+    "Instagram": PUBLISH_TARGET_INSTAGRAM_FEED,
+    "FB + IG Stories": PUBLISH_TARGET_STORIES,
+    "TikTok": PUBLISH_TARGET_COPY_ONLY,
+}
+COPY_ONLY_REASONS: dict[str, str] = {
+    "Instagram": (
+        "Copy only: link an Instagram professional account to the Facebook Page to publish "
+        "Instagram slots."
+    ),
+    "TikTok": "TikTok is copy-only: paste the caption into the TikTok app.",
 }
 
 SLOT_ANGLES: dict[str, str] = {
@@ -131,6 +149,7 @@ FACEBOOK_STATUS_LABELS: dict[str, str] = {
     "cancelled": "Cancelled",
     "no_lot": "No cataloged lot",
     "not_applicable": "Not posting to the Page",
+    "copy_only": "Copy only",
 }
 
 FACEBOOK_BLOCKED_REASONS: dict[str, str] = {
@@ -158,9 +177,22 @@ def facebook_blocked_reason(status: str, *, schedulable: bool) -> str | None:
     return FACEBOOK_BLOCKED_REASONS.get(key)
 
 
-def current_publish_target(intended_platform: str) -> str:
+def current_publish_target(intended_platform: str, *, instagram: bool = False) -> str:
+    """Publisher for a new approval. Instagram slots are copy-only until Instagram is linked."""
     platform = (intended_platform or "").strip() or FACEBOOK_PLATFORM
-    return PLATFORM_PUBLISH_TARGETS.get(platform, PUBLISH_TARGET_FACEBOOK_PAGE)
+    target = PLATFORM_PUBLISH_TARGETS.get(platform, PUBLISH_TARGET_COPY_ONLY)
+    if target == PUBLISH_TARGET_INSTAGRAM_FEED and not instagram:
+        return PUBLISH_TARGET_COPY_ONLY
+    return target
+
+
+def _instagram_ready(db: Session, account_id: str) -> bool:
+    account = db.get(Account, account_id)
+    return account is not None and instagram_user_id(account) is not None
+
+
+def row_target(row: FacebookPagePost | None) -> str:
+    return str(getattr(row, "publish_target", None) or "") or PUBLISH_TARGET_FACEBOOK_PAGE
 
 
 def slot_id_from_local_time(local_time: str) -> str:
@@ -401,6 +433,7 @@ def _slot_dict(
     post: dict[str, Any],
     *,
     ctseller_sale_id: int,
+    instagram: bool = False,
 ) -> dict[str, Any] | None:
     lot_id = str(post.get("lot_id") or "").strip()
     if not lot_id:
@@ -416,7 +449,7 @@ def _slot_dict(
         "lot_id": lot_id,
         "ctseller_sale_id": int(ctseller_sale_id),
         "intended_platform": intended,
-        "publish_target": current_publish_target(intended),
+        "publish_target": current_publish_target(intended, instagram=instagram),
         "slot_angle": slot_angle_for(str(post.get("local_time") or ""), hook=str(post.get("hook") or "")),
     }
 
@@ -555,12 +588,17 @@ def facebook_page_slots(
         pinned=calendar_pins(db, account_id, records, payload_by_lot),
         tz=tz,
     )
+    instagram = _instagram_ready(db, account_id)
+    by_key = _index_calendar_rows(records)
     out: list[dict[str, Any]] = []
     for post in posts:
-        slot = _slot_dict(post, ctseller_sale_id=int(ctseller_sale_id))
+        slot = _slot_dict(post, ctseller_sale_id=int(ctseller_sale_id), instagram=instagram)
         if not slot:
             continue
-        if slot["publish_target"] != PUBLISH_TARGET_FACEBOOK_PAGE:
+        pinned = by_key.get(migrate_calendar_key(str(slot["slot_key"])))
+        if pinned is not None and pinned.status in PINNED_STATUSES:
+            slot["publish_target"] = row_target(pinned)
+        if slot["publish_target"] not in PUBLISHABLE_TARGETS:
             continue
         out.append(slot)
     return out
@@ -578,14 +616,26 @@ def annotate_social_calendar(
     if records is None:
         records = calendar_rows(db, account_id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
+    instagram = _instagram_ready(db, account_id)
     moment = _as_utc(now or datetime.now(UTC))
     rows = [post if isinstance(post, dict) else post.model_dump() for post in posts]
     links = _GroupLinks(db, account_id, ctseller_sale_id, [str(row.get("lot_id") or "") for row in rows])
     annotated: list[dict[str, Any]] = []
     for data in rows:
         intended = str(data.get("platform") or "").strip() or FACEBOOK_PLATFORM
-        target = current_publish_target(intended)
+        target = current_publish_target(intended, instagram=instagram)
         lot_id = str(data.get("lot_id") or "").strip() or None
+        key = ""
+        if lot_id:
+            key = calendar_slot_key(
+                int(ctseller_sale_id),
+                lot_id,
+                slot_id_from_local_time(str(data.get("local_time") or "09:00")),
+                data.get("post_date"),
+            )
+            pinned = by_key.get(key)
+            if pinned is not None and pinned.status in PINNED_STATUSES:
+                target = row_target(pinned)
         extra = {
             "slot_key": "",
             "intended_platform": intended,
@@ -602,7 +652,13 @@ def annotate_social_calendar(
             "facebook_review_note": None,
             "facebook_caption": None,
         }
-        if target != PUBLISH_TARGET_FACEBOOK_PAGE:
+        if target not in PUBLISHABLE_TARGETS:
+            extra["slot_key"] = key
+            extra["facebook_status"] = "copy_only"
+            extra["facebook_status_label"] = facebook_status_label("copy_only")
+            extra["facebook_blocked_reason"] = COPY_ONLY_REASONS.get(
+                intended, "Copy only: nothing is posted automatically for this slot."
+            )
             annotated.append({**data, **extra})
             continue
         if not lot_id:
@@ -631,6 +687,9 @@ def annotate_social_calendar(
         open_slot = not row or row.status in {"failed", "cancelled"}
         schedulable = window == "ok" and open_slot
         can_cancel = bool(row and status == "scheduled" and _cancel_allowed(row, now=moment))
+        label = facebook_status_label(status)
+        if status == "scheduled" and target in DEFERRED_TARGETS:
+            label = "Scheduled (Estate-EZ posts at slot time)"
         extra.update(
             {
                 "slot_key": key,
@@ -638,7 +697,7 @@ def annotate_social_calendar(
                 "facebook_can_post_now": open_slot,
                 "facebook_can_cancel": can_cancel,
                 "facebook_status": status,
-                "facebook_status_label": facebook_status_label(status),
+                "facebook_status_label": label,
                 "facebook_blocked_reason": facebook_blocked_reason(status, schedulable=schedulable),
                 "facebook_slot_at": when,
                 "facebook_post_id": (row.facebook_post_id if row else None),
@@ -746,7 +805,12 @@ def _connected_page(account: Account) -> tuple[str, str] | None:
 
 
 def _row_live(row: FacebookPagePost, *, now: datetime) -> bool:
-    """A scheduled row whose slot time has passed is live on Facebook."""
+    """A scheduled Page feed row whose slot time has passed is live (Facebook published it).
+
+    Instagram / Stories rows are posted by the queue, never by Facebook on its own.
+    """
+    if row_target(row) != PUBLISH_TARGET_FACEBOOK_PAGE:
+        return False
     when = _as_aware(row.scheduled_publish_time)
     return when is not None and when <= _as_utc(now)
 
@@ -816,6 +880,19 @@ def reconcile_calendar_rows(
             row.status = "posted"
             row.posted_at = row.posted_at or row.scheduled_publish_time
             row.review_note = None
+            changed += 1
+        elif (
+            row.status == "scheduled"
+            and row_target(row) in DEFERRED_TARGETS
+            and not row.facebook_post_id
+            and (when := _as_aware(row.scheduled_publish_time)) is not None
+            and moment - when > DEFERRED_MAX_LATE + timedelta(hours=1)
+        ):
+            # Its queue job never ran (worker down, Page disconnected). Unpin so it can be redone.
+            row.status = "failed"
+            row.error_message = DEFERRED_MISSED_NOTE
+            row.review_note = DEFERRED_MISSED_NOTE
+            row.attempt_count = max(int(row.attempt_count or 0), AUTO_APPROVE_MAX_ATTEMPTS)
             changed += 1
         elif row.status == "publishing":
             claimed = _as_aware(row.claimed_at)
@@ -1055,33 +1132,37 @@ def sync_facebook_calendar_after_snapshot(
     owner = _account_owner(db, account_id)
     if owner is None:
         return
+    from app import facebook_post_tasks
+
     moment = _as_utc(now or datetime.now(UTC))
     records = calendar_rows(db, account_id, ctseller_sale_id)
     by_key = _index_calendar_rows(records)
+    queued = facebook_post_tasks.live_slot_keys(db, account_id)
     due = [
         slot
         for slot in facebook_page_slots(
             db, account_id, ctseller_sale_id, records=records, tz=account_zone_name(account)
         )
         if schedule_window_state(slot["when"], now=moment) == "ok"
+        and migrate_calendar_key(str(slot["slot_key"])) not in queued
         and auto_retry_allowed(_record_for_slot(by_key, slot), now=moment)
     ]
     pending = [item for item in _draft_items(db, account, due) if item]
     if not pending:
         return
-    # Callers are already off the request thread (calendar task thread, worker sweep child).
+    # The publish queue posts them (worker in production, a thread in dev).
     try:
-        publish_posts(
+        facebook_post_tasks.enqueue_batch(
             db,
-            account=account,
-            user=owner,
+            account_id=account_id,
+            user_id=owner.id,
             items=pending,
             include_follow_hook=False,
-            confirm=True,
             force=False,
             source=CALENDAR_SOURCE,
-            now=now,
+            now=moment,
         )
+        facebook_post_tasks.kick(db.get_bind(), account_id, now=now)
     except Exception:
         _LOG.exception(
             "Auto-approve Facebook calendar failed account=%s sale=%s",
@@ -1289,6 +1370,10 @@ def cancel_calendar_slots(
             reason="Owner unapproved this Push calendar slot.",
         )
         db.refresh(row)
+        if row.status == "cancelled":
+            from app import facebook_post_tasks
+
+            facebook_post_tasks.cancel_slot_jobs(db, account.id, key, reason="Owner unapproved this slot.")
         if row.status != "cancelled":
             results.append(
                 {

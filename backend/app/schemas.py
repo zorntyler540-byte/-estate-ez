@@ -1393,6 +1393,9 @@ class FacebookStatusOut(BaseModel):
     connected_at: datetime | None = None
     token_error: str | None = None
     graph_api_version: str = ""
+    instagram_enabled: bool = False
+    instagram_connected: bool = False
+    instagram_username: str | None = None
     oauth_scopes: list[str] = Field(default_factory=list)
     calendar_auto_approve: bool = False
     timezone: str = "America/Los_Angeles"
@@ -1494,6 +1497,10 @@ class FacebookPublishResultOut(BaseModel):
     needs_reconnect: bool = False
     error: str | None = None
     calendar_key: str | None = None
+    publish_target: str | None = None
+    instagram_media_id: str | None = None
+    # e.g. "Facebook story is live; the Instagram story failed: ..."
+    note: str | None = None
 
 
 class FacebookPublishOut(BaseModel):
@@ -1504,6 +1511,10 @@ class FacebookPublishOut(BaseModel):
     done: int = 0
     posted: int = 0
     failed: int = 0
+    # Posts that will retry after a temporary Facebook / Instagram error.
+    retrying: int = 0
+    # Queued for a while with nothing running: the worker is down or busy.
+    waiting_for_worker: bool = False
     results: list[FacebookPublishResultOut] = Field(default_factory=list)
 
 

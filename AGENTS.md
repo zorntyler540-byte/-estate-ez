@@ -224,6 +224,26 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
  runs once per slot. Calendar auto-approve is swept by the worker in an isolated
  `python -m app.worker --social-sweep` child every 60s (killed after 15 min), even while the
  worker is busy cataloging; the in-process maintenance loop runs it in dev.
+- **Social publishing is a durable DB queue** (`social_publish_batches` / `social_publish_jobs`,
+ migration `0053`; code in `app/facebook_post_tasks.py`). The API only enqueues. The worker parent
+ polls `has_due_jobs` every 3s and spawns `python -m app.worker --social-publish` (hard-killed
+ after 12 min); the API drains in-process only when `RUN_CATALOG_JOBS_IN_PROCESS=true` (dev).
+ Batches survive API/worker restarts; `GET /facebook/posts/batches/{id}` reads the DB. One live
+ job per slot (`active_key` unique), one running job per account, accounts drain in parallel.
+ Transient Graph errors retry 3 times (30s, 2 min); a timeout that may have posted is **never**
+ retried (check-the-Page note). Stale `running` jobs are requeued only if no Graph call could
+ have gone out. Publish / approve take an `Idempotency-Key` header (the modal sends one).
+- **Every calendar slot has a publish target** (`facebook_page_posts.publish_target`): Facebook →
+ Page feed (scheduled by Graph); Instagram → IG feed (container → poll → `media_publish`);
+ "FB + IG Stories" → Page photo story + IG story; TikTok → `copy_only` (never posted). IG and
+ Stories cannot be scheduled through Graph, so approve **reserves** the slot (`scheduled`, no
+ Graph id) and the queue posts it at slot time (not if >2h late). IG targets need
+ `META_INSTAGRAM_PUBLISHING=true`, an IG professional account linked to the Page
+ (`accounts.instagram_user_id`, read on Page select / `POST /integrations/facebook/instagram/refresh`)
+ and R2 on API **and** worker (IG fetches presigned `social-media/…` copies, deleted after posting).
+ Without a linked IG account Instagram slots are copy-only and Stories post to the Page only. IG
+ progress (`creation_id`, `media_id`) is persisted per job, so a retry resumes the same container
+ and never publishes twice. Do not route IG/Stories/TikTok back to the Page feed.
 - **Find groups is public groups only (Facebook tab).** `POST /lots/{id}/audience-hunt` and
   `POST /sales/{id}/audience-hunt` use Gemini Pro + Google Search (`tools=[GoogleSearch()]`),
   then a separate structured JSON call (schema + search tools 400 together). That is how real

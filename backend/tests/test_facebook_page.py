@@ -221,10 +221,15 @@ def test_calendar_slot_keys_include_slot_and_migrate_legacy() -> None:
     assert "pushcal:12:lot-1" in calendar_key_aliases("pushcal:12:lot-1:0900")
     assert "pushcal:12:lot-1:0900" in calendar_key_aliases("pushcal:12:lot-1:20261015:0900")
     assert "pushcal:12:lot-1" in calendar_key_aliases("pushcal:12:lot-1:20261015:0900")
-    assert current_publish_target("Instagram") == PUBLISH_TARGET_FACEBOOK_PAGE
-    assert current_publish_target("TikTok") == PUBLISH_TARGET_FACEBOOK_PAGE
-    assert current_publish_target("FB + IG Stories") == PUBLISH_TARGET_FACEBOOK_PAGE
-    assert set(PLATFORM_PUBLISH_TARGETS.values()) == {PUBLISH_TARGET_FACEBOOK_PAGE}
+    assert current_publish_target("Facebook") == PUBLISH_TARGET_FACEBOOK_PAGE
+    assert current_publish_target("Instagram") == "copy_only"
+    assert current_publish_target("Instagram", instagram=True) == "instagram_feed"
+    assert current_publish_target("FB + IG Stories") == "stories"
+    assert current_publish_target("TikTok") == "copy_only"
+    assert current_publish_target("TikTok", instagram=True) == "copy_only"
+    assert PUBLISH_TARGET_FACEBOOK_PAGE not in {
+        PLATFORM_PUBLISH_TARGETS[name] for name in ("Instagram", "FB + IG Stories", "TikTok")
+    }
     assert slot_angle_for("09:00") == "collector_find"
     assert slot_angle_for("12:15") == "midday"
     assert slot_angle_for("16:30") == "stories"
@@ -844,7 +849,7 @@ def test_push_calendar_facebook_slot_schedules_after_confirm(tmp_path, monkeypat
         assert countdown["platform"] == "FB + IG Stories"
         assert countdown["slot_key"] == calendar_slot_key(12, lot.id, "1740", countdown["post_date"])
         assert countdown["facebook_schedulable"] is True
-        assert countdown["publish_target"] == "facebook_page"
+        assert countdown["publish_target"] == "stories"
         assert client.get("/facebook/posts").json() == []
 
         denied = client.post(
@@ -1038,7 +1043,6 @@ def test_push_calendar_auto_approve_off_by_default(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
-    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
     client, db, account, _user, lot = _client(tmp_path, connected=True)
     feeds: list[str] = []
 
@@ -1080,7 +1084,6 @@ def test_catalogger_snapshot_does_not_auto_publish(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
-    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
     client, db, account, _user, lot = _client(tmp_path, connected=True)
     account.facebook_calendar_auto_approve = True
     catalogger = User(
@@ -1141,13 +1144,12 @@ def _add_push_lot(db, account, user, sibling: Lot, *, lot_id: str, sku: str, ite
     return lot
 
 
-def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatch) -> None:
+def test_push_calendar_instagram_and_tiktok_slots_never_post_to_the_page_feed(tmp_path, monkeypatch) -> None:
     from app import facebook_post_tasks
 
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     monkeypatch.setattr(settings, "google_api_key", "")
-    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
     client, db, account, user, lot = _client(tmp_path, connected=True)
     extras = [
         _add_push_lot(db, account, user, lot, lot_id="lot-ig", sku="AA101", item_id=101),
@@ -1183,21 +1185,21 @@ def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatc
         assert by_time["12:15"]["platform"] == "Instagram"
         assert by_time["16:30"]["platform"] == "FB + IG Stories"
         assert by_time["18:00"]["platform"] == "TikTok"
+        expected = {"09:00": "facebook_page", "12:15": "copy_only", "16:30": "stories", "18:00": "copy_only"}
         for row in calendar:
-            assert row["publish_target"] == "facebook_page"
-            assert row["facebook_schedulable"] is True
+            target = expected.get(row["local_time"], "stories")
+            assert row["publish_target"] == target
             assert row["slot_key"].endswith(f":{slot_id_from_local_time(row['local_time'])}")
             assert is_dated_slot_key(row["slot_key"])
-            assert row["facebook_status"] == "planned"
-        preview = client.post(
-            "/engagement/sales/12/calendar/facebook/preview",
-            json={"slot_keys": [by_time["12:15"]["slot_key"], by_time["18:00"]["slot_key"]]},
-        )
-        assert preview.status_code == 200, preview.text
-        captions = [row["caption"] for row in preview.json()["lots"]]
-        assert len(captions) == 2
-        assert "Midday spotlight" in captions[0]
-        assert "Would you bid on this?" in captions[1]
+            if target == "copy_only":
+                assert row["facebook_schedulable"] is False
+                assert row["facebook_status"] == "copy_only"
+                assert row["facebook_status_label"] == "Copy only"
+            else:
+                assert row["facebook_schedulable"] is True
+                assert row["facebook_status"] == "planned"
+        assert "Instagram" in by_time["12:15"]["facebook_blocked_reason"]
+        assert "TikTok" in by_time["18:00"]["facebook_blocked_reason"]
         messages: list[str] = []
 
         def fake_feed(*, page_id, page_token, message, media_fbids, scheduled_unix=None):
@@ -1217,9 +1219,10 @@ def test_push_calendar_every_platform_slot_is_a_page_target(tmp_path, monkeypatc
                 },
             )
         assert approved.status_code == 200, approved.text
-        assert all(row["ok"] for row in approved.json()["results"])
-        assert len(messages) == 2
-        assert messages[0] != messages[1]
+        results = approved.json()["results"]
+        assert len(results) == 2
+        assert all(row["skipped"] and not row["ok"] for row in results)
+        assert messages == []
     finally:
         _clear_overrides()
 
@@ -1553,7 +1556,6 @@ def test_push_calendar_post_now_is_not_duplicated_by_snapshot_or_approve(tmp_pat
     monkeypatch.setattr(settings, "meta_app_id", "app-id")
     monkeypatch.setattr(settings, "meta_app_secret", "app-secret")
     monkeypatch.setattr(settings, "google_api_key", "")
-    monkeypatch.setattr(facebook_post_tasks, "SYNC_LOT_LIMIT", 80)
     client, db, account, _user, lot = _client(tmp_path, connected=True)
     feeds: list[int | None] = []
 
