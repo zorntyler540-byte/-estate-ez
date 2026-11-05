@@ -67,7 +67,10 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   The worker claims with `FOR UPDATE SKIP LOCKED`, round-robins across accounts, and runs up to
   `WORKER_MAX_CONCURRENT_JOBS` isolated children (default 3). Each child **hard-exits** (`os._exit`)
   when its job ends so Gemini/JPEG RAM leaves the Railway cgroup; the parent must not import the
-  pipeline. Keep `CATALOG_JOB_MAX_CONCURRENT=1` per franchise. Gemini HTTP is capped cross-process
+  pipeline. Keep `CATALOG_JOB_MAX_CONCURRENT=1` per franchise for single-lot uploads; website batch
+  work has its own lane (`CATALOG_BULK_MAX_CONCURRENT`, default 2). After triage a multi-lot batch
+  is split into per-lot single-lot jobs (`parent_job_id`, folder `<batch>.lotNNN-<token>`, triage
+  rows carried in `.split_triage.json`); lots over 40 photos become review-flagged parts. Gemini HTTP is capped cross-process
   (`GEMINI_GLOBAL_CONCURRENCY` + per-model RPM). Railway Metrics **Sum** view adds every replica.
   Isolated-child OOM/crash is capped (`WORKER_CHILD_CRASH_RETRIES`, default 3) and listed by
   `/jobs/stuck`. Parent RSS kill (`WORKER_CHILD_RSS_MB=3000`; 1200 is too low for a 3-photo lot)

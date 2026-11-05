@@ -52,9 +52,10 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `ALLOW_OPEN_REGISTRATION` | **Closed by default in production.** Set `true` only to bootstrap the first real account, then set `false` (or unset) and redeploy. |
 | `MASTER_ADMIN_EMAILS` | Optional. Comma-separated emails of **existing** users who may manage every tenant. Register/invite of those addresses is blocked until the user already exists. |
 | `MASTER_ADMIN_USER_IDS` | Optional. Comma-separated user ids that are master admin even if their email is not listed. Prefer this once you know the user id. |
-| `CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT` | Optional (default `25`). Caps receiving+queued catalog jobs per account. |
-| `CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY` | Optional (default `800`). Caps photos cataloged or queued per account per UTC day. |
-| `CATALOG_MAX_PHOTOS_PER_JOB` | Optional (default `250`). Caps stills in one multi-lot batch job. Single-lot jobs stay at 40. |
+| `CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT` | Optional (default `25`). Caps receiving+queued catalog jobs per account. Per-lot jobs the server splits out of a batch do not count. |
+| `CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY` | Optional (default `2000`). Caps photos cataloged or queued per account per UTC day (`GET /jobs/quota` shows usage and `resets_at`; the 429 carries `Retry-After`). |
+| `CATALOG_MAX_PHOTOS_PER_JOB` | Optional (default `250`). Caps stills in one multi-lot batch job (checked up front from `expected_photos`). Single-lot jobs and each split lot stay at 40. |
+| `CATALOG_BATCH_FANOUT` | Optional (default `true`). After triage a multi-lot batch queues one single-lot job per tape-SKU lot. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
 | `META_APP_ID` / `META_APP_SECRET` | Optional. Facebook Page posting. Leave unset to hide Connect/Post in the dashboard. See **§9 Facebook Page**. |
 | `META_OAUTH_REDIRECT_URI` | API callback, e.g. `https://<your-api-domain>/integrations/facebook/oauth/callback`. Must match the Meta app exactly. |
@@ -156,7 +157,8 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
 4. Leave that variable unset/true on the worker (the Dockerfile defaults it to true).
 5. Optional worker knobs (recommended before onboarding several franchises):
    - `WORKER_MAX_CONCURRENT_JOBS=3` — one replica runs up to 3 isolated child processes
-   - `CATALOG_JOB_MAX_CONCURRENT=1` — per-account cap (fair round-robin across franchises)
+   - `CATALOG_JOB_MAX_CONCURRENT=1` — per-account cap for single-lot uploads (fair round-robin across franchises)
+   - `CATALOG_BULK_MAX_CONCURRENT=2` — separate per-account lane for website batches and their per-lot jobs, so phone lots never wait behind a big folder
    - `GEMINI_GLOBAL_CONCURRENCY=8` — cross-process Gemini HTTP cap (advisory locks)
    - `WORKER_CHILD_CRASH_RETRIES=3` — isolated-child OOM/crash cap; then the job is failed and listed by `/jobs/stuck`
    - `WORKER_CHILD_RSS_MB=3000` — parent SIGKILLs a runaway child (do **not** use 1200; a 3-photo lot already exceeded 1.2 GB)

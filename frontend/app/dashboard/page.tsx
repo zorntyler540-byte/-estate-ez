@@ -664,6 +664,34 @@ async function createDisplayThumbUrls(files: File[]): Promise<(string | null)[]>
 }
 
 /** Re-clone bytes and verify readability immediately before multipart upload (iOS stale File handles). */
+type CatalogQuota = {
+  queued_jobs: number;
+  max_queued_jobs: number;
+  photos_today: number;
+  max_photos_per_day: number;
+  photos_remaining_today: number;
+  max_photos_per_job: number;
+  max_photos_per_lot?: number | null;
+  resets_at: string;
+};
+
+function catalogQuotaError(q: CatalogQuota, photos: number, singleLot: boolean): string | null {
+  if (!singleLot && photos > q.max_photos_per_job) {
+    return `One batch upload may have at most ${q.max_photos_per_job} photos; this one has ${photos}. Split the folder into smaller batches (subfolders per room work well) and upload each.`;
+  }
+  if (photos > q.photos_remaining_today) {
+    const resets = new Date(q.resets_at);
+    const when = Number.isNaN(resets.getTime())
+      ? "tomorrow"
+      : resets.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    return `This account can catalog ${q.photos_remaining_today} more photo${q.photos_remaining_today === 1 ? "" : "s"} today (limit ${q.max_photos_per_day}); this upload has ${photos}. Nothing was sent. The limit resets ${when}, or ask an admin to raise it.`;
+  }
+  if (q.queued_jobs >= q.max_queued_jobs) {
+    return `This account already has ${q.queued_jobs} uploads waiting to catalog (limit ${q.max_queued_jobs}). Wait for some to finish, then upload again.`;
+  }
+  return null;
+}
+
 function stagedRelForUploadName(file: File): string {
   return stagedUploadRelOrNull(file) || file.name;
 }
@@ -1571,6 +1599,11 @@ function jobInputLabel(folder: string): string {
   const base = raw.replace(/\\/g, "/").split("/").pop() || raw;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(base)) {
     return `Batch ${base.slice(0, 8)}…`;
+  }
+  // Per-lot job split out of a batch: ``<batch uuid>.lot003-<token>``.
+  const lot = /^([0-9a-f]{8})-[0-9a-f-]{27}\.lot(\d{3})-[0-9a-z]+$/i.exec(base);
+  if (lot) {
+    return `Batch ${lot[1]}… lot ${parseInt(lot[2]!, 10)}`;
   }
   if (base.length > 52) return `${base.slice(0, 49)}…`;
   return base;
@@ -5621,8 +5654,17 @@ export default function DashboardPage() {
       let latest: Job | null = null;
       let sent = 0;
       if (!jobId) {
+        // Refuse an oversized batch before sending it (a 429 halfway left an orphan receiving job).
+        const quota = (await apiFetch("/jobs/quota", token).catch(() => null)) as CatalogQuota | null;
+        const quotaError = quota ? catalogQuotaError(quota, pending.length, isSingleLot) : null;
+        if (quotaError) {
+          if (isSingleLot) restoreSingleLotStaging(readyFiles, manualSkuBackup, skippedCount + prepareSkipped, session);
+          setError(quotaError);
+          return;
+        }
         const first = pending.slice(0, UPLOAD_FILE_CHUNK);
         const form = new FormData();
+        form.append("expected_photos", String(pending.length));
         form.append("sale_id", selectedSaleId);
         form.append("inherit_sku_from_subfolder", inheritSkuFromSubfolder ? "true" : "false");
         form.append("single_lot_mode", isSingleLot ? "true" : "false");
@@ -5702,7 +5744,7 @@ export default function DashboardPage() {
               ? `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} as one lot — queued. It will start automatically when the current lot finishes. You can add another lot now.`
               : `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} as one lot — upload box cleared. Catalog is running; you can add the next lot now.`
             : running.status === "queued"
-              ? `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} — upload box cleared. Queued for the catalog worker; it starts automatically.`
+              ? `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} — upload box cleared. Queued for the catalog worker; after sorting, each lot catalogs as its own job (several at once).`
               : `Uploaded ${total} photo${total === 1 ? "" : "s"}${resumedNote} — upload box cleared. Catalog is running; lots appear below as they finish.`
         );
       } catch (runErr) {
