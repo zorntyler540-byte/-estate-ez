@@ -58,8 +58,36 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["category"] == "Lighting"
     assert item["startingprice"] == 5.0
     assert item["itemstatus"] == "Pending"
-    assert isinstance(item["itemreceiptmethod"], str)
-    assert "pickup" in item["itemreceiptmethod"]
+    assert json.loads(item["itemreceiptmethod"]) == {
+        "pickup": True,
+        "delivery": False,
+        "shipping": True,
+    }
+    assert item["isshippable"] is True
+
+
+def test_build_item_payload_ignores_sale_receipt_method() -> None:
+    """A pickup-only sale setting must not be copied onto a new item."""
+    pickup_only = '{"pickup": true, "delivery": false, "shipping": false}'
+    shipping_off = {"pickup": True, "delivery": True, "shipping": False}
+    for method in (pickup_only, shipping_off, None, ""):
+        item = build_item_payload(
+            sale_id=1,
+            location_id=2,
+            sku="S1",
+            title="Chair",
+            description="d",
+            category="Household Goods Other",
+            condition="Good",
+            starting_price=1.0,
+            item_receipt_method=method,
+        )
+        assert json.loads(item["itemreceiptmethod"]) == {
+            "pickup": True,
+            "delivery": False,
+            "shipping": True,
+        }
+        assert item["isshippable"] is True
 
 
 def test_build_item_payload_kitchen_area() -> None:
