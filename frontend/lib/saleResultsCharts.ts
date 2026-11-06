@@ -45,10 +45,9 @@ export function topHammerBars(
     sold_count: number;
     posted_count?: number;
     avg_price?: number;
-  }>,
-  limit = 10
+  }>
 ): HammerBar[] {
-  const ranked = categories
+  return categories
     .map((c) => ({
       category: c.category,
       hammer: c.revenue || 0,
@@ -56,20 +55,8 @@ export function topHammerBars(
       sold: c.sold_count || 0,
       posted: c.posted_count ?? 0
     }))
+    .filter((c) => c.hammer > 0 || c.sold > 0)
     .sort((a, b) => b.hammer - a.hammer || b.sold - a.sold);
-  if (ranked.length <= limit) return ranked;
-  const head = ranked.slice(0, limit);
-  const rest = ranked.slice(limit);
-  const sold = rest.reduce((s, r) => s + r.sold, 0);
-  const hammer = rest.reduce((s, r) => s + r.hammer, 0);
-  const other: HammerBar = {
-    category: "Other",
-    hammer,
-    avg: sold ? hammer / sold : 0,
-    sold,
-    posted: rest.reduce((s, r) => s + r.posted, 0)
-  };
-  return other.hammer > 0 || other.sold > 0 ? [...head, other] : head;
 }
 
 export function topAvgBars(
@@ -79,10 +66,9 @@ export function topAvgBars(
     sold_count: number;
     posted_count?: number;
     avg_price?: number;
-  }>,
-  limit = 10
+  }>
 ): HammerBar[] {
-  const ranked = categories
+  return categories
     .map((c) => ({
       category: c.category,
       hammer: c.revenue || 0,
@@ -92,19 +78,6 @@ export function topAvgBars(
     }))
     .filter((c) => c.sold > 0 && c.avg > 0)
     .sort((a, b) => b.avg - a.avg || b.hammer - a.hammer);
-  if (ranked.length <= limit) return ranked;
-  const head = ranked.slice(0, limit);
-  const rest = ranked.slice(limit);
-  const sold = rest.reduce((s, r) => s + r.sold, 0);
-  const hammer = rest.reduce((s, r) => s + r.hammer, 0);
-  const other: HammerBar = {
-    category: "Other",
-    hammer,
-    avg: sold ? hammer / sold : 0,
-    sold,
-    posted: rest.reduce((s, r) => s + r.posted, 0)
-  };
-  return other.avg > 0 ? [...head, other] : head;
 }
 
 export function hammerTimeBuckets(
