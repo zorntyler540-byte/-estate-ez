@@ -50,6 +50,9 @@ inventory.db
 # One-off audit scratch (never commit host findings)
 security-audit/
 
+# Listing-model comparison output (may be regenerated locally; fixtures stay in git)
+backend/scripts/listing_compare_out/
+
 # Estate / catalog images (sensitive + large — do not commit)
 # Use an anchored path so Expo app icons under mobile/assets/images are not ignored.
 /Images/

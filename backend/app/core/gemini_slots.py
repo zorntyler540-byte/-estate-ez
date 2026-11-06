@@ -50,11 +50,22 @@ CREATE TABLE IF NOT EXISTS gemini_rate_windows (
 
 
 def model_family(model: str | None) -> str:
-    """Map a Gemini model id onto flash / pro / 3.8-flash rate-limit buckets. Does not change model choice."""
+    """Map a Gemini model id onto flash / pro / 3.8-flash rate-limit buckets. Does not change model choice.
+
+    ``gemini-flash-latest`` stays in the 3.8 bucket so a stale id shares that ceiling.
+    Call sites pin ids in ``app.core.gemini_models`` and do not send the alias.
+    3.6 Flash Standard shares the 3.8 bucket (same paid tier).
+    """
     name = (model or "").strip().lower()
     if "pro" in name:
         return "pro"
-    if "3.8" in name or "3-8" in name or "flash-latest" in name:
+    if (
+        "3.8" in name
+        or "3-8" in name
+        or "3.6" in name
+        or "3-6" in name
+        or "flash-latest" in name
+    ):
         return "flash38"
     return "flash"
 

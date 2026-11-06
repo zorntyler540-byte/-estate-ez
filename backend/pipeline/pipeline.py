@@ -30,9 +30,9 @@ from pipeline.schemas import (
 )
 
 # --- Environment knobs (Section 10) — read directly; no app.config import ---
+# Model ids are resolved per call (``app.core.gemini_models``), not captured here,
+# so a settings sync after import still takes effect. ``-latest`` aliases are never sent.
 
-GEMINI_FLASH_MODEL = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
-GEMINI_PRO_MODEL = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 LISTING_FLASH_MAX_FRAMES = max(1, int(os.environ.get("LISTING_FLASH_MAX_FRAMES", "5")))
 DIMENSION_FLASH_MAX_FRAMES = max(1, int(os.environ.get("DIMENSION_FLASH_MAX_FRAMES", "3")))
 BRAND_PRO_MAX_LABEL_FRAMES = max(1, int(os.environ.get("BRAND_PRO_MAX_LABEL_FRAMES", "4")))
@@ -45,8 +45,8 @@ GALLERY_PLAN_MAX_PHOTOS = max(2, int(os.environ.get("GALLERY_PLAN_MAX_PHOTOS", "
 
 # --- Actual Gemini token usage metering (per catalog job) ---------------------------------
 # Records real prompt/candidate token counts from ``response.usage_metadata`` split by model tier
-# (Flash = triage/listing, Pro = author) so the admin analytics can show true cost instead of an
-# estimate. Reset at the start of a catalog job and snapshotted at the end (see app.services.processing).
+# (flash vs pro, from the model id actually called) so admin analytics can show true cost instead
+# of an estimate. Reset at the start of a catalog job and snapshotted at the end (see app.services.processing).
 # NOTE: process-global counters. Isolated worker children (default) each have their own process so
 # concurrent catalog jobs do not mix token totals. Keep WORKER_ISOLATE_JOBS=true in production.
 _usage_lock = threading.Lock()
@@ -297,8 +297,11 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
         temperature=0.1,
     )
 
-    response = _gemini_generate(GEMINI_FLASH_MODEL, parts, config)
-    _record_usage("flash", response)
+    from app.core.gemini_models import triage_model, usage_tier_for_model
+
+    model = triage_model()
+    response = _gemini_generate(model, parts, config)
+    _record_usage(usage_tier_for_model(model), response)
 
     if response.parsed is not None:
         row = PhotoTriageResult.model_validate(response.parsed)
@@ -450,8 +453,11 @@ def plan_listing_gallery(
         system_instruction=GALLERY_SYSTEM_INSTRUCTION,
         temperature=0.1,
     )
-    response = _gemini_generate(GEMINI_FLASH_MODEL, parts, config)
-    _record_usage("flash", response)
+    from app.core.gemini_models import grouping_model, usage_tier_for_model
+
+    model = grouping_model()
+    response = _gemini_generate(model, parts, config)
+    _record_usage(usage_tier_for_model(model), response)
 
     if response.parsed is not None:
         plan = ListingGalleryPlan.model_validate(response.parsed)
@@ -1084,7 +1090,7 @@ def _build_pro_image_payload(
     return {fn: user_images_dict[fn] for fn in pro_image_order if fn in user_images_dict}
 
 
-def run_brand_audit_pro(
+def build_listing_request(
     item_specific_images_dict: dict[str, bytes],
     flash_item_draft_json: dict,
     *,
@@ -1092,8 +1098,11 @@ def run_brand_audit_pro(
     flash_listing_context: dict[str, Any] | None = None,
     triage_ocr_aggregate: list[dict[str, str]] | None = None,
     pro_author_mode: bool = True,
-) -> str:
-    """Stage 2: Pro writes (or proofreads) listing + brands using hero, labels, and triage OCR."""
+) -> tuple[list[Any], Any]:
+    """Parts and config for the listing author. Near-real-time generateContent, not Batch.
+
+    Comparison scripts call this so every model sees the production prompt.
+    """
     valuation_block = ""
     if ENABLE_GROUNDED_VALUATION:
         valuation_block = (
@@ -1249,9 +1258,36 @@ def run_brand_audit_pro(
     if ENABLE_GROUNDED_VALUATION:
         config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
     config = types.GenerateContentConfig(**config_kwargs)
+    return parts, config
 
-    response = _gemini_generate(GEMINI_PRO_MODEL, parts, config)
-    _record_usage("pro", response)
+
+def run_brand_audit_pro(
+    item_specific_images_dict: dict[str, bytes],
+    flash_item_draft_json: dict,
+    *,
+    hero_triage_metadata: dict[str, Any] | None = None,
+    flash_listing_context: dict[str, Any] | None = None,
+    triage_ocr_aggregate: list[dict[str, str]] | None = None,
+    pro_author_mode: bool = True,
+) -> str:
+    """Stage 2: the listing model writes (or proofreads) the auction listing.
+
+    Near-real-time ``generateContent``. Do not move this onto the Gemini Batch
+    API — the worker waits for the listing before the lot is saved.
+    """
+    from app.core.gemini_models import listing_model, usage_tier_for_model
+
+    parts, config = build_listing_request(
+        item_specific_images_dict,
+        flash_item_draft_json,
+        hero_triage_metadata=hero_triage_metadata,
+        flash_listing_context=flash_listing_context,
+        triage_ocr_aggregate=triage_ocr_aggregate,
+        pro_author_mode=pro_author_mode,
+    )
+    model = listing_model()
+    response = _gemini_generate(model, parts, config)
+    _record_usage(usage_tier_for_model(model), response)
 
     if response.text:
         manifest = FullyAuditedManifest.model_validate(json.loads(response.text))

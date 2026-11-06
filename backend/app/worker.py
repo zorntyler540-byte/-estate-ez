@@ -508,7 +508,7 @@ def run_self_test_complex_hang() -> int:
     _LOG.info("Pipeline Pro author succeeded model=gemini-2.5-pro complex=True listing_calls=0")
     _LOG.info(
         'HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/'
-        'gemini-flash-latest:generateContent "HTTP/1.1 200 OK"'
+        'gemini-3.8-flash:generateContent "HTTP/1.1 200 OK"'
     )
     note_job_persisted(
         job_id="db5b42d2-self-test",

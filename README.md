@@ -193,10 +193,41 @@ Common optional variables:
 | `WORKER_CHILD_AS_MB` | Child `RLIMIT_AS` in MB, sized with the RSS cap (default 3000; 0 disables) |
 | `CATALOG_JOB_MAX_CONCURRENT` | Per-account catalog cap (default 1) |
 | `GEMINI_GLOBAL_CONCURRENCY` | Cross-process Gemini HTTP cap (default 8) |
+| `GEMINI_TRIAGE_MODEL` | Per-photo triage (default `gemini-2.5-flash`) |
+| `GEMINI_LISTING_MODEL` | Final listing author. Unset follows `GEMINI_PRO_MODEL` |
+| `GEMINI_PRO_MODEL` | Audience hunt, appraiser, listing fallback (default `gemini-2.5-pro`) |
+| `GEMINI_MODEL` | Simple-lot Flash listing seed (default `gemini-3.8-flash`) |
 | `META_APP_ID` / `META_APP_SECRET` | Facebook Page connect/post |
 | `FEEDBACK_TO_EMAIL` + `SMTP_*` | Dashboard suggestion inbox |
 | `NEXT_PUBLIC_API_BASE` | Public API URL for the web client. **Required** for `next build` / `Dockerfile.web` (no fallback) |
 | `EXPO_PUBLIC_API_BASE` | API URL for the phone app. **Required** for release builds and `eas update` (no fallback) |
+
+### Gemini model pins
+
+Model ids are explicit. `gemini-flash-latest` is rewritten to `gemini-3.8-flash` and is not sent to the API. On 2026-12-01 Google auto-routes `gemini-2.5-pro` to `gemini-3.8-flash` and `gemini-2.5-flash` to `gemini-3.5-flash-lite`. On 2027-01-01, paid 3.8 / 3.6 Flash Standard input goes from $0.75 to $1.50 per million tokens and output from $3.75 to $7.50. Listings stay on `generateContent` (near-real-time), not the Batch API. Catalog jobs stay concurrent.
+
+| Variable | Default when unset | Used for |
+| --- | --- | --- |
+| `GEMINI_TRIAGE_MODEL` | `gemini-2.5-flash` | Per-photo triage, including label OCR. `GEMINI_FLASH_MODEL` still applies when this is unset |
+| `GEMINI_GROUPING_MODEL` | triage model | Listing-gallery sort |
+| `GEMINI_OCR_MODEL` | `GEMINI_MODEL` | Estate-tape SKU check |
+| `GEMINI_LISTING_MODEL` | `GEMINI_PRO_MODEL` (`gemini-2.5-pro`) | Final auction listing |
+| `GEMINI_PRO_MODEL` | `gemini-2.5-pro` | Audience hunt and the field appraiser |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Simple-lot Flash listing seed |
+| `GEMINI_LISTING_FLASH_MODEL` | `GEMINI_MODEL` | Overrides the Flash listing seed only |
+| `GEMINI_CAPTION_MODEL` | `gemini-2.5-flash` | Facebook Page captions |
+| `HERO_BG_GEMINI_MODEL` | `gemini-nano-banana-2.1` | Listing-cover background |
+
+Compare the listing prompt on local fixtures (no database, no production photos):
+
+```bash
+cd backend
+../backend/.venv/bin/python scripts/compare_listing_models.py --dry-run
+../backend/.venv/bin/python scripts/compare_listing_models.py
+../backend/.venv/bin/python scripts/compare_listing_models.py --include-3-6
+```
+
+A live run needs `GOOGLE_API_KEY`. It writes `scripts/listing_compare_out/report.md` and `report.csv` with the listing text, token counts, latency, and estimated cost at current Flash rates and at the 2027-01-01 rates (`app/core/gemini_rates.py`). Pass `--fixtures` to point at your own `lot.json` folders. Admin analytics prices stay on today's rates until you change `GEMINI_FLASH_*_COST_PER_MILLION`.
 
 Production deploy, R2 CORS, worker memory caps, and Facebook app setup: [`DEPLOY.md`](DEPLOY.md).
 

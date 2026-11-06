@@ -375,8 +375,9 @@ def _draft_with_gemini(
 ) -> str:
     from google.genai import types
 
+    from app.core.gemini_models import caption_model
     from pipeline.gemini_schema import pydantic_model_to_gemini_schema
-    from pipeline.pipeline import GEMINI_FLASH_MODEL, _get_client
+    from pipeline.pipeline import _get_client
 
     client = _get_client()
     close_s = _format_close_time_portable(close_at, tz) or "(close time unknown)"
@@ -423,7 +424,7 @@ def _draft_with_gemini(
 
     response = generate_content(
         client,
-        model=GEMINI_FLASH_MODEL,
+        model=caption_model(),
         contents=parts,
         config=config,
     )

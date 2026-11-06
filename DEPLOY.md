@@ -161,6 +161,7 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
    - `CATALOG_JOB_MAX_CONCURRENT=1` — per-account cap for single-lot uploads (fair round-robin across franchises)
    - `CATALOG_BULK_MAX_CONCURRENT=2` — separate per-account lane for website batches and their per-lot jobs, so phone lots never wait behind a big folder
    - `GEMINI_GLOBAL_CONCURRENCY=8` — cross-process Gemini HTTP cap (advisory locks)
+   - `GEMINI_TRIAGE_MODEL` / `GEMINI_LISTING_MODEL` / `GEMINI_PRO_MODEL` — pinned model ids (see `backend/.env.example`). Leave unset to keep today's models. Do not set `gemini-flash-latest`; it is rewritten to `gemini-3.8-flash`. Set the same values on the API and the worker. Listings stay on `generateContent`, not Batch.
    - `WORKER_CHILD_CRASH_RETRIES=3` — isolated-child OOM/crash cap; then the job is failed and listed by `/jobs/stuck`
    - `WORKER_CHILD_RSS_MB=3000` — parent SIGKILLs a runaway child (do **not** use 1200; a 3-photo lot already exceeded 1.2 GB)
    - `WORKER_CHILD_EXIT_SECONDS=15` — after the job row is saved, the child must `os._exit` even if cleanup hangs

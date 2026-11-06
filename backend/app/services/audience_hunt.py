@@ -540,7 +540,8 @@ def run_audience_research_and_structure(
     from google.genai import types
 
     from pipeline.gemini_schema import pydantic_model_to_gemini_schema
-    from pipeline.pipeline import GEMINI_PRO_MODEL, _get_client
+    from app.core.gemini_models import pro_model
+    from pipeline.pipeline import _get_client
     from pipeline.schemas import AudienceHuntResult
 
     bag = usage if usage is not None else empty_hunt_usage()
@@ -567,7 +568,7 @@ def run_audience_research_and_structure(
 
     research = generate_content(
         client,
-        model=GEMINI_PRO_MODEL,
+        model=pro_model(),
         contents=research_parts,
         config=research_config,
     )
@@ -605,7 +606,7 @@ def run_audience_research_and_structure(
     )
     structured = generate_content(
         client,
-        model=GEMINI_PRO_MODEL,
+        model=pro_model(),
         contents=structure_parts,
         config=structure_config,
     )

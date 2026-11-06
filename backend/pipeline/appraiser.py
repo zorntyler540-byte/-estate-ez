@@ -9,8 +9,8 @@ from google.genai import types
 
 from app.services.ctseller_categories import ct_categories_for_ai
 from pipeline.gemini_schema import pydantic_model_to_gemini_schema
+from app.core.gemini_models import pro_model
 from pipeline.pipeline import (
-    GEMINI_PRO_MODEL,
     _detect_mime_type,
     _get_client,
     _image_part,
@@ -79,7 +79,7 @@ def run_appraisal_research(
 
     response = generate_content(
         client,
-        model=GEMINI_PRO_MODEL,
+        model=pro_model(),
         contents=parts,
         config=config,
     )
@@ -118,7 +118,7 @@ def run_appraisal_structure(
 
     response = generate_content(
         client,
-        model=GEMINI_PRO_MODEL,
+        model=pro_model(),
         contents=parts,
         config=config,
     )
