@@ -165,7 +165,7 @@ def _worker_test_env() -> dict[str, str]:
 
 
 def test_complex_pro_author_path_child_exits_when_cleanup_hangs() -> None:
-    """After Pro author + flash-latest, persist complete then hang — watchdog must os._exit."""
+    """After Pro author + pinned Flash, persist complete then hang — watchdog must os._exit."""
     proc = subprocess.run(
         [sys.executable, "-m", "app.worker", "--self-test-complex-hang"],
         cwd=os.path.join(os.path.dirname(__file__), ".."),

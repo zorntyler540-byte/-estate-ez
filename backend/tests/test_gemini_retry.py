@@ -103,6 +103,8 @@ def test_model_family_does_not_change_model_choice() -> None:
     assert model_family("gemini-2.5-flash") == "flash"
     assert model_family("gemini-2.5-pro") == "pro"
     assert model_family("gemini-3.8-flash") == "flash38"
+    assert model_family("gemini-3.6-flash") == "flash38"
+    assert model_family("gemini-3.5-flash-lite") == "flash"
     assert model_family("gemini-flash-latest") == "flash38"
 
 

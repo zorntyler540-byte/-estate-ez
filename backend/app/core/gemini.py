@@ -14,6 +14,7 @@ import requests
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import google_api_key, settings
+from app.core.gemini_models import listing_flash_model, ocr_model
 from app.services.ctseller_categories import ct_categories_for_ai
 from app.core.lotting import (
     MERGED_PRO_DESCRIPTION_MAX_CHARS,
@@ -477,7 +478,7 @@ def _analyze_photo_sdk_from_bytes(
 
     try:
         response = generate_content(
-            client, model=settings.gemini_model, contents=contents, config=config
+            client, model=listing_flash_model(), contents=contents, config=config
         )
         if response.parsed:
             row = InventoryTableEntry.model_validate(response.parsed)
@@ -489,14 +490,15 @@ def _analyze_photo_sdk_from_bytes(
     return None
 
 
-def _model_url() -> str:
-    return f"https://generativelanguage.googleapis.com/{settings.gemini_api_version}/models/{settings.gemini_model}:generateContent"
+def _model_url(model: str) -> str:
+    return f"https://generativelanguage.googleapis.com/{settings.gemini_api_version}/models/{model}:generateContent"
 
 
-def _generate_content(payload: dict[str, Any], timeout: int = 120) -> str | None:
+def _generate_content(payload: dict[str, Any], timeout: int = 120, *, model: str | None = None) -> str | None:
     from app.core.gemini_retry import GeminiRetryableError, backoff_seconds, inspect_transient, retry_after_from_headers
     from app.core.gemini_slots import gemini_slot
 
+    model_id = (model or listing_flash_model()).strip()
     headers = {"Content-Type": "application/json", "x-goog-api-key": google_api_key()}
     max_attempts = max(1, int(settings.gemini_retry_max_attempts))
     base = float(settings.gemini_retry_base_seconds)
@@ -505,8 +507,8 @@ def _generate_content(payload: dict[str, Any], timeout: int = 120) -> str | None
     last_status: int | None = None
     for attempt in range(max_attempts):
         try:
-            with gemini_slot(settings.gemini_model):
-                response = requests.post(_model_url(), headers=headers, json=payload, timeout=timeout)
+            with gemini_slot(model_id):
+                response = requests.post(_model_url(model_id), headers=headers, json=payload, timeout=timeout)
             if response.status_code in TRANSIENT_HTTP:
                 retry_after = retry_after_from_headers(response.headers)
                 last_status = response.status_code
@@ -558,7 +560,7 @@ def _analyze_photo_rest_from_bytes(
         },
         "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
     }
-    text = _generate_content(payload)
+    text = _generate_content(payload, model=listing_flash_model())
     if not text: return None
     try:
         parsed = json.loads(re.sub(r"```json|```", "", text).strip())
@@ -658,7 +660,7 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": base64.b64encode(img_bytes).decode("utf-8")}}]}]
     }
-    text = _generate_content(payload)
+    text = _generate_content(payload, model=ocr_model())
     if not text: return None
     try:
         res = json.loads(re.sub(r"```json|```", "", text).strip())

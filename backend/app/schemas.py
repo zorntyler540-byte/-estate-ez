@@ -14,6 +14,12 @@ class HealthResponse(BaseModel):
     appraiser_max_photos: int = 3
     gemini_pro_model: str = ""
     gemini_flash_model: str = ""
+    gemini_triage_model: str = ""
+    gemini_grouping_model: str = ""
+    gemini_listing_model: str = ""
+    gemini_listing_flash_model: str = ""
+    gemini_ocr_model: str = ""
+    gemini_caption_model: str = ""
     catalog_upload_root: str = ""
     catalog_image_files_on_disk: int = 0
     catalog_r2_configured: bool = False

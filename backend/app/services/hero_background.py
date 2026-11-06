@@ -12,7 +12,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from app.config import require_google_api_key, settings
+from app.config import require_google_api_key
 from app.services.plain_background import PLAIN_BG_COLORS, jpeg_bytes_rgb, prepare_jpeg_bytes
 
 # Closest match the image model accepts. Keep the cover's orientation.
@@ -121,6 +121,7 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
         from google import genai
         from google.genai import types
 
+        from app.core.gemini_models import hero_background_model
         from app.core.gemini_slots import generate_content
 
         client = genai.Client(
@@ -129,7 +130,7 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
         )
         response = generate_content(
             client,
-            model=(settings.hero_bg_gemini_model or "gemini-nano-banana-2.1").strip(),
+            model=hero_background_model(),
             contents=[
                 types.Part.from_bytes(data=prepared, mime_type="image/jpeg"),
                 prompt,
