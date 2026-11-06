@@ -8,7 +8,7 @@ from app.core.lotting import LotOutput
 
 
 class TestTextileLotMerge(unittest.TestCase):
-    def test_from_model_broadens_singular_title_when_multi_dimensions(self) -> None:
+    def test_from_model_keeps_textile_signal_without_forced_lot_wording(self) -> None:
         lot = LotOutput.from_model(
             {
                 "item_name": "Cotton Woven Lace Textile with Geometric Patterns",
@@ -22,8 +22,8 @@ class TestTextileLotMerge(unittest.TestCase):
             }
         )
         t = lot.auction_title.lower()
-        self.assertIn("lot", t)
         self.assertTrue("lace" in t or "textile" in t)
+        self.assertNotIn(" lot ", f" {t} ")
 
     def test_merge_second_photo_applies_textile_lot_prose(self) -> None:
         lot = LotOutput.from_model(

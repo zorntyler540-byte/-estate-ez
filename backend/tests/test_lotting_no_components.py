@@ -25,7 +25,8 @@ class TestNoComponentsSpec(unittest.TestCase):
         self.assertFalse(any(l.lower().startswith("components:") for l in merged))
         self.assertFalse(any(l.lower().startswith("style:") for l in merged))
         self.assertFalse(any(l.lower().startswith("finish:") for l in merged))
-        self.assertEqual(len([l for l in merged if l.lower().startswith("item ")]), 2)
+        self.assertEqual(len([l for l in merged if l.lower().startswith("item ")]), 0)
+        self.assertTrue(any(l.lower().startswith("brand:") for l in merged))
 
     def test_drop_style_and_finish(self) -> None:
         out = drop_style_and_finish_spec_lines(
