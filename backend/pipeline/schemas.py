@@ -64,6 +64,14 @@ class PhotoTriageResult(BaseModel):
             "Include tape on a roll or strip in the foreground. null if no estate lot tape marking is readable."
         ),
     )
+    is_lot_divider: bool = Field(
+        default=False,
+        description=(
+            "True only when the frame deliberately shows NO merchandise — a blank sheet of paper, an empty wall, "
+            "bare floor or ceiling, or a covered/black lens — shot as a separator between lots. False whenever any "
+            "item, part of an item, tag, label, box, or estate tape is visible."
+        ),
+    )
 
 
 class ListingGallerySlot(BaseModel):

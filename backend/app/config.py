@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     # After triage, a multi-lot batch queues one single-lot job per tape-SKU lot instead of
     # cataloging every lot inside the batch job.
     catalog_batch_fanout: bool = Field(default=True, alias="CATALOG_BATCH_FANOUT")
+    # Batch uploads without SKU tape: a blank divider frame (blank page, empty wall, covered lens)
+    # ends the current lot. Needs both the triage flag and a near-featureless image.
+    catalog_divider_splits: bool = Field(default=True, alias="CATALOG_DIVIDER_SPLITS")
     # One worker process may run this many isolated catalog jobs at once (child-process pool).
     worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
     # After this many isolated-child deaths (OOM / SIGKILL) the job is marked failed, not re-queued.

@@ -32,6 +32,7 @@ from app.core.lotting import (
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import resolve_lot_ct_category
 from app.services.ctseller_conditions import canonicalize_ct_condition
+from app.services.lot_dividers import is_lot_divider
 from app.services.memory_trim import trim_process_memory
 from app.services.pipeline_integration import (
     is_weak_pipeline_lot,
@@ -771,14 +772,19 @@ def _save_lot(
 def _segment_batch_lots_by_tape(
     folder: Path,
     ordered: list[tuple[Path, str, dict]],
+    *,
+    dividers: list[Path] | None = None,
 ) -> list[list[tuple[Path, str]]]:
     """
-    Split a batch upload into lot segments using estate tape SKU (and subfolder boundaries).
+    Split a batch upload into lot segments using estate tape SKU, blank divider frames,
+    and subfolder boundaries. Divider frames are left out of every segment (not cataloged);
+    they are appended to ``dividers`` when given.
     """
     segments: list[list[tuple[Path, str]]] = []
     current: list[tuple[Path, str]] = []
     open_sku: str | None = None
     prev_batch_key: str | None = None
+    use_dividers = bool(settings.catalog_divider_splits)
 
     for path, key, row in ordered:
         batch_key = _subfolder_batch_key(folder, path)
@@ -786,6 +792,16 @@ def _segment_batch_lots_by_tape(
             segments.append(current)
             current = []
             open_sku = None
+
+        if use_dividers and is_lot_divider(path, row):
+            if current:
+                segments.append(current)
+                current = []
+            open_sku = None
+            prev_batch_key = batch_key
+            if dividers is not None:
+                dividers.append(path)
+            continue
 
         marking = triage_tape_marking_from_row(row)
         sku_candidate = tape_marking_canonical(marking) if marking else None
@@ -991,7 +1007,16 @@ def _process_job_batch_pipeline(
         _emit_job(job, {"type": "status", "status": "failed", "error_message": job.error_message})
         return
 
-    lots = cap_lot_segments(_segment_batch_lots_by_tape(folder, ordered))
+    divider_paths: list[Path] = []
+    lots = cap_lot_segments(_segment_batch_lots_by_tape(folder, ordered, dividers=divider_paths))
+    if divider_paths:
+        _LOG.info(
+            "batch divider frames job_id=%s dividers=%d lots=%d",
+            job.id,
+            len(divider_paths),
+            len(lots),
+        )
+        _emit_job(job, {"type": "batch_dividers", "dividers": len(divider_paths), "lots": len(lots)})
     if not lots:
         job.status = JobStatus.failed
         job.error_message = "No photos to catalog after triage"

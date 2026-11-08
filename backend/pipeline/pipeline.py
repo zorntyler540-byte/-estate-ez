@@ -264,6 +264,10 @@ Rules:
 - tape: dedicated frame where colored estate lot tape / SKU is the main subject (purple, lavender, blue, bright green, or yellow masking tape with handwriting). Prefer tape over hero when the strip fills much of the image. **Hard rule: a tape frame must never be photo_role hero.**
   When **any** colored estate lot tape with a lot number is visible (even on a **tape roll** in the foreground of a hero shot), copy the marking into **lot_tape_marking** (e.g. MS530, MS 530, #8524).
 - unusable: blank, extreme blur, or not catalog-worthy.
+- is_lot_divider: true only for a deliberate **separator** frame with no merchandise at all — a blank sheet of paper,
+  an empty wall, bare floor/ceiling, or a covered/black lens (tag it unusable too). False when any item, part of an
+  item, label, box, or estate tape is visible, even small or at the edge. A plain-background close-up of an object is
+  never a divider.
 - Do NOT assign a new distinct_item_id for another angle of the same object.
 - is_primary_front_for_item: True only for THE front shot, not side/back of the same object.
 - Flag every image with any readable tag text (label_legibility clear or partial), even if corner of frame.

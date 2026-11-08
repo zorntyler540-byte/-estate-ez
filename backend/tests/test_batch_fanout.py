@@ -148,7 +148,7 @@ def test_batch_pipeline_fans_out_instead_of_cataloging_inline(tmp_path: Path, mo
     monkeypatch.setattr(
         processing,
         "_segment_batch_lots_by_tape",
-        lambda _f, ordered: [[(p, k) for p, k, _r in ordered[:2]], [(p, k) for p, k, _r in ordered[2:]]],
+        lambda _f, ordered, **_k: [[(p, k) for p, k, _r in ordered[:2]], [(p, k) for p, k, _r in ordered[2:]]],
     )
 
     def no_inline(*_a, **_k):
