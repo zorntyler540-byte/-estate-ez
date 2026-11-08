@@ -74,6 +74,19 @@ class PhotoTriageResult(BaseModel):
     )
 
 
+class LotDividerCheck(BaseModel):
+    """One blank-looking batch frame judged with the photos shot before and after it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shows_merchandise: bool = Field(
+        description="True if the CANDIDATE shows any sellable item, part of one, a label, box, or estate tape."
+    )
+    is_lot_separator: bool = Field(
+        description="True when the CANDIDATE is a separator shot between lots with no merchandise in it."
+    )
+
+
 class ListingGallerySlot(BaseModel):
     """One catalog photo in shopper listing order (cheap Flash gallery pass)."""
 

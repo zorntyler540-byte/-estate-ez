@@ -32,7 +32,7 @@ from app.core.lotting import (
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import resolve_lot_ct_category
 from app.services.ctseller_conditions import canonicalize_ct_condition
-from app.services.lot_dividers import is_lot_divider
+from app.services.lot_dividers import find_lot_dividers
 from app.services.memory_trim import trim_process_memory
 from app.services.pipeline_integration import (
     is_weak_pipeline_lot,
@@ -784,7 +784,7 @@ def _segment_batch_lots_by_tape(
     current: list[tuple[Path, str]] = []
     open_sku: str | None = None
     prev_batch_key: str | None = None
-    use_dividers = bool(settings.catalog_divider_splits)
+    divider_set = find_lot_dividers(ordered)
 
     for path, key, row in ordered:
         batch_key = _subfolder_batch_key(folder, path)
@@ -793,7 +793,7 @@ def _segment_batch_lots_by_tape(
             current = []
             open_sku = None
 
-        if use_dividers and is_lot_divider(path, row):
+        if path in divider_set:
             if current:
                 segments.append(current)
                 current = []

@@ -5,10 +5,12 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from app.config import settings
-from app.services.lot_dividers import frame_edge_fractions, frame_looks_blank, is_lot_divider
+from app.services import lot_dividers
+from app.services.lot_dividers import find_lot_dividers, frame_edge_fractions, frame_looks_blank, is_lot_divider
 from app.services.processing import _segment_batch_lots_by_tape
 from pipeline.schemas import PhotoTriageResult
 
@@ -36,6 +38,24 @@ def _item_photo(path: Path) -> Path:
         w, h = rng.randint(30, 200), rng.randint(30, 200)
         color = tuple(rng.randint(0, 255) for _ in range(3))
         draw.rectangle((x, y, x + w, y + h), fill=color, outline=(0, 0, 0), width=4)
+    im.save(path, "JPEG", quality=85)
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _no_context_call(monkeypatch):
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", lambda *_a: None)
+
+
+def _sheet_edge_down_middle(path: Path) -> Path:
+    """Half dark backdrop, half white sheet: the sheet's edge runs through the centre."""
+    rng = random.Random(11)
+    im = Image.new("RGB", (900, 1200), (70, 75, 55))
+    px = im.load()
+    for y in range(1200):
+        for x in range(450, 900):
+            v = 225 + rng.randint(-5, 5) - int(10 * y / 1200)
+            px[x, y] = (v, v, v)
     im.save(path, "JPEG", quality=85)
     return path
 
@@ -120,12 +140,17 @@ def test_blank_page_wall_and_dark_frame_look_blank(tmp_path: Path) -> None:
     assert frame_looks_blank(_blank_page(tmp_path / "page.jpg"))
     assert frame_looks_blank(_blank_page(tmp_path / "dark.jpg", base=40))
     assert frame_looks_blank(_paper_on_table(tmp_path / "paper.jpg"))
+    assert frame_looks_blank(_sheet_edge_down_middle(tmp_path / "sheet.jpg"))
 
 
 def test_item_photos_do_not_look_blank(tmp_path: Path) -> None:
     assert not frame_looks_blank(_item_photo(tmp_path / "items.jpg"))
-    assert not frame_looks_blank(_figurine_on_backdrop(tmp_path / "figurine.jpg"))
     assert not frame_looks_blank(_item_off_center(tmp_path / "side.jpg"))
+
+
+def test_plain_backdrop_item_needs_gemini_agreement(tmp_path: Path) -> None:
+    path = _figurine_on_backdrop(tmp_path / "figurine.jpg")
+    assert not is_lot_divider(path, _row(path.name, divider=False))
 
 
 def test_unreadable_file_is_never_a_divider(tmp_path: Path) -> None:
@@ -180,6 +205,28 @@ def test_divider_resets_tape_so_next_sku_does_not_double_split(tmp_path: Path) -
     ordered[3] = (p3, k3, {**r3, "photo_role": "tape", "lot_tape_marking": "200"})
     segments = _segment_batch_lots_by_tape(folder, ordered)
     assert _names(segments) == [[1, 2], [4, 5]]
+
+
+def test_context_check_overrides_the_single_photo_flag(tmp_path: Path, monkeypatch) -> None:
+    folder, ordered = _batch(tmp_path, list("iibiidii"))
+    verdicts = {"web-b1-0003.jpg": True, "web-b1-0006.jpg": False}
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    def fake(path, before, after):
+        seen.append((path.name, before.name if before else None, after.name if after else None))
+        return verdicts.get(path.name)
+
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", fake)
+    assert {p.name for p in find_lot_dividers(ordered)} == {"web-b1-0003.jpg"}
+    assert ("web-b1-0003.jpg", "web-b1-0002.jpg", "web-b1-0004.jpg") in seen
+    assert all(name in ("web-b1-0003.jpg", "web-b1-0006.jpg") for name, _b, _a in seen)
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert _names(segments) == [[1, 2], [4, 5, 6, 7, 8]]
+
+
+def test_context_unavailable_falls_back_to_triage_flag(tmp_path: Path) -> None:
+    _folder, ordered = _batch(tmp_path, list("iibidi"))
+    assert {p.name for p in find_lot_dividers(ordered)} == {"web-b1-0005.jpg"}
 
 
 def test_triage_schema_has_divider_flag_defaulting_false() -> None:

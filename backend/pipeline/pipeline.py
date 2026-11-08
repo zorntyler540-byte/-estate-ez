@@ -24,6 +24,7 @@ from pipeline.schemas import (
     FullyAuditedManifest,
     InventoryLotDraft,
     ListingGalleryPlan,
+    LotDividerCheck,
     LowTierDraftItem,
     PhotoTriageResult,
     VerifiedAndPricedItem,
@@ -314,6 +315,59 @@ def triage_single_photo(filename: str, img_bytes: bytes) -> dict[str, Any]:
     if not row.filename or row.filename != filename:
         row = row.model_copy(update={"filename": filename})
     return row.model_dump()
+
+
+DIVIDER_SYSTEM_INSTRUCTION = (
+    "You are a professional estate specialist checking where one lot ends in a batch of photos. "
+    "Output structured JSON only."
+)
+
+DIVIDER_USER_PROMPT = """Staff photograph lots one after another and shoot a separator frame between lots: a blank
+sheet of paper or cloth, an empty wall, bare floor or ceiling, a covered/black lens, or an out-of-focus shot of
+nothing. Judge only the CANDIDATE image; BEFORE and AFTER are the neighbouring shots for context (they may show the
+same kind of items or different ones).
+- shows_merchandise: true if the CANDIDATE shows any sellable item, part of one, a label, a box, or estate tape —
+  even blurry, dark, or cut off at the edge. A plain backdrop, sheet, wall, or table edge with nothing on it is not
+  merchandise.
+- is_lot_separator: true when shows_merchandise is false and the CANDIDATE looks like a separator shot. A close-up
+  or blurry frame of the same item seen in BEFORE/AFTER is not a separator.
+
+CANDIDATE filename: {filename}
+"""
+
+
+def check_lot_divider(
+    filename: str,
+    candidate: bytes,
+    before: bytes | None = None,
+    after: bytes | None = None,
+) -> bool | None:
+    """One small Flash call over [before, candidate, after] thumbs. None when the call fails."""
+    parts: list[Any] = []
+    for label, data in (("BEFORE", before), ("CANDIDATE", candidate), ("AFTER", after)):
+        if not data:
+            continue
+        payload, mime = _maybe_downscale(data, _detect_mime_type(data), max_edge=512)
+        parts.extend([f"{label}:", _image_part(payload, mime)])
+    parts.append(DIVIDER_USER_PROMPT.format(filename=filename))
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=pydantic_model_to_gemini_schema(LotDividerCheck),
+        system_instruction=DIVIDER_SYSTEM_INSTRUCTION,
+        temperature=0.0,
+    )
+    try:
+        response = _gemini_generate(GEMINI_FLASH_MODEL, parts, config)
+        _record_usage("flash", response)
+        if response.parsed is not None:
+            row = LotDividerCheck.model_validate(response.parsed)
+        elif response.text:
+            row = LotDividerCheck.model_validate(json.loads(response.text))
+        else:
+            return None
+    except Exception:
+        return None
+    return bool(row.is_lot_separator and not row.shows_merchandise)
 
 
 GALLERY_SYSTEM_INSTRUCTION = (
