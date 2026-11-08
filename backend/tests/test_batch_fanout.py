@@ -78,6 +78,14 @@ def test_segments_over_forty_photos_become_review_parts() -> None:
     assert flat == big
 
 
+def test_short_tail_stays_with_the_previous_part() -> None:
+    """45 photos must not become a 40-lot plus a 5-photo splinter of the same item."""
+    seg = [(Path(f"/x/{i}.jpg"), f"{i}.jpg") for i in range(45)]
+    lots = cap_lot_segments([seg])
+    assert [(len(e), part, parts) for e, part, parts in lots] == [(45, 1, 1)]
+    assert [e for e, _p, _n in lots for e in e] == seg
+
+
 def test_split_queues_one_single_lot_job_per_lot_and_completes_parent(tmp_path: Path) -> None:
     Session = _session(tmp_path)
     folder, paths = _batch_folder(tmp_path, ["035/a.jpg", "035/b.jpg", "036/a.jpg"])

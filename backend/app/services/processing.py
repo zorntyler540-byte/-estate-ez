@@ -836,22 +836,33 @@ def _segment_batch_lots_by_tape(
 SPLIT_TRIAGE_SIDECAR = ".split_triage.json"
 
 
+# A leftover shorter than this is the tail of the same items (a jacket's last detail shots),
+# not a new lot. Cutting it off made one garment two listings. It stays on the previous part,
+# which is then over the CT Bids cap and flagged for review.
+_CAP_TAIL_MIN = 12
+
+
 def cap_lot_segments(
     segments: list[list[tuple[Path, str]]], cap: int | None = CTBIDS_MAX_PHOTOS_PER_LOT
 ) -> list[tuple[list[tuple[Path, str]], int, int]]:
     """``(entries, part, parts)`` per lot; a segment over the CT Bids cap becomes consecutive parts.
 
-    More than 40 frames between tape markers is almost always a missed boundary, and a lot over
+    More than 40 frames between markers is almost always a missed boundary, and a lot over
     the cap cannot be posted at all — split in capture order and flag the parts for review.
+    A final part shorter than ``_CAP_TAIL_MIN`` stays with the part before it.
     """
     out: list[tuple[list[tuple[Path, str]], int, int]] = []
     for seg in segments:
         if not cap or len(seg) <= cap:
             out.append((seg, 1, 1))
             continue
-        parts = (len(seg) + cap - 1) // cap
-        for i in range(parts):
-            out.append((seg[i * cap : (i + 1) * cap], i + 1, parts))
+        chunks = [seg[i : i + cap] for i in range(0, len(seg), cap)]
+        if len(chunks) >= 2 and len(chunks[-1]) < _CAP_TAIL_MIN:
+            chunks[-2].extend(chunks[-1])
+            chunks.pop()
+        n = len(chunks)
+        for i, chunk in enumerate(chunks, start=1):
+            out.append((chunk, i, n))
     return out
 
 
@@ -1101,7 +1112,7 @@ def _process_job_batch_pipeline(
         batch_key = _subfolder_batch_key(folder, seg_paths[0])
         _apply_inherit_sku_from_subfolder_name(job, lot, batch_key)
         _strip_maker_stamp_misread_as_tape_sku(lot, None)
-        if parts_by_seg.get(seg_idx, (1, 1))[1] > 1:
+        if parts_by_seg.get(seg_idx, (1, 1))[1] > 1 or len(seg_paths) > CTBIDS_MAX_PHOTOS_PER_LOT:
             lot.sku_needs_review = True
 
         # Persist photos in capture order first; _finalize_open_lot then groups by listing role.
@@ -1236,7 +1247,7 @@ def _process_job_single_lot_pipeline(
     if folder is not None and photos:
         _apply_inherit_sku_from_subfolder_name(job, lot, _subfolder_batch_key(folder, photos[0]))
     _strip_maker_stamp_misread_as_tape_sku(lot, None)
-    if split and int(split.get("parts") or 1) > 1:
+    if (split and int(split.get("parts") or 1) > 1) or len(photos) > CTBIDS_MAX_PHOTOS_PER_LOT:
         lot.sku_needs_review = True
 
     # Persist photos in capture order first; _finalize_open_lot then groups for listing
