@@ -42,6 +42,9 @@ cloud-specific gotchas; do not duplicate standard docs.
   `http://localhost:8000`. `npm run build` **fails** unless it is set to an https URL (or
   `http://localhost…` for a local production build). There is no production fallback URL.
   Railway's web service sets it as a service variable, which `Dockerfile.web` takes as a required build arg.
+- **`google-genai` is pinned `<3`** and every SDK client passes
+ `HttpOptions(api_version=settings.gemini_api_version)` (`v1beta`). 3.0.0 defaults to `v1`, which
+ 400s on system instructions, so every triage/listing call failed after an unpinned rebuild.
 - **Gemini AI cataloging needs `GOOGLE_API_KEY`.** Without it the API/worker still start and
   all non-AI flows (auth, sales, lots, exports) work; only actual photo-analysis jobs are
   no-ops. The key is provided as a Cursor Cloud injected secret (an OS env var), which
@@ -191,11 +194,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   deterministic sort (it does not re-call Gemini). Do not bring back naive hero-first-only
   reordering or a separate “Fix photo order” capture-order reset.
 - **Blank divider photos split batch uploads without tape** (`app/services/lot_dividers.py`).
- In Choose folder / Choose photos batches, a frame splits lots only when Stage-1 triage sets
- `is_lot_divider` **and** the Pillow edge check agrees (empty centre, few edges overall). The frame
- is left out of every lot. Either signal alone keeps it as a normal photo. That double check is
- why this is not the removed Gemini-only `lot_boundary_blank_page` (it skipped real white-plate
- frames). Repeated/leading/trailing dividers make no empty lots; tape SKU and subfolders still
+ In Choose folder / Choose photos batches, a frame is a divider only when the Pillow edge check
+ passes (few edges) **and** Gemini agrees: one small Flash call (`check_lot_divider`) sees the
+ candidate with the photos before and after it; the Stage-1 `is_lot_divider` flag is only the
+ fallback when that call fails. The frame is left out of every lot. Each candidate logs a
+ `divider candidate` line. That double check is why this is not the removed Gemini-only
+ `lot_boundary_blank_page` (it skipped real white-plate frames). Repeated/leading/trailing dividers make no empty lots; tape SKU and subfolders still
  split too. `CATALOG_DIVIDER_SPLITS=false` turns it off. Single-lot jobs (phone, Add one lot) ignore it.
 - **SKU-tape frames are never the lot hero.** After Stage-1 triage, `select_analysis_photos`
   coerces dedicated tape shots to `photo_role=tape` (including a mis-tagged `hero` that has a
