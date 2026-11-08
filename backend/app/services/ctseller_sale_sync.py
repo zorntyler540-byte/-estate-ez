@@ -36,24 +36,31 @@ def apply_ctseller_catalog_sale_sync(
 ) -> CtsellerCatalogSyncResult:
     """
     Add a catalog sale for each open CT Seller auction that is not mapped yet.
-    Refresh the name on mapped, still-open catalog sales when CT Bids retitles.
+    Refresh the name on mapped, still-open catalog sales when CT Bids retitles, unless more
+    than one open catalog is linked to that auction.
 
     Does not close, delete, or invent lots. Manual Estate-EZ sales without a mapping stay put.
     """
     existing = (
         db.query(Sale)
         .filter(Sale.account_id == account_id)
+        .order_by(Sale.created_at.asc())
         .all()
     )
     by_remote: dict[int, Sale] = {}
+    open_mapped: dict[int, int] = {}
     for row in existing:
         raw = getattr(row, "ctseller_sale_id", None)
         try:
             rid = int(raw) if raw is not None else 0
         except (TypeError, ValueError):
             rid = 0
-        if rid > 0 and rid not in by_remote:
+        if rid <= 0:
+            continue
+        if rid not in by_remote:
             by_remote[rid] = row
+        if row.closed_at is None:
+            open_mapped[rid] = open_mapped.get(rid, 0) + 1
 
     created = 0
     renamed = 0
@@ -82,6 +89,10 @@ def apply_ctseller_catalog_sale_sync(
             continue
         already += 1
         if row.closed_at is not None:
+            continue
+        # Posting from another catalog links it to the same auction; renaming then gives two
+        # catalogs the auction's title (a "General" catalog silently became a second copy).
+        if open_mapped.get(rid, 0) > 1:
             continue
         if want and (row.name or "").strip() != want:
             row.name = want

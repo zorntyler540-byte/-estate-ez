@@ -265,3 +265,38 @@ def test_ctseller_sales_lists_open_auctions_when_connected(tmp_path, monkeypatch
     finally:
         app.dependency_overrides.clear()
         db.close()
+
+
+def test_apply_does_not_rename_when_two_catalogs_share_an_auction(tmp_path) -> None:
+    Session = _session(tmp_path)
+    db = Session()
+    account, user = _seed(db)
+    general = Sale(
+        id="sale-general",
+        account_id=account.id,
+        user_id=user.id,
+        name="General",
+        ctseller_sale_id=48324,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    original = Sale(
+        id="sale-janet",
+        account_id=account.id,
+        user_id=user.id,
+        name="Janet Latina",
+        ctseller_sale_id=48324,
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    db.add_all([general, original])
+    db.commit()
+    stats = apply_ctseller_catalog_sale_sync(
+        db,
+        account_id=account.id,
+        user_id=user.id,
+        remote_sales=[CTSellerSaleRow(id=48324, title="JANET LATINA")],
+    )
+    db.commit()
+    assert stats.created == 0
+    assert stats.renamed == 0
+    assert db.get(Sale, "sale-general").name == "General"
+    assert db.get(Sale, "sale-janet").name == "Janet Latina"
