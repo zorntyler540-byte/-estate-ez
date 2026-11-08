@@ -6915,6 +6915,22 @@ export default function DashboardPage() {
     }
   }
 
+  async function renameSelectedSale() {
+    if (!token || !selectedSale) return;
+    const next = window.prompt("Rename this Estate-EZ sale", selectedSale.name || "");
+    const name = (next || "").trim();
+    if (!name || name === (selectedSale.name || "").trim()) return;
+    try {
+      const updated = (await apiFetch(`/sales/${encodeURIComponent(selectedSale.id)}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ name })
+      })) as Sale;
+      setSales((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rename the sale.");
+    }
+  }
+
   const saleTopBar = (
     <label className="ct-app-sale-select">
       <span className="ct-app-sale-select__label">Change sale</span>
@@ -6938,6 +6954,16 @@ export default function DashboardPage() {
           </option>
         ))}
       </select>
+      {isAccountOwner && selectedSale ? (
+        <button
+          type="button"
+          className="ct-btn ct-btn--ghost"
+          onClick={() => void renameSelectedSale()}
+          title="Rename this Estate-EZ sale (does not change the CT Bids auction title)"
+        >
+          Rename
+        </button>
+      ) : null}
     </label>
   );
 
