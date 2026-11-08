@@ -41,7 +41,6 @@ import { FacebookPagePostModal } from "../../components/FacebookPagePostModal";
 import { apiFetch, apiUploadFiles, API_BASE, parseApiErrorMessage } from "../../lib/api";
 import { catalogPollIntervalMs, catalogStatusPath } from "../../lib/catalogPoll";
 import { isClientRole, isOwnerRole, rememberAccountRole, storedAccountRole } from "../../lib/roles";
-import { isNavRouteHidden } from "../../lib/navVisibility";
 import {
   clearStagingDraft,
   loadStagingDraft,
@@ -8699,15 +8698,6 @@ export default function DashboardPage() {
                 : "Post selected to Facebook Page"}
             </button>
           ) : null}
-          {isAccountOwner && !isNavRouteHidden("/facebook") ? (
-            <Link
-              href="/facebook"
-              className="ct-btn"
-              title="Find public Facebook groups for this sale — moved to the Facebook tab"
-            >
-              Find groups
-            </Link>
-          ) : null}
           {ctSellerEligibleIds.length > 0 ? (
             <div className="ct-row ct-row--gap-lg" style={{ alignItems: "center", gap: "0.5rem" }}>
               <button
@@ -8846,7 +8836,7 @@ export default function DashboardPage() {
                     lot.ctseller_item_id
                       ? "Already posted"
                       : lot.audience_hold
-                        ? "Held for collector groups"
+                        ? "Held from CT Seller posting"
                         : lotEligibleForCtSellerPost(lot)
                           ? "Select to post to CT Seller"
                           : "Needs SKU and title before posting"
@@ -8893,7 +8883,7 @@ export default function DashboardPage() {
                     {lot.reserve_price != null ? ` · res ${formatLotPrice(lot.reserve_price)}` : ""}
                   </span>
                   {lot.audience_hold ? (
-                    <span className="ct-lot-mobile-card__meta-item" title="Held for collector groups — skipped on bulk CT Seller post">
+                    <span className="ct-lot-mobile-card__meta-item" title="Held from CT Seller posting — skipped on bulk CT Seller post">
                       Held
                     </span>
                   ) : null}
@@ -8931,7 +8921,7 @@ export default function DashboardPage() {
                   lotIsPostedToCtSeller(lot)
                     ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
                     : lot.audience_hold
-                      ? "Held for collector groups — skipped on bulk CT Seller post"
+                      ? "Held from CT Seller posting — skipped on bulk CT Seller post"
                       : "Not posted to CT Seller yet"
                 }
               >
@@ -9062,7 +9052,7 @@ export default function DashboardPage() {
                     lot.ctseller_item_id
                       ? "Already posted"
                       : lot.audience_hold
-                        ? "Held for collector groups"
+                        ? "Held from CT Seller posting"
                         : lotEligibleForCtSellerPost(lot)
                           ? "Select to post to CT Seller"
                           : "Needs SKU and title before posting"
@@ -9120,7 +9110,7 @@ export default function DashboardPage() {
                     lotIsPostedToCtSeller(lot)
                       ? lotPostedStatusLabel(lot, ctSellerRemoteSales)
                       : lot.audience_hold
-                        ? "Held for collector groups — skipped on bulk CT Seller post"
+                        ? "Held from CT Seller posting — skipped on bulk CT Seller post"
                         : "Not posted to CT Seller yet"
                   }
                 >
