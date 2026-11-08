@@ -8034,7 +8034,7 @@ export default function DashboardPage() {
                     <div className="ct-upload-option__text">
                       <span className="ct-upload-option__title">Choose folder</span>
                       <span className="ct-upload-option__desc">
-                        Entire folder from disk; one subfolder or estate tape per lot.
+                        Entire folder from disk; one subfolder, estate tape, or blank divider photo per lot.
                       </span>
                     </div>
                     <button
@@ -8057,7 +8057,7 @@ export default function DashboardPage() {
                     <div className="ct-upload-option__text">
                       <span className="ct-upload-option__title">Choose photos</span>
                       <span className="ct-upload-option__desc">
-                        Pick files in order; a new colored estate tape SKU starts the next lot.
+                        Pick files in order; a new estate tape SKU or a blank divider photo starts the next lot.
                       </span>
                     </div>
                     <button
@@ -8127,6 +8127,11 @@ export default function DashboardPage() {
                       <li>
                         <strong>One flat folder:</strong> colored estate tape marks new lots; subfolders work if you
                         prefer not to use tape on every group.
+                      </li>
+                      <li>
+                        <strong>No tape?</strong> Between lots, take one photo of a blank sheet of paper, an empty
+                        wall, or the floor with nothing in it. That divider photo starts the next lot and is not
+                        added to any listing. Keep every item out of the divider shot.
                       </li>
                       <li>
                         <strong>Add one lot</strong> merges every selected image into one catalog row. On touch devices
