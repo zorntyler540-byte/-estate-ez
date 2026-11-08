@@ -439,7 +439,10 @@ def _get_genai_client() -> Any | None:
     key = google_api_key()
     if not key or _genai_client: return _genai_client
     from google import genai
-    _genai_client = genai.Client(api_key=key)
+    from google.genai import types
+    _genai_client = genai.Client(
+        api_key=key, http_options=types.HttpOptions(api_version=settings.gemini_api_version)
+    )
     return _genai_client
 
 

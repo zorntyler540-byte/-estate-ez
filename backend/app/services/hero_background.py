@@ -125,7 +125,7 @@ def render_hero_ai_background(raw: bytes, color_name: str) -> bytes:
 
         client = genai.Client(
             api_key=key,
-            http_options=types.HttpOptions(timeout=50_000),
+            http_options=types.HttpOptions(timeout=50_000, api_version=settings.gemini_api_version),
         )
         response = generate_content(
             client,

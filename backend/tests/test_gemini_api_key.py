@@ -71,7 +71,7 @@ def test_pipeline_client_uses_settings_not_process_env(monkeypatch):
     captured: dict[str, str] = {}
 
     class _FakeClient:
-        def __init__(self, *, api_key: str):
+        def __init__(self, *, api_key: str, **_kwargs):
             captured["api_key"] = api_key
 
     monkeypatch.setenv("GEMINI_API_KEY", "stale-env-key")

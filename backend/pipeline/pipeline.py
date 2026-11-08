@@ -141,9 +141,12 @@ _genai_client: genai.Client | None = None
 def _get_client() -> genai.Client:
     global _genai_client
     if _genai_client is None:
-        from app.config import require_google_api_key
+        from app.config import require_google_api_key, settings
 
-        _genai_client = genai.Client(api_key=require_google_api_key())
+        _genai_client = genai.Client(
+            api_key=require_google_api_key(),
+            http_options=types.HttpOptions(api_version=settings.gemini_api_version),
+        )
     return _genai_client
 
 
