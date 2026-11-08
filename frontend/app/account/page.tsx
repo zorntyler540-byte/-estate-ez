@@ -1092,7 +1092,7 @@ export default function AccountPage() {
             <summary>Roles</summary>
             <div className="ct-help-details__body">
               <strong>Catalogger</strong> — catalog lots, edit listings, add photos, and post to CT Seller.
-              They cannot delete lots, clear a sale, close a sale, run audience hunts, manage teammates,
+              They cannot delete lots, clear a sale, close a sale, manage teammates,
               or connect CT Seller. <strong>Owner</strong> — full access. Choose a temporary password; they
               can change it after signing in.
             </div>

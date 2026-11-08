@@ -5,11 +5,10 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
-import { FindGroupsPanel } from "../../components/FindGroupsPanel";
 import { LotThumbnail } from "../../components/LotThumbnail";
 import { apiFetch } from "../../lib/api";
 import { isWatcherPlan, rememberAccountAccess, watcherHome } from "../../lib/plans";
-import { isOwnerRole, rememberAccountRole } from "../../lib/roles";
+import { rememberAccountRole } from "../../lib/roles";
 
 const SALE_STORAGE_KEY = "ct_selected_sale_id";
 
@@ -85,8 +84,6 @@ function marketplaceText(lot: Lot): string {
 export default function FacebookPage() {
   const router = useRouter();
   const [token, setToken] = useState("");
-  const [accountRole, setAccountRole] = useState("");
-  const isAccountOwner = isOwnerRole(accountRole);
   const [sales, setSales] = useState<Sale[]>([]);
   const [selectedSaleId, setSelectedSaleId] = useState("");
   const [lots, setLots] = useState<Lot[]>([]);
@@ -110,7 +107,6 @@ export default function FacebookPage() {
         const role = String(row.role || "");
         rememberAccountRole(role);
         rememberAccountAccess(row);
-        setAccountRole(role);
         if (isWatcherPlan(row.plan_code)) {
           router.replace(watcherHome(row));
           return;
@@ -128,7 +124,9 @@ export default function FacebookPage() {
           })
           .catch((e) => setError(e instanceof Error ? e.message : "Could not load sales"));
       })
-      .catch(() => setAccountRole(""));
+      .catch(() => {
+        /* Other requests on this page surface a sign-in or load error. */
+      });
   }, [router]);
 
   const loadLots = useCallback(async () => {
@@ -245,9 +243,7 @@ export default function FacebookPage() {
               Facebook
             </h1>
             <p className="ct-subtitle" style={{ margin: 0 }}>
-              Find national US collector groups for this sale (Gemini + Google Search, not the
-              Groups API; items ship nationwide), copy group-friendly captions from Page posts, and
-              list furniture captured for Marketplace.
+              Copy captions from Page posts, and list furniture captured for Marketplace.
               {selectedSale ? ` Showing ${selectedSale.name}.` : ""}
             </p>
           </div>
@@ -266,24 +262,6 @@ export default function FacebookPage() {
 
         {error ? <p className="ct-error">{error}</p> : null}
         {copyStatus ? <p className="ct-muted" style={{ marginTop: 0 }}>{copyStatus}</p> : null}
-
-        {selectedSaleId ? (
-          <FindGroupsPanel
-            token={token}
-            saleId={selectedSaleId}
-            saleName={selectedSale?.name}
-            isOwner={isAccountOwner}
-          />
-        ) : (
-          <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
-            <h2 className="ct-dash-panel__title" style={{ margin: 0 }}>
-              Find groups
-            </h2>
-            <p className="ct-muted" style={{ margin: "0.35rem 0 0" }}>
-              Select a sale to hunt public Facebook groups and see search-link fallbacks.
-            </p>
-          </section>
-        )}
 
         <section className="ct-card ct-card--padded" style={{ marginBottom: "1.25rem" }}>
           <h2 className="ct-dash-panel__title" style={{ marginTop: 0 }}>
