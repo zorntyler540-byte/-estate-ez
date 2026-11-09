@@ -201,8 +201,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
  fallback when the call fails, and only together with the triage flag. The frame is left out of
  every lot. Each candidate logs a `divider candidate` line. That double check is why this is not the removed Gemini-only
  `lot_boundary_blank_page` (it skipped real white-plate frames). Repeated/leading/trailing dividers make no empty lots. A different tape number starts a
- lot, and so does the first tape photo after item shots that have no number yet (that tape
- belongs to the next lot). The same number photographed again stays in the lot. Subfolders
+ lot. The first dedicated tape photo in a run of items starts the next lot even when the
+ number matches one already read (that photo is the divider). A later photo of the same tape
+ stays in the new lot. Subfolders
  split too. `CATALOG_DIVIDER_SPLITS=false` turns it off. Single-lot jobs (phone, Add one lot) ignore it.
 - **SKU-tape frames are never the lot hero.** After Stage-1 triage, `select_analysis_photos`
   coerces dedicated tape shots to `photo_role=tape` (including a mis-tagged `hero` that has a

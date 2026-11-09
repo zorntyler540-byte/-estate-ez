@@ -50,6 +50,27 @@ def test_first_tape_after_items_starts_the_next_lot(tmp_path: Path) -> None:
     assert [p.name for p, _ in segments[1]] == [f"IMG_{i:04d}.jpg" for i in range(3839, 3842)]
 
 
+def test_tape_photo_splits_even_when_the_number_matches(tmp_path: Path) -> None:
+    """A hero already read DK3001RG; the dedicated tape photo still starts the next lot."""
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    paths = [folder / name for name in ("mask.jpg", "mask2.jpg", "tape.jpg", "jewel.jpg", "tape2.jpg")]
+    hero = _row("mask2.jpg", "DK3001RG")
+    hero["photo_role"] = "hero"
+    tape = _row("tape.jpg", "DK3001RG")
+    again = _row("tape2.jpg", "DK3001RG")
+    ordered = [
+        (paths[0], paths[0].name, _row(paths[0].name)),
+        (paths[1], paths[1].name, hero),
+        (paths[2], paths[2].name, tape),
+        (paths[3], paths[3].name, _row(paths[3].name)),
+        (paths[4], paths[4].name, again),
+    ]
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [p.name for p, _ in segments[0]] == ["mask.jpg", "mask2.jpg"]
+    assert [p.name for p, _ in segments[1]] == ["tape.jpg", "jewel.jpg", "tape2.jpg"]
+
+
 def test_tape_frame_without_a_readable_number_still_divides(tmp_path: Path) -> None:
     folder = tmp_path / "batch"
     folder.mkdir()
