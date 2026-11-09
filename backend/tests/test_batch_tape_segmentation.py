@@ -30,9 +30,41 @@ def test_segment_splits_on_new_tape_marking(tmp_path: Path) -> None:
         (paths[4], paths[4].name, _row(paths[4].name)),
     ]
     segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert len(segments) == 3
+    assert [p.name for p, _ in segments[0]] == ["IMG_0000.jpg"]
+    assert [p.name for p, _ in segments[1]] == ["IMG_0001.jpg", "IMG_0002.jpg"]
+    assert [p.name for p, _ in segments[2]] == ["IMG_0003.jpg", "IMG_0004.jpg"]
+
+
+def test_first_tape_after_items_starts_the_next_lot(tmp_path: Path) -> None:
+    """Masks, then the tape photo, then the jewelry: the tape starts the jewelry lot."""
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    paths = [folder / f"IMG_{i:04d}.jpg" for i in range(3832, 3842)]
+    ordered = []
+    for path in paths:
+        marking = "DK3001RG" if path.name == "IMG_3839.jpg" else None
+        ordered.append((path, path.name, _row(path.name, marking)))
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [p.name for p, _ in segments[0]] == [f"IMG_{i:04d}.jpg" for i in range(3832, 3839)]
+    assert [p.name for p, _ in segments[1]] == [f"IMG_{i:04d}.jpg" for i in range(3839, 3842)]
+
+
+def test_tape_frame_without_a_readable_number_still_divides(tmp_path: Path) -> None:
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    paths = [folder / f"p{i}.jpg" for i in range(3)]
+    tape = _row(paths[1].name)
+    tape["photo_role"] = "tape"
+    ordered = [
+        (paths[0], paths[0].name, _row(paths[0].name)),
+        (paths[1], paths[1].name, tape),
+        (paths[2], paths[2].name, _row(paths[2].name)),
+    ]
+    segments = _segment_batch_lots_by_tape(folder, ordered)
     assert len(segments) == 2
-    assert [p.name for p, _ in segments[0]] == ["IMG_0000.jpg", "IMG_0001.jpg", "IMG_0002.jpg"]
-    assert [p.name for p, _ in segments[1]] == ["IMG_0003.jpg", "IMG_0004.jpg"]
+    assert [p.name for p, _ in segments[0]] == ["p0.jpg"]
+    assert [p.name for p, _ in segments[1]] == ["p1.jpg", "p2.jpg"]
 
 
 def test_segment_keeps_same_tape_in_one_lot(tmp_path: Path) -> None:

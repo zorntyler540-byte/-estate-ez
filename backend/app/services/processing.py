@@ -783,20 +783,25 @@ def _segment_batch_lots_by_tape(
     segments: list[list[tuple[Path, str]]] = []
     current: list[tuple[Path, str]] = []
     open_sku: str | None = None
+    current_has_item = False
     prev_batch_key: str | None = None
     divider_set = find_lot_dividers(ordered)
+
+    def _close_segment() -> None:
+        nonlocal current, current_has_item
+        if current:
+            segments.append(current)
+        current = []
+        current_has_item = False
 
     for path, key, row in ordered:
         batch_key = _subfolder_batch_key(folder, path)
         if prev_batch_key is not None and batch_key != prev_batch_key and current:
-            segments.append(current)
-            current = []
+            _close_segment()
             open_sku = None
 
         if path in divider_set:
-            if current:
-                segments.append(current)
-                current = []
+            _close_segment()
             open_sku = None
             prev_batch_key = batch_key
             if dividers is not None:
@@ -806,26 +811,37 @@ def _segment_batch_lots_by_tape(
         marking = triage_tape_marking_from_row(row)
         sku_candidate = tape_marking_canonical(marking) if marking else None
         sku_ok = bool(sku_candidate and tape_sku_opens_new_lot(sku_candidate))
+        role_tape = str(row.get("photo_role") or "").strip().lower() == "tape"
 
         if sku_ok and sku_candidate and not settings.skip_tape_verify:
             verified = verify_tape_sku(path, sku_candidate)
             if verified is False:
                 sku_ok = False
 
+        # A different tape number starts a lot. So does the first tape photo after item
+        # shots that have no number yet: that tape belongs to the next lot, not the items
+        # photographed before it (IMG_3839 between the masks and the jewelry).
+        starts_new = False
         if (
             sku_ok
             and sku_candidate
             and open_sku is not None
             and not tape_sku_same_marking(open_sku, sku_candidate)
         ):
-            if current:
-                segments.append(current)
-                current = []
-            open_sku = sku_candidate
+            starts_new = True
+        elif (sku_ok or role_tape) and open_sku is None and current_has_item:
+            starts_new = True
+
+        if starts_new:
+            _close_segment()
+            open_sku = sku_candidate if sku_ok else None
+            _LOG.info("tape boundary file=%s marking=%s", path.name, sku_candidate or "")
         elif sku_ok and sku_candidate and open_sku is None:
             open_sku = sku_candidate
 
         current.append((path, key))
+        if not role_tape:
+            current_has_item = True
         prev_batch_key = batch_key
 
     if current:
