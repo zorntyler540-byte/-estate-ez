@@ -20,6 +20,10 @@ _EDGE_LEVEL = 40
 _CENTER_MARGIN = 0.2
 MAX_DIVIDER_CENTER_EDGE_FRACTION = 0.04
 MAX_DIVIDER_FRAME_EDGE_FRACTION = 0.06
+# A creased or shadowed sheet still gets the neighbour check. The strict limits above are only
+# the fallback when that Gemini call is unavailable.
+LOOSE_DIVIDER_CENTER_EDGE_FRACTION = 0.16
+LOOSE_DIVIDER_FRAME_EDGE_FRACTION = 0.20
 # Blurry item frames also pass the pixel check; each costs one small Flash call.
 MAX_CONTEXT_CHECKS_PER_BATCH = 40
 _CONTEXT_THUMB_EDGE = 512
@@ -65,6 +69,13 @@ def frame_looks_blank(path: Path) -> bool:
     return _fractions_look_blank(frame_edge_fractions(path))
 
 
+def _fractions_might_be_blank(fracs: tuple[float, float] | None) -> bool:
+    if fracs is None:
+        return False
+    center, whole = fracs
+    return center <= LOOSE_DIVIDER_CENTER_EDGE_FRACTION and whole <= LOOSE_DIVIDER_FRAME_EDGE_FRACTION
+
+
 def _row_can_be_divider(row: dict) -> bool:
     if str(row.get("lot_tape_marking") or "").strip():
         return False
@@ -105,16 +116,20 @@ def find_lot_dividers(ordered: list[tuple[Path, str, dict]]) -> set[Path]:
         if not _row_can_be_divider(row):
             continue
         fracs = frame_edge_fractions(path)
-        if not _fractions_look_blank(fracs):
-            continue
         flagged = bool(row.get("is_lot_divider"))
+        # A white sheet with a crease fails the strict edge test. Triage already calling it a
+        # divider, or a loose edge test, is enough to spend one neighbour check on it.
+        if not flagged and not _fractions_might_be_blank(fracs):
+            continue
+        strict = _fractions_look_blank(fracs)
         in_context: bool | None = None
         if checks < MAX_CONTEXT_CHECKS_PER_BATCH:
             checks += 1
             before = ordered[i - 1][0] if i > 0 else None
             after = ordered[i + 1][0] if i + 1 < len(ordered) else None
             in_context = check_divider_in_context(path, before, after)
-        is_divider = in_context if in_context is not None else flagged
+        # Neighbour check decides. Without it, only a strict blank that triage also flagged splits.
+        is_divider = in_context if in_context is not None else (flagged and strict)
         _LOG.info(
             "divider candidate file=%s center_edges=%.3f frame_edges=%.3f triage_flag=%s context=%s divider=%s",
             path.name,

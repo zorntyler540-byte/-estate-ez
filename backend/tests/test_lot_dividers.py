@@ -224,6 +224,34 @@ def test_context_check_overrides_the_single_photo_flag(tmp_path: Path, monkeypat
     assert _names(segments) == [[1, 2], [4, 5, 6, 7, 8]]
 
 
+def _creased_sheet(path: Path) -> Path:
+    """White paper with a few hard folds: past the strict edge test, still low-detail."""
+    im = Image.new("RGB", (1200, 900), (246, 246, 242))
+    draw = ImageDraw.Draw(im)
+    for x in (280, 460, 700, 900):
+        draw.line((x, 0, x + 30, 900), fill=(30, 30, 28), width=7)
+    im.save(path, "JPEG", quality=85)
+    return path
+
+
+def test_creased_sheet_splits_when_the_neighbour_check_agrees(tmp_path: Path, monkeypatch) -> None:
+    folder, ordered = _batch(tmp_path, list("iii"))
+    sheet = ordered[1][0]
+    _creased_sheet(sheet)
+    assert not frame_looks_blank(sheet)
+    ordered[1] = (sheet, sheet.name, _row(sheet.name, divider=False))
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", lambda path, _b, _a: path == sheet)
+    assert find_lot_dividers(ordered) == {sheet}
+    assert _names(_segment_batch_lots_by_tape(folder, ordered)) == [[1], [3]]
+
+
+def test_triage_flag_on_a_real_photo_needs_the_neighbour_check(tmp_path: Path, monkeypatch) -> None:
+    folder, ordered = _batch(tmp_path, list("ifi"))
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", lambda *_a: False)
+    assert find_lot_dividers(ordered) == set()
+    assert _names(_segment_batch_lots_by_tape(folder, ordered)) == [[1, 2, 3]]
+
+
 def test_context_unavailable_falls_back_to_triage_flag(tmp_path: Path) -> None:
     _folder, ordered = _batch(tmp_path, list("iibidi"))
     assert {p.name for p in find_lot_dividers(ordered)} == {"web-b1-0005.jpg"}

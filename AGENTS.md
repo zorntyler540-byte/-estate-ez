@@ -194,11 +194,12 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   deterministic sort (it does not re-call Gemini). Do not bring back naive hero-first-only
   reordering or a separate “Fix photo order” capture-order reset.
 - **Blank divider photos split batch uploads without tape** (`app/services/lot_dividers.py`).
- In Choose folder / Choose photos batches, a frame is a divider only when the Pillow edge check
- passes (few edges) **and** Gemini agrees: one small Flash call (`check_lot_divider`) sees the
- candidate with the photos before and after it; the Stage-1 `is_lot_divider` flag is only the
- fallback when that call fails. The frame is left out of every lot. Each candidate logs a
- `divider candidate` line. That double check is why this is not the removed Gemini-only
+ In Choose folder / Choose photos batches, a frame is a divider when a small Flash call
+ (`check_lot_divider`) sees it with the photos before and after it and says so. That call runs
+ when Stage-1 triage sets `is_lot_divider` or the frame is low-detail, including a creased or
+ shadowed white sheet that fails the strict edge test. The strict Pillow check is only the
+ fallback when the call fails, and only together with the triage flag. The frame is left out of
+ every lot. Each candidate logs a `divider candidate` line. That double check is why this is not the removed Gemini-only
  `lot_boundary_blank_page` (it skipped real white-plate frames). Repeated/leading/trailing dividers make no empty lots; tape SKU and subfolders still
  split too. `CATALOG_DIVIDER_SPLITS=false` turns it off. Single-lot jobs (phone, Add one lot) ignore it.
 - **SKU-tape frames are never the lot hero.** After Stage-1 triage, `select_analysis_photos`
