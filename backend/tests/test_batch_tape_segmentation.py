@@ -68,6 +68,35 @@ def test_each_tape_photo_after_items_starts_a_lot(tmp_path: Path) -> None:
     assert [p.name for p, _ in segments[2]] == ["tape2.jpg"]
 
 
+def test_mask_photo_with_a_tape_roll_does_not_split(tmp_path: Path, monkeypatch) -> None:
+    """IMG_3832 shows the masks and a tape roll. IMG_3839 is the tape photo."""
+    from app.services import processing
+
+    def audit(path: Path, _claimed: str):
+        if path.name == "IMG_3832.jpg":
+            return (True, False, True)
+        if path.name == "IMG_3839.jpg":
+            return (True, True, False)
+        return (True, False, False)
+
+    monkeypatch.setattr(processing, "classify_tape_frame", audit)
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    paths = [folder / f"IMG_{i:04d}.jpg" for i in range(3832, 3842)]
+    for path in paths:
+        path.write_bytes(b"")
+    ordered = []
+    for path in paths:
+        if path.name in ("IMG_3832.jpg", "IMG_3839.jpg"):
+            row = _row(path.name, "DK3001RG")
+        else:
+            row = _row(path.name)
+        ordered.append((path, path.name, row))
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [p.name for p, _ in segments[0]] == [f"IMG_{i:04d}.jpg" for i in range(3832, 3839)]
+    assert [p.name for p, _ in segments[1]] == [f"IMG_{i:04d}.jpg" for i in range(3839, 3842)]
+
+
 def test_same_number_still_splits_when_the_photo_is_of_the_tape(tmp_path: Path, monkeypatch) -> None:
     """IMG_3839 was read as DK3001, the same digits as the open lot, and was not tagged tape."""
     from app.services import processing
