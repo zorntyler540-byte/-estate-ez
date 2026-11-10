@@ -265,7 +265,7 @@ Rules:
   text verbatim into brand_text (e.g. PEDERSOLI, TOWER, GR, maker name + date).
   **Handwritten inventory tags** (paper/card in plastic, tied to item): use item_front when the tag fills much of
   the frame; copy every readable line into brand_text (model name, caliber, maker, serial).
-- tape: a frame whose subject is the colored estate lot tape or the tape roll (purple, lavender, blue, bright green, or yellow masking tape with handwriting), even when a few items sit at the edge. Prefer tape over hero or item_front whenever the roll or strip is what the photo is of. **Hard rule: a tape frame must never be photo_role hero.**
+- tape: photo_role **tape** whenever the photo is of the colored estate lot tape or the tape roll (purple, lavender, blue, bright green, or yellow masking tape with a handwritten lot code), including a roll sitting on the table and a strip filling the frame. A tape photo separates one lot from the next, so do not call it item_front or hero. **Hard rule: a tape frame must never be photo_role hero.**
   When **any** colored estate lot tape with a lot number is visible (even on a **tape roll** in the foreground of a hero shot), copy the marking into **lot_tape_marking** (e.g. MS530, MS 530, #8524).
 - unusable: blank, extreme blur, or not catalog-worthy.
 - is_lot_divider: true only for a deliberate **separator** frame with no merchandise at all — a blank sheet of paper,

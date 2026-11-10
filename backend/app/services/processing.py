@@ -784,17 +784,15 @@ def _segment_batch_lots_by_tape(
     current: list[tuple[Path, str]] = []
     open_sku: str | None = None
     current_has_item = False
-    segment_has_tape = False
     prev_batch_key: str | None = None
     divider_set = find_lot_dividers(ordered)
 
     def _close_segment() -> None:
-        nonlocal current, current_has_item, segment_has_tape
+        nonlocal current, current_has_item
         if current:
             segments.append(current)
         current = []
         current_has_item = False
-        segment_has_tape = False
 
     for path, key, row in ordered:
         batch_key = _subfolder_batch_key(folder, path)
@@ -820,18 +818,19 @@ def _segment_batch_lots_by_tape(
             if verified is False:
                 sku_ok = False
 
-        # A different tape number starts a lot. So does the first dedicated tape photo in a
-        # run of items, even when the number matches one already read: that photo is the
-        # divider (IMG_3839), and a second shot of the same tape stays in the new lot.
+        # A dedicated tape photo starts the next lot once the current lot has item shots,
+        # unless it is another photo of the same number. IMG_3864 was tape number 3003 inside
+        # a lot that had already opened on DK3002RG, and the double-check rejected 3003, so
+        # the tea set and the red glass stayed together.
+        same_marking = bool(
+            sku_candidate
+            and open_sku
+            and tape_sku_same_marking(open_sku, sku_candidate)
+        )
         starts_new = False
-        if (
-            sku_ok
-            and sku_candidate
-            and open_sku is not None
-            and not tape_sku_same_marking(open_sku, sku_candidate)
-        ):
+        if sku_ok and sku_candidate and open_sku is not None and not same_marking:
             starts_new = True
-        elif role_tape and current_has_item and not segment_has_tape:
+        elif role_tape and current_has_item and not same_marking:
             starts_new = True
 
         if starts_new:
@@ -851,9 +850,7 @@ def _segment_batch_lots_by_tape(
             )
 
         current.append((path, key))
-        if role_tape:
-            segment_has_tape = True
-        else:
+        if not role_tape:
             current_has_item = True
         prev_batch_key = batch_key
 
