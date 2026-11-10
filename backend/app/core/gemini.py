@@ -624,10 +624,23 @@ def analyze_photo(photo_path: Path, **kwargs) -> dict[str, Any] | None:
 
 # --- Tape Verification logic follows standard audit rules ---
 def verify_tape_sku(photo_path: Path, claimed_marking: str) -> bool | None:
+    """True when the claimed lot code is on estate tape. None when the check fails."""
+    audited = classify_tape_frame(photo_path, claimed_marking)
+    return None if audited is None else audited[0]
+
+
+def classify_tape_frame(photo_path: Path, claimed_marking: str) -> tuple[bool, bool] | None:
+    """(number_matches, photo_is_of_the_tape). None when the check cannot be completed.
+
+    photo_is_of_the_tape is true when the frame is the tape or the tape roll, which is the
+    divider between lots even if the handwritten number matches the previous lot.
+    """
     timeout = float(settings.tape_verify_total_timeout_seconds)
-    fut = _get_tape_verify_pool().submit(_verify_tape_sku_inner, photo_path, claimed_marking)
-    try: return fut.result(timeout=timeout)
-    except Exception: return None
+    fut = _get_tape_verify_pool().submit(_classify_tape_frame_inner, photo_path, claimed_marking)
+    try:
+        return fut.result(timeout=timeout)
+    except Exception:
+        return None
 
 def _normalize_tape_audit_reading(raw: object) -> str:
     if raw is None:
@@ -638,7 +651,7 @@ def _normalize_tape_audit_reading(raw: object) -> str:
     return (tape_marking_canonical(s) or sku_digits(s) or "").strip().upper()
 
 
-def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | None:
+def _classify_tape_frame_inner(photo_path: Path, claimed_marking: str) -> tuple[bool, bool] | None:
     claim = (claimed_marking or "").strip()
     if not claim:
         return None
@@ -649,7 +662,10 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
         "Letter-prefix codes (e.g. MS530) count when the letters+digits are on that colored tape. "
         "Set new_lot_from_tape false if the marking is only on a yellow MEASURING tape (inch/cm scale), ruler, "
         "sticker, tag, or item body. "
-        "Return JSON {\"new_lot_from_tape\": bool, \"lot_digits_on_tape\": string}. "
+        "Set dedicated_tape_photo true only when this photo is OF the tape or the tape roll "
+        "(that photo separates one lot from the next). False when the photo is of the merchandise "
+        "and the tape is only beside it. "
+        "Return JSON {\"new_lot_from_tape\": bool, \"lot_digits_on_tape\": string, \"dedicated_tape_photo\": bool}. "
         "lot_digits_on_tape: exact marking read from the tape (letters+digits as seen), or null if none/unreadable."
     )
     prompt = prompt + _tape_verify_prompt_extra()
@@ -665,9 +681,10 @@ def _verify_tape_sku_inner(photo_path: Path, claimed_marking: str) -> bool | Non
     if not text: return None
     try:
         res = json.loads(re.sub(r"```json|```", "", text).strip())
+        dedicated = bool(res.get("dedicated_tape_photo"))
         if res.get("new_lot_from_tape") is not True:
-            return False
+            return (False, dedicated)
         read_norm = _normalize_tape_audit_reading(res.get("lot_digits_on_tape"))
         claim_norm = _normalize_tape_audit_reading(claim)
-        return bool(claim_norm) and read_norm == claim_norm
+        return (bool(claim_norm) and read_norm == claim_norm, dedicated)
     except Exception: return None

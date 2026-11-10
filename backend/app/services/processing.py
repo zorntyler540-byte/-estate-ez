@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import google_api_key, settings
 from app.core.catalog_crash import processing_error_message_preserving_crash
-from app.core.gemini import verify_tape_sku
+from app.core.gemini import classify_tape_frame
 from app.job_lock import job_advisory_lock_key
 from app.core.lotting import (
     LotOutput,
@@ -812,25 +812,29 @@ def _segment_batch_lots_by_tape(
         sku_candidate = tape_marking_canonical(marking) if marking else None
         sku_ok = bool(sku_candidate and tape_sku_opens_new_lot(sku_candidate))
         role_tape = str(row.get("photo_role") or "").strip().lower() == "tape"
+        dedicated = role_tape
 
         if sku_ok and sku_candidate and not settings.skip_tape_verify:
-            verified = verify_tape_sku(path, sku_candidate)
-            if verified is False:
-                sku_ok = False
+            audited = classify_tape_frame(path, sku_candidate)
+            if audited is not None:
+                matches, is_tape_photo = audited
+                if matches is False:
+                    sku_ok = False
+                if is_tape_photo:
+                    dedicated = True
 
-        # A dedicated tape photo starts the next lot once the current lot has item shots,
-        # unless it is another photo of the same number. IMG_3864 was tape number 3003 inside
-        # a lot that had already opened on DK3002RG, and the double-check rejected 3003, so
-        # the tea set and the red glass stayed together.
+        # A photo of the tape starts the next lot once this lot already has items, even when
+        # the handwritten number matches the previous lot. IMG_3839 was read as DK3001, the
+        # same digits as DK3001RG, and was not tagged tape, so the masks stayed with the jewelry.
         same_marking = bool(
             sku_candidate
             and open_sku
             and tape_sku_same_marking(open_sku, sku_candidate)
         )
         starts_new = False
-        if sku_ok and sku_candidate and open_sku is not None and not same_marking:
+        if dedicated and current_has_item:
             starts_new = True
-        elif role_tape and current_has_item and not same_marking:
+        elif sku_ok and sku_candidate and open_sku is not None and not same_marking:
             starts_new = True
 
         if starts_new:
@@ -842,9 +846,10 @@ def _segment_batch_lots_by_tape(
 
         if sku_ok or role_tape:
             _LOG.info(
-                "tape seen file=%s role_tape=%s marking=%s split=%s",
+                "tape seen file=%s role_tape=%s dedicated=%s marking=%s split=%s",
                 path.name,
                 role_tape,
+                dedicated,
                 sku_candidate or "",
                 starts_new,
             )
