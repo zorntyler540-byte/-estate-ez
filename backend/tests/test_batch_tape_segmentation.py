@@ -68,16 +68,16 @@ def test_each_tape_photo_after_items_starts_a_lot(tmp_path: Path) -> None:
     assert [p.name for p, _ in segments[2]] == ["tape2.jpg"]
 
 
-def test_mask_photo_with_a_tape_roll_does_not_split(tmp_path: Path, monkeypatch) -> None:
-    """IMG_3832 shows the masks and a tape roll. IMG_3839 is the tape photo."""
+def test_tape_roll_beside_the_items_starts_the_lot(tmp_path: Path, monkeypatch) -> None:
+    """IMG_3839 is the jewelry on the table with the tape roll at the left."""
     from app.services import processing
 
     def audit(path: Path, _claimed: str):
         if path.name == "IMG_3832.jpg":
-            return (True, False, True)
+            return (True, True, True)
         if path.name == "IMG_3839.jpg":
-            return (True, True, False)
-        return (True, False, False)
+            return (True, True, True)
+        return (True, False, True)
 
     monkeypatch.setattr(processing, "classify_tape_frame", audit)
     folder = tmp_path / "batch"

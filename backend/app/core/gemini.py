@@ -632,7 +632,7 @@ def verify_tape_sku(photo_path: Path, claimed_marking: str) -> bool | None:
 def classify_tape_frame(photo_path: Path, claimed_marking: str) -> tuple[bool, bool, bool] | None:
     """(number_matches, photo_is_of_the_tape, shows_merchandise). None when the check fails.
 
-    A mask or jewelry shot with a tape roll in the frame is merchandise, not the divider.
+    A wide shot with the tape roll beside the items starts that lot. The roll does not have to be alone.
     """
     timeout = float(settings.tape_verify_total_timeout_seconds)
     fut = _get_tape_verify_pool().submit(_classify_tape_frame_inner, photo_path, claimed_marking)
@@ -661,10 +661,12 @@ def _classify_tape_frame_inner(photo_path: Path, claimed_marking: str) -> tuple[
         "Letter-prefix codes (e.g. MS530) count when the letters+digits are on that colored tape. "
         "Set new_lot_from_tape false if the marking is only on a yellow MEASURING tape (inch/cm scale), ruler, "
         "sticker, tag, or item body. "
-        "Set shows_merchandise true if any sellable item is visible: a mask, jewelry, glass, dish, "
-        "clothing, or any other product. A tape roll sitting in front of those items is still merchandise. "
-        "Set dedicated_tape_photo true ONLY when shows_merchandise is false and the photo is of the "
-        "tape strip or the tape roll alone. That is the divider between lots. "
+        "Set dedicated_tape_photo true when a colored estate tape ROLL or a tape strip with a lot "
+        "number is in the frame to mark this lot. That includes a wide shot where the roll sits "
+        "beside the items (the roll is on the table with the jewelry or the masks). That photo "
+        "STARTS the lot. Also true for a close-up of the tape alone. "
+        "Set dedicated_tape_photo false only when no tape roll and no tape strip is visible. "
+        "Set shows_merchandise true if sellable items are also visible. "
         "Return JSON {\"new_lot_from_tape\": bool, \"lot_digits_on_tape\": string, "
         "\"dedicated_tape_photo\": bool, \"shows_merchandise\": bool}. "
         "lot_digits_on_tape: exact marking read from the tape (letters+digits as seen), or null if none/unreadable."
@@ -683,7 +685,7 @@ def _classify_tape_frame_inner(photo_path: Path, claimed_marking: str) -> tuple[
     try:
         res = json.loads(re.sub(r"```json|```", "", text).strip())
         shows_merchandise = bool(res.get("shows_merchandise"))
-        dedicated = bool(res.get("dedicated_tape_photo")) and not shows_merchandise
+        dedicated = bool(res.get("dedicated_tape_photo"))
         if res.get("new_lot_from_tape") is not True:
             return (False, dedicated, shows_merchandise)
         read_norm = _normalize_tape_audit_reading(res.get("lot_digits_on_tape"))

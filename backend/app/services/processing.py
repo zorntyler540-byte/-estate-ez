@@ -819,13 +819,10 @@ def _segment_batch_lots_by_tape(
             if audited is not None:
                 matches = audited[0]
                 is_tape_photo = audited[1] if len(audited) > 1 else False
-                shows_merchandise = audited[2] if len(audited) > 2 else False
                 if matches is False:
                     sku_ok = False
-                if shows_merchandise:
-                    # IMG_3832 is the masks with a tape roll in the frame. That is not the divider.
-                    dedicated = False
-                elif is_tape_photo:
+                # A wide shot with the tape roll beside the items starts that lot (IMG_3839).
+                if is_tape_photo:
                     dedicated = True
 
         # A photo of the tape starts the next lot once this lot already has items, even when
