@@ -23,10 +23,12 @@ import {
   IMPORT_GAP_CHOICES_MS,
   IMPORT_MAX_PICKS,
   planImportGroups,
+  skuSequence,
   type ImportGroup,
   type ImportGroupMode,
   type ImportPick
 } from "@/lib/queue/importGroups";
+import { blankSplitKeys, tapeSplitKeys } from "@/lib/queue/importSuggest";
 
 function gapLabel(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)} min`;
@@ -38,7 +40,7 @@ function plural(n: number, word: string): string {
 
 export default function ImportPhotosScreen() {
   const insets = useSafeAreaInsets();
-  const { selectedSaleId, selectedSaleName, signedInRole } = useAuth();
+  const { token, selectedSaleId, selectedSaleName, signedInRole } = useAuth();
   const { getSaleName } = useSales();
   const { requestUpload } = useSyncActions();
   const saleLabel = selectedSaleId ? getSaleName(selectedSaleId, selectedSaleName) : "";
@@ -50,6 +52,12 @@ export default function ImportPhotosScreen() {
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
   /** SKU per lot, keyed by the lot's first photo so unrelated splits keep it. */
   const [skuByStart, setSkuByStart] = useState<Record<string, string>>({});
+  /** Staff typed this lot's SKU; it is not replaced when the starting number changes. */
+  const [skuEdited, setSkuEdited] = useState<Set<string>>(() => new Set());
+  const [skuStart, setSkuStart] = useState("");
+  /** Blank frames and tape-roll shots. A Split/Join tap undoes one. */
+  const [suggested, setSuggested] = useState<Set<string>>(() => new Set());
+  const [suggesting, setSuggesting] = useState(false);
   const [picking, setPicking] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [note, setNote] = useState("");
@@ -62,9 +70,10 @@ export default function ImportPhotosScreen() {
   const dated = picks.length > 0 && picks.every((p) => p.takenAt != null);
   const effectiveMode: ImportGroupMode = mode === "gap" && dated ? "gap" : "one";
   const groups = useMemo(
-    () => planImportGroups(picks, { mode: effectiveMode, gapMs, toggled }),
-    [picks, effectiveMode, gapMs, toggled]
+    () => planImportGroups(picks, { mode: effectiveMode, gapMs, toggled, suggested }),
+    [picks, effectiveMode, gapMs, toggled, suggested]
   );
+  const autoSkus = useMemo(() => skuSequence(skuStart, groups.length), [skuStart, groups.length]);
   const cappedCount = groups.filter((g) => g.capped).length;
 
   const choose = useCallback(async () => {
@@ -76,7 +85,9 @@ export default function ImportPhotosScreen() {
       if (!res) return;
       setPicks(res.picks);
       setToggled(new Set());
+      setSuggested(new Set());
       setSkuByStart({});
+      setSkuEdited(new Set());
       const notes: string[] = [];
       if (res.truncated) notes.push(`Only the first ${IMPORT_MAX_PICKS} photos were kept — import the rest next.`);
       if (!res.picks.every((p) => p.takenAt != null)) {
@@ -90,6 +101,28 @@ export default function ImportPhotosScreen() {
     }
   }, [picking, importing]);
 
+  useEffect(() => {
+    if (!picks.length) {
+      setSuggesting(false);
+      return;
+    }
+    let cancel = false;
+    setSuggesting(true);
+    void (async () => {
+      const blanks = await blankSplitKeys(picks);
+      if (cancel) return;
+      setSuggested(new Set(blanks));
+      const tape = token ? await tapeSplitKeys(picks, token) : null;
+      if (cancel) return;
+      if (tape) setSuggested((prev) => new Set([...prev, ...tape]));
+      else if (token) setNote((prev) => prev || "Couldn't check the photos for tape rolls. Tap Split where a lot should start.");
+      setSuggesting(false);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [picks, token]);
+
   const toggleAt = useCallback((key: string) => {
     setToggled((prev) => {
       const next = new Set(prev);
@@ -101,10 +134,11 @@ export default function ImportPhotosScreen() {
 
   const runImport = useCallback(async () => {
     if (!selectedSaleId || importing || !groups.length) return;
-    const lots = groups.map((g) => ({
-      picks: g.picks,
-      manualSku: skuByStart[g.picks[0]!.key]?.trim() || null
-    }));
+    const lots = groups.map((g, index) => {
+      const key = g.picks[0]!.key;
+      const typed = skuEdited.has(key) ? skuByStart[key]?.trim() || "" : autoSkus?.[index] || "";
+      return { picks: g.picks, manualSku: typed || null };
+    });
     setProgress({ photosDone: 0, photos: picks.length, lotsQueued: 0, lots: lots.length });
     try {
       const out = await importLots({
@@ -129,7 +163,7 @@ export default function ImportPhotosScreen() {
         `${e instanceof Error ? e.message : "Copying photos failed."} Lots already queued stay in Queue; pick the rest again.`
       );
     }
-  }, [selectedSaleId, importing, groups, skuByStart, picks.length, saleLabel, selectedSaleName, requestUpload]);
+  }, [selectedSaleId, importing, groups, skuByStart, skuEdited, autoSkus, picks.length, saleLabel, selectedSaleName, requestUpload]);
 
   const renderGroup = useCallback(
     ({ item, index }: { item: ImportGroup; index: number }) => {
@@ -148,11 +182,14 @@ export default function ImportPhotosScreen() {
             placeholder="SKU (optional)"
             placeholderTextColor={theme.textSubtle}
             style={styles.input}
-            value={skuByStart[start] ?? ""}
+            value={skuEdited.has(start) ? skuByStart[start] ?? "" : autoSkus?.[index] ?? skuByStart[start] ?? ""}
             autoCapitalize="characters"
             autoCorrect={false}
             editable={!importing}
-            onChangeText={(text) => setSkuByStart((prev) => ({ ...prev, [start]: text }))}
+            onChangeText={(text) => {
+              setSkuEdited((prev) => new Set(prev).add(start));
+              setSkuByStart((prev) => ({ ...prev, [start]: text }));
+            }}
           />
           <FlatList
             horizontal
@@ -182,7 +219,7 @@ export default function ImportPhotosScreen() {
         </View>
       );
     },
-    [importing, skuByStart, toggleAt]
+    [importing, skuByStart, skuEdited, autoSkus, toggleAt]
   );
 
   const header = (
@@ -247,9 +284,21 @@ export default function ImportPhotosScreen() {
               ))}
             </View>
           ) : null}
+          <TextInput
+            placeholder="Start SKUs at (optional, e.g. 1001)"
+            placeholderTextColor={theme.textSubtle}
+            style={styles.input}
+            value={skuStart}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            editable={!importing}
+            onChangeText={setSkuStart}
+          />
           <Text style={styles.meta}>
-            {plural(picks.length, "photo")} → {plural(groups.length, "lot")}. Tap Split on a photo to start a new lot
-            there, or Join on a lot's first photo to merge it into the lot above.
+            {suggesting ? "Looking for blank photos and tape rolls… " : ""}
+            {plural(picks.length, "photo")} → {plural(groups.length, "lot")}. Photos stay in camera order
+            (IMG_9 before IMG_10). A blank frame or a shot with the tape roll starts a suggested lot — tap Split
+            or Join to change it. A starting SKU numbers each lot in order.
             {cappedCount ? ` Lots over ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (the CT Bids limit) are split for you.` : ""}
           </Text>
         </>

@@ -14,6 +14,8 @@ export type ImportPick = {
   height?: number;
   /** When the shot was taken (EXIF), or null when the picker gave no date. */
   takenAt: number | null;
+  /** Camera file name when the picker has one (``IMG_3839.JPG``). */
+  fileName?: string | null;
   /** 0-based position in the picker result (selection order on iOS 15+). */
   pickIndex: number;
 };
@@ -67,14 +69,51 @@ export function exifTakenAtMs(exif: Record<string, unknown> | null | undefined):
   return null;
 }
 
+/** Trailing number in a camera name (``IMG_3839.JPG`` → 3839). */
+export function cameraShotNumber(fileName: string | null | undefined): number | null {
+  if (!fileName) return null;
+  const match = fileName.match(/(\d+)(?=\D*$)/);
+  if (!match) return null;
+  const n = parseInt(match[1]!, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
- * Photo order inside the import. Time-gap grouping needs shooting order, so it sorts by
- * capture time when every pick has one; otherwise (and for "one lot") pick order is kept.
+ * Photo order inside the import. Camera file numbers win (IMG_9 before IMG_10) because the
+ * Photos picker does not always return shooting order. Otherwise time-gap mode sorts by
+ * capture time, and one-lot mode keeps pick order.
  */
 export function orderPicks(picks: readonly ImportPick[], mode: ImportGroupMode): ImportPick[] {
   const byPick = [...picks].sort((a, b) => a.pickIndex - b.pickIndex);
+  const numbered = byPick.filter((p) => cameraShotNumber(p.fileName) != null).length;
+  if (numbered >= 2 && numbered * 2 >= byPick.length) {
+    return byPick.sort((a, b) => {
+      const na = cameraShotNumber(a.fileName);
+      const nb = cameraShotNumber(b.fileName);
+      if (na != null && nb != null && na !== nb) return na - nb;
+      if (na != null && nb == null) return -1;
+      if (na == null && nb != null) return 1;
+      return a.pickIndex - b.pickIndex;
+    });
+  }
   if (mode !== "gap" || !byPick.every((p) => p.takenAt != null)) return byPick;
   return byPick.sort((a, b) => a.takenAt! - b.takenAt! || a.pickIndex - b.pickIndex);
+}
+
+/** Next SKUs from one starting value (``1001`` or ``DK1001``). Null when it does not end in a number. */
+export function skuSequence(start: string, count: number): string[] | null {
+  const match = start.trim().match(/^(.*?)(\d+)$/);
+  if (!match || count < 1) return null;
+  const prefix = match[1] ?? "";
+  const width = match[2]!.length;
+  let n = parseInt(match[2]!, 10);
+  if (!Number.isFinite(n)) return null;
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(prefix + String(n).padStart(width, "0"));
+    n += 1;
+  }
+  return out;
 }
 
 /** Keys of photos that start a new lot by themselves (before manual toggles). */
@@ -95,12 +134,22 @@ export function autoSplitKeys(ordered: readonly ImportPick[], mode: ImportGroupM
  */
 export function planImportGroups(
   picks: readonly ImportPick[],
-  opts: { mode: ImportGroupMode; gapMs?: number; toggled?: ReadonlySet<string>; maxPerLot?: number }
+  opts: {
+    mode: ImportGroupMode;
+    gapMs?: number;
+    toggled?: ReadonlySet<string>;
+    /** Suggested splits (blank frame or tape roll). A toggle undoes one. */
+    suggested?: ReadonlySet<string>;
+    maxPerLot?: number;
+  }
 ): ImportGroup[] {
   const ordered = orderPicks(picks, opts.mode);
   if (!ordered.length) return [];
   const cap = Math.max(1, opts.maxPerLot ?? CTBIDS_MAX_PHOTOS_PER_LOT);
   const auto = autoSplitKeys(ordered, opts.mode, opts.gapMs ?? IMPORT_DEFAULT_GAP_MS);
+  for (const key of opts.suggested ?? []) {
+    if (ordered[0]?.key !== key) auto.add(key);
+  }
   const toggled = opts.toggled ?? new Set<string>();
   const raw: { picks: ImportPick[]; start: ImportGroup["start"] }[] = [];
   for (let i = 0; i < ordered.length; i++) {

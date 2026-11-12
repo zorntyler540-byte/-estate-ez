@@ -1,10 +1,12 @@
 import {
+  cameraShotNumber,
   exifTakenAtMs,
   groupStartKeys,
   importCapturedAt,
   orderPicks,
   parseExifDate,
   planImportGroups,
+  skuSequence,
   type ImportPick
 } from "./importGroups";
 
@@ -72,6 +74,25 @@ assert(exifTakenAtMs(null) === null && exifTakenAtMs({}) === null, "no exif");
   const small = planImportGroups(picks.slice(0, 40), { mode: "one" });
   assert(small.length === 1 && !small[0]!.capped, "exactly 40 is one lot");
 }
+
+// Camera file numbers beat a scrambled picker, including IMG_9 before IMG_10.
+{
+  const named = (i: number, fileName: string): ImportPick => ({ ...pick(i, null, fileName), fileName });
+  const picks = [named(0, "IMG_3840.JPG"), named(1, "IMG_3839.JPG"), named(2, "IMG_10.JPG"), named(3, "IMG_9.JPG")];
+  assert(orderPicks(picks, "one").map((p) => p.fileName).join() === "IMG_9.JPG,IMG_10.JPG,IMG_3839.JPG,IMG_3840.JPG", "camera order");
+  assert(cameraShotNumber("IMG_3839.JPG") === 3839 && cameraShotNumber("note.txt") === null, "shot number");
+  const suggested = planImportGroups(picks, { mode: "one", suggested: new Set(["IMG_3839.JPG"]) });
+  assert(suggested.length === 2 && suggested[1]!.picks[0]!.fileName === "IMG_3839.JPG", "suggested tape split");
+  const undone = planImportGroups(picks, {
+    mode: "one",
+    suggested: new Set(["IMG_3839.JPG"]),
+    toggled: new Set(["IMG_3839.JPG"])
+  });
+  assert(undone.length === 1, "toggle undoes a suggestion");
+}
+assert(skuSequence("1001", 3)?.join() === "1001,1002,1003", "plain sku run");
+assert(skuSequence("DK99", 2)?.join() === "DK99,DK100", "prefix grows");
+assert(skuSequence("nope", 2) === null, "sku needs a number");
 
 assert(importCapturedAt(pick(0, T0), 3, 99) === T0, "exif time wins");
 assert(importCapturedAt(pick(0, null), 3, 1000) === 1003, "fallback keeps order");

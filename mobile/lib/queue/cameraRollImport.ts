@@ -52,6 +52,7 @@ export async function pickCameraRollPhotos(): Promise<PickResult | null> {
       width: a.width,
       height: a.height,
       takenAt: exifTakenAtMs(a.exif as Record<string, unknown> | null | undefined),
+      fileName: a.fileName ?? null,
       pickIndex: i
     });
   });

@@ -2223,6 +2223,39 @@ def sale_cataloged_mobile_drafts(
     )
 
 
+@app.post("/mobile/import-hints")
+def mobile_import_hints(
+    current: User = Depends(get_current_user_upload),
+    files: list[UploadFile] = File(),
+) -> dict[str, list[int]]:
+    """Which camera-roll frames should start a lot (tape roll or blank divider).
+
+    Files are in shooting order. The phone shows the result as suggested splits the staff can undo.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.import_hints import frame_starts_new_lot
+
+    del current
+    if len(files) > 80:
+        raise HTTPException(status_code=400, detail="Send at most 80 photos to check.")
+    tmp = Path(tempfile.mkdtemp(prefix="import-hints-"))
+    paths: list[Path] = []
+    try:
+        for i, upload in enumerate(files):
+            dest = tmp / f"{i:04d}.jpg"
+            dest.write_bytes(upload.file.read())
+            paths.append(dest)
+        splits: list[int] = []
+        if len(paths) > 1:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                flags = list(pool.map(frame_starts_new_lot, paths))
+            splits = [i for i, flag in enumerate(flags) if flag and i > 0]
+        return {"splits": splits}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 @app.post("/mobile/drafts/status", response_model=MobileDraftStatusOut)
 def mobile_drafts_status(
     payload: MobileDraftStatusIn,
