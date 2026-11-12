@@ -715,6 +715,12 @@ class SaleCoverPhotosPushIn(BaseModel):
     save_sale_mapping: bool = True
 
 
+class FillSkusIn(BaseModel):
+    """First number for lots in this sale that have no SKU yet. Example: 1001 or DK1001."""
+
+    start: str = Field(min_length=1, max_length=40)
+
+
 class SaleReservePriceIn(BaseModel):
     reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
     apply_to_lots: bool = True

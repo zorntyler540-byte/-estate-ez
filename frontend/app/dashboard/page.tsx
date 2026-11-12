@@ -2310,6 +2310,8 @@ export default function DashboardPage() {
   const [catalogPollEpoch, setCatalogPollEpoch] = useState(0);
   const selectedSaleIdRef = useRef<string>("");
   const [newSaleName, setNewSaleName] = useState("");
+  const [fillSkuStart, setFillSkuStart] = useState("1001");
+  const [fillingSkus, setFillingSkus] = useState(false);
   const [creatingSale, setCreatingSale] = useState(false);
   const [showClosedSales, setShowClosedSales] = useState(readShowClosedSales);
   const [isMasterAdmin, setIsMasterAdmin] = useState(false);
@@ -6067,6 +6069,55 @@ export default function DashboardPage() {
     }
   }
 
+  async function fillEmptySkus() {
+    if (!token || !selectedSaleId) return;
+    const start = fillSkuStart.trim();
+    if (!/^(.*)\d$/.test(start)) {
+      setError("Start the SKUs with a number, such as 1001 or DK1001.");
+      return;
+    }
+    const blank = lots.filter((l) => !(l.sku || "").trim());
+    if (blank.length < 1) {
+      setError("");
+      setPullCtSellerSalesMsg("Every lot in this sale already has a SKU.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Number ${blank.length} lot${blank.length === 1 ? "" : "s"} that have no SKU, starting at ${start}?\n\nLots that already have a SKU are left as they are. Numbers already used in this sale are skipped.`
+      )
+    ) {
+      return;
+    }
+    setFillingSkus(true);
+    setError("");
+    try {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/fill-skus`, token, {
+        method: "POST",
+        body: JSON.stringify({ start })
+      })) as { updated?: number; assignments?: { lot_id: string; sku: string }[] };
+      const byId = new Map((res.assignments || []).map((row) => [row.lot_id, row.sku]));
+      if (byId.size > 0) {
+        setLots((prev) =>
+          prev.map((lot) => {
+            const sku = byId.get(lot.id);
+            return sku ? { ...lot, sku, sku_needs_review: false } : lot;
+          })
+        );
+      }
+      const n = res.updated || 0;
+      setPullCtSellerSalesMsg(
+        n > 0
+          ? `Numbered ${n} lot${n === 1 ? "" : "s"} starting at ${start}.`
+          : "No empty SKUs to fill."
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not fill SKUs.");
+    } finally {
+      setFillingSkus(false);
+    }
+  }
+
   async function fillBlankLotConditions() {
     if (!token || !selectedSaleId) return;
     const blank = lots.filter((l) => !(l.condition_text || "").trim()).length;
@@ -7438,6 +7489,31 @@ export default function DashboardPage() {
                 onClick={() => void fillBlankLotConditions()}
               >
                 Fill blank conditions
+              </Button>
+              <span className="ct-toolbar__label">Empty SKUs</span>
+              <input
+                className="ct-input"
+                style={{ maxWidth: 120, width: "7rem" }}
+                aria-label="First SKU for lots that have none"
+                placeholder="1001"
+                value={fillSkuStart}
+                onChange={(e) => setFillSkuStart(e.target.value)}
+                disabled={fillingSkus || !selectedSaleId}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  fillingSkus ||
+                  !token ||
+                  !selectedSaleId ||
+                  lots.every((l) => Boolean((l.sku || "").trim()))
+                }
+                title="Give the next numbers to lots with no SKU, in the order they were cataloged. Lots that already have a SKU stay as they are."
+                onClick={() => void fillEmptySkus()}
+              >
+                {fillingSkus ? "Numbering…" : "Fill empty SKUs"}
               </Button>
               <Button
                 type="button"

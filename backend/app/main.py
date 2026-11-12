@@ -135,6 +135,7 @@ from app.schemas import (
     SalePostToCTSellerLotResult,
     SalePostToCTSellerOut,
     SalePostToCTSellerStatusOut,
+    FillSkusIn,
     SaleReservePriceIn,
     SaleReservePriceLotResult,
     SaleReservePriceOut,
@@ -2764,6 +2765,45 @@ def fill_blank_lot_conditions(
     if updated:
         db.commit()
     return {"updated": updated, "total": len(rows)}
+
+
+@app.post("/sales/{sale_id}/fill-skus")
+def fill_lot_skus(
+    sale_id: str,
+    payload: FillSkusIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Number lots that have no SKU, in the order they were cataloged. Existing SKUs stay."""
+    from app.services.sku_fill import SkuStartError, assign_blank_skus
+
+    sale = _sale_for_user(sale_id, current, db)
+    rows = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .order_by(Lot.created_at.asc(), Lot.id.asc())
+        .all()
+    )
+    blank = [row for row in rows if not (row.sku or "").strip()]
+    taken = {(row.sku or "").strip() for row in rows if (row.sku or "").strip()}
+    try:
+        assigned = assign_blank_skus([row.id for row in blank], start=payload.start, taken=taken)
+    except SkuStartError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    by_id = {row.id: row for row in blank}
+    for lot_id, sku in assigned:
+        row = by_id[lot_id]
+        row.sku = sku
+        row.sku_needs_review = False
+        db.add(row)
+    if assigned:
+        db.commit()
+        recompute_sku_sanity_flags_for_sale(db, sale.id, current.account_id)
+        db.commit()
+    return {
+        "updated": len(assigned),
+        "assignments": [{"lot_id": lot_id, "sku": sku} for lot_id, sku in assigned],
+    }
 
 
 @app.post("/sales/{sale_id}/reserve-price", response_model=SaleReservePriceOut)
