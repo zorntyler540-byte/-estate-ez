@@ -1134,7 +1134,7 @@ type AdminUsageSummary = {
   by_account: AdminUsageAccount[];
 };
 
-type DashboardTab = "overview" | "upload" | "lots" | "admin" | "exports";
+type DashboardTab = "overview" | "upload" | "admin" | "exports";
 type LotsSortKey = "sku" | "title" | "price" | "status" | "photos";
 type AdminSortKey = "name" | "plan" | "status" | "usage";
 type SortDir = "asc" | "desc";
@@ -1144,7 +1144,6 @@ const DASHBOARD_TAB_QUERY_KEY = "tab";
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string; ownerOnly?: boolean }> = [
   { id: "overview", label: "Overview" },
   { id: "upload", label: "Upload" },
-  { id: "lots", label: "Lots" },
   { id: "admin", label: "Admin", ownerOnly: true },
   { id: "exports", label: "Exports" }
 ];
@@ -1153,7 +1152,9 @@ function parseDashboardTab(raw: string | null, canSeeAdmin: boolean): DashboardT
   if (!raw) return "overview";
   const value = raw.toLowerCase();
   if (value === "admin" && !canSeeAdmin) return "overview";
-  if (value === "overview" || value === "upload" || value === "lots" || value === "admin" || value === "exports") {
+  // Lots used to be its own tab. Old links open Overview, which now includes the lot list.
+  if (value === "lots") return "overview";
+  if (value === "overview" || value === "upload" || value === "admin" || value === "exports") {
     return value;
   }
   return "overview";
@@ -7310,7 +7311,7 @@ export default function DashboardPage() {
 
   const isOverviewTab = activeTab === "overview";
   const isUploadTab = activeTab === "upload";
-  const isLotsTab = activeTab === "lots";
+  const isLotsTab = isOverviewTab;
   const isAdminTab = activeTab === "admin";
   const isExportsTab = activeTab === "exports";
 
@@ -7341,7 +7342,7 @@ export default function DashboardPage() {
           </div>
           {activeTab === "admin" ? <DashboardPanelSkeleton title="Master admin" rows={7} /> : null}
           {activeTab === "upload" ? <DashboardPanelSkeleton title="Upload photos" rows={6} /> : null}
-          {activeTab === "lots" ? <DashboardPanelSkeleton title="Lots" rows={8} /> : null}
+          {activeTab === "overview" ? <DashboardPanelSkeleton title="Lots" rows={8} /> : null}
           {activeTab === "exports" ? <DashboardPanelSkeleton title="Exports" rows={5} /> : null}
         </div>
       </AppShell>
