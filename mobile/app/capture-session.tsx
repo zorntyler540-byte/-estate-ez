@@ -689,6 +689,15 @@ export default function CaptureSessionScreen() {
     }
   }
 
+  /** The camera X should land on Import / Start lot, not whichever tab was open before. */
+  function leaveCamera() {
+    if (isAppendMode || isFacebook) {
+      router.back();
+      return;
+    }
+    router.replace("/(tabs)/capture");
+  }
+
   function confirmFinish() {
     if (isAppendMode) {
       if (!thumbs.length) {
@@ -712,7 +721,7 @@ export default function CaptureSessionScreen() {
       return;
     }
     if (!draftId) {
-      router.back();
+      leaveCamera();
       return;
     }
     const pending = splitMediaUris(thumbs);
@@ -923,7 +932,7 @@ export default function CaptureSessionScreen() {
             styles.closeFab,
             { top: landscape ? 10 : Math.max(10, 4), left: landscape ? 10 : 12 }
           ]}
-          onPress={() => router.back()}
+          onPress={() => leaveCamera()}
           hitSlop={10}
           accessibilityLabel="Close capture"
         >
@@ -1080,7 +1089,7 @@ export default function CaptureSessionScreen() {
                     cancelAppend();
                     return;
                   }
-                  router.back();
+                  leaveCamera();
                 }}
               >
                 <Text style={styles.secondaryText}>Cancel</Text>

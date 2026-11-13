@@ -3,7 +3,6 @@ import { join } from "node:path";
 
 import {
   HIDDEN_TAB_ROUTES,
-  captureTabOpensCamera,
   formatTabBadge,
   isTabHidden,
   queueTabAccessibilityLabel
@@ -33,8 +32,4 @@ assert(queueTabAccessibilityLabel(0) === "Queue", "plain label at zero");
 assert(queueTabAccessibilityLabel(1).includes("1 lot not"), "singular count is spoken");
 assert(queueTabAccessibilityLabel(4).includes("4 lots"), "plural count is spoken");
 
-assert(captureTabOpensCamera("capture"), "ready login goes straight to camera");
-assert(!captureTabOpensCamera("pick-sale"), "no sale: show the Capture screen");
-assert(!captureTabOpensCamera("wait-for-owner"), "client without a sale: show the Capture screen");
-
-console.log("navVisibility selftest ok (16 cases)");
+console.log("navVisibility selftest ok (13 cases)");

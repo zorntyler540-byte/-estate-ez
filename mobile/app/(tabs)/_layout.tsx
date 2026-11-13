@@ -1,15 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs, router, usePathname } from "expo-router";
+import { Tabs, usePathname } from "expo-router";
 import { useEffect, useState } from "react";
 import { AppState } from "react-native";
 
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
-import { useSales } from "@/context/SalesContext";
 import { useSyncRefreshKey } from "@/context/SyncContext";
-import { captureGate } from "@/lib/clientCapture";
 import {
-  captureTabOpensCamera,
   formatTabBadge,
   isTabHidden,
   queueTabAccessibilityLabel
@@ -46,18 +43,14 @@ function useQueueBadgeCount(): number {
 }
 
 export default function TabLayout() {
-  const { signedInRole, selectedSaleId, selectedSaleName } = useAuth();
-  const { getSaleName } = useSales();
+  const { signedInRole } = useAuth();
   const role = (signedInRole || "").toLowerCase();
   const isOwner = role === "owner";
   const isClient = role === "client";
   const queueCount = useQueueBadgeCount();
-  const saleLabel = selectedSaleId ? getSaleName(selectedSaleId, selectedSaleName) : "";
-  const gate = captureGate({ role: signedInRole, saleId: selectedSaleId, saleName: saleLabel });
   const hrefFor = (route: string, path: `/(tabs)/${string}`, allowed = true) =>
     allowed && !isTabHidden(route) ? path : null;
   const captureTitle = isClient ? "Photos" : "Capture";
-  const opensCamera = captureTabOpensCamera(gate.action);
 
   return (
     <Tabs
@@ -85,16 +78,8 @@ export default function TabLayout() {
         name="capture"
         options={{
           title: captureTitle,
-          tabBarAccessibilityLabel: opensCamera ? `${captureTitle}, opens the camera` : captureTitle,
+          tabBarAccessibilityLabel: captureTitle,
           tabBarIcon: ({ color }) => <Ionicons name="camera" size={26} color={color} />
-        }}
-        listeners={{
-          tabPress: (e) => {
-            // Straight to the camera when this login can shoot; otherwise show why not.
-            if (!opensCamera) return;
-            e.preventDefault();
-            router.push("/capture-session");
-          }
         }}
       />
       <Tabs.Screen

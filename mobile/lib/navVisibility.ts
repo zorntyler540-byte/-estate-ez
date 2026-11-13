@@ -21,10 +21,3 @@ export function queueTabAccessibilityLabel(count: number): string {
   return `Queue, ${n} lot${n === 1 ? "" : "s"} not on the website yet`;
 }
 
-/**
- * Tapping Capture opens the camera directly when this login can shoot into a sale.
- * Otherwise the Capture screen explains what is missing (pick a sale / wait for owner).
- */
-export function captureTabOpensCamera(gateAction: string): boolean {
-  return gateAction === "capture";
-}
