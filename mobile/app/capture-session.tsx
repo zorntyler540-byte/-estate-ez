@@ -982,12 +982,16 @@ export default function CaptureSessionScreen() {
           landscape && { paddingRight: Math.max(insets.right, 8) }
         ]}
       >
-        <View
-          style={[
+        <ScrollView
+          style={styles.panelScroll}
+          contentContainerStyle={[
             styles.panelControls,
             landscape && styles.panelControlsLandscape,
-            !landscape && { paddingBottom: 6 }
+            { paddingBottom: Math.max(insets.bottom, landscape ? 10 : 12) }
           ]}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
         >
           <View style={styles.aspectRow}>
             {CAMERA_ASPECT_PRESETS.map((preset) => {
@@ -1053,6 +1057,15 @@ export default function CaptureSessionScreen() {
               </Text>
             ) : null}
           </View>
+
+          {thumbs.length ? (
+            <DraftPhotoStrip
+              uris={thumbs}
+              size="md"
+              onPressPhoto={openPreview}
+              onDeletePhoto={deleteFromStrip}
+            />
+          ) : null}
 
           {captureModes.length > 1 ? (
             <View style={styles.modeRow}>
@@ -1162,28 +1175,6 @@ export default function CaptureSessionScreen() {
           ) : photosBackup === "on" ? (
             <Text style={styles.libraryHint}>A copy of each shot is also saved in the Photos app.</Text>
           ) : null}
-        </View>
-
-        <ScrollView
-          style={styles.panelThumbs}
-          contentContainerStyle={[
-            styles.panelThumbsContent,
-            !landscape && { paddingBottom: Math.max(insets.bottom, 14) }
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {!landscape ? (
-            <Text style={styles.sectionTitle}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
-          ) : (
-            <Text style={styles.sectionHintLandscape}>{isAppendMode ? "New media" : "Photos & videos"}</Text>
-          )}
-          <DraftPhotoStrip
-            uris={thumbs}
-            size="md"
-            onPressPhoto={openPreview}
-            onDeletePhoto={deleteFromStrip}
-          />
         </ScrollView>
       </View>
 
@@ -1204,7 +1195,7 @@ export default function CaptureSessionScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.black },
   rootLandscape: { flexDirection: "row", alignItems: "stretch" },
-  cameraWrap: { flex: 1, minHeight: 320, position: "relative" },
+  cameraWrap: { flex: 1, minHeight: 180, position: "relative" },
   cameraWrapLandscape: { flex: 1, minHeight: 0, minWidth: 0 },
   closeFab: {
     position: "absolute",
@@ -1312,13 +1303,15 @@ const styles = StyleSheet.create({
     zIndex: 3
   },
   panel: {
-    flexGrow: 0,
-    flexShrink: 0,
-    maxHeight: "40%",
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
+    maxHeight: "68%",
     backgroundColor: theme.bgElevated,
     borderTopWidth: 1,
     borderTopColor: theme.border
   },
+  panelScroll: { flex: 1, minHeight: 0 },
   panelLandscape: {
     flexGrow: 0,
     flexShrink: 0,
@@ -1341,17 +1334,6 @@ const styles = StyleSheet.create({
     paddingLeft: 10,
     paddingRight: 6
   },
-  panelThumbs: {
-    flexGrow: 1,
-    flexShrink: 1,
-    minHeight: 72
-  },
-  panelThumbsContent: {
-    paddingHorizontal: 12,
-    paddingTop: 4,
-    paddingBottom: 8,
-    gap: 6
-  },
   sessionMeta: {
     gap: 2,
     paddingBottom: 4,
@@ -1366,9 +1348,6 @@ const styles = StyleSheet.create({
   sessionMetaLabelLandscape: { fontSize: 13 },
   sessionMetaResumed: { color: theme.success, fontSize: 12, fontWeight: "600" },
   sessionMetaSale: { color: theme.primaryHover, fontSize: 12, fontWeight: "600" },
-  sectionTitle: { color: theme.text, fontSize: 14, fontWeight: "700" },
-  sectionHint: { color: theme.textMuted, fontSize: 12, marginTop: -4 },
-  sectionHintLandscape: { color: theme.textMuted, fontSize: 11, fontWeight: "600" },
   input: {
     borderWidth: 1,
     borderColor: theme.borderStrong,
