@@ -77,7 +77,7 @@ export function queueRowTitle(item: {
     return item.archived_at ? `${media} added to ${label}` : `Add ${media} to ${label}`;
   }
   if (item.archived_at) {
-    return sku ? `${sku} · ${media} · on website` : `${media} · on website`;
+    return sku ? `${sku} · ${media} · in Estate-EZ` : `${media} · in Estate-EZ`;
   }
   return sku ? `${sku} · ${media}` : media;
 }
@@ -217,8 +217,8 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
 
   if (archived) {
     return {
-      label: "On website",
-      hint: "This listing stays on the website. This row is only on this phone — Add photos, or Remove when you are done.",
+      label: "In Estate-EZ",
+      hint: "On this sale in Estate-EZ. It is not in the seller app until someone posts it from the website. Add photos, or Remove when you are done on this phone.",
       tone: "ok",
       detail: null,
       showResend: false,
@@ -228,8 +228,8 @@ export function queueRowView(item: QueueRowInput): QueueRowView {
 
   if (linked && item.status !== "uploading" && item.status !== "queued" && item.status !== "draft") {
     return {
-      label: "On website",
-      hint: "Next Sync moves this to Phone archive and removes photos from this phone. Do not Resend.",
+      label: "In Estate-EZ",
+      hint: "On this sale in Estate-EZ. It is not in the seller app until someone posts it from the website. Next Sync moves this to Phone archive.",
       tone: "ok",
       detail: null,
       showResend: false,

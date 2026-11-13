@@ -132,6 +132,34 @@ export function autoSplitKeys(ordered: readonly ImportPick[], mode: ImportGroupM
  * Group the picks into lots. ``toggled`` flips the boundary before a photo: it starts a new lot
  * there, or joins an automatic split back. Lots over the cap are cut into ≤cap parts.
  */
+/** Put picks in an explicit key order. Keys that are missing are skipped; leftover picks follow. */
+export function picksInKeyOrder(picks: readonly ImportPick[], keys: readonly string[]): ImportPick[] {
+  const byKey = new Map(picks.map((p) => [p.key, p]));
+  const out: ImportPick[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const pick = byKey.get(key);
+    if (!pick || seen.has(key)) continue;
+    seen.add(key);
+    out.push(pick);
+  }
+  for (const pick of picks) {
+    if (!seen.has(pick.key)) out.push(pick);
+  }
+  return out;
+}
+
+/** Swap a photo with its neighbor. Null when it is already at that end. */
+export function moveImportKey(keys: readonly string[], key: string, delta: -1 | 1): string[] | null {
+  const from = keys.indexOf(key);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= keys.length) return null;
+  const next = keys.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved!);
+  return next;
+}
+
 export function planImportGroups(
   picks: readonly ImportPick[],
   opts: {
@@ -140,10 +168,14 @@ export function planImportGroups(
     toggled?: ReadonlySet<string>;
     /** Suggested splits (blank frame or tape roll). A toggle undoes one. */
     suggested?: ReadonlySet<string>;
+    /** When set, this order replaces camera-file and capture-time sorting. */
+    manualOrder?: readonly string[] | null;
     maxPerLot?: number;
   }
 ): ImportGroup[] {
-  const ordered = orderPicks(picks, opts.mode);
+  const ordered = opts.manualOrder?.length
+    ? picksInKeyOrder(picks, opts.manualOrder)
+    : orderPicks(picks, opts.mode);
   if (!ordered.length) return [];
   const cap = Math.max(1, opts.maxPerLot ?? CTBIDS_MAX_PHOTOS_PER_LOT);
   const auto = autoSplitKeys(ordered, opts.mode, opts.gapMs ?? IMPORT_DEFAULT_GAP_MS);
