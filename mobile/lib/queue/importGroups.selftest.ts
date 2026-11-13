@@ -3,8 +3,10 @@ import {
   exifTakenAtMs,
   groupStartKeys,
   importCapturedAt,
+  moveImportKey,
   orderPicks,
   parseExifDate,
+  picksInKeyOrder,
   planImportGroups,
   skuSequence,
   type ImportPick
@@ -90,6 +92,22 @@ assert(exifTakenAtMs(null) === null && exifTakenAtMs({}) === null, "no exif");
   });
   assert(undone.length === 1, "toggle undoes a suggestion");
 }
+// A hand-set order replaces the camera-file sort, and Earlier/Later swaps neighbors.
+{
+  const named = (i: number, fileName: string): ImportPick => ({ ...pick(i, null, fileName), fileName });
+  const picks = [named(0, "IMG_3840.JPG"), named(1, "IMG_3839.JPG"), named(2, "IMG_10.JPG")];
+  const camera = orderPicks(picks, "one").map((p) => p.key);
+  assert(camera.join() === "IMG_10.JPG,IMG_3839.JPG,IMG_3840.JPG", "camera order before a move");
+  const moved = moveImportKey(camera, "IMG_3840.JPG", -1);
+  assert(moved?.join() === "IMG_10.JPG,IMG_3840.JPG,IMG_3839.JPG", "move earlier");
+  assert(moveImportKey(camera, "IMG_10.JPG", -1) === null, "already first");
+  assert(moveImportKey(camera, "IMG_3840.JPG", 1) === null, "already last");
+  const grouped = planImportGroups(picks, { mode: "one", manualOrder: moved });
+  assert(grouped.length === 1 && grouped[0]!.picks.map((p) => p.key).join() === moved!.join(), "manual order is kept");
+  const withExtra = picksInKeyOrder(picks, ["IMG_3840.JPG"]);
+  assert(withExtra.map((p) => p.key).join() === "IMG_3840.JPG,IMG_3839.JPG,IMG_10.JPG", "leftover picks follow");
+}
+
 assert(skuSequence("1001", 3)?.join() === "1001,1002,1003", "plain sku run");
 assert(skuSequence("DK99", 2)?.join() === "DK99,DK100", "prefix grows");
 assert(skuSequence("nope", 2) === null, "sku needs a number");

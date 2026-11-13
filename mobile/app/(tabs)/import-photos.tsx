@@ -23,6 +23,7 @@ import {
   IMPORT_DEFAULT_GAP_MS,
   IMPORT_GAP_CHOICES_MS,
   IMPORT_MAX_PICKS,
+  moveImportKey,
   planImportGroups,
   skuSequence,
   type ImportGroup,
@@ -56,6 +57,8 @@ export default function ImportPhotosScreen() {
   /** Staff typed this lot's SKU; it is not replaced when the starting number changes. */
   const [skuEdited, setSkuEdited] = useState<Set<string>>(() => new Set());
   const [skuStart, setSkuStart] = useState("");
+  /** Photo keys in the order the person set. Null keeps camera order. */
+  const [manualOrder, setManualOrder] = useState<string[] | null>(null);
   /** Blank frames and tape-roll shots. A Split/Join tap undoes one. */
   const [suggested, setSuggested] = useState<Set<string>>(() => new Set());
   const [suggesting, setSuggesting] = useState(false);
@@ -79,8 +82,8 @@ export default function ImportPhotosScreen() {
   const dated = picks.length > 0 && picks.every((p) => p.takenAt != null);
   const effectiveMode: ImportGroupMode = mode === "gap" && dated ? "gap" : "one";
   const groups = useMemo(
-    () => planImportGroups(picks, { mode: effectiveMode, gapMs, toggled, suggested }),
-    [picks, effectiveMode, gapMs, toggled, suggested]
+    () => planImportGroups(picks, { mode: effectiveMode, gapMs, toggled, suggested, manualOrder }),
+    [picks, effectiveMode, gapMs, toggled, suggested, manualOrder]
   );
   const autoSkus = useMemo(() => skuSequence(skuStart, groups.length), [skuStart, groups.length]);
   const cappedCount = groups.filter((g) => g.capped).length;
@@ -97,6 +100,7 @@ export default function ImportPhotosScreen() {
       setSuggested(new Set());
       setSkuByStart({});
       setSkuEdited(new Set());
+      setManualOrder(null);
       const notes: string[] = [];
       if (res.truncated) notes.push(`Only the first ${IMPORT_MAX_PICKS} photos were kept — import the rest next.`);
       if (!res.picks.every((p) => p.takenAt != null)) {
@@ -132,6 +136,16 @@ export default function ImportPhotosScreen() {
     };
   }, [picks, token]);
 
+  const orderKeys = useMemo(() => groups.flatMap((g) => g.picks.map((p) => p.key)), [groups]);
+
+  const movePhoto = useCallback(
+    (key: string, delta: -1 | 1) => {
+      const next = moveImportKey(orderKeys, key, delta);
+      if (next) setManualOrder(next);
+    },
+    [orderKeys]
+  );
+
   const toggleAt = useCallback((key: string) => {
     setToggled((prev) => {
       const next = new Set(prev);
@@ -162,8 +176,17 @@ export default function ImportPhotosScreen() {
         : "";
       Alert.alert(
         `${plural(out.lotsQueued, "lot")} queued`,
-        `They upload on their own when the connection is stable — a few at a time on big imports.${skipped}`
+        `They upload on their own when the connection is stable — a few at a time on big imports. They show on the Estate-EZ sale. Post from the website to send them to the seller app.${skipped}`
       );
+      setPicks([]);
+      setToggled(new Set());
+      setSuggested(new Set());
+      setSkuByStart({});
+      setSkuEdited(new Set());
+      setSkuStart("");
+      setManualOrder(null);
+      setNote("");
+      setProgress(null);
       router.replace("/(tabs)/queue");
     } catch (e) {
       setProgress(null);
@@ -211,24 +234,47 @@ export default function ImportPhotosScreen() {
             renderItem={({ item: p, index: i }) => {
               const joinsPrevious = i === 0 && (item.start === "auto" || item.start === "manual");
               const label = joinsPrevious ? "Join lot above" : i > 0 ? "New lot here" : null;
+              const atStart = orderKeys[0] === p.key;
+              const atEnd = orderKeys[orderKeys.length - 1] === p.key;
               return (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={label ? `${label}, photo ${i + 1} of lot ${index + 1}` : `Photo ${i + 1} of lot ${index + 1}`}
-                  disabled={importing || !label}
-                  onPress={() => toggleAt(p.key)}
-                  style={styles.thumbWrap}
-                >
-                  <StableUriImage uri={p.uri} style={styles.thumb} cachePolicy="none" />
-                  {label ? <Text style={styles.thumbAction}>{joinsPrevious ? "Join ↑" : "Split"}</Text> : null}
-                </Pressable>
+                <View style={styles.thumbWrap}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={label ? `${label}, photo ${i + 1} of lot ${index + 1}` : `Photo ${i + 1} of lot ${index + 1}`}
+                    disabled={importing || !label}
+                    onPress={() => toggleAt(p.key)}
+                  >
+                    <StableUriImage uri={p.uri} style={styles.thumb} cachePolicy="none" />
+                    {label ? <Text style={styles.thumbAction}>{joinsPrevious ? "Join ↑" : "Split"}</Text> : null}
+                  </Pressable>
+                  <View style={styles.moveRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move photo ${i + 1} of lot ${index + 1} earlier`}
+                      disabled={importing || atStart}
+                      hitSlop={6}
+                      onPress={() => movePhoto(p.key, -1)}
+                    >
+                      <Text style={[styles.moveText, (importing || atStart) && styles.moveTextOff]}>Earlier</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move photo ${i + 1} of lot ${index + 1} later`}
+                      disabled={importing || atEnd}
+                      hitSlop={6}
+                      onPress={() => movePhoto(p.key, 1)}
+                    >
+                      <Text style={[styles.moveText, (importing || atEnd) && styles.moveTextOff]}>Later</Text>
+                    </Pressable>
+                  </View>
+                </View>
               );
             }}
           />
         </View>
       );
     },
-    [importing, skuByStart, skuEdited, autoSkus, toggleAt]
+    [importing, skuByStart, skuEdited, autoSkus, toggleAt, orderKeys, movePhoto]
   );
 
   const header = (
@@ -314,8 +360,11 @@ export default function ImportPhotosScreen() {
           />
           <Text style={styles.meta}>
             {suggesting ? "Looking for blank photos and tape rolls… " : ""}
-            {plural(picks.length, "photo")} → {plural(groups.length, "lot")}. Photos stay in camera order
-            (IMG_9 before IMG_10). A blank frame or a shot with the tape roll starts a suggested lot — tap Split
+            {plural(picks.length, "photo")} → {plural(groups.length, "lot")}.{" "}
+            {manualOrder
+              ? "Photos are in the order you set."
+              : "Photos start in camera order (IMG_9 before IMG_10)."}{" "}
+            Earlier and Later move a shot. A blank frame or a shot with the tape roll starts a suggested lot — tap Split
             or Join to change it. A starting SKU numbers each lot in order.
             {cappedCount ? ` Lots over ${CTBIDS_MAX_PHOTOS_PER_LOT} photos (the CT Bids limit) are split for you.` : ""}
           </Text>
@@ -446,7 +495,10 @@ const styles = StyleSheet.create({
     fontSize: 15
   },
   thumbRow: { gap: 8 },
-  thumbWrap: { width: 84, alignItems: "center", gap: 4 },
+  thumbWrap: { width: 96, alignItems: "center", gap: 4 },
+  moveRow: { flexDirection: "row", gap: 6 },
+  moveText: { color: theme.primary, fontSize: 11, fontWeight: "700" },
+  moveTextOff: { opacity: 0.35 },
   thumb: { width: 84, height: 84, borderRadius: 8, backgroundColor: theme.bgElevated },
   thumbAction: { color: theme.primary, fontSize: 12, fontWeight: "700" },
   footer: {
