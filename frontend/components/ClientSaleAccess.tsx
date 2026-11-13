@@ -100,8 +100,9 @@ export function ClientSaleAccess({
     <div className="ct-sale-watch" style={{ marginTop: "0.75rem" }}>
       <p className="ct-muted" style={{ margin: "0 0 0.35rem" }}>
         Give a client the Estate-EZ phone app. They sign in with the email and password shown here, then
-        take pictures. Those photos upload into <strong>{saleName}</strong> only. Access stops at the end
-        time, or as soon as you revoke it.
+        take pictures or tap <strong>Bulk upload</strong> on the Photos tab. Those photos upload into{" "}
+        <strong>{saleName}</strong> only. Access stops at the end time, or as soon as you revoke it. On an
+        iPad, Bulk upload stays at the bottom of that tab.
       </p>
       <div className="ct-row ct-row--gap-lg" style={{ flexWrap: "wrap", alignItems: "center" }}>
         <input

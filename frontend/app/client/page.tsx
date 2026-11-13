@@ -15,6 +15,7 @@ import {
 } from "../../lib/webUploadSession";
 
 const MAX_PHOTOS = 40;
+const BULK_MAX_PHOTOS = 250;
 
 type Me = {
   email?: string;
@@ -41,6 +42,7 @@ export default function ClientUploadPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [ready, setReady] = useState(false);
   const [sku, setSku] = useState("");
+  const [bulk, setBulk] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const uploadSessionRef = useRef<WebUploadSession | null>(null);
   const [busy, setBusy] = useState(false);
@@ -127,8 +129,13 @@ export default function ClientUploadPage() {
 
   async function upload() {
     if (!token || !me?.assigned_sale_id || files.length === 0) return;
-    if (files.length > MAX_PHOTOS) {
-      setError(`CTBids allows at most ${MAX_PHOTOS} photos per listing.`);
+    const cap = bulk ? BULK_MAX_PHOTOS : MAX_PHOTOS;
+    if (files.length > cap) {
+      setError(
+        bulk
+          ? `A bulk upload can include at most ${cap} photos. Split the rest into another upload.`
+          : `CTBids allows at most ${MAX_PHOTOS} photos per listing.`
+      );
       return;
     }
     setBusy(true);
@@ -156,9 +163,9 @@ export default function ClientUploadPage() {
       const form = new FormData();
       form.append("sale_id", me.assigned_sale_id);
       form.append("inherit_sku_from_subfolder", "false");
-      form.append("single_lot_mode", "true");
+      form.append("single_lot_mode", bulk ? "false" : "true");
       form.append("client_draft_id", webClientDraftId(session));
-      if (sku.trim()) form.append("single_lot_manual_sku", sku.trim());
+      if (!bulk && sku.trim()) form.append("single_lot_manual_sku", sku.trim());
       ready.forEach((file, i) => form.append("files", file, names[i]!));
       const created = (await apiUploadFiles("/jobs/upload", token, form)) as JobRow;
       session.jobId = created.id;
@@ -180,6 +187,7 @@ export default function ClientUploadPage() {
       );
       setFiles([]);
       setSku("");
+      setBulk(false);
       const input = document.getElementById("client-photos") as HTMLInputElement | null;
       if (input) input.value = "";
     } catch (e) {
@@ -248,18 +256,51 @@ export default function ClientUploadPage() {
               <>
                 {error ? <div className="ct-banner ct-banner--error">{error}</div> : null}
                 {message ? <div className="ct-banner ct-banner--success">{message}</div> : null}
-                <label className="ct-label" htmlFor="client-sku">
-                  Lot number (optional)
-                </label>
-                <input
-                  id="client-sku"
-                  className="ct-input"
-                  value={sku}
-                  onChange={(e) => setSku(e.target.value)}
-                  placeholder="Tape number, if you have one"
-                  disabled={busy}
-                  style={{ maxWidth: 280, marginBottom: "0.85rem" }}
-                />
+                <div className="ct-row ct-row--gap-lg" style={{ marginBottom: "0.85rem" }}>
+                  <button
+                    type="button"
+                    className={`ct-btn ${bulk ? "ct-btn--ghost" : "ct-btn--primary"}`}
+                    disabled={busy}
+                    onClick={() => {
+                      uploadSessionRef.current = null;
+                      setBulk(false);
+                    }}
+                  >
+                    One lot
+                  </button>
+                  <button
+                    type="button"
+                    className={`ct-btn ${bulk ? "ct-btn--primary" : "ct-btn--ghost"}`}
+                    disabled={busy}
+                    onClick={() => {
+                      uploadSessionRef.current = null;
+                      setBulk(true);
+                    }}
+                  >
+                    Bulk upload
+                  </button>
+                </div>
+                {bulk ? (
+                  <p className="ct-muted" style={{ marginTop: 0 }}>
+                    Pick the photos in order. A tape-roll photo, or a blank sheet, empty wall, or floor, starts the
+                    next lot.
+                  </p>
+                ) : (
+                  <>
+                    <label className="ct-label" htmlFor="client-sku">
+                      Lot number (optional)
+                    </label>
+                    <input
+                      id="client-sku"
+                      className="ct-input"
+                      value={sku}
+                      onChange={(e) => setSku(e.target.value)}
+                      placeholder="Tape number, if you have one"
+                      disabled={busy}
+                      style={{ maxWidth: 280, marginBottom: "0.85rem" }}
+                    />
+                  </>
+                )}
                 <label className="ct-label" htmlFor="client-photos">
                   Photos
                 </label>
@@ -277,7 +318,9 @@ export default function ClientUploadPage() {
                 />
                 <p className="ct-muted" style={{ marginTop: "0.45rem" }}>
                   {files.length === 0
-                    ? `Choose up to ${MAX_PHOTOS} photos for one lot.`
+                    ? bulk
+                      ? `Choose up to ${BULK_MAX_PHOTOS} photos. They are split into lots on the server.`
+                      : `Choose up to ${MAX_PHOTOS} photos for one lot.`
                     : `${files.length} photo${files.length === 1 ? "" : "s"} selected.`}
                 </p>
                 <button

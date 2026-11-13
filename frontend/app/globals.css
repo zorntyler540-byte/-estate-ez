@@ -4558,6 +4558,16 @@ select.ct-input option {
     margin-top: 0.25rem;
   }
 
+  .ct-upload-staging {
+    margin-top: 0;
+    max-width: none;
+  }
+
+  /* Mobile order: upload staging when active, lots, exports last. */
+}
+
+/* Phones only. iPad widths were hiding Choose folder / Choose photos and leaving a blank Upload tab. */
+@media (max-width: 767px) {
   .ct-dash-upload__desktop {
     display: none;
   }
@@ -4573,13 +4583,6 @@ select.ct-input option {
   .ct-dash-upload__mobile-settings {
     display: flex;
   }
-
-  .ct-upload-staging {
-    margin-top: 0;
-    max-width: none;
-  }
-
-  /* Mobile order: upload staging when active, lots, exports last. */
 }
 
 @media (max-width: 540px) {
