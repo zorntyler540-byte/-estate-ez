@@ -46,8 +46,21 @@ def _read_int_env(name: str, default: int) -> int:
 
 # Markdown Description column: max chars (0 = no truncation). Default 20000.
 REPORT_DESC_MAX_CHARS = _read_int_env("REPORT_DESC_MAX_CHARS", 20000)
-# Model IDs change; if you get 404, run: python main.py --list-models
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
+# Pinned id. ``gemini-flash-latest`` is rewritten to gemini-3.8-flash (its current target).
+# Keep this alias map in sync with backend/app/core/gemini_models.py.
+def _pinned_cli_model() -> str:
+    raw = os.environ.get("GEMINI_MODEL", "").strip()
+    if not raw or raw.lower() == "gemini-flash-latest" or raw.lower().endswith("-latest"):
+        if raw.lower().endswith("-latest") and raw.lower() != "gemini-flash-latest":
+            print(
+                f"Ignoring Gemini alias {raw!r}; using gemini-3.8-flash.",
+                file=sys.stderr,
+            )
+        return "gemini-3.8-flash"
+    return raw
+
+
+MODEL = _pinned_cli_model()
 API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta").strip().strip("/")
 
 

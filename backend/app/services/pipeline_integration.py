@@ -64,9 +64,35 @@ _PLACEHOLDER_TITLES = frozenset({"estate lot", "estate item (item_1)", ""})
 
 
 def _sync_pipeline_env_from_settings() -> None:
-    """Ensure the isolated pipeline reads the same model knobs as the app."""
-    os.environ["GEMINI_FLASH_MODEL"] = settings.gemini_flash_model
-    os.environ["GEMINI_PRO_MODEL"] = settings.gemini_pro_model
+    """Copy pinned model ids into the process env before a catalog run.
+
+    Model choice itself is resolved per call (``app.core.gemini_models``). The
+    env copy keeps anything that still reads ``GEMINI_*_MODEL`` aligned, and
+    ignores non-string stand-ins used by tests.
+    """
+
+    def _put(env_name: str, attr: str, *, coded_default: str | None = None) -> None:
+        value = getattr(settings, attr, None)
+        if not isinstance(value, str) or not value.strip():
+            return
+        text = value.strip()
+        fields = getattr(settings, "model_fields_set", None)
+        explicit = isinstance(fields, (set, frozenset)) and attr in fields
+        # Don't publish a coded default into the environment. That would make
+        # GEMINI_TRIAGE_MODEL look explicit and hide a legacy GEMINI_FLASH_MODEL.
+        if coded_default is not None and text == coded_default and not explicit:
+            return
+        os.environ[env_name] = text
+
+    _put("GEMINI_FLASH_MODEL", "gemini_flash_model", coded_default="gemini-2.5-flash")
+    _put("GEMINI_PRO_MODEL", "gemini_pro_model", coded_default="gemini-2.5-pro")
+    _put("GEMINI_TRIAGE_MODEL", "gemini_triage_model", coded_default="gemini-2.5-flash")
+    _put("GEMINI_GROUPING_MODEL", "gemini_grouping_model", coded_default="")
+    _put("GEMINI_OCR_MODEL", "gemini_ocr_model", coded_default="")
+    _put("GEMINI_LISTING_MODEL", "gemini_listing_model", coded_default="")
+    _put("GEMINI_LISTING_FLASH_MODEL", "gemini_listing_flash_model", coded_default="")
+    _put("GEMINI_CAPTION_MODEL", "gemini_caption_model", coded_default="")
+    _put("GEMINI_MODEL", "gemini_model", coded_default="gemini-3.8-flash")
     os.environ["LISTING_FLASH_MAX_FRAMES"] = str(settings.listing_flash_max_frames)
     os.environ["BRAND_PRO_MAX_LABEL_FRAMES"] = str(settings.brand_pro_max_label_frames)
     os.environ["BRAND_SKIP_PRO_IF_AGREEMENT"] = "1" if settings.brand_skip_pro_if_agreement else "0"
@@ -663,11 +689,18 @@ def run_single_lot_pipeline(
             }
         )
 
+    from app.core.gemini_models import resolved_gemini_models
+
+    pinned = resolved_gemini_models()
     logger.info(
-        "Pipeline start: photos=%d pro_model=%s flash_model=%s",
+        "Pipeline start: photos=%d triage=%s grouping=%s listing=%s listing_flash=%s ocr=%s pro=%s",
         len(entries),
-        settings.gemini_pro_model,
-        settings.gemini_flash_model,
+        pinned["triage"],
+        pinned["grouping"],
+        pinned["listing"],
+        pinned["listing_flash"],
+        pinned["ocr"],
+        pinned["pro"],
     )
     if should_cancel and should_cancel():
         raise PipelineCancelled()
@@ -825,10 +858,12 @@ def run_single_lot_pipeline(
             pipeline_result["brand_audit_json"] = manifest_json
             pro_skipped = False
             ran_pro = True
-            pipeline_result["pro_model"] = settings.gemini_pro_model
+            pipeline_result["pro_model"] = pinned["listing"]
+            pipeline_result["listing_model"] = pinned["listing"]
             logger.info(
-                "Pipeline Pro author succeeded model=%s complex=%s listing_calls=%d",
-                settings.gemini_pro_model,
+                "Pipeline listing author succeeded listing_model=%s pro_model=%s complex=%s listing_calls=%d",
+                pinned["listing"],
+                pinned["pro"],
                 complex_lot,
                 listing_calls,
             )

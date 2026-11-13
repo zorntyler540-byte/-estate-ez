@@ -825,12 +825,21 @@ def health_ping() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     root = upload_root()
+    from app.core.gemini_models import resolved_gemini_models
+
+    pinned = resolved_gemini_models()
     return HealthResponse(
         status="ok",
         enable_appraiser=settings.enable_appraiser,
         appraiser_max_photos=settings.appraiser_max_photos,
-        gemini_pro_model=settings.gemini_pro_model,
-        gemini_flash_model=settings.gemini_flash_model,
+        gemini_pro_model=pinned["pro"],
+        gemini_flash_model=pinned["triage"],
+        gemini_triage_model=pinned["triage"],
+        gemini_grouping_model=pinned["grouping"],
+        gemini_listing_model=pinned["listing"],
+        gemini_listing_flash_model=pinned["listing_flash"],
+        gemini_ocr_model=pinned["ocr"],
+        gemini_caption_model=pinned["caption"],
         catalog_upload_root=str(root),
         catalog_image_files_on_disk=_count_catalog_image_files(),
         catalog_r2_configured=catalog_r2_configured(),

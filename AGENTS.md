@@ -55,6 +55,14 @@ cloud-specific gotchas; do not duplicate standard docs.
   it differs from `GOOGLE_API_KEY`). The photo pipeline entry
   point is `app.core.gemini.analyze_photo_from_bytes` (image bytes -> structured
   `InventoryTableEntry` row).
+- **Gemini model ids are pinned** in `app.core.gemini_models` (`GEMINI_TRIAGE_MODEL`,
+  `GEMINI_LISTING_MODEL`, `GEMINI_PRO_MODEL`, plus grouping / OCR / caption /
+  listing-flash). Do not send `-latest` aliases; `gemini-flash-latest` is rewritten
+  to `gemini-3.8-flash`. Defaults keep today's behavior: triage `gemini-2.5-flash`,
+  listings follow Pro `gemini-2.5-pro`, the simple-lot Flash seed is `gemini-3.8-flash`.
+  Listing author calls stay on `generateContent` (near-real-time), not the Batch API.
+  Compare models with `backend/scripts/compare_listing_models.py` on the synthetic
+  fixtures — it does not open the catalog database.
 - **System deps** `python3.12-venv` and `libheif1` (HEIC photo support) are already baked
   into the environment; they are not part of the update script.
 

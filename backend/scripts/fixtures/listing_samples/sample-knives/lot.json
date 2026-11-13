@@ -1,0 +1,59 @@
+{
+  "lot_id": "sample-knives",
+  "note": "Synthetic fixture for listing-model comparison. Not a production lot.",
+  "hero_filename": "hero.jpg",
+  "images": ["hero.jpg", "label.jpg"],
+  "triage": [
+    {
+      "filename": "hero.jpg",
+      "photo_role": "hero",
+      "shows_whole_lot": true,
+      "distinct_item_id": "KNIVES",
+      "is_primary_front_for_item": false,
+      "label_legibility": "none",
+      "brand_text": "",
+      "quality": "sharp",
+      "confidence": "high",
+      "shows_measuring_scale": true,
+      "measurement_text": "8 in",
+      "lot_tape_marking": "MS530"
+    },
+    {
+      "filename": "label.jpg",
+      "photo_role": "angle_only",
+      "shows_whole_lot": false,
+      "distinct_item_id": "KNIVES",
+      "is_primary_front_for_item": false,
+      "label_legibility": "clear",
+      "brand_text": "DEER HOOF HANDLE hand forged hunting knife",
+      "quality": "ok",
+      "confidence": "high"
+    }
+  ],
+  "flash_draft": {
+    "primary_category": "Sporting Goods",
+    "estimated_distinct_item_count": 2,
+    "items": [
+      {
+        "temporary_id": "KNIVES",
+        "suggested_title": "Hunting knives",
+        "raw_ocr_text_found": "DEER HOOF HANDLE",
+        "condition_cues": "handles intact",
+        "primary_front_filename": "hero.jpg",
+        "alternate_label_filenames": ["label.jpg"]
+      }
+    ],
+    "selected_hero_filename": "hero.jpg",
+    "selected_tape_filenames": [],
+    "analysis_photo_filenames": ["hero.jpg", "label.jpg"],
+    "brand_needs_review": false
+  },
+  "flash_listing": {
+    "auction_title": "Deer Hoof Handled Hunting Knives",
+    "professional_description": "A pair of hunting knives with deer hoof handles, shown with a measuring tape.",
+    "specification_lines": ["Dimensions: ~8 in"],
+    "brands": [],
+    "ct_category": "Sporting Goods",
+    "condition_notes": "GOOD"
+  }
+}

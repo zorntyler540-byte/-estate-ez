@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG = logging.getLogger(__name__)
@@ -59,7 +59,9 @@ class Settings(BaseSettings):
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
     # Deprecated alias. Read only to copy into ``google_api_key``; call ``google_api_key()`` instead.
     deprecated_gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY", repr=False)
-    gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
+    # Pinned ids. ``-latest`` aliases are rewritten in ``pin_configured_gemini_model``.
+    # Simple-lot Flash listing seed. ``gemini-flash-latest`` used to point here (3.8 Flash).
+    gemini_model: str = Field(default="gemini-3.8-flash", alias="GEMINI_MODEL")
     gemini_api_version: str = Field(default="v1beta", alias="GEMINI_API_VERSION")
     # Estimated Gemini pricing used for admin analytics (USD per 1M tokens).
     # Legacy single/blended rates (kept for backward compatibility / fallback).
@@ -69,10 +71,10 @@ class Settings(BaseSettings):
     gemini_output_cost_per_million: float = Field(
         default=1.05, ge=0.0, alias="GEMINI_OUTPUT_COST_PER_MILLION"
     )
-    # Per-model rates (USD per 1M tokens). Defaults track published paid pricing.
-    # Listing Flash (`GEMINI_MODEL` = gemini-flash-latest → gemini-3.8-flash) is $0.75 in / $3.75 out.
+    # Per-model rates (USD per 1M tokens). Defaults track published paid pricing as of late 2026.
+    # 3.8 / 3.6 Flash Standard is $0.75 in / $3.75 out until 2027-01-01, then $1.50 / $7.50.
     # Pro is $1.25 in / $10.00 out (prompts <=200k). Override via env when Google changes pricing.
-    # Flash-tier analytics use these rates for triage + listing; listing (flash-latest) dominates cost.
+    # Flash-tier analytics use the current Flash Standard rates; the comparison script prices both.
     gemini_flash_input_cost_per_million: float = Field(
         default=0.75, ge=0.0, alias="GEMINI_FLASH_INPUT_COST_PER_MILLION"
     )
@@ -167,11 +169,24 @@ class Settings(BaseSettings):
     worker_isolate_jobs: bool = Field(default=True, alias="WORKER_ISOLATE_JOBS")
     # Parallel CT Seller photo upload (download/resize/POST). Keep modest — unofficial API + 2 GB API RAM.
     ctseller_post_photo_workers: int = Field(default=4, ge=1, le=8, alias="CTSELLER_POST_PHOTO_WORKERS")
-    # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
+    # Estate pipeline model ids. Resolved per call in ``app.core.gemini_models``.
+    # Empty optional fields mean "follow the role default" (see that module).
+    # Triage / label OCR on the photo. Legacy ``GEMINI_FLASH_MODEL`` still applies when this is unset.
+    gemini_triage_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_TRIAGE_MODEL")
+    # Listing-gallery sort. Empty follows ``GEMINI_TRIAGE_MODEL``.
+    gemini_grouping_model: str = Field(default="", alias="GEMINI_GROUPING_MODEL")
+    # Estate-tape SKU check. Empty follows the Flash listing seed (``GEMINI_MODEL``).
+    gemini_ocr_model: str = Field(default="", alias="GEMINI_OCR_MODEL")
+    # Final auction listing (``run_brand_audit_pro``). Empty follows ``GEMINI_PRO_MODEL``.
+    gemini_listing_model: str = Field(default="", alias="GEMINI_LISTING_MODEL")
+    # Simple-lot Flash listing seed. Empty follows ``GEMINI_MODEL`` (pinned ``gemini-3.8-flash``).
+    gemini_listing_flash_model: str = Field(default="", alias="GEMINI_LISTING_FLASH_MODEL")
+    # Facebook Page captions. Empty follows ``GEMINI_FLASH_MODEL``.
+    gemini_caption_model: str = Field(default="", alias="GEMINI_CAPTION_MODEL")
     gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
     gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")
     # One listing cover at a time. Image model (API key), not the local cutout.
-    # Nano Banana 2.1 paints the photo. Listing Flash and Pro stay on text.
+    # Nano Banana 2.1 paints the photo. Listing text stays on the listing / Pro models.
     hero_bg_gemini_model: str = Field(
         default="gemini-nano-banana-2.1", alias="HERO_BG_GEMINI_MODEL"
     )
@@ -332,6 +347,32 @@ class Settings(BaseSettings):
             seen.add(v)
             out.append(v)
         return out
+
+    @field_validator(
+        "gemini_model",
+        "gemini_triage_model",
+        "gemini_grouping_model",
+        "gemini_ocr_model",
+        "gemini_listing_model",
+        "gemini_listing_flash_model",
+        "gemini_caption_model",
+        "gemini_flash_model",
+        "gemini_pro_model",
+        "hero_bg_gemini_model",
+        mode="before",
+    )
+    @classmethod
+    def pin_configured_gemini_model(cls, v: object, info: ValidationInfo) -> object:
+        """Reject ``-latest`` aliases before they can be sent to the API."""
+        if not isinstance(v, str):
+            return v
+        text = v.strip()
+        if not text:
+            return ""
+        from app.core.gemini_models import default_for_settings_field, pin_model_id
+
+        fallback = default_for_settings_field(info.field_name or "")
+        return pin_model_id(text, fallback=fallback)
 
     @model_validator(mode="after")
     def resolve_gemini_key_alias(self) -> Self:
