@@ -10,10 +10,13 @@ import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import "react-native-reanimated";
+import { Alert } from "react-native";
 import { StatusBar } from "expo-status-bar";
 
+import { getAppValue, setAppValue } from "@/lib/queue/db";
+import { RELEASE_NOTE, releaseNoteToShow } from "@/lib/releaseNote";
 import { FONT_FAMILY } from "@/lib/typography";
 // Defines the background upload task at startup — the OS can launch the app just to run it.
 import "@/lib/backgroundUpload";
@@ -68,10 +71,30 @@ export default function RootLayout() {
   );
 }
 
+const RELEASE_NOTE_SEEN_KEY = "release_note_seen";
+
 function RootNav() {
   const { token, ready, sessionReady } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const releaseNoteStarted = useRef(false);
+
+  useEffect(() => {
+    if (releaseNoteStarted.current) return;
+    releaseNoteStarted.current = true;
+    void (async () => {
+      try {
+        const seen = await getAppValue(RELEASE_NOTE_SEEN_KEY);
+        const note = releaseNoteToShow(seen, RELEASE_NOTE);
+        if (!note) return;
+        Alert.alert("What's new", note.text, [
+          { text: "OK", onPress: () => void setAppValue(RELEASE_NOTE_SEEN_KEY, note.key) }
+        ]);
+      } catch {
+        /* The next cold start tries again. */
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!ready) return;
