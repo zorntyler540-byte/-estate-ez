@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   View
 } from "react-native";
@@ -37,71 +38,74 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={styles.flex}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View style={styles.brand}>
-        <BrandLogo size={140} />
-      </View>
-      <Text style={styles.kicker}>Estate-EZ</Text>
-      <Text style={styles.title}>Sign in</Text>
-      <Text style={styles.sub}>
-        Sign in with the email and password from your account owner. Photos you take on this phone upload into your sale.
-      </Text>
-      <Text style={styles.api} numberOfLines={API_BASE_ERROR ? 4 : 2}>
-        {API_BASE_ERROR ? `App setup error: ${API_BASE_ERROR}` : `API: ${API_BASE}`}
-      </Text>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.root}>
+        <View style={styles.brand}>
+          <BrandLogo size={140} />
+        </View>
+        <Text style={styles.kicker}>Estate-EZ</Text>
+        <Text style={styles.title}>Sign in</Text>
+        <Text style={styles.sub}>
+          Sign in with the email and password from your account owner. Photos you take on this phone upload into your sale.
+        </Text>
+        <Text style={styles.api} numberOfLines={API_BASE_ERROR ? 4 : 2}>
+          {API_BASE_ERROR ? `App setup error: ${API_BASE_ERROR}` : `API: ${API_BASE}`}
+        </Text>
 
-      <TextInput
-        autoCapitalize="none"
-        autoComplete="username"
-        autoCorrect={false}
-        keyboardType="email-address"
-        textContentType="username"
-        placeholder="Email"
-        placeholderTextColor={theme.textSubtle}
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-      />
-      <TextInput
-        autoCapitalize="none"
-        autoComplete="password"
-        returnKeyType="go"
-        secureTextEntry
-        textContentType="password"
-        placeholder="Password"
-        onSubmitEditing={() => {
-          if (email.trim() && password && !busy) void onSubmit();
-        }}
-        placeholderTextColor={theme.textSubtle}
-        style={styles.input}
-        value={password}
-        onChangeText={setPassword}
-      />
+        <TextInput
+          autoCapitalize="none"
+          autoComplete="username"
+          autoCorrect={false}
+          keyboardType="email-address"
+          textContentType="username"
+          placeholder="Email"
+          placeholderTextColor={theme.textSubtle}
+          style={styles.input}
+          value={email}
+          onChangeText={setEmail}
+        />
+        <TextInput
+          autoCapitalize="none"
+          autoComplete="password"
+          returnKeyType="go"
+          secureTextEntry
+          textContentType="password"
+          placeholder="Password"
+          onSubmitEditing={() => {
+            if (email.trim() && password && !busy) void onSubmit();
+          }}
+          placeholderTextColor={theme.textSubtle}
+          style={styles.input}
+          value={password}
+          onChangeText={setPassword}
+        />
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Sign in"
-        accessibilityState={{ disabled: busy || !email.trim() || !password, busy }}
-        style={[styles.button, busy && styles.buttonDisabled]}
-        disabled={busy || !email.trim() || !password}
-        onPress={() => void onSubmit()}
-      >
-        {busy ? (
-          <ActivityIndicator color={theme.onPrimary} />
-        ) : (
-          <Text style={styles.buttonText}>Sign in</Text>
-        )}
-      </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sign in"
+          accessibilityState={{ disabled: busy || !email.trim() || !password, busy }}
+          style={[styles.button, busy && styles.buttonDisabled]}
+          disabled={busy || !email.trim() || !password}
+          onPress={() => void onSubmit()}
+        >
+          {busy ? (
+            <ActivityIndicator color={theme.onPrimary} />
+          ) : (
+            <Text style={styles.buttonText}>Sign in</Text>
+          )}
+        </Pressable>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 24, justifyContent: "center", gap: 12, backgroundColor: theme.bg },
+  flex: { flex: 1, backgroundColor: theme.bg },
+  root: { flexGrow: 1, padding: 24, justifyContent: "center", gap: 12, backgroundColor: theme.bg },
   brand: { alignItems: "center", marginBottom: 8 },
   kicker: {
     fontSize: 32,

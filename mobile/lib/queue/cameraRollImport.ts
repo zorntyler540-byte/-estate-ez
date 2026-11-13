@@ -35,7 +35,13 @@ export async function pickCameraRollPhotos(): Promise<PickResult | null> {
     orderedSelection: true,
     exif: true,
     quality: 1,
-    preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current
+    // iOS: keep the current representation. Android Photo Picker has no equivalent and rejects the field.
+    ...(Platform.OS === "ios"
+      ? {
+          preferredAssetRepresentationMode:
+            ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current
+        }
+      : {})
   });
   if (res.canceled || !res.assets?.length) return null;
   const assets = res.assets.filter((a) => (a.type ?? "image") === "image");

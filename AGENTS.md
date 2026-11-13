@@ -182,6 +182,14 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `production` EAS profile has the URL in `eas.json`; `preview` / `development` must be given
   one explicitly. A release bundle that somehow lacks it shows an "App setup error" on sign-in
   and makes no requests.
+- **Android Play build:** same Expo app, package `com.caringtransitions.capture`, runtime
+  **`1.1.0`**, production channel — a JS `eas update --channel production` reaches TestFlight
+  and Play/APK installs together. Do not publish an OTA that imports a native module the
+  iOS `1.1.0` binary lacks. `eas build --platform android --profile production` makes the Play
+  App Bundle (SDK 54 targets API 36). `android-apk` is a sideload APK on the same channel.
+  `eas submit --platform android --profile production` uploads to the Play **internal** track.
+  The Google service-account JSON stays in EAS credentials, never in git. Broad photo-read
+  permissions are blocked; import uses the system photo picker and gallery backup is write-only.
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.
