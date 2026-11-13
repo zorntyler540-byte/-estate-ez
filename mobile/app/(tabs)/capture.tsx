@@ -46,7 +46,7 @@ export default function CaptureScreen() {
       Alert.alert("No sale assigned", gate.message);
       return;
     }
-    router.push("/import-photos");
+    router.push("/(tabs)/import-photos");
   }
 
   function confirmSignOut() {

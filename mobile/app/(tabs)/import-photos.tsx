@@ -1,6 +1,7 @@
+import { Ionicons } from "@expo/vector-icons";
 import { router, Stack } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Alert, BackHandler, FlatList, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Text, TextInput } from "@/components/AppText";
@@ -65,6 +66,14 @@ export default function ImportPhotosScreen() {
 
   useEffect(() => {
     void discardInterruptedImports().catch(() => 0);
+  }, []);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      router.navigate("/(tabs)/capture");
+      return true;
+    });
+    return () => sub.remove();
   }, []);
 
   const dated = picks.length > 0 && picks.every((p) => p.takenAt != null);
@@ -224,6 +233,15 @@ export default function ImportPhotosScreen() {
 
   const header = (
     <View style={styles.headerBlock}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close import"
+        onPress={() => router.navigate("/(tabs)/capture")}
+        style={styles.closeRow}
+      >
+        <Ionicons name="close" size={22} color={theme.text} />
+        <Text style={styles.closeText}>Close</Text>
+      </Pressable>
       {gate.action === "capture" ? (
         <Text style={styles.lead}>
           Pick photos from the camera roll. Each group below becomes its own lot in{" "}
@@ -310,7 +328,20 @@ export default function ImportPhotosScreen() {
   return (
     <View style={styles.root}>
       <Stack.Screen
-        options={{ title: "Import from Photos", headerBackVisible: !importing, gestureEnabled: !importing }}
+        options={{
+          title: "Import from Photos",
+          headerLeft: () => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close import"
+              onPress={() => router.navigate("/(tabs)/capture")}
+              hitSlop={12}
+              style={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
+            >
+              <Ionicons name="close" size={28} color={theme.text} />
+            </Pressable>
+          )
+        }}
       />
       <FlatList
         data={groups}
@@ -353,6 +384,15 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   list: { padding: 16, gap: 12 },
   headerBlock: { gap: 12, marginBottom: 4 },
+  closeRow: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: MIN_TAP_PX,
+    paddingRight: 12
+  },
+  closeText: { color: theme.text, fontSize: 17, fontWeight: "700" },
   lead: { color: theme.textMuted, fontSize: 15, lineHeight: 22 },
   saleName: { color: theme.primary, fontWeight: "700" },
   warn: { color: theme.warning, fontSize: 14 },

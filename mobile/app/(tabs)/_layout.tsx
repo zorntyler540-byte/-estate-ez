@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs, usePathname } from "expo-router";
+import { router, Tabs, usePathname } from "expo-router";
 import { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Pressable } from "react-native";
 
 import { theme } from "@/constants/theme";
 import { useAuth } from "@/context/AuthContext";
@@ -13,6 +13,20 @@ import {
 } from "@/lib/navVisibility";
 import { countQueueBadge } from "@/lib/queue/db";
 import { FONT_FAMILY } from "@/lib/typography";
+
+function CloseImportButton() {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Close import"
+      onPress={() => router.navigate("/(tabs)/capture")}
+      hitSlop={12}
+      style={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
+    >
+      <Ionicons name="close" size={28} color={theme.text} />
+    </Pressable>
+  );
+}
 
 /** Lots still on this phone (shooting, queued, uploading, failed). */
 function useQueueBadgeCount(): number {
@@ -80,6 +94,14 @@ export default function TabLayout() {
           title: captureTitle,
           tabBarAccessibilityLabel: captureTitle,
           tabBarIcon: ({ color }) => <Ionicons name="camera" size={26} color={color} />
+        }}
+      />
+      <Tabs.Screen
+        name="import-photos"
+        options={{
+          href: null,
+          title: "Import from Photos",
+          headerLeft: () => <CloseImportButton />
         }}
       />
       <Tabs.Screen
