@@ -160,11 +160,18 @@ export default function ImportPhotosScreen() {
       const skipped = out.photosSkipped
         ? ` ${plural(out.photosSkipped, "photo")} could not be opened (an iCloud original that is not downloaded?) and ${out.photosSkipped === 1 ? "was" : "were"} left out.`
         : "";
+      setProgress(null);
+      setPicks([]);
+      setToggled(new Set());
+      setSuggested(new Set());
+      setSkuByStart({});
+      setSkuEdited(new Set());
+      setNote("");
+      router.navigate("/(tabs)/queue");
       Alert.alert(
         `${plural(out.lotsQueued, "lot")} queued`,
         `They upload on their own when the connection is stable — a few at a time on big imports.${skipped}`
       );
-      router.replace("/(tabs)/queue");
     } catch (e) {
       setProgress(null);
       Alert.alert(
