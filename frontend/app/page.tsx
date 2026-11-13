@@ -168,8 +168,8 @@ export default function HomePage() {
           </p>
         ) : null}
         <p className="ct-muted" style={{ margin: 0, textAlign: "center", fontSize: "0.88rem" }}>
-          Need the Windows app?{" "}
-          <a href="/desktop">Download CTBids Sale Suite</a>
+          Need the desktop app?{" "}
+          <a href="/desktop">Download for Windows or Mac</a>
         </p>
       </div>
     </main>

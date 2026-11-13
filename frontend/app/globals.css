@@ -2580,7 +2580,8 @@ select.ct-input option {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
+  gap: 1.25rem;
   padding: clamp(1.25rem, 4vw, 2.75rem);
   text-align: center;
 }
