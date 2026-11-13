@@ -1,4 +1,4 @@
-import { CameraView, useCameraPermissions, type FocusMode } from "expo-camera";
+import { CameraView, useCameraPermissions, useMicrophonePermissions, type FocusMode } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -7,6 +7,7 @@ import {
   Alert,
   AppState,
   PanResponder,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -66,10 +67,11 @@ import {
 } from "@/lib/queue/captureProcessing";
 import type { LotDraft } from "@/lib/types";
 import {
+  MICROPHONE_OFF_NOTE,
   VIDEO_BITRATE,
-  VIDEO_CODEC,
-  VIDEO_MAX_FILE_BYTES,
   VIDEO_QUALITY,
+  microphoneRecordPlan,
+  videoRecordOptions,
   videoSizeProblem
 } from "@/lib/videoCapture";
 import { theme } from "@/constants/theme";
@@ -170,6 +172,7 @@ export default function CaptureSessionScreen() {
   const landscape = windowWidth > windowHeight;
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
+  const [micPermission, requestMicPermission] = useMicrophonePermissions();
   const [draftId, setDraftId] = useState<string | null>(null);
   const [manualSku, setManualSku] = useState("");
   const [thumbs, setThumbs] = useState<string[]>([]);
@@ -445,9 +448,9 @@ export default function CaptureSessionScreen() {
         setLibraryNote("");
         return;
       }
-      setLibraryNote(librarySaveNote(result) ?? "");
+      setLibraryNote(librarySaveNote(result, Platform.OS === "android" ? "android" : "ios") ?? "");
     } catch {
-      setLibraryNote(librarySaveNote("failed") ?? "");
+      setLibraryNote(librarySaveNote("failed", Platform.OS === "android" ? "android" : "ios") ?? "");
     }
   }
 
@@ -554,11 +557,49 @@ export default function CaptureSessionScreen() {
     void captureQueue.enqueue(() => mirrorToPhotoLibrary(dest)).catch(() => undefined);
   }
 
+  async function selectCaptureMode(mode: "photo" | "video") {
+    if (recording) return;
+    if (mode === "photo") {
+      setCaptureMode("photo");
+      setError((current) => (current === MICROPHONE_OFF_NOTE ? "" : current));
+      return;
+    }
+    if (captureMode === "video") return;
+    setCaptureMode("video");
+    let granted = Boolean(micPermission?.granted);
+    if (!granted) {
+      try {
+        granted = Boolean((await requestMicPermission()).granted);
+      } catch {
+        granted = false;
+      }
+    }
+    const plan = microphoneRecordPlan(granted);
+    setVideoMuted(plan.mute);
+    if (plan.note) setError(plan.note);
+  }
+
   async function recordVideo() {
     if (!cameraRef.current || busy || recording || !cameraReady || !sessionReady) return;
     if (thumbs.filter(isVideoUri).length >= MAX_VIDEOS_PER_LOT) {
       setError(`This lot can have at most ${MAX_VIDEOS_PER_LOT} videos.`);
       return;
+    }
+    // Android will not record audio until RECORD_AUDIO is granted. Ask here so the
+    // first take matches the iPhone prompt instead of failing after the shutter.
+    if (!videoMuted && !micPermission?.granted) {
+      let granted = false;
+      try {
+        granted = Boolean((await requestMicPermission()).granted);
+      } catch {
+        granted = false;
+      }
+      const plan = microphoneRecordPlan(granted);
+      if (plan.mute) {
+        setVideoMuted(true);
+        setError(plan.note ?? MICROPHONE_OFF_NOTE);
+        return;
+      }
     }
     setError("");
     setBusy(true);
@@ -569,11 +610,7 @@ export default function CaptureSessionScreen() {
       try {
         // 720p + bitrate cap (CameraView props; iOS needs the codec here to apply the bitrate)
         // and a file-size stop keep a 45s clip well under the website's upload limit.
-        clip = await cameraRef.current.recordAsync({
-          maxDuration: MAX_VIDEO_DURATION_SEC,
-          maxFileSize: VIDEO_MAX_FILE_BYTES,
-          codec: VIDEO_CODEC
-        });
+        clip = await cameraRef.current.recordAsync(videoRecordOptions(Platform.OS));
       } catch (e) {
         if (!videoMuted) {
           setVideoMuted(true);
@@ -873,7 +910,8 @@ export default function CaptureSessionScreen() {
               paddingLeft: Math.max(insets.left, 0),
               paddingRight: 0,
               paddingTop: 0,
-              paddingBottom: 0
+              // Android's 3-button / gesture bar sits on the bottom in landscape too.
+              paddingBottom: Platform.OS === "android" ? insets.bottom : 0
             }
           : {
               paddingTop: insets.top,
@@ -1080,7 +1118,7 @@ export default function CaptureSessionScreen() {
                     key={mode}
                     style={[styles.modeBtn, active && styles.modeBtnActive]}
                     disabled={recording}
-                    onPress={() => setCaptureMode(mode)}
+                    onPress={() => void selectCaptureMode(mode)}
                   >
                     <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
                       {mode === "photo" ? "Photo" : "Video"}
@@ -1173,7 +1211,11 @@ export default function CaptureSessionScreen() {
           {libraryNote ? (
             <Text style={styles.libraryNote}>{libraryNote}</Text>
           ) : photosBackup === "on" ? (
-            <Text style={styles.libraryHint}>A copy of each shot is also saved in the Photos app.</Text>
+            <Text style={styles.libraryHint}>
+              {Platform.OS === "android"
+                ? "A copy of each shot is also saved in Gallery."
+                : "A copy of each shot is also saved in the Photos app."}
+            </Text>
           ) : null}
         </ScrollView>
       </View>
