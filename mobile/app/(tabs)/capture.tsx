@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 
 import { BrandLogo } from "@/components/BrandLogo";
@@ -77,77 +77,83 @@ export default function CaptureScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={styles.brand}>
-        <BrandLogo size={96} />
-      </View>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <View style={styles.brand}>
+          <BrandLogo size={96} />
+        </View>
 
-      <Text style={styles.lead}>
-        Native camera capture with offline storage. Queued lots upload automatically when you're online.
-      </Text>
-
-      <View style={styles.signedInBox}>
-        <Text style={styles.signedInLabel}>SIGNED IN AS</Text>
-        <Text style={styles.signedInEmail} selectable>
-          {signedInEmail ?? "Email not stored on this phone"}
+        <Text style={styles.lead}>
+          Native camera capture with offline storage. Queued lots upload automatically when you're online.
         </Text>
-      </View>
 
-      {gate.action === "capture" ? (
-        <Text style={styles.saleBanner}>
-          {gate.staffHint ? (
-            <>
-              Uploading to: <Text style={styles.saleName}>{saleLabel}</Text>
-              {"\n"}
-              <Text style={styles.meta}>{gate.staffHint}</Text>
-            </>
-          ) : (
-            <>
-              Photos from this phone go into <Text style={styles.saleName}>{saleLabel}</Text>.
-            </>
-          )}
+        <View style={styles.signedInBox}>
+          <Text style={styles.signedInLabel}>SIGNED IN AS</Text>
+          <Text style={styles.signedInEmail} selectable>
+            {signedInEmail ?? "Email not stored on this phone"}
+          </Text>
+        </View>
+
+        {gate.action === "capture" ? (
+          <Text style={styles.saleBanner}>
+            {gate.staffHint ? (
+              <>
+                Uploading to: <Text style={styles.saleName}>{saleLabel}</Text>
+                {"\n"}
+                <Text style={styles.meta}>{gate.staffHint}</Text>
+              </>
+            ) : (
+              <>
+                Photos from this phone go into <Text style={styles.saleName}>{saleLabel}</Text>.
+              </>
+            )}
+          </Text>
+        ) : (
+          <Text style={styles.warn}>{gate.message}</Text>
+        )}
+
+        <Text style={styles.meta}>
+          {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / failed)
         </Text>
-      ) : (
-        <Text style={styles.warn}>{gate.message}</Text>
-      )}
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Start lot capture"
-        style={styles.primary}
-        onPress={startCapture}
-      >
-        <Text style={styles.primaryText}>Start lot capture</Text>
-      </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
+          accessibilityState={{ disabled: signingOut, busy: signingOut }}
+          style={[styles.signOut, signingOut && styles.signOutDisabled]}
+          disabled={signingOut}
+          onPress={confirmSignOut}
+        >
+          <Text style={styles.signOutText}>{signingOut ? "Signing out…" : "Sign out"}</Text>
+        </Pressable>
+      </ScrollView>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Import lots from the camera roll"
-        style={styles.secondary}
-        onPress={startImport}
-      >
-        <Text style={styles.secondaryText}>Import from Photos</Text>
-      </Pressable>
+      <View style={styles.actions}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Start lot capture"
+          style={styles.primary}
+          onPress={startCapture}
+        >
+          <Text style={styles.primaryText}>Start lot capture</Text>
+        </Pressable>
 
-      <Text style={styles.meta}>
-        {pending} lot{pending === 1 ? "" : "s"} waiting locally (draft / queued / failed)
-      </Text>
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Sign out"
-        accessibilityState={{ disabled: signingOut, busy: signingOut }}
-        style={[styles.signOut, signingOut && styles.signOutDisabled]}
-        disabled={signingOut}
-        onPress={confirmSignOut}
-      >
-        <Text style={styles.signOutText}>{signingOut ? "Signing out…" : "Sign out"}</Text>
-      </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Bulk upload from the camera roll"
+          style={styles.secondary}
+          onPress={startImport}
+        >
+          <Text style={styles.secondaryText}>Bulk upload</Text>
+          <Text style={styles.secondaryHint}>Import from Photos and split into lots</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 20, gap: 16, backgroundColor: theme.bg },
+  root: { flex: 1, backgroundColor: theme.bg },
+  scroll: { padding: 20, gap: 16 },
   brand: { alignItems: "center", marginBottom: 4 },
   lead: { fontSize: 15, lineHeight: 22, color: theme.textMuted },
   signedInBox: {
@@ -176,12 +182,20 @@ const styles = StyleSheet.create({
   meta: { color: theme.textMuted, fontSize: 14 },
   saleBanner: { color: theme.textMuted, fontSize: 15, lineHeight: 22 },
   saleName: { color: theme.primary, fontWeight: "700" },
+  actions: {
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+    backgroundColor: theme.bgElevated
+  },
   primary: {
     backgroundColor: theme.primary,
     borderRadius: 12,
     paddingVertical: 16,
-    alignItems: "center",
-    marginTop: 8
+    alignItems: "center"
   },
   primaryText: { color: theme.onPrimary, fontSize: 17, fontWeight: "700" },
   secondary: {
@@ -193,6 +207,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TAP_PX
   },
   secondaryText: { color: theme.primary, fontSize: 16, fontWeight: "700" },
+  secondaryHint: { color: theme.textMuted, fontSize: 13, fontWeight: "600", marginTop: 2 },
   signOut: {
     marginTop: 24,
     alignSelf: "flex-start",
