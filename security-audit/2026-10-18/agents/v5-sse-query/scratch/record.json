@@ -1,0 +1,80 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "get_current_user_sse accepts Query access_token as equivalent to Authorization Bearer, and the dashboard EventSource puts that JWT in the URL. Default uvicorn process logging records the request query.",
+  "title": "Staff JWT placed in EventSource query string; same Query door authenticates catalog uploads",
+  "description": "A lower-trust observer of API or proxy access logs, or of the HTTP request target, can recover a staff JWT. The dashboard builds EventSource on /jobs/{id}/events?access_token= plus the live token. get_current_user_sse treats Query access_token as equivalent to Authorization Bearer and mints a full User for GET /jobs/{id}/events, POST /jobs/upload, and POST /jobs/{id}/upload-files. First-party upload clients send the JWT in the Authorization header, not the query; the observed client leak is the EventSource URL. Tokens default to 43200 minutes and user_from_access_token does not bind iat to password changes. Procfile and Dockerfile.api start uvicorn without --no-access-log. Whether the running process or Railway edge actually retains the request-target query was not observed.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "frontend/app/dashboard/page.tsx",
+      "line": 3159,
+      "scope": "dashboard EventSource URL",
+      "description": "Browser builds /jobs/{id}/events?access_token= plus the staff JWT and opens EventSource on it."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/auth.py",
+      "line": 96,
+      "scope": "get_current_user_sse Query parameter",
+      "description": "FastAPI Query access_token is documented as the EventSource JWT and is optional beside HTTP Bearer."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/auth.py",
+      "line": 105,
+      "scope": "query token consumed as session",
+      "description": "Query value is OR'd with Bearer credentials and passed to user_from_access_token, minting a full User principal for SSE and for POST /jobs/upload and /jobs/{id}/upload-files."
+    }
+  ],
+  "validation_plan": {
+    "local": "In the required OS sandbox with dummy tenants, mint a JWT, then start uvicorn (not TestClient) and GET /jobs/{id}/events?access_token=<dummy-jwt> plus POST /jobs/upload?access_token=<dummy-jwt>. Confirm the query door authenticates and that the uvicorn access-log request target contains the access_token query name. Redact token values in any retained log excerpt.",
+    "deployment": "Owner inspects existing Railway or API access-log settings and any retained /jobs/*/events?access_token= lines; do not replay live tokens or probe production."
+  },
+  "blockers": [
+    "OS-enforced sandbox is unavailable (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion); uvicorn access-log request-target capture was not executed.",
+    "Live Railway or proxy access-log retention for /jobs/*/events?access_token= is a host-dashboard fact and was not observed; this run must not fetch production."
+  ],
+  "fingerprint": "unauth.sse.access-token-query",
+  "evidence": [
+    {
+      "file": "frontend/app/dashboard/page.tsx",
+      "line": 3159,
+      "description": "EventSource URL concatenates encodeURIComponent(token) into query access_token."
+    },
+    {
+      "file": "backend/app/auth.py",
+      "line": 105,
+      "description": "token = Bearer credentials or stripped access_token query; empty raises 401."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 5784,
+      "description": "job_events_sse Depends(get_current_user_sse) and documents query access_token."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 5364,
+      "description": "create_job_from_upload Depends(get_current_user_sse), so query JWT also authorizes multipart catalog upload."
+    },
+    {
+      "file": "Procfile",
+      "line": 3,
+      "description": "Production API is uvicorn app.main:app without --no-access-log."
+    },
+    {
+      "file": "infra/docker/Dockerfile.api",
+      "line": 22,
+      "description": "Container CMD also launches uvicorn without disabling access logs."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 150,
+      "description": "access_token_expire_minutes defaults to 43200 (30 days)."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 943,
+      "description": "change_own_password updates password_hash only; user_from_access_token still accepts prior JWTs."
+    }
+  ]
+}

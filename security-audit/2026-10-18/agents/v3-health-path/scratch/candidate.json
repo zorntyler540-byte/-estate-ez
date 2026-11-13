@@ -1,0 +1,64 @@
+{
+  "proposed_verdict": "needs_validation",
+  "fingerprint": "unauth.health.upload-root-disclosure",
+  "title": "Unauthenticated /health discloses catalog upload root and disk inventory",
+  "description": "An anonymous caller of GET /health receives the absolute catalog upload filesystem path, a count of catalog images on disk, whether R2 is configured, and Gemini model names. That is more than a liveness probe and maps internal layout used by catalog storage. The handler also walks the upload tree (capped at 200000 files) with no auth.",
+  "claimed_root_cause": "health() is unauthenticated and serializes upload_root() and _count_catalog_image_files() into HealthResponse, unlike production path redaction used for job input_folder.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/main.py",
+      "line": 851,
+      "scope": "GET /health",
+      "description": "Anonymous health route with no Depends authentication."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/catalog_storage.py",
+      "line": 20,
+      "scope": "upload_root",
+      "description": "upload_root() resolves backend/data/uploads to an absolute Path."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/main.py",
+      "line": 860,
+      "scope": "HealthResponse.catalog_upload_root",
+      "description": "Handler returns catalog_upload_root=str(root), image file count, r2 flag, and model names to the anonymous client."
+    }
+  ],
+  "evidence": [
+    {
+      "file": "backend/app/main.py",
+      "line": 851,
+      "description": "@app.get(\"/health\") has no current-user dependency."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 860,
+      "description": "catalog_upload_root is the raw absolute path string, not public_job_input_folder."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 861,
+      "description": "catalog_image_files_on_disk calls _count_catalog_image_files() on every anonymous request."
+    },
+    {
+      "file": "backend/app/schemas.py",
+      "line": 17,
+      "description": "HealthResponse includes catalog_upload_root, catalog_image_files_on_disk, and catalog_r2_configured."
+    },
+    {
+      "file": "backend/app/main.py",
+      "line": 247,
+      "description": "public_job_input_folder redacts absolute paths in production for jobs only; health does not call it."
+    }
+  ],
+  "blockers": [
+    "OS-enforced sandbox and parent artifact promotion unavailable"
+  ],
+  "validation_plan": {
+    "local": "In the OS sandbox, TestClient GET /health without Authorization and record that catalog_upload_root is an absolute path and catalog_image_files_on_disk is present.",
+    "deployment": "Owner compares a liveness probe they already use with the JSON fields returned by their API /health; do not scan production disks beyond that observation."
+  }
+}

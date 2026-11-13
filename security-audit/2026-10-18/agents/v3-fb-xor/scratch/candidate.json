@@ -1,0 +1,70 @@
+{
+  "proposed_verdict": "needs_validation",
+  "fingerprint": "facebook.crypto.xor-import-fallback",
+  "title": "Facebook and CT Seller sealing fall open to SECRET_KEY XOR when Fernet import fails",
+  "description": "seal_facebook_secret intends Fernet with a key derived from META_TOKEN_ENCRYPTION_KEY or SECRET_KEY. If cryptography cannot be imported, it writes xor: plus a repeating XOR of sha256(meta-page:SECRET_KEY), ignoring META_TOKEN_ENCRYPTION_KEY. unseal_facebook_secret always decrypts xor: blobs with that SECRET_KEY material even when Fernet is available. ctseller.seal_secret has the same ImportError fallback; its XOR key is sha256(SECRET_KEY) without the ctseller: prefix used by Fernet. Dockerfiles install cryptography>=42.0.0, so the branch is a fail-open for a missing or broken import rather than the default image path. API schemas do not return unsealed tokens.",
+  "claimed_root_cause": "Token seal functions catch ImportError and persist unauthenticated XOR under a xor: prefix keyed from SECRET_KEY, and unseal accepts that prefix unconditionally.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/services/facebook_page.py",
+      "line": 211,
+      "scope": "complete_oauth",
+      "description": "Fresh Facebook user and Page tokens are passed to seal_facebook_secret before commit."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/services/facebook_crypto.py",
+      "line": 20,
+      "scope": "seal_facebook_secret",
+      "description": "Fernet is attempted with sha256(meta-page: dedicated-or-SECRET_KEY)."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/services/facebook_crypto.py",
+      "line": 28,
+      "scope": "seal_facebook_secret",
+      "description": "ImportError stores xor: ciphertext derived only from SECRET_KEY."
+    }
+  ],
+  "evidence": [
+    {
+      "file": "backend/app/services/facebook_crypto.py",
+      "line": 14,
+      "description": "Fernet key uses META_TOKEN_ENCRYPTION_KEY when set; XOR does not."
+    },
+    {
+      "file": "backend/app/services/facebook_crypto.py",
+      "line": 38,
+      "description": "unseal always handles xor: with SECRET_KEY material."
+    },
+    {
+      "file": "backend/app/services/ctseller.py",
+      "line": 91,
+      "description": "CT Seller secrets use the same ImportError XOR fallback."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 177,
+      "description": "Comments document optional META_TOKEN_ENCRYPTION_KEY with SECRET_KEY derivation."
+    },
+    {
+      "file": "requirements.txt",
+      "line": 20,
+      "description": "cryptography is a declared dependency."
+    },
+    {
+      "file": "infra/docker/Dockerfile.api",
+      "line": 10,
+      "description": "API image pip-installs requirements.txt, including cryptography."
+    }
+  ],
+  "blockers": [
+    "No OS-enforced sandbox, so ImportError was not forced at runtime.",
+    "Whether every deployed process (Railway API, worker, and any non-Docker host) can import cryptography is not source-provable."
+  ],
+  "validation_plan": {
+    "local": "Monkeypatch cryptography.fernet import to raise ImportError, call seal_facebook_secret and ctseller.seal_secret with dummy strings, assert xor: prefixes, then unseal and compare. Set META_TOKEN_ENCRYPTION_KEY to a distinct dummy and assert Facebook XOR still follows SECRET_KEY. Restore the import and assert Fernet output has no xor: prefix.",
+    "deployment": "Owner runs a one-shot import cryptography check in the production API and worker images and confirms no xor: rows exist on accounts.facebook_*_enc or CT Seller secret columns."
+  }
+}

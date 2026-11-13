@@ -1,0 +1,368 @@
+{
+  "units": [
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fadmin%2Faccounts::backend%2Fapp%2Fauth.py%23is_master_admin_email::backend%2Fapp::ATTACK-CLASSES.md%23Access%20control",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/config.py",
+        "backend/app/main.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/config.py",
+            "backend/app/main.py"
+          ],
+          "invariant": "Ordinary owners cannot reach all-tenant admin routes; only a JWT user whose DB email is in MASTER_ADMIN_EMAILS can.",
+          "method": "source",
+          "result": "GET/PATCH/DELETE /admin/accounts* and GET /admin/analytics all call _require_master_admin after get_current_user. That helper only tests is_master_admin_email(current.email). Ordinary owners and cataloggers whose email is absent from the env list have no alternate handler that omits the check. JWT account_id is bound in user_from_access_token and is not used as the admin gate. POST /integrations/r2/migrate-catalog requires the same email check before body.account_id may name another tenant. POST /integrations/r2/cors is owner OR master-admin but only applies cors_allow_origins() from server config, not a caller-chosen origin.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/config.py",
+            "backend/app/main.py"
+          ],
+          "invariant": "The master-admin email list cannot be satisfied by self-service register or team invite of an unused listed address.",
+          "method": "source",
+          "result": "No out-of-band enrollment exists. POST /auth/register writes payload.email.lower() as a new owner and does not consult master_admin_email_list. POST /team/members lets any owner create owner/catalogger/client with a globally unused email. is_master_admin_email then grants list/archive/restore/delete of every Account. Production registration is gated only when ALLOW_OPEN_REGISTRATION is false; the setting defaults true. A client with a listed email is still blocked from /admin/* by enforce_client_http, so the working claim roles are owner and catalogger.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "master-admin-email-claim-via-register-or-invite"
+      ],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fexports%2Fjson::backend%2Fapp%2Fmain.py%23export%20handlers::backend%2Fapp::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/export_tasks.py",
+        "backend/app/main.py",
+        "backend/app/schemas.py",
+        "backend/app/services/roles.py",
+        "backend/app/services/sale_zip_export.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/schemas.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "JSON/CSV/markdown/PDF exports stay inside current.account_id and cannot be called by a client login.",
+          "method": "source",
+          "result": "_lots_for_export always filters Lot.account_id == current.account_id and, when sale_id is set, resolves that sale through _sale_for_user (sale_id + account_id + client assigned-sale). Swapping another tenant's sale_id yields 404. GET /exports/* is not on client_http_allowed, so enforce_client_http returns 403 before the handler. LotOut includes listing and audience fields but not CT Seller password or sealed tokens. Catalogger export of every sale in the same account matches the intended staff share of inventory.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/export_tasks.py",
+            "backend/app/main.py",
+            "backend/app/services/sale_zip_export.py"
+          ],
+          "invariant": "Sale photo ZIP create/status/download and the worker cannot read another tenant's lots or an unowned export_id.",
+          "method": "source",
+          "result": "POST /exports/sale-photos-zip uses _sale_for_user then stores SalePhotoZipExport.account_id = current.account_id. GET status and download require export_id + account_id. start_sale_zip_export's runner re-loads the row by export_id AND account_id. run_sale_photo_zip_export selects lots with Lot.account_id == row.account_id even when across_sales=true (still one Estate-EZ account, filtered by optional ctseller_sale_id). Clients cannot start a ZIP (path not allowlisted) and across_sales additionally rejects is_client_role. zip_path is written by the worker under export_dir_for_account; the download FileResponse does not re-chroot that path (hardening only; callers cannot set zip_path).",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fjobs%2F%7Bid%7D%2Fevents::backend%2Fapp%2Fauth.py%23get_current_user_sse::backend%2Fapp::PROTOCOLS-RPC-AND-MESSAGING.md%23Per-item%20and%20streaming%20authorization%20gaps",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "backend/app/services/job_events.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/main.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "GET /jobs/{job_id}/events requires a valid JWT and a job owned by that JWT's account (and, for clients, their assigned sale).",
+          "method": "source",
+          "result": "get_current_user_sse accepts Authorization Bearer or query access_token, then user_from_access_token (sub + account_id must match the User row; inactive Account is 403). Missing token is 401. The handler loads ProcessingJob by job_id AND current.account_id, then _assert_client_job. Swapping another tenant's job_id is 404; a same-account job on another sale is 403 for clients. enforce_client_http allows GET /jobs/{id}/events only.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/services/job_events.py"
+          ],
+          "invariant": "The open SSE generator cannot be steered onto another job or tenant after the initial authorize-once.",
+          "method": "source",
+          "result": "account_id and job_id are captured after the ownership check. list_events_after always filters JobSseEvent.account_id and JobSseEvent.job_id; last_id is only a watermark on that pair, so global autoincrement ids from other jobs are not returned. The stream does not re-validate the JWT or Account.is_active; access_token_expire_minutes defaults to 43200 so expiry-during-stream is not a realistic window. Query-string JWT is the documented EventSource workaround and is hardening (log/Referer exposure), not a per-item authz miss.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Flots%2F%7Bid%7D%2Fmedia-url::backend%2Fapp%2Fobject_storage.py%23signed%20URL::backend%2Fapp%2Fobject_storage.py::DATA-ISOLATION-AND-LIFECYCLE.md%23Blob%20and%20signed-reference%20overreach",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/catalog_storage.py",
+        "backend/app/main.py",
+        "backend/app/object_storage.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/object_storage.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Presigned media URLs are minted only after JWT auth and a lot/photo/video row bound to current.account_id.",
+          "method": "source",
+          "result": "GET /lots/{lot_id}/media-url, /photos/{photo_id}/media-url, and /videos/{video_id}/media-url all require get_current_user (clients 403 via allowlist) and query Lot/Photo/LotVideo with both resource id and account_id. Cross-tenant lot_id or a photo_id on another lot/account is 404. sale_lot_cover_urls uses _sale_for_user then Photo.account_id. presigned_get_url is GetObject-only, ExpiresIn clamped to 60..86400 seconds; handlers pass 3600. The URL holder can GET that one key until expiry (inherent presign), not list the bucket.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/catalog_storage.py",
+            "backend/app/main.py",
+            "backend/app/object_storage.py"
+          ],
+          "invariant": "storage_path cannot be caller-controlled into another tenant prefix or an absolute path outside upload_root.",
+          "method": "source",
+          "result": "No request schema writes Photo.storage_path. persist_catalog_photo/video and replace/rotate rewrite it to catalog/{account_id}/…. signed_catalog_url signs whatever _object_key_from_storage_path returns and does not assert a catalog/{account_id}/ prefix; that helper also returns any string containing '/' if it is not under upload_root. resolve_catalog_storage_path and delete_catalog_photo will use an absolute path as a local candidate without a relative_to(upload_root) check. Those are latent overreach if a row were poisoned; no API write path was found. download_lot_photo FileResponse follows the same resolver.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Flots::backend%2Fapp%2Fmain.py%23_sale_for_user::backend%2Fapp::DATA-ISOLATION-AND-LIFECYCLE.md%23Missing%20tenant%20or%20owner%20enforcement",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "backend/app/models.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/main.py",
+            "backend/app/models.py"
+          ],
+          "invariant": "Lot, sale, and job reads/writes bind current.account_id from the JWT-matched User, not a caller-supplied account_id.",
+          "method": "source",
+          "result": "user_from_access_token requires token account_id == User.account_id. _sale_for_user filters Sale.id and Sale.account_id. GET /lots filters Lot.account_id and, with sale_id, calls _sale_for_user. GET /lots/{id}, photos, videos, move, merge, delete, and job get/run/cancel/delete all include account_id in the query. Swapping lot_id/sale_id/job_id from another tenant is 404. No list/detail handler accepts account_id as a query/body override except R2 migrate (master-admin gated).",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py"
+          ],
+          "invariant": "Policy (assigned sale / client) and the SQL predicate agree; batch lot_ids cannot pull another sale or tenant.",
+          "method": "source",
+          "result": "Clients are forced onto assigned_sale_id in list_sales, list_lots, list_jobs, and _enforce_client_sale. POST /sales/{id}/post-to-ctseller and ctseller-photos re-query lots with account_id + sale_id and ignore unknown lot_ids. move_lots_to_sale is called with current.account_id. list_lots X-Total-Count omits listing_channel/sku_flags/ctseller_sale_id (same-tenant count only; not cross-tenant). GET /exports/sale-photos-zip download looks up Sale by id without account_id solely to build the filename slug; zip bytes come from the account-scoped export row.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fintegrations%2Fctseller%2Fsession::backend%2Fapp%2Fmain.py%23CTSellerSessionOut::backend%2Fapp%2Fservices%2Fctseller.py::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/main.py",
+        "backend/app/schemas.py",
+        "backend/app/services/ctseller.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/schemas.py",
+            "backend/app/services/ctseller.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Catalogger receipt of CT Seller access+refresh JWTs is the intended Watcher capability, not an accidental disclosure of the stored password, and clients cannot call it.",
+          "method": "source",
+          "result": "POST /integrations/ctseller/session is get_current_user only (no can_manage_integrations / _require_owner). It loads Account by current.account_id, mints/reuses the stored CT session, and returns CTSellerSessionOut(access_token, refresh_token, username) explicitly documented as never returning the CT password. PUT/DELETE credentials remain owner-only. Clients are 403 because the path is not allowlisted. Architecture states cataloggers may obtain these JWTs for Estate-Ez Auction Watcher. The tokens are the same seller.ctbids.com JWTs the server uses for all CT API calls, so they are owner-equivalent on that third-party API; that is intended staff capability, not a role bypass inside Estate-EZ.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Flots%2F%7Bid%7D%2Fpost-to-ctseller::backend%2Fapp%2Fservices%2Froles.py%23can_catalog::backend%2Fapp%2Fservices%2Fctseller.py::ATTACK-CLASSES.md%23Access%20control",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/main.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/main.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Only same-account catalog staff (owner/catalogger) can post a lot or sale to the account's CT Seller mapping; clients and other tenants cannot.",
+          "method": "source",
+          "result": "POST /lots/{lot_id}/post-to-ctseller and /ctseller-photos load Lot by id AND account_id, then _sale_for_user(lot.sale_id). Sale-level post and photo batch start with _sale_for_user and re-filter Lot.account_id + Lot.sale_id (lot_ids from another sale or tenant are dropped or 404). Handlers do not call can_catalog() by name; the equivalent is get_current_user plus client allowlist denial of these paths. roles.py documents cataloggers may post to CT Seller; can_manage_integrations stays owner-only for storing the password. Background start_sale_post_in_background is invoked with current.account_id, not a body account_id.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    },
+    {
+      "coverage_id": "backend%2Fapp%2Fservices%2Froles.py%23client_http_allowed::backend%2Fapp%2Fauth.py%23enforce_client_http::backend%2Fapp::ATTACK-CLASSES.md%23Access%20control",
+      "disposition": "covered",
+      "reviewed_paths": [
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "backend/app/services/roles.py"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "A client JWT cannot reach catalog, export, admin, CT session, or media-url by trailing slash, case, extra segments, or path prefix tricks.",
+          "method": "source",
+          "result": "enforce_client_http runs on get_current_user and get_current_user_sse using request.method and request.url.path. client_http_allowed uppercases the verb, strips a trailing slash, and allowlists only /auth/me, /auth/password, /sales, /jobs, POST /jobs/upload, GET /sales/{id}/cataloged-mobile-drafts when {id} has no slash, DELETE /jobs/{id} except 'upload', and POST/GET /jobs/{id}/{upload-files|run|cancel|events}. Extra segments fail len(parts)!=2. /jobs/upload as a job_id prefix is rejected. GET /lots, /lots/, /exports/json, /integrations/ctseller/session, and /admin/accounts are denied. Case-shifted /Lots or /JOBS does not match the allowlist (fail-closed) and would not match FastAPI routes either.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-authz",
+          "reviewed_paths": [
+            "backend/app/auth.py",
+            "backend/app/main.py",
+            "backend/app/services/roles.py"
+          ],
+          "invariant": "Routes that skip get_current_user still cannot be used as a client allowlist bypass.",
+          "method": "source",
+          "result": "lot_thumbnail, lot_photo_thumbnail, and stream_lot_video use oauth2_scheme + user_from_access_token (no enforce_client_http) but explicitly 403 is_client_role before the account_id query. POST /jobs/upload and upload-files use get_current_user_sse so the allowlist still applies, then _sale_for_user / _assert_client_job. GET /jobs for clients is forced to assigned_sale_id. No engagement/facebook router path is allowlisted.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "master-admin-email-claim-via-register-or-invite",
+      "title": "Master-admin email can be claimed by open registration or team invite",
+      "description": "All-tenant admin is not a stored role. Any authenticated user whose users.email is in MASTER_ADMIN_EMAILS may list, archive, restore, and delete every Account. POST /auth/register and POST /team/members will create a user with that email if it is globally unused, and neither path proves the caller is the env-list operator. An unused listed address therefore becomes a first-claimer privilege to cross-tenant admin.",
+      "claimed_root_cause": "Master-admin authorization is a case-folded email membership test on the current User row, while self-service register and owner team-invite can mint that email without an enrollment or possession check.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "backend/app/main.py",
+          "line": 866,
+          "scope": "register",
+          "description": "Unauthenticated POST /auth/register creates a new Account and owner User. It blocks only when ENVIRONMENT is production and ALLOW_OPEN_REGISTRATION is false; it never consults MASTER_ADMIN_EMAILS."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/main.py",
+          "line": 885,
+          "scope": "User.email assignment",
+          "description": "The new owner's email is stored as payload.email.lower(). The only collision control is a global unique email lookup, which uses the raw payload.email (not lowercased) and does not reserve listed admin addresses."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/main.py",
+          "line": 978,
+          "scope": "create_team_member",
+          "description": "Alternate mint: any owner may POST /team/members with role owner or catalogger and a globally unused email, including an address from MASTER_ADMIN_EMAILS."
+        },
+        {
+          "kind": "propagation",
+          "file": "backend/app/auth.py",
+          "line": 114,
+          "scope": "is_master_admin_email",
+          "description": "After login, every request loads User from JWT sub+account_id. Admin is decided only by stripping/lowercasing that DB email and testing membership in settings.master_admin_email_list()."
+        },
+        {
+          "kind": "sink",
+          "file": "backend/app/main.py",
+          "line": 1242,
+          "scope": "admin_list_accounts",
+          "description": "_require_master_admin(current) is the sole gate on GET /admin/accounts (and the sibling archive/restore/delete/analytics routes). A claimed listed email yields cross-tenant account names, owner emails, and destructive admin actions."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "backend/app/config.py",
+          "line": 145,
+          "description": "allow_open_registration defaults true; production register is denied only when this flag is explicitly false."
+        },
+        {
+          "file": "backend/app/config.py",
+          "line": 147,
+          "description": "master_admin_emails is a comma-separated env string, not a user-id enrollment table."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 451,
+          "description": "_require_master_admin checks only is_master_admin_email(current.email); role and account_id are ignored."
+        },
+        {
+          "file": "backend/app/main.py",
+          "line": 1420,
+          "description": "DELETE /admin/accounts/{account_id} deletes another tenant's users, sales, lots, photos, jobs, and account row after the same email check (blocked only when account_id equals the caller's own account)."
+        },
+        {
+          "file": "backend/app/auth.py",
+          "line": 83,
+          "description": "get_current_user does not add an admin claim or second factor; a normal HS256 staff JWT is enough once the email matches."
+        }
+      ],
+      "blockers": [
+        "This run forbids executing target code and has no OS-enforced sandbox, so the register-then-GET /admin/accounts result was not observed on dummy tenants.",
+        "Whether a deployment's MASTER_ADMIN_EMAILS addresses are already enrolled User rows, and whether ALLOW_OPEN_REGISTRATION is false in production, is env-only and not source-visible."
+      ],
+      "validation_plan": {
+        "local": "On an isolated SQLite API with dummy tenants already seeded, set MASTER_ADMIN_EMAILS to an unused mailbox and ALLOW_OPEN_REGISTRATION=true. POST /auth/register with that email, then GET /admin/accounts with the returned JWT and confirm 200 listing the seed tenants. Repeat from a second dummy owner via POST /team/members creating a catalogger with another unused listed email, and confirm that catalogger JWT also passes GET /admin/accounts while a third owner whose email is not listed receives 403.",
+        "deployment": "Owner-observed only: inspect production MASTER_ADMIN_EMAILS and ALLOW_OPEN_REGISTRATION, and whether each listed address already exists as a users.email. Do not register or invite those addresses on a live system."
+      }
+    }
+  ],
+  "hardening": [
+    "Bind master admin to enrolled user ids (or reject register/team-create of MASTER_ADMIN_EMAILS addresses) instead of first-claimer email membership.",
+    "After a successful lot/photo/video account_id lookup, refuse to sign or read storage_path unless _object_key_from_storage_path is under catalog/{account_id}/ (or videos/), and chroot resolve_catalog_storage_path, delete_catalog_photo, and ZIP FileResponse to upload_root / export_dir_for_account.",
+    "Treat CT Seller access+refresh JWTs from POST /integrations/ctseller/session as owner-equivalent on seller.ctbids.com; if Watcher should be owner-only, gate the route with can_manage_integrations.",
+    "Keep JWT out of EventSource query strings (short-lived SSE ticket or cookie) so access logs do not store staff bearer tokens.",
+    "Make GET /lots X-Total-Count apply the same listing_channel, sku_flags, and ctseller_sale_id predicates as the page query.",
+    "If two client logins share one sale, bind job cancel/delete/run to job.user_id as well as assigned_sale_id if peer-client isolation is desired."
+  ],
+  "uncovered": []
+}

@@ -1,0 +1,58 @@
+{
+  "decision": "rejected",
+  "record": {
+    "verdict": "rejected",
+    "fingerprint": "gemini.hunt.unlabeled-listing-search-args",
+    "title": "Audience-hunt listing text is unlabeled and can steer unconstrained Google Search arguments",
+    "description": "Owners alone may start hunts. The hunt still concatenates catalogger- or model-written Title, SKU, Description, Specs, and pickup city into the Pro+Search user prompt with no untrusted delimiter. The Search tool has no handler-side query or URL allowlist. _safe_public_url persists any http(s) group URL, including internal hosts, onto the lot; recommend_hold can set audience_hold and skip CT Seller posts. Attacker is a catalogger (or client photos that became listing text) who does not run the hunt. Affected principal is the owner who requested find groups (Search spend and stored URLs/hold) under the operator Gemini identity. Code does not implement a server-side fetch of those URLs. Whether Google Search grounding will fetch a listing-supplied internal URL is not source-visible.",
+    "claimed_root_cause": "Lot fields are interpolated as trusted labeled lines into a Google Search tool call with no query/URL allowlist, and hunt JSON URLs are stored after only a javascript:/data: filter.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 5115,
+        "scope": "hunt_lot_audience",
+        "description": "Owner starts a hunt on a lot whose title/description/SKU may have been written by a catalogger or prior Gemini catalog."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 451,
+        "scope": "_lot_research_text",
+        "description": "Listing fields are formatted as Title/SKU/Description/Specs with no untrusted wrapper."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 575,
+        "scope": "run_audience_research_and_structure",
+        "description": "Research GenerateContentConfig attaches tools=[GoogleSearch()] with no argument validation."
+      },
+      {
+        "kind": "sink",
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 205,
+        "scope": "_safe_public_url",
+        "description": "Model-chosen group URLs are stored if they start with http:// or https://; internal hosts are not excluded. recommend_hold may set audience_hold."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 511,
+        "description": "audience_research_prompt embeds _lot_research_text after operational instructions."
+      },
+      {
+        "file": "backend/app/services/audience_hunt.py",
+        "line": 662,
+        "description": "payload recommend_hold true sets lot.audience_hold without a separate owner confirm object."
+      },
+      {
+        "file": "backend/app/services/roles.py",
+        "line": 76,
+        "description": "Hunt start remains owner-only; the gap is tool-argument binding, not the route gate."
+      }
+    ],
+    "reason": "Cited lines are real at c661a8fd: hunt_lot_audience (backend/app/main.py:5115) calls _require_can_run_audience_hunt; _lot_research_text (backend/app/services/audience_hunt.py:451-479) emits labeled Title/SKU/Description/Specs plus pickup city; audience_research_prompt (511-532) appends that block after instructions; run_audience_research_and_structure (566-575) attaches tools=[GoogleSearch()]; _safe_public_url (205-216) keeps any http(s) string and drops javascript:/data:; recommend_hold at 662-663 can set audience_hold. That is intended same-principal hunt authority plus missing delimiter/host hygiene, not a crossed boundary. The owner is the requester and Gemini billing principal; those lot fields are the designed research subject of Find groups. Cataloggers on the same account already PATCH auction_title, professional_description, specification_lines, sku, and audience_hold (update_lot at backend/app/main.py:4958-5019 blocks only clients). Clients cannot start hunts or PATCH lots; photo bytes become listing text only through the catalog model. Google Search is a Gemini built-in tool—the app never receives Search arguments and never fetches stored group hrefs (facebook_groups.found_groups_from_lots copies them for display). Auto-hold is the documented hunt side effect and is authority the catalogger already has. A provider fetch of a listing-supplied RFC1918 URL is not a source-visible sink. The first trace step is an owner-gated route, not a lower-trust entrypoint that invokes Search."
+  }
+}

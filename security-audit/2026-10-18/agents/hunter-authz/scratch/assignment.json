@@ -1,0 +1,456 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fadmin%2Faccounts::backend%2Fapp%2Fauth.py%23is_master_admin_email::backend%2Fapp::ATTACK-CLASSES.md%23Access%20control",
+    "surface": "Master-admin cross-account routes",
+    "boundary": "Ordinary account owner versus all-tenant admin",
+    "subsystem": "Master admin",
+    "attack_class": "Access control",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/auth.py",
+      "backend/app/config.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules",
+      "WEB-PROTOCOL-AND-AUTH.md#JWT verification and claim binding"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fexports%2Fjson::backend%2Fapp%2Fmain.py%23export%20handlers::backend%2Fapp::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+    "surface": "Inventory exports and sale photo ZIP",
+    "boundary": "Authenticated staff versus bulk estate data",
+    "subsystem": "FastAPI core API",
+    "attack_class": "Feature abuse and data leakage",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/services/sale_zip_export.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Feature abuse and data leakage",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Export and backup scope expansion"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Fjobs%2F%7Bid%7D%2Fevents::backend%2Fapp%2Fauth.py%23get_current_user_sse::backend%2Fapp::PROTOCOLS-RPC-AND-MESSAGING.md%23Per-item%20and%20streaming%20authorization%20gaps",
+    "surface": "Job SSE event stream",
+    "boundary": "Cross-job or unauthenticated reader versus job progress",
+    "subsystem": "FastAPI core API",
+    "attack_class": "SSE identity and replay",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/auth.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Per-item and streaming authorization gaps"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Flots%2F%7Bid%7D%2Fmedia-url::backend%2Fapp%2Fobject_storage.py%23signed%20URL::backend%2Fapp%2Fobject_storage.py::DATA-ISOLATION-AND-LIFECYCLE.md%23Blob%20and%20signed-reference%20overreach",
+    "surface": "Presigned R2 media URLs",
+    "boundary": "URL holder versus catalog object bytes",
+    "subsystem": "Object storage",
+    "attack_class": "Blob and signed URL overreach",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/catalog_storage.py",
+      "backend/app/object_storage.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Resource and file handling",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Blob and signed-reference overreach"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23GET%20%2Flots::backend%2Fapp%2Fmain.py%23_sale_for_user::backend%2Fapp::DATA-ISOLATION-AND-LIFECYCLE.md%23Missing%20tenant%20or%20owner%20enforcement",
+    "surface": "Lot, sale, and job account_id filters",
+    "boundary": "Same-deployment tenant versus another account's estate data",
+    "subsystem": "FastAPI core API",
+    "attack_class": "Tenant isolation",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/models.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Policy and query disagreement"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Fintegrations%2Fctseller%2Fsession::backend%2Fapp%2Fmain.py%23CTSellerSessionOut::backend%2Fapp%2Fservices%2Fctseller.py::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+    "surface": "CT Seller session mint for Watcher",
+    "boundary": "Catalogger versus CT Seller access and refresh JWTs",
+    "subsystem": "CT Seller integration",
+    "attack_class": "Feature abuse and data leakage",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/services/ctseller.py",
+      "backend/app/schemas.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Feature abuse and data leakage",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules",
+      "WEB-PROTOCOL-AND-AUTH.md#API-key scope and resource binding"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fmain.py%23POST%20%2Flots%2F%7Bid%7D%2Fpost-to-ctseller::backend%2Fapp%2Fservices%2Froles.py%23can_catalog::backend%2Fapp%2Fservices%2Fctseller.py::ATTACK-CLASSES.md%23Access%20control",
+    "surface": "CT Seller listing and photo post",
+    "boundary": "Catalogger versus owner's CT Seller account",
+    "subsystem": "CT Seller integration",
+    "attack_class": "Access control",
+    "starting_paths": [
+      "backend/app/main.py",
+      "backend/app/services/ctseller.py",
+      "backend/app/services/roles.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  },
+  {
+    "coverage_id": "backend%2Fapp%2Fservices%2Froles.py%23client_http_allowed::backend%2Fapp%2Fauth.py%23enforce_client_http::backend%2Fapp::ATTACK-CLASSES.md%23Access%20control",
+    "surface": "Client upload-only HTTP allowlist",
+    "boundary": "Client login versus catalog and integrations",
+    "subsystem": "FastAPI core API",
+    "attack_class": "Access control",
+    "starting_paths": [
+      "backend/app/services/roles.py",
+      "backend/app/auth.py",
+      "backend/app/main.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Access control",
+    "selected_companion_blocks": [
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Core discipline",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Universal moves",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Validation rules",
+      "DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP server or client in the product."
+      },
+      {
+        "block": "AI-AND-LLM.md#Sub-agent and MCP trust inheritance",
+        "reason": "No MCP or sub-agent dispatch in the product."
+      },
+      {
+        "block": "CLIENT-SIDE.md#Service-worker registration and scope takeover",
+        "reason": "No service-worker registration in frontend or mobile webviews."
+      },
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#IPC peer-authentication gaps",
+        "reason": "No Unix-socket/XPC/Binder local daemon in this surface."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "SaaS path is Python/TypeScript; no unsafe native, kernel, or FFI parser in this surface."
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Topic, routing-key, and subscription scope gaps",
+        "reason": "No broker/topic subscription; worker polls Postgres."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#MFA enrollment and assurance downgrade",
+        "reason": "No MFA enrollment or second-factor paths."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML IdP or assertion consumer in source."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#WebAuthn and passkey verification",
+        "reason": "No WebAuthn/passkey registration or assertion code."
+      }
+    ]
+  }
+]

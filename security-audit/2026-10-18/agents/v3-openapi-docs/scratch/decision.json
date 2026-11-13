@@ -1,0 +1,64 @@
+{
+  "decision": "needs_validation",
+  "record": {
+    "verdict": "needs_validation",
+    "fingerprint": "cloud.ingress.fastapi-openapi-docs",
+    "title": "FastAPI docs and OpenAPI remain enabled on the 0.0.0.0 API bind",
+    "description": "The API app is constructed with FastAPI defaults, so /docs, /redoc, and /openapi.json are registered in development and production. Docker and Procfile bind uvicorn on 0.0.0.0, and DEPLOY.md publishes an API domain for /health. Those routes disclose the full management surface (auth, R2 migrate, admin delete, CT Seller, Facebook). Whether a Railway edge or other proxy currently blocks them is not in source and was not probed.",
+    "claimed_root_cause": "FastAPI() is created without docs_url, redoc_url, or openapi_url disabled, and no production overlay or ingress manifest in repo strips those paths before the public bind.",
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "backend/app/main.py",
+        "line": 284,
+        "scope": "FastAPI constructor",
+        "description": "app = FastAPI(title=settings.app_name) keeps default documentation and OpenAPI URLs for every environment."
+      },
+      {
+        "kind": "propagation",
+        "file": "backend/app/config.py",
+        "line": 209,
+        "scope": "production_must_be_safe",
+        "description": "Production startup checks SECRET_KEY, SQLite, and CORS_ORIGINS but does not disable docs or require TRUSTED_HOSTS."
+      },
+      {
+        "kind": "sink",
+        "file": "infra/docker/Dockerfile.api",
+        "line": 22,
+        "scope": "uvicorn CMD",
+        "description": "Container starts uvicorn app.main:app --host 0.0.0.0, so any attached public domain forwards to the default docs routes unless a proxy blocks them."
+      }
+    ],
+    "evidence": [
+      {
+        "file": "backend/app/main.py",
+        "line": 284,
+        "description": "No docs_url=None, redoc_url=None, or openapi_url=None on the FastAPI constructor."
+      },
+      {
+        "file": "Procfile",
+        "line": 3,
+        "description": "Nixpacks/Procfile path also runs uvicorn on 0.0.0.0 bound to $PORT."
+      },
+      {
+        "file": "DEPLOY.md",
+        "line": 60,
+        "description": "Operators are told to generate a public API domain and to hit /health on that hostname."
+      },
+      {
+        "file": "backend/app/main.py",
+        "line": 559,
+        "description": "TrustedHostMiddleware is added only when TRUSTED_HOSTS is non-empty; empty is the documented default."
+      }
+    ],
+    "blockers": [
+      "Live Railway ingress, private-networking flags, and any path filter in front of the API are not in this repo.",
+      "This run must not fetch the public API /docs or /openapi.json.",
+      "No sandbox was available to boot uvicorn locally and observe the default routes."
+    ],
+    "validation_plan": {
+      "local": "In an isolated loopback sandbox, start app.main:app and confirm unauthenticated GET /docs, /redoc, and /openapi.json return 200 with the operation list. That only proves the application route, not live exposure.",
+      "deployment": "Owner, from the Railway dashboard or an already-authorized admin path, notes whether the API service has a public domain and whether an edge rule denies /docs, /redoc, and /openapi.json. Do not probe the hostname from this agent."
+    }
+  }
+}

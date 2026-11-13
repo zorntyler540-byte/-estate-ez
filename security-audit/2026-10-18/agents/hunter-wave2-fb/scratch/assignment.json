@@ -1,0 +1,37 @@
+[
+  {
+    "coverage_id": "backend%2Fapp%2Ffacebook_routes.py%23GET%20%2Ffacebook%2Fposts::backend%2Fapp%2Ffacebook_routes.py%23get_current_user%20read::backend%2Fapp%2Fservices%2Ffacebook_page.py::ATTACK-CLASSES.md%23Feature%20abuse%20and%20data%20leakage",
+    "surface": "GET /facebook/posts and GET /integrations/facebook/status",
+    "boundary": "Catalogger versus Page connection metadata and post history",
+    "subsystem": "Facebook Page posting",
+    "attack_class": "Feature abuse and data leakage",
+    "starting_paths": [
+      "backend/app/facebook_routes.py",
+      "backend/app/services/facebook_page.py"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Feature abuse and data leakage",
+    "selected_companion_blocks": [
+      "WEB-PROTOCOL-AND-AUTH.md#Core discipline",
+      "WEB-PROTOCOL-AND-AUTH.md#Universal moves",
+      "WEB-PROTOCOL-AND-AUTH.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding",
+        "reason": "OAuth callback is a separate unit."
+      },
+      {
+        "block": "MEMORY-SAFETY-AND-BINARY.md#Core discipline",
+        "reason": "No unsafe native surface."
+      },
+      {
+        "block": "WEB-PROTOCOL-AND-AUTH.md#SAML signed-object and assertion binding",
+        "reason": "No SAML."
+      },
+      {
+        "block": "AI-AND-LLM.md#MCP server and tool identity confusion",
+        "reason": "No MCP."
+      }
+    ]
+  }
+]

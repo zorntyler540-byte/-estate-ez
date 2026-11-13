@@ -1,0 +1,75 @@
+{
+  "verdict": "needs_validation",
+  "claimed_root_cause": "allow_open_registration defaults True and register only 403s when is_production and that flag is false, so a production deploy that omits the flag keeps anonymous owner-JWT minting.",
+  "title": "Open registration defaults on and mints owner JWTs",
+  "description": "POST /auth/register is public. The production close-gate requires both ENVIRONMENT=production and ALLOW_OPEN_REGISTRATION=false. The setting defaults true, .env.example leaves it true, and DEPLOY.md treats closing signup as a post-bootstrap step. A successful call creates an owner tenant and returns an access JWT. The web UI always exposes Register.",
+  "trace": [
+    {
+      "kind": "entrypoint",
+      "file": "backend/app/main.py",
+      "line": 866,
+      "scope": "POST /auth/register",
+      "description": "Unauthenticated register endpoint."
+    },
+    {
+      "kind": "propagation",
+      "file": "backend/app/config.py",
+      "line": 145,
+      "scope": "ALLOW_OPEN_REGISTRATION default",
+      "description": "allow_open_registration Field default True; production_must_be_safe does not require it false."
+    },
+    {
+      "kind": "sink",
+      "file": "backend/app/main.py",
+      "line": 893,
+      "scope": "owner JWT issuance",
+      "description": "After creating Account, owner User, and General sale, register returns create_access_token for that owner."
+    }
+  ],
+  "validation_plan": {
+    "local": "In the OS sandbox with dummy data, POST /auth/register under default settings and expect 200 plus access_token. Monkeypatch is_production True while leaving allow_open_registration at default True and expect 200 plus access_token. Then set allow_open_registration False with is_production True and expect 403. Do not call any deployed host.",
+    "deployment": "Owner reads only the Railway API service variables ALLOW_OPEN_REGISTRATION and ENVIRONMENT. If ENVIRONMENT is production/prod and the flag is unset or true, treat the issue as live. Do not POST /auth/register against production."
+  },
+  "blockers": [
+    "No OS-enforced sandbox is available (empty allowlist env, no-network namespace, read-only target, trusted parent-side no-follow promotion), so TestClient register calls were not executed.",
+    "Live Railway ALLOW_OPEN_REGISTRATION and ENVIRONMENT were not observed; this run must not probe the public API or create accounts."
+  ],
+  "fingerprint": "unauth.auth.open-registration-fail-open",
+  "evidence": [
+    {
+      "file": "backend/app/main.py",
+      "line": 868,
+      "description": "403 only if is_production and not allow_open_registration."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 145,
+      "description": "ALLOW_OPEN_REGISTRATION defaults True with comment to set true only to bootstrap."
+    },
+    {
+      "file": "backend/app/config.py",
+      "line": 210,
+      "description": "production_must_be_safe rejects weak SECRET_KEY, SQLite, and empty CORS_ORIGINS in production, but does not require allow_open_registration false."
+    },
+    {
+      "file": "backend/.env.example",
+      "line": 15,
+      "description": "Example env sets ALLOW_OPEN_REGISTRATION=true."
+    },
+    {
+      "file": "DEPLOY.md",
+      "line": 52,
+      "description": "Deploy table says default true and to set false after the first real account."
+    },
+    {
+      "file": "frontend/app/page.tsx",
+      "line": 36,
+      "description": "Public login page posts /auth/${mode}, which is /auth/register when the always-visible Register tab is selected."
+    },
+    {
+      "file": "backend/app/auth.py",
+      "line": 43,
+      "description": "create_access_token signs sub/account_id/role with HS256 and long default TTL."
+    }
+  ]
+}

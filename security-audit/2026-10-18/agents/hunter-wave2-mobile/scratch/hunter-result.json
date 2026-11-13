@@ -1,0 +1,150 @@
+{
+  "units": [
+    {
+      "coverage_id": "mobile%2Fcontext%2FAuthContext.tsx%23loginWithPassword::mobile%2Flib%2FsecureStorage.ts%23AFTER_FIRST_UNLOCK::mobile::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Credential-store%20and%20local-secret%20boundary%20mismatch",
+      "disposition": "candidate",
+      "reviewed_paths": [
+        "mobile/app.json",
+        "mobile/app/login.tsx",
+        "mobile/context/AuthContext.tsx",
+        "mobile/eas.json",
+        "mobile/lib/queue/db.ts",
+        "mobile/lib/secureStorage.ts"
+      ],
+      "checks": [
+        {
+          "agent_id": "hunter-wave2-mobile",
+          "reviewed_paths": [
+            "mobile/context/AuthContext.tsx",
+            "mobile/lib/secureStorage.ts",
+            "mobile/app.json"
+          ],
+          "invariant": "A less-trusted other app on the same OS profile cannot read the remembered staff password from SecureStore.",
+          "method": "source",
+          "result": "Writes go only through expo-secure-store. app.json has no keychain-access-groups, no android.sharedUserId, and no exported provider. Other apps are not granted that read in source. Same-app reads after sign-in (silentRefresh, boot restore) are the intended OS principal and are not a boundary violation.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-mobile",
+          "reviewed_paths": [
+            "mobile/app/login.tsx",
+            "mobile/context/AuthContext.tsx",
+            "mobile/lib/secureStorage.ts"
+          ],
+          "invariant": "The reusable staff password is not persisted in an OS credential item that is backup-eligible or readable without user presence, unless a refresh token is used instead.",
+          "method": "source",
+          "result": "Every successful signIn stores JSON {email, password} under ct_mobile_login_credentials via loginWithPassword. STORE_OPTS sets only keychainAccessible AFTER_FIRST_UNLOCK (not AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY). requireAuthentication is never passed on set or get. getItemAsync is called with the key only. The JWT is stored the same way. There is no remember-me opt-out on the login screen.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-mobile",
+          "reviewed_paths": [
+            "mobile/app.json",
+            "mobile/eas.json",
+            "mobile/lib/secureStorage.ts"
+          ],
+          "invariant": "Android allowBackup and iOS ThisDeviceOnly / merged packaging actually prevent a backup or other-profile reader from recovering the password.",
+          "method": "source",
+          "result": "No android/ or ios/ trees exist (EAS managed builds in eas.json). app.json android block does not set allowBackup. plugins lists expo-secure-store as a bare string with no configureAndroidBackup. iOS AFTER_FIRST_UNLOCK is the backup-eligible Keychain class; ThisDeviceOnly is unused. Whether Google Auto Backup, Finder/iCloud encrypted backup, MDM, or another OS user/work profile can read the shipped item is an OS/packaging fact.",
+          "artifact": null
+        },
+        {
+          "agent_id": "hunter-wave2-mobile",
+          "reviewed_paths": [
+            "mobile/context/AuthContext.tsx",
+            "mobile/lib/queue/db.ts"
+          ],
+          "invariant": "In-app sign-out and account switch do not leave the remembered password for a later Estate-EZ session on this install.",
+          "method": "source",
+          "result": "signOut deletes ct_mobile_access_token, ct_mobile_login_credentials, and the selected-sale keys. Failed loadAccount after signIn also deletes credentials. The next in-app login cannot read the previous password from SecureStore. ct_capture.db lot drafts are not wiped; that is leftover queue data on the same OS profile, not a password reader.",
+          "artifact": null
+        }
+      ],
+      "candidate_fingerprints": [
+        "mobile.securestore.remembered-password-backup"
+      ],
+      "unresolved": []
+    }
+  ],
+  "candidates": [
+    {
+      "proposed_verdict": "needs_validation",
+      "fingerprint": "mobile.securestore.remembered-password-backup",
+      "title": "Remembered staff password stored in backup-eligible SecureStore",
+      "description": "A backup or other-OS-profile restorer—not another app on the live profile—may recover the reusable Estate-EZ password. Each mobile sign-in writes email+password under ct_mobile_login_credentials with iOS AFTER_FIRST_UNLOCK and without requireAuthentication. That item can mint a new staff JWT via silent re-login. Same-app use on the signed-in OS user is out of scope.",
+      "claimed_root_cause": "loginWithPassword persists the raw password in expo-secure-store using AFTER_FIRST_UNLOCK rather than a ThisDeviceOnly accessibility class or a refresh token, and app.json neither disables Android allowBackup nor pins SecureStore backup rules.",
+      "trace": [
+        {
+          "kind": "entrypoint",
+          "file": "mobile/context/AuthContext.tsx",
+          "line": 110,
+          "scope": "loginWithPassword credential persist",
+          "description": "After POST /auth/login, the app writes JSON {email, password} to SecureStore key ct_mobile_login_credentials with no remember-me flag."
+        },
+        {
+          "kind": "propagation",
+          "file": "mobile/lib/secureStorage.ts",
+          "line": 5,
+          "scope": "STORE_OPTS keychainAccessible",
+          "description": "All secureSet calls, including the password, use AFTER_FIRST_UNLOCK and do not set requireAuthentication or a ThisDeviceOnly constant."
+        },
+        {
+          "kind": "sink",
+          "file": "mobile/lib/secureStorage.ts",
+          "line": 13,
+          "scope": "SecureStore.setItemAsync",
+          "description": "The password string is stored in the OS keychain/keystore-backed store. Boot and silentRefresh later read it with getItemAsync(key) and call login again."
+        }
+      ],
+      "evidence": [
+        {
+          "file": "mobile/context/AuthContext.tsx",
+          "line": 21,
+          "description": "CREDENTIALS_KEY is ct_mobile_login_credentials, documented as email+password for silent re-login when the JWT expires."
+        },
+        {
+          "file": "mobile/context/AuthContext.tsx",
+          "line": 112,
+          "description": "Stored value is JSON.stringify({ email, password }) of the staff password, not a refresh token."
+        },
+        {
+          "file": "mobile/lib/secureStorage.ts",
+          "line": 5,
+          "description": "keychainAccessible is AFTER_FIRST_UNLOCK, which is backup-eligible on iOS; AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY is not used."
+        },
+        {
+          "file": "mobile/lib/secureStorage.ts",
+          "line": 9,
+          "description": "secureGet calls getItemAsync(key) with no requireAuthentication options."
+        },
+        {
+          "file": "mobile/app.json",
+          "line": 28,
+          "description": "android package com.caringtransitions.capture sets no allowBackup false and no backup/dataExtraction rules."
+        },
+        {
+          "file": "mobile/app.json",
+          "line": 49,
+          "description": "plugins includes expo-secure-store as a string with no configureAndroidBackup object."
+        }
+      ],
+      "blockers": [
+        "OS-enforced sandbox and parent artifact promotion unavailable",
+        "No android/ or ios/ trees; EAS merged AndroidManifest allowBackup plus SecureStore backup XML, and the shipped IPA keychain accessibility, are packaging facts",
+        "Encrypted iCloud/Finder/Google/MDM backup restore of dummy ct_mobile_login_credentials onto a second dummy device or OS profile was not observed"
+      ],
+      "validation_plan": {
+        "local": "On an isolated simulator/emulator with a dummy tenant, sign in, then read the written item's iOS accessibility class and Android backup XML/EncryptedSharedPreferences binding. Restore an encrypted backup onto a second dummy device or profile and see whether the dummy password silently logs in. Do not use live staff accounts.",
+        "deployment": "Owner inspects the EAS production APK/IPA AndroidManifest allowBackup and expo-secure-store backup rules, and the iOS keychain accessibility for com.caringtransitions.capture. Do not export or replay live staff passwords."
+      }
+    }
+  ],
+  "hardening": [
+    "Replace remembered password with a server refresh token so SecureStore never holds the staff password.",
+    "If background access after lock is required, use AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY so iOS backups omit the item.",
+    "requireAuthentication is a same-device presence gate; it does not stop backup restore and is not a substitute for ThisDeviceOnly or a refresh token.",
+    "Set android.allowBackup false or pass expo-secure-store configureAndroidBackup explicitly in app.json so EAS prebuild cannot drop exclusion XML.",
+    "signOut deletes the SecureStore password but leaves ct_capture.db drafts on the same OS profile; wipe or rebind that queue if shared-phone staff switching is in scope."
+  ],
+  "uncovered": []
+}
