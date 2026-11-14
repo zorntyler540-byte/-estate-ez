@@ -15,6 +15,10 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.config import google_api_key, settings
 from app.services.ctseller_categories import ct_categories_for_ai
+from app.services.description_openers import (
+    description_opener_prompt_clause,
+    professional_description_schema_hint,
+)
 from app.core.lotting import (
     MERGED_PRO_DESCRIPTION_MAX_CHARS,
     PROFESSIONAL_DESCRIPTION_MAX_WORDS,
@@ -124,9 +128,7 @@ class InventoryTableEntry(BaseModel):
     professional_description: str = Field(
         default="",
         validation_alias=AliasChoices("professional_description", "ProfessionalDescription"),
-        description=(
-            "Warm ~50-word paragraph: flair, then title hook. No 'This is a…'. No condition essay."
-        ),
+        description=professional_description_schema_hint(),
     )
     specification_lines: list[str] = Field(
         default_factory=list,
@@ -191,16 +193,17 @@ SYSTEM_INSTRUCTION = (
     "Jewelry: Brand + metal tone + distinctive form + type + (count); never pad with Collection, Statement, Fashion, "
     "Assorted, Ft., Feat., or Featuring. Put the number in parentheses at the end — (5), not (5 Pcs); do not lead with Three/Four. "
     "Lead with a short readable brand; do not trail ', including Brand'.\n"
-    "- **professional_description:** ~50 words max, one paragraph, warm CTBids seller voice. Open with appeal "
-    "(look, display, who would love it), then restate the title hook in the same Title Case. "
+    "- **professional_description:** ~50 words max, one paragraph, warm CTBids seller voice. "
+    + description_opener_prompt_clause()
+    + " Then restate the title hook in the same Title Case. "
     "No 'This is a…', 'This lot consists of…', 'The item features…', or 'Each … features…'. "
     "Do not chain 'is marked on the base with' or 'Dimensions are shown in the photos, with a height of…'. "
     "Do not spam **handsome** — at most one generic praise word; prefer a specific visual detail "
-    "(cross-hatch cut, brass patina, flintlock lockplate, woven texture). Rotate: polished, classic, striking, solid, "
-    "crisp, display-ready, well-made, inviting, timeless, sharp-looking, charming. "
+    "(cross-hatch cut, brass patina, flintlock lockplate, woven texture). "
     "No condition essay in prose. Marks, mold numbers, and exact sizes → specification_lines; at most one casual size clause "
     "('about 6¼ in tall per photos').\n"
-    "- **Good:** 'Deer Hoof Handled Hunting Knives' — 'A rustic showpiece for the cabin — deer hoof handled hunting knives with polished blades.'\n"
+    "- **Good:** 'Deer Hoof Handled Hunting Knives' — 'A rustic showpiece for the cabin — deer hoof handled hunting knives with polished blades.' "
+    "The next listing should open differently, not with that same line.\n"
     "- **Bad:** 'This is a pair of hunting knives with deer hoof handles. Each knife features a polished blade and is marked on the tang…'\n"
     "- Multi-object titles must name the salient types (or type + count). Prefer material + object / group / set / these pieces "
     "over 'this lot' / 'Estate lot'. Never open item_name with Estate lot.\n"
@@ -285,7 +288,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
         + "- brand: ONE primary maker, or empty if none is readable. Apparel = sewn-in neck/care label, not zipper pulls. "
         "Copy label text into labels_and_tags.\n"
         + "- material: Hallmark-first; brass/bronze ≠ pewter; title/prose/material must match.\n"
-        + "- professional_description: Warm ~50-word paragraph; flair then title hook; no 'This is a…'; no condition essay.\n"
+        + "- professional_description: Warm ~50-word paragraph. Open with a varied, evocative auction hook tied to this item — not the same stock line as every other listing. No 'This is a…'; no condition essay.\n"
         + "- condition_notes: Exactly one of:\n"
         "  * NEW: no signs of wear; may include tags/packaging.\n"
         "  * LIKE NEW: clearly unused, but tags may be missing.\n"

@@ -18,6 +18,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
+from app.services.description_openers import description_opener_prompt_clause
 from pipeline.gemini_schema import fully_audited_manifest_gemini_schema, pydantic_model_to_gemini_schema
 from pipeline.schemas import (
     BrandAuditResult,
@@ -999,13 +1000,14 @@ BRAND_AUDIT_SYSTEM = (
     "Prefer specific CT categories over Household Goods Other — e.g. gaming mice/keyboards/headsets, TVs, tablets, "
     "and phones are Electronics. "
     "When rewriting final_professional_description, sound like a **warm CTBids specialist selling the piece** — "
-    "not a stiff catalog ('This is a set of…', 'Each … features…'). **Shape:** one short **flair** opening clause, "
-    "then **immediately restate the title hook** (material/handle/finish + object) in natural words — same hook as "
-    "final_auction_title, woven in after the flair (em dash or comma). Put marks and exact sizes in "
-    "final_specification_lines / **Dimensions:**. "
+    "not a stiff catalog ('This is a set of…', 'Each … features…'). **Shape:** one paragraph, same warm length. "
+    + description_opener_prompt_clause()
+    + " Then restate the title hook (material/handle/finish + object) in natural words — same hook as "
+    "final_auction_title, woven in with an em dash or comma — if the opening did not already name it. "
+    "Put marks and exact sizes in final_specification_lines / **Dimensions:**. "
     "**Vary descriptive vocabulary** — do not lean on the same adjective across listings (especially **handsome**). "
-    "Prefer specific visual details; rotate natural appeal words (classic, striking, solid, crisp, polished, "
-    "display-ready, timeless, inviting) that fit the item type. "
+    "Prefer specific visual details; rotate natural appeal words (striking, solid, crisp, polished, "
+    "display-ready, inviting) that fit the item type. "
     "When a yellow measuring tape, metal ruler, or yardstick is visibly measuring the item(s), ensure "
     "final_specification_lines include **Dimensions:** or **Measurement:** with legible reads (~ inches). "
     "Never invent brands or details not visible in the images or triage OCR. "
@@ -1014,6 +1016,25 @@ BRAND_AUDIT_SYSTEM = (
     "Liz & Co / Liz Claiborne costume marks are not Tiffany & Co. "
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
+
+# Description opening rules for the Pro author task. Warm tone and length stay;
+# the hook should feel specific to this item and not match the rest of the sale.
+PRO_AUTHOR_DESCRIPTION_GUIDANCE = (
+    "13. **Vary descriptive words** — avoid repeating **handsome** (and similar default compliments). "
+    "Use at most one generic praise word; prefer concrete visual details. "
+    "Rotate: striking, solid, crisp, polished, display-ready, inviting, sharp-looking.\n"
+    "14. **Description opening:** final_professional_description = one paragraph, warm seller voice. "
+    + description_opener_prompt_clause()
+    + " Then weave the title hook (material/handle/finish + object) in the **same Title Case** as "
+    "final_auction_title if the opening did not already name it. "
+    "Do not paste the full title verbatim. "
+    "Good: 'Add a touch of classic sparkle to your look—this Gruen Precision wristwatch…' "
+    "and, for the next piece, 'Ready to pounce—this enamel tiger brooch…' or "
+    "'Who wouldn't want this Napier link bracelet stacked at the wrist?' "
+    "Bad: opening the watch, the brooch, and the bracelet all with "
+    "'Add a touch of classic sparkle to your look…'\n"
+)
+
 
 # Specialty identification kept on Pro (not Flash) so listing-Flash tokens stay short.
 PRO_AUTHOR_SPECIALTY_GUIDANCE = (
@@ -1227,15 +1248,8 @@ def run_brand_audit_pro(
             "do not downgrade to vague 'gold-tone' when text is legible.\n"
             "11. Do not add 'vintage' or 'antique' as filler unless a specific decade or era mark is visible.\n"
             "12. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
-            "13. **Vary descriptive words** — avoid repeating **handsome** (and similar default compliments). "
-            "Use at most one generic praise word; prefer concrete visual details. Rotate: classic, striking, solid, "
-            "crisp, polished, display-ready, timeless, inviting, sharp-looking.\n"
-            "14. **Description flair + hook:** final_professional_description = one paragraph. Start with a short warm "
-            "**flair** clause (appeal, display, who would love it), then **right after** restate the title hook "
-            "(material/handle/finish + object) in natural words — e.g. flair, then 'deer hoof handled hunting knives'. "
-            "Use the **same Title Case** as final_auction_title for the hook phrase (not all lowercase). "
-            "Do not paste the full title verbatim; weave the same hook in after the opening flair.\n"
-            "15. **Ruler / measuring tape:** when a ruler, yellow measuring tape, or yardstick is measuring the item, "
+            + PRO_AUTHOR_DESCRIPTION_GUIDANCE
+            + "15. **Ruler / measuring tape:** when a ruler, yellow measuring tape, or yardstick is measuring the item, "
             "**read the number** and put a **Dimensions:** / **Measurement:** line (with units, e.g. '~12 in') in "
             "final_specification_lines. **Weight scale:** when the item sits on a scale with a visible readout, "
             "**read it** and add a **Weight:** line (e.g. 'Weight: 2.4 lb'). Do not omit these when a scale is visible.\n"
