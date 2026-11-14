@@ -31,6 +31,7 @@ from app.core.lotting import (
 )
 from app.models import JobStatus, Lot, Photo, ProcessingJob
 from app.services.category_inference import resolve_lot_ct_category
+from app.services.description_openers import sale_description_loader
 from app.services.ctseller_conditions import canonicalize_ct_condition
 from app.services.lot_dividers import find_lot_dividers
 from app.services.memory_trim import trim_process_memory
@@ -1133,6 +1134,8 @@ def _process_job_batch_pipeline(
                 emit=_emit,
                 should_cancel=_should_cancel,
                 pre_triage_rows=seg_triage,
+                sibling_descriptions=sale_description_loader(db, job.sale_id),
+                sale_id=job.sale_id,
             )
         except PipelineCancelled:
             job.status = JobStatus.failed
@@ -1248,6 +1251,8 @@ def _process_job_single_lot_pipeline(
             emit=_emit,
             should_cancel=_should_cancel,
             pre_triage_rows=pre_triage,
+            sibling_descriptions=sale_description_loader(db, job.sale_id),
+            sale_id=job.sale_id,
         )
     except PipelineCancelled:
         job.status = JobStatus.failed
@@ -1646,6 +1651,8 @@ def run_lot_ai_regenerate_and_save(
     current, _pipeline_result = run_single_lot_pipeline(
         labeled_paths,
         manifest_tag=manifest_tag,
+        sibling_descriptions=sale_description_loader(db, row.sale_id, exclude_lot_id=row.id),
+        sale_id=row.sale_id,
     )
     if is_weak_pipeline_lot(current):
         current = _regenerate_fallback_lot_output(row)
