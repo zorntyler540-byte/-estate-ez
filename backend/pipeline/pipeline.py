@@ -1003,7 +1003,7 @@ BRAND_AUDIT_SYSTEM = (
     "not a stiff catalog ('This is a set of…', 'Each … features…'). **Shape:** one paragraph, same warm length. "
     + description_opener_prompt_clause()
     + " Then restate the title hook (material/handle/finish + object) in natural words — same hook as "
-    "final_auction_title, woven in with an em dash or comma — when that hook is not already the opening. "
+    "final_auction_title, woven in with an em dash or comma — if the opening did not already name it. "
     "Put marks and exact sizes in final_specification_lines / **Dimensions:**. "
     "**Vary descriptive vocabulary** — do not lean on the same adjective across listings (especially **handsome**). "
     "Prefer specific visual details; rotate natural appeal words (striking, solid, crisp, polished, "
@@ -1017,8 +1017,8 @@ BRAND_AUDIT_SYSTEM = (
     "Never use placeholder tokens like Unknown, Generic, or Unbranded. Output structured JSON only."
 )
 
-# Description opening rules for the Pro author task. Tone, length, and the title-hook
-# weave stay; only the generic lifestyle lead-in is replaced.
+# Description opening rules for the Pro author task. Warm tone and length stay;
+# the hook should feel specific to this item and not match the rest of the sale.
 PRO_AUTHOR_DESCRIPTION_GUIDANCE = (
     "13. **Vary descriptive words** — avoid repeating **handsome** (and similar default compliments). "
     "Use at most one generic praise word; prefer concrete visual details. "
@@ -1026,10 +1026,13 @@ PRO_AUTHOR_DESCRIPTION_GUIDANCE = (
     "14. **Description opening:** final_professional_description = one paragraph, warm seller voice. "
     + description_opener_prompt_clause()
     + " Then weave the title hook (material/handle/finish + object) in the **same Title Case** as "
-    "final_auction_title when that hook is not already the opening. "
+    "final_auction_title if the opening did not already name it. "
     "Do not paste the full title verbatim. "
-    "Good: 'Gruen Precision wristwatch in a gold-tone case, with a clean two-tone dial.' "
-    "Bad: 'Add a touch of classic sparkle to your look—this Gruen Precision wristwatch…'\n"
+    "Good: 'Add a touch of classic sparkle to your look—this Gruen Precision wristwatch…' "
+    "and, for the next piece, 'Ready to pounce—this enamel tiger brooch…' or "
+    "'Who wouldn't want this Napier link bracelet stacked at the wrist?' "
+    "Bad: opening the watch, the brooch, and the bracelet all with "
+    "'Add a touch of classic sparkle to your look…'\n"
 )
 
 

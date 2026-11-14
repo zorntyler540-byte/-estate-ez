@@ -170,8 +170,8 @@ class Settings(BaseSettings):
     # Estate pipeline: per-photo triage + capped Pro brand audit for single-lot and batch uploads.
     gemini_flash_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FLASH_MODEL")
     gemini_pro_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRO_MODEL")
-    # After the listing author writes a description, rewrite a stock or repeated first
-    # sentence against other listings in the same sale. Default on. Does not serialize lots.
+    # After the listing author writes a description, rewrite a first sentence that
+    # repeats another listing in the same sale. Default on. Does not serialize lots.
     description_opener_rewrite: bool = Field(default=True, alias="DESCRIPTION_OPENER_REWRITE")
     # One listing cover at a time. Image model (API key), not the local cutout.
     # Nano Banana 2.1 paints the photo. Listing Flash and Pro stay on text.

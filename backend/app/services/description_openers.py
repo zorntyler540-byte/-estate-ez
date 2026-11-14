@@ -1,12 +1,13 @@
-"""Listing-description openers: one banned-phrase list, then a per-sale check.
+"""Listing-description openers: varied auction hooks, then a per-sale check.
 
-The listing author (``GEMINI_PRO_MODEL``, currently gemini-2.5-pro) is told to
-open on a specific fact. After it writes, we compare the first sentence with
-descriptions already stored for the same sale. A banned opener or a repeated
-opening is rewritten in place — the first sentence only — up to a couple of
-tries. Lots keep running in parallel: this reads sibling text when it checks
-and does not take a sale lock. Two items that finish together can still pick
-similar openers.
+The listing author (``GEMINI_PRO_MODEL``, currently gemini-2.5-pro) keeps a
+warm, salesy first sentence. A stock hook such as "Add a touch…" is fine once.
+After it writes, we compare that opening with descriptions already stored for
+the same sale. A repeat — the same first few words, or a stock phrase already
+used on another lot — is rewritten in place. Only the first sentence changes,
+and the replacement stays flavorful. Lots keep running in parallel: this reads
+sibling text when it checks and does not take a sale lock. Two items that
+finish together can still pick similar openers.
 
 The rewrite call stays compatible with Gemini 2.5 and with the 3.x models that
 2.5 Pro is rerouted to. It does not set ``temperature``, ``thinking_budget``,
@@ -28,8 +29,9 @@ from app.config import settings
 _LOG = logging.getLogger(__name__)
 
 # Edit this list to change the author prompt and the post-check together.
+# These are overused, not forbidden. Each may appear in one listing per sale.
 # Matched as whole words inside the first sentence (case and punctuation ignored).
-BANNED_DESCRIPTION_OPENERS: tuple[str, ...] = (
+OVERUSED_DESCRIPTION_OPENERS: tuple[str, ...] = (
     "Add a touch",
     "A perfect",
     "A classic",
@@ -38,14 +40,12 @@ BANNED_DESCRIPTION_OPENERS: tuple[str, ...] = (
     "Elevate",
     "ready to",
     "statement piece for any",
+    "timeless",
 )
 
-# Discouraged filler. Same first-sentence match as the banned openers; the
-# prompt tells the model to avoid overusing these rather than to never use them.
-DISCOURAGED_DESCRIPTION_FILLER: tuple[str, ...] = ("timeless",)
-
-# Duplicate check: first N normalized words of the opening sentence.
+# Exact duplicate: first 4 normalized words. Near duplicate: first 3.
 OPENING_KEY_WORDS = 4
+OPENING_NEAR_WORDS = 3
 
 # Hard cap on model rewrites. The original draft stays if none of them is better.
 DESCRIPTION_OPENER_MAX_RETRIES = 2
@@ -90,22 +90,23 @@ class DescriptionFirstSentence(BaseModel):
     first_sentence: str = Field(
         default="",
         description=(
-            "Replacement opening sentence only. Start with a specific maker, material, "
-            "era, detail, or what the item is. Do not include later sentences."
+            "Replacement opening sentence only. A fresh, warm, salesy auction hook "
+            "tied to this item — not a plain factual opener. Do not include later sentences."
         ),
     )
 
 
 def description_opener_prompt_clause() -> str:
-    """Shared author / rewrite instruction. Built from the lists above."""
-    banned = ", ".join(f'"{phrase}"' for phrase in BANNED_DESCRIPTION_OPENERS)
-    filler = ", ".join(f'"{phrase}"' for phrase in DISCOURAGED_DESCRIPTION_FILLER)
+    """Shared author instruction. Built from the overused-hook list above."""
+    overused = ", ".join(f'"{phrase}"' for phrase in OVERUSED_DESCRIPTION_OPENERS)
     return (
-        "Open the first sentence with something specific to this item "
-        "(maker/brand, material, era, a standout detail, or what it is), "
-        "not a generic lifestyle hook. "
-        f"Do not use these openers or filler: {banned}. "
-        f"Avoid overusing {filler}."
+        "Open with a warm, evocative auction hook a bidder would feel, tied to something "
+        "specific about THIS item — its look, era, style, who would love it, the occasion, "
+        "or a motif (a tiger brooch can be 'ready to pounce'). "
+        "Vary the sentence shape from other listings in the sale: a question, an exclamation, "
+        "item-first, a scene, or a collector angle. "
+        f"Do not default to the same stock hooks ({overused}). "
+        "One fresh use of any of those in a sale is fine; do not repeat them across listings."
     )
 
 
@@ -123,9 +124,13 @@ def opener_rewrite_system_instruction() -> str:
     return (
         "You are a professional estate specialist revising one sentence of a CT Bids auction listing. "
         "Output structured JSON only. Rewrite only the opening sentence. "
-        "Keep the warm seller tone and about the same length as the sentence you replace. "
-        "Do not invent brands, dates, materials, or flaws that are not already in the title or description. "
-        + description_opener_prompt_clause()
+        "Keep it warm, evocative, and salesy — a fresh auction hook a bidder would feel, "
+        "just as flavorful as the sentence you replace, tied to this item's look, era, style, "
+        "who would love it, or a motif. Vary the sentence shape "
+        "(a question, an exclamation, item-first, a scene, or a collector angle). "
+        "Do not flatten it into a plain factual opener or a spec sheet. "
+        "Keep about the same length. "
+        "Do not invent brands, dates, materials, or flaws that are not already in the title or description."
     )
 
 
@@ -180,6 +185,14 @@ def opening_key(text: str, *, words: int = OPENING_KEY_WORDS) -> str:
     return " ".join(opening_words(text)[:words])
 
 
+def opening_stem(text: str, *, words: int = OPENING_NEAR_WORDS) -> str:
+    """Near-duplicate pattern. Empty when the opening is shorter than ``words``."""
+    tokens = opening_words(text)
+    if len(tokens) < words:
+        return ""
+    return " ".join(tokens[:words])
+
+
 def _contains_phrase(words: list[str], phrase: str) -> bool:
     phrase_words = normalized_words(phrase)
     if not phrase_words or len(phrase_words) > len(words):
@@ -189,34 +202,63 @@ def _contains_phrase(words: list[str], phrase: str) -> bool:
 
 
 def matched_opener_phrases(text: str) -> list[str]:
-    """Banned openers and discouraged filler found in the first sentence."""
+    """Overused hooks found in the first sentence. A single use is allowed."""
     words = opening_words(text)
     if not words:
         return []
     hits: list[str] = []
-    for phrase in (*BANNED_DESCRIPTION_OPENERS, *DISCOURAGED_DESCRIPTION_FILLER):
+    for phrase in OVERUSED_DESCRIPTION_OPENERS:
         if _contains_phrase(words, phrase):
             hits.append(phrase)
     return hits
 
 
-def opener_conflicts(text: str, sibling_descriptions: list[str]) -> list[str]:
-    """Sibling first sentences whose opening pattern matches ``text``."""
+def openings_collide(text: str, sibling: str) -> str | None:
+    """How ``text`` repeats ``sibling``, or None.
+
+    ``duplicate`` is the same first four words. ``near-duplicate`` is the same
+    first three. ``stock-phrase`` is an overused hook already used once in the sale.
+    """
     key = opening_key(text)
-    if not key:
-        return []
+    if key and key == opening_key(sibling):
+        return "duplicate"
+    stem = opening_stem(text)
+    if stem and stem == opening_stem(sibling):
+        return "near-duplicate"
+    shared = set(matched_opener_phrases(text)) & set(matched_opener_phrases(sibling))
+    if shared:
+        return "stock-phrase"
+    return None
+
+
+def opener_conflicts(text: str, sibling_descriptions: list[str]) -> list[str]:
+    """Sibling first sentences this opening repeats."""
     found: list[str] = []
     seen: set[str] = set()
     for sibling in sibling_descriptions:
-        if opening_key(sibling) != key:
+        if openings_collide(text, sibling) is None:
             continue
         first, _rest = split_first_sentence(sibling)
-        sample = (first or key).strip()
+        sample = (first or opening_key(sibling)).strip()
         marker = sample.lower()
-        if marker in seen:
+        if not marker or marker in seen:
             continue
         seen.add(marker)
         found.append(sample)
+    return found
+
+
+def stock_phrases_used(sibling_descriptions: list[str]) -> list[str]:
+    """Overused hooks already spent on another listing in this sale."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for sibling in sibling_descriptions:
+        for phrase in matched_opener_phrases(sibling):
+            marker = phrase.lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            found.append(phrase)
     return found
 
 
@@ -234,25 +276,35 @@ def sibling_opening_keys(sibling_descriptions: list[str], *, limit: int = SIBLIN
     return keys
 
 
+_COLLISION_RANK = {"duplicate": 3, "near-duplicate": 2, "stock-phrase": 1}
+
+
 def rewrite_reason(text: str, sibling_descriptions: list[str]) -> str | None:
-    """Why this description should get a new first sentence, or None."""
-    hits = matched_opener_phrases(text)
-    conflicts = opener_conflicts(text, sibling_descriptions)
-    if not hits and not conflicts:
-        return None
-    parts: list[str] = []
-    if hits:
-        parts.append("banned:" + "|".join(hits))
-    if conflicts:
-        parts.append("duplicate")
-    return ";".join(parts)
+    """Why this opening repeats another listing in the sale, or None.
+
+    A stock phrase that no sibling has used yet is not a reason to rewrite.
+    """
+    best: str | None = None
+    for sibling in sibling_descriptions:
+        reason = openings_collide(text, sibling)
+        if reason is None:
+            continue
+        if best is None or _COLLISION_RANK[reason] > _COLLISION_RANK[best]:
+            best = reason
+    return best
 
 
-def opener_issue_score(text: str, sibling_keys: set[str]) -> tuple[int, int]:
-    """Lower is better: banned-phrase count, then whether the opening is already used."""
-    key = opening_key(text)
-    duplicate = 1 if key and key in sibling_keys else 0
-    return (len(matched_opener_phrases(text)), duplicate)
+def opener_issue_score(text: str, sibling_descriptions: list[str]) -> tuple[int, int]:
+    """Lower is better: a repeated word-pattern, then a stock phrase already used."""
+    pattern = 0
+    stock = 0
+    for sibling in sibling_descriptions:
+        reason = openings_collide(text, sibling)
+        if reason in ("duplicate", "near-duplicate"):
+            pattern = 1
+        elif reason == "stock-phrase":
+            stock = 1
+    return (pattern, stock)
 
 
 def replace_first_sentence(description: str, new_first: str) -> str:
@@ -305,6 +357,9 @@ def opener_rewrite_user_text(*, title: str, description: str, avoid: list[str]) 
     lines = [
         "Rewrite ONLY the first sentence. Put that sentence in first_sentence.",
         "The sentences after it will be kept unchanged — do not include them in your reply.",
+        "Write a fresh, equally flavorful auction hook: warm and salesy, tied to this item "
+        "(its look, era, style, who would love it, the occasion, or a motif). "
+        "Vary the sentence shape. Do not flatten it into a plain factual opener or a spec sheet.",
         "",
         f"Title: {title.strip() or '(none)'}",
         f"First sentence to replace: {first}",
@@ -312,7 +367,7 @@ def opener_rewrite_user_text(*, title: str, description: str, avoid: list[str]) 
     if rest:
         lines.append(f"Later sentences (keep, do not repeat): {rest}")
     lines.append("")
-    lines.append("Do not start the same way as any of these, and do not use them as filler:")
+    lines.append("Do not reuse these openings already used on other listings in this sale:")
     for item in avoid:
         lines.append(f"- {item}")
     return "\n".join(lines)
@@ -322,6 +377,7 @@ def _avoid_lines(
     *,
     conflicts: list[str],
     sibling_keys: list[str],
+    used_stock_phrases: list[str],
     prior_attempts: list[str],
 ) -> list[str]:
     lines: list[str] = []
@@ -337,12 +393,10 @@ def _avoid_lines(
         seen.add(marker)
         lines.append(cleaned)
 
-    for phrase in BANNED_DESCRIPTION_OPENERS:
-        add(phrase)
-    for phrase in DISCOURAGED_DESCRIPTION_FILLER:
-        add(f"{phrase} (avoid overuse)")
     for conflict in conflicts:
         add(conflict)
+    for phrase in used_stock_phrases:
+        add(f"{phrase} (already used once in this sale)")
     for key in sibling_keys:
         add(key)
     for attempt in prior_attempts:
@@ -468,7 +522,7 @@ def maybe_rewrite_description_opener(
     generate: Callable[..., Any] | None = None,
     max_retries: int = DESCRIPTION_OPENER_MAX_RETRIES,
 ) -> str:
-    """Return ``description``, with a new first sentence when the opening is stock or repeated.
+    """Return ``description``, with a new first sentence when the opening repeats another lot.
 
     Never raises. A model error or a rewrite that is no better keeps the best text so far.
     ``enabled`` defaults to ``DESCRIPTION_OPENER_REWRITE`` (on).
@@ -510,20 +564,20 @@ def _rewrite_description_opener(
     if reason is None or max_retries < 1:
         return original
 
-    sibling_keys = {key for key in (opening_key(row) for row in siblings) if key}
     best = original
-    best_rank: tuple[tuple[int, int], int] = (opener_issue_score(original, sibling_keys), 0)
+    best_rank: tuple[tuple[int, int], int] = (opener_issue_score(original, siblings), 0)
     prior_attempts: list[str] = []
     attempts = 0
     generate_fn = generate or _default_generate
 
     for attempt in range(1, max_retries + 1):
-        if opener_issue_score(best, sibling_keys) == (0, 0):
+        if opener_issue_score(best, siblings) == (0, 0):
             break
         source = best
         avoid = _avoid_lines(
             conflicts=opener_conflicts(source, siblings),
             sibling_keys=sibling_opening_keys(siblings),
+            used_stock_phrases=stock_phrases_used(siblings),
             prior_attempts=prior_attempts,
         )
         try:
@@ -546,7 +600,7 @@ def _rewrite_description_opener(
             continue
         prior_attempts.append(split_first_sentence(sentence)[0])
         candidate = replace_first_sentence(original, sentence)
-        rank = (opener_issue_score(candidate, sibling_keys), attempt)
+        rank = (opener_issue_score(candidate, siblings), attempt)
         if rank < best_rank:
             best = candidate
             best_rank = rank

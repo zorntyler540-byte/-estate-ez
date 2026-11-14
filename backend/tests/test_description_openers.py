@@ -16,42 +16,44 @@ from app.core.gemini import SYSTEM_INSTRUCTION
 from app.db import Base
 from app.models import Account, Lot, Sale, User
 from app.services.description_openers import (
-    BANNED_DESCRIPTION_OPENERS,
-    DISCOURAGED_DESCRIPTION_FILLER,
+    OVERUSED_DESCRIPTION_OPENERS,
     build_opener_rewrite_config,
     description_opener_prompt_clause,
     listing_author_model,
     load_sale_descriptions,
-    sale_description_loader,
     matched_opener_phrases,
     maybe_rewrite_description_opener,
     opening_key,
+    opening_stem,
     opener_issue_score,
+    opener_rewrite_system_instruction,
     replace_first_sentence,
     rewrite_reason,
+    sale_description_loader,
     split_first_sentence,
 )
 from pipeline.pipeline import BRAND_AUDIT_SYSTEM, PRO_AUTHOR_DESCRIPTION_GUIDANCE
 
-GRUEN_BEFORE = (
+GRUEN = (
     "Add a touch of classic sparkle to your look—this Gruen Precision wristwatch "
     "keeps excellent time. Minor desk wear on the lugs."
 )
-GRUEN_SENTENCE = "Gruen Precision wristwatch in a gold-tone case, with a clean two-tone dial."
-GRUEN_AFTER = (
-    "Gruen Precision wristwatch in a gold-tone case, with a clean two-tone dial. "
-    "Minor desk wear on the lugs."
+NAPIER = (
+    "A perfect statement piece for any collection—this Napier link bracelet stacks easily. "
+    "The clasp is snug."
 )
-DUPLICATE_BEFORE = (
-    "Gruen Precision wristwatch in a gold-tone case, with a clean dial. "
-    "Minor desk wear on the lugs."
+NAPIER_QUESTION = (
+    "Who wouldn't want this Napier link bracelet stacked at the wrist? The clasp is snug."
 )
-DUPLICATE_SIBLING = "Gruen Precision wristwatch in a silver-tone case, with a cream dial."
-DUPLICATE_SENTENCE = "Gold-tone Gruen Precision wristwatch with a two-tone dial and slim lugs."
-DUPLICATE_AFTER = (
-    "Gold-tone Gruen Precision wristwatch with a two-tone dial and slim lugs. "
-    "Minor desk wear on the lugs."
+TIGER_REPEATED = (
+    "Add a touch of classic sparkle to your look—this enamel tiger brooch is ready for a lapel. "
+    "The stones are bright."
 )
+TIGER_FRESH = "Ready to pounce—this enamel tiger brooch has its eye on the lapel!"
+TIGER_AFTER = (
+    "Ready to pounce—this enamel tiger brooch has its eye on the lapel! The stones are bright."
+)
+JEWELRY_SALE = [GRUEN, NAPIER_QUESTION]
 
 
 class _Resp:
@@ -85,11 +87,11 @@ def _assert_new_call_shape(config, contents) -> None:
 
 
 def test_opening_key_normalizes_case_punctuation_and_dashes() -> None:
-    assert opening_key(GRUEN_BEFORE) == "add a touch of"
+    assert opening_key(GRUEN) == "add a touch of"
+    assert opening_stem(GRUEN) == "add a touch"
     assert opening_key("  ADD   a touch, of classic sparkle!") == "add a touch of"
     assert opening_key('"Gruen Precision wristwatch, in gold!"') == "gruen precision wristwatch in"
-    assert opening_key("Gruen Precision wristwatch in a gold-tone case.") == "gruen precision wristwatch in"
-    assert split_first_sentence(GRUEN_BEFORE)[1] == "Minor desk wear on the lugs."
+    assert split_first_sentence(GRUEN)[1] == "Minor desk wear on the lugs."
     assert split_first_sentence("look—this Gruen Precision keeps time")[1] == ""
 
 
@@ -105,19 +107,15 @@ def test_sentence_split_keeps_abbreviations() -> None:
     assert rest == "Extra sentence."
 
 
-def test_banned_phrases_match_whole_words_in_the_first_sentence_only() -> None:
-    assert matched_opener_phrases(GRUEN_BEFORE)[0] == "Add a touch"
-    assert "A perfect" in matched_opener_phrases(
-        "A perfect statement piece for any collection—this Napier bracelet stacks easily."
-    )
-    assert "statement piece for any" in matched_opener_phrases(
-        "A perfect statement piece for any collection—this Napier bracelet stacks easily."
-    )
+def test_stock_phrases_match_whole_words_in_the_first_sentence_only() -> None:
+    assert matched_opener_phrases(GRUEN)[0] == "Add a touch"
+    assert "A perfect" in matched_opener_phrases(NAPIER)
+    assert "statement piece for any" in matched_opener_phrases(NAPIER)
     assert matched_opener_phrases("A classic choice for everyday elegance. The cotton is soft.") == ["A classic"]
     assert matched_opener_phrases("A delightful accent for the shelf.") == ["A delightful"]
     assert matched_opener_phrases("A charming little brass bell.") == ["A charming"]
     assert matched_opener_phrases("Elevate your table with this brass candlestick.") == ["Elevate"]
-    assert matched_opener_phrases("Ready to bring warmth to the mantel.") == ["ready to"]
+    assert matched_opener_phrases(TIGER_FRESH) == ["ready to"]
     assert matched_opener_phrases("A timeless Gruen Precision wristwatch with a cream dial.") == ["timeless"]
     assert matched_opener_phrases(
         "Gruen Precision wristwatch with a cream dial. A timeless look for evenings."
@@ -125,58 +123,86 @@ def test_banned_phrases_match_whole_words_in_the_first_sentence_only() -> None:
     assert matched_opener_phrases(
         "A classical guitar from Valencia, with a spruce top. The case is worn."
     ) == []
-    assert rewrite_reason("Gruen Precision wristwatch with a cream dial.", []) is None
+    assert rewrite_reason(GRUEN, []) is None
 
 
-def test_duplicate_opening_uses_the_first_four_words() -> None:
-    siblings = [DUPLICATE_SIBLING]
-    assert opening_key(DUPLICATE_BEFORE) == opening_key(DUPLICATE_SIBLING) == "gruen precision wristwatch in"
-    assert rewrite_reason(DUPLICATE_BEFORE, siblings) == "duplicate"
+def test_a_stock_hook_is_kept_when_the_sale_has_not_used_it() -> None:
+    assert rewrite_reason(GRUEN, [NAPIER_QUESTION]) is None
+    assert rewrite_reason(NAPIER, []) is None
+    assert rewrite_reason(TIGER_FRESH + " The stones are bright.", [GRUEN, NAPIER_QUESTION]) is None
+
+
+def test_duplicate_and_near_duplicate_and_second_stock_phrase() -> None:
+    same_four = "Gruen Precision wristwatch in a gold-tone case. The crown is unsigned."
+    sibling = "Gruen Precision wristwatch in a silver-tone case, with a cream dial."
+    assert opening_key(same_four) == opening_key(sibling) == "gruen precision wristwatch in"
+    assert rewrite_reason(same_four, [sibling]) == "duplicate"
+    assert opener_issue_score(same_four, [sibling]) == (1, 0)
     assert rewrite_reason(
-        "Gruen Precision wristwatch with a cream dial.",
-        siblings,
+        "Gold-tone Gruen Precision wristwatch with a cream dial.",
+        [sibling],
     ) is None
-    assert opener_issue_score(DUPLICATE_BEFORE, {"gruen precision wristwatch in"}) == (0, 1)
+
+    near = (
+        "Picture this gold dial catching the light—this Napier link bracelet stacks easily. "
+        "The clasp is snug."
+    )
+    sibling_scene = (
+        "Picture this gold case on the wrist—this Gruen Precision wristwatch keeps excellent time."
+    )
+    assert opening_key(near) == "picture this gold dial"
+    assert opening_key(sibling_scene) == "picture this gold case"
+    assert opening_stem(near) == opening_stem(sibling_scene) == "picture this gold"
+    assert rewrite_reason(near, [sibling_scene]) == "near-duplicate"
+
+    second_classic = "A classic sparkle for evening—this Trifari brooch winks. The stones are clear."
+    first_classic = "A classic choice for everyday elegance—this Monet brooch sits softly. The pin is straight."
+    assert opening_stem(second_classic) != opening_stem(first_classic)
+    assert rewrite_reason(second_classic, [first_classic]) == "stock-phrase"
+    assert rewrite_reason(second_classic, []) is None
 
 
 def test_replace_first_sentence_keeps_the_rest() -> None:
-    assert replace_first_sentence(GRUEN_BEFORE, GRUEN_SENTENCE) == GRUEN_AFTER
+    assert replace_first_sentence(TIGER_REPEATED, TIGER_FRESH) == TIGER_AFTER
     rewritten = replace_first_sentence(
-        GRUEN_BEFORE,
-        "Gruen Precision wristwatch with a cream dial. The crown was replaced.",
+        TIGER_REPEATED,
+        "Ready to pounce—this enamel tiger brooch has its eye on the lapel! The pin was replaced.",
     )
-    assert rewritten == (
-        "Gruen Precision wristwatch with a cream dial. Minor desk wear on the lugs."
-    )
+    assert rewritten == TIGER_AFTER
 
 
-def test_banned_opener_rewrites_only_the_first_sentence(monkeypatch) -> None:
+def test_repeated_jewelry_hook_stays_flavorful(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_PRO_MODEL", "gemini-2.5-pro")
-    generate, calls = _generate(GRUEN_SENTENCE)
+    generate, calls = _generate(TIGER_FRESH)
     result = maybe_rewrite_description_opener(
-        GRUEN_BEFORE,
-        sibling_descriptions=lambda: [],
-        title="Gruen Precision Wristwatch",
+        TIGER_REPEATED,
+        sibling_descriptions=lambda: JEWELRY_SALE,
+        title="Enamel Tiger Brooch",
         sale_id="sale-1",
         enabled=True,
         generate=generate,
     )
-    assert result == GRUEN_AFTER
+    assert result == TIGER_AFTER
     assert len(calls) == 1
     assert calls[0]["model"] == "gemini-2.5-pro"
     _assert_new_call_shape(calls[0]["config"], calls[0]["contents"])
-    assert "Add a touch" in calls[0]["contents"]
-    assert "Minor desk wear on the lugs." in calls[0]["contents"]
+    prompt = calls[0]["contents"]
+    assert "equally flavorful" in prompt
+    assert "plain factual opener" in prompt
+    gruen_first, _rest = split_first_sentence(GRUEN)
+    assert gruen_first in prompt
+    assert "The stones are bright." in prompt
+    assert "Add a touch (already used once in this sale)" in prompt
 
 
 @pytest.mark.parametrize("model_id", ["gemini-2.5-pro", "gemini-3.8-flash"])
 def test_rewrite_call_passes_the_listing_model_through(monkeypatch, model_id: str) -> None:
     monkeypatch.setenv("GEMINI_PRO_MODEL", model_id)
     assert listing_author_model() == model_id
-    generate, calls = _generate(GRUEN_SENTENCE)
+    generate, calls = _generate(TIGER_FRESH)
     maybe_rewrite_description_opener(
-        GRUEN_BEFORE,
-        sibling_descriptions=lambda: [],
+        TIGER_REPEATED,
+        sibling_descriptions=lambda: JEWELRY_SALE,
         enabled=True,
         generate=generate,
     )
@@ -186,27 +212,34 @@ def test_rewrite_call_passes_the_listing_model_through(monkeypatch, model_id: st
 
 def test_duplicate_opening_is_passed_as_something_to_avoid(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_PRO_MODEL", "gemini-2.5-pro")
-    generate, calls = _generate(DUPLICATE_SENTENCE)
+    fresh = "Picture this gold-tone dial catching the light—this Gruen Precision wristwatch is a keeper."
+    generate, calls = _generate(fresh)
+    original = "Gruen Precision wristwatch in a gold-tone case, with a clean dial. Minor desk wear on the lugs."
+    sibling = "Gruen Precision wristwatch in a silver-tone case, with a cream dial."
     result = maybe_rewrite_description_opener(
-        DUPLICATE_BEFORE,
-        sibling_descriptions=lambda: [DUPLICATE_SIBLING, "Oak dresser with a mirrored back."],
+        original,
+        sibling_descriptions=lambda: [sibling, "Oak dresser with a mirrored back."],
         title="Gruen Precision Wristwatch",
         sale_id="sale-9",
         enabled=True,
         generate=generate,
     )
-    assert result == DUPLICATE_AFTER
+    assert result == (
+        "Picture this gold-tone dial catching the light—this Gruen Precision wristwatch is a keeper. "
+        "Minor desk wear on the lugs."
+    )
     assert len(calls) == 1
-    assert DUPLICATE_SIBLING in calls[0]["contents"]
+    assert sibling in calls[0]["contents"]
     assert "oak dresser with a" in calls[0]["contents"]
+    assert "equally flavorful" in calls[0]["contents"]
     _assert_new_call_shape(calls[0]["config"], calls[0]["contents"])
 
 
-def test_second_retry_replaces_a_still_banned_opening() -> None:
+def test_second_retry_replaces_a_hook_still_used_in_the_sale() -> None:
     sentences = iter(
         [
-            "A charming jacket for cool mornings.",
-            "Olive cotton field jacket with a zip front and plaid lining.",
+            "A perfect statement piece for the lapel—this enamel tiger brooch gleams.",
+            TIGER_FRESH,
         ]
     )
     calls: list[str] = []
@@ -215,18 +248,16 @@ def test_second_retry_replaces_a_still_banned_opening() -> None:
         calls.append(contents)
         return _Resp(next(sentences))
 
-    original = "A classic choice for everyday elegance. The cotton is soft."
     result = maybe_rewrite_description_opener(
-        original,
-        sibling_descriptions=lambda: [],
+        TIGER_REPEATED,
+        sibling_descriptions=lambda: [GRUEN, NAPIER],
         enabled=True,
         generate=generate,
     )
     assert len(calls) == 2
-    assert "A charming" in calls[1]
-    assert result == (
-        "Olive cotton field jacket with a zip front and plaid lining. The cotton is soft."
-    )
+    assert "A perfect statement piece for the lapel" in calls[1]
+    assert "equally flavorful" in calls[0]
+    assert result == TIGER_AFTER
 
 
 def test_clean_rewrite_stops_before_the_second_try() -> None:
@@ -234,11 +265,11 @@ def test_clean_rewrite_stops_before_the_second_try() -> None:
 
     def generate(*, model, contents, config):
         calls["n"] += 1
-        return _Resp(GRUEN_SENTENCE)
+        return _Resp(TIGER_FRESH)
 
     maybe_rewrite_description_opener(
-        GRUEN_BEFORE,
-        sibling_descriptions=lambda: [],
+        TIGER_REPEATED,
+        sibling_descriptions=lambda: JEWELRY_SALE,
         enabled=True,
         generate=generate,
     )
@@ -247,12 +278,13 @@ def test_clean_rewrite_stops_before_the_second_try() -> None:
 
 def test_retries_keep_the_original_when_nothing_is_better() -> None:
     def generate(*, model, contents, config):
-        return _Resp("A perfect jacket for weekends.")
+        return _Resp("A classic choice for weekend wear.")
 
     original = "A classic choice for everyday elegance. The cotton is soft."
+    sibling = "A classic choice for everyday elegance—this field jacket has a plaid lining."
     result = maybe_rewrite_description_opener(
         original,
-        sibling_descriptions=lambda: [],
+        sibling_descriptions=lambda: [sibling],
         enabled=True,
         generate=generate,
         max_retries=2,
@@ -264,15 +296,14 @@ def test_model_error_keeps_the_listing() -> None:
     def generate(*, model, contents, config):
         raise RuntimeError("gemini down")
 
-    original = GRUEN_BEFORE
     assert (
         maybe_rewrite_description_opener(
-            original,
-            sibling_descriptions=lambda: [],
+            TIGER_REPEATED,
+            sibling_descriptions=lambda: JEWELRY_SALE,
             enabled=True,
             generate=generate,
         )
-        == original
+        == TIGER_REPEATED
     )
 
 
@@ -285,12 +316,12 @@ def test_disabled_flag_skips_the_model_and_the_sale_read() -> None:
 
     assert (
         maybe_rewrite_description_opener(
-            GRUEN_BEFORE,
+            TIGER_REPEATED,
             sibling_descriptions=load,
             enabled=False,
             generate=generate,
         )
-        == GRUEN_BEFORE
+        == TIGER_REPEATED
     )
 
 
@@ -303,67 +334,74 @@ def test_settings_flag_defaults_on_and_can_turn_the_check_off(monkeypatch) -> No
 
     assert (
         maybe_rewrite_description_opener(
-            GRUEN_BEFORE,
-            sibling_descriptions=lambda: [],
+            TIGER_REPEATED,
+            sibling_descriptions=lambda: JEWELRY_SALE,
             generate=generate,
         )
-        == GRUEN_BEFORE
+        == TIGER_REPEATED
     )
 
 
-def test_specific_opening_does_not_call_the_model() -> None:
+def test_distinct_jewelry_hooks_do_not_call_the_model() -> None:
     def generate(*, model, contents, config):
         raise AssertionError("model should not be called")
 
-    text = "Gruen Precision wristwatch with a cream dial. The crown is unsigned."
-    assert (
-        maybe_rewrite_description_opener(
-            text,
-            sibling_descriptions=lambda: ["Oak dresser with a mirrored back."],
-            enabled=True,
-            generate=generate,
+    tiger = TIGER_FRESH + " The stones are bright."
+    for text, siblings in (
+        (GRUEN, []),
+        (NAPIER_QUESTION, [GRUEN]),
+        (tiger, [GRUEN, NAPIER_QUESTION]),
+    ):
+        assert (
+            maybe_rewrite_description_opener(
+                text,
+                sibling_descriptions=lambda siblings=siblings: siblings,
+                enabled=True,
+                generate=generate,
+            )
+            == text
         )
-        == text
-    )
 
 
-def test_sibling_read_failure_still_rewrites_a_banned_opener() -> None:
-    generate, calls = _generate(GRUEN_SENTENCE)
+def test_sibling_read_failure_keeps_the_listing() -> None:
+    def generate(*, model, contents, config):
+        raise AssertionError("model should not be called")
 
     def load():
         raise RuntimeError("db down")
 
-    result = maybe_rewrite_description_opener(
-        GRUEN_BEFORE,
-        sibling_descriptions=load,
-        enabled=True,
-        generate=generate,
+    assert (
+        maybe_rewrite_description_opener(
+            TIGER_REPEATED,
+            sibling_descriptions=load,
+            enabled=True,
+            generate=generate,
+        )
+        == TIGER_REPEATED
     )
-    assert result == GRUEN_AFTER
-    assert len(calls) == 1
 
 
 def test_parsed_response_is_accepted() -> None:
     from app.services.description_openers import DescriptionFirstSentence
 
     def generate(*, model, contents, config):
-        return _Resp("", parsed=DescriptionFirstSentence(first_sentence=GRUEN_SENTENCE), text="")
+        return _Resp("", parsed=DescriptionFirstSentence(first_sentence=TIGER_FRESH), text="")
 
     result = maybe_rewrite_description_opener(
-        GRUEN_BEFORE,
-        sibling_descriptions=lambda: [],
+        TIGER_REPEATED,
+        sibling_descriptions=lambda: JEWELRY_SALE,
         enabled=True,
         generate=generate,
     )
-    assert result == GRUEN_AFTER
+    assert result == TIGER_AFTER
 
 
 def test_rewrite_is_logged(caplog) -> None:
-    generate, _calls = _generate(GRUEN_SENTENCE)
+    generate, _calls = _generate(TIGER_FRESH)
     with caplog.at_level(logging.INFO, logger="app.services.description_openers"):
         maybe_rewrite_description_opener(
-            GRUEN_BEFORE,
-            sibling_descriptions=lambda: [],
+            TIGER_REPEATED,
+            sibling_descriptions=lambda: JEWELRY_SALE,
             sale_id="sale-log",
             enabled=True,
             generate=generate,
@@ -371,6 +409,7 @@ def test_rewrite_is_logged(caplog) -> None:
     assert "Listing description opener rewritten" in caplog.text
     assert "sale-log" in caplog.text
     assert "Add a touch of classic sparkle" in caplog.text
+    assert "Ready to pounce" in caplog.text
 
 
 def test_parallel_rewrites_are_not_serialized() -> None:
@@ -379,17 +418,17 @@ def test_parallel_rewrites_are_not_serialized() -> None:
 
     def generate(*, model, contents, config):
         barrier.wait(timeout=3)
-        return _Resp(GRUEN_SENTENCE)
+        return _Resp(TIGER_FRESH)
 
     def run() -> None:
         try:
             result = maybe_rewrite_description_opener(
-                GRUEN_BEFORE,
-                sibling_descriptions=lambda: [],
+                TIGER_REPEATED,
+                sibling_descriptions=lambda: JEWELRY_SALE,
                 enabled=True,
                 generate=generate,
             )
-            assert result == GRUEN_AFTER
+            assert result == TIGER_AFTER
         except BaseException as exc:  # noqa: BLE001 - fail the test from the thread
             errors.append(exc)
 
@@ -402,23 +441,27 @@ def test_parallel_rewrites_are_not_serialized() -> None:
     assert all(not thread.is_alive() for thread in threads)
 
 
-def test_author_prompts_use_the_shared_banned_list() -> None:
+def test_author_prompts_vary_the_hook_without_banning_it() -> None:
     clause = description_opener_prompt_clause()
     assert clause in BRAND_AUDIT_SYSTEM
     assert clause in PRO_AUTHOR_DESCRIPTION_GUIDANCE
     assert clause in SYSTEM_INSTRUCTION
-    assert "flair" not in BRAND_AUDIT_SYSTEM
-    assert "flair" not in PRO_AUTHOR_DESCRIPTION_GUIDANCE
-    assert "flair" not in SYSTEM_INSTRUCTION
-    assert "who would love it" not in BRAND_AUDIT_SYSTEM
-    for phrase in BANNED_DESCRIPTION_OPENERS:
+    assert "evocative" in clause
+    assert "who would love it" in clause
+    assert "ready to pounce" in clause
+    assert "Do not use these openers" not in clause
+    assert "not a generic lifestyle hook" not in BRAND_AUDIT_SYSTEM
+    for phrase in OVERUSED_DESCRIPTION_OPENERS:
         assert phrase in clause
-    for phrase in DISCOURAGED_DESCRIPTION_FILLER:
-        assert phrase in clause
-    assert "Gruen Precision wristwatch in a gold-tone case" in PRO_AUTHOR_DESCRIPTION_GUIDANCE
+    assert "Add a touch of classic sparkle to your look—this Gruen Precision" in PRO_AUTHOR_DESCRIPTION_GUIDANCE
+    assert "Ready to pounce—this enamel tiger brooch" in PRO_AUTHOR_DESCRIPTION_GUIDANCE
+    assert "Who wouldn't want this Napier link bracelet" in PRO_AUTHOR_DESCRIPTION_GUIDANCE
+    rewrite = opener_rewrite_system_instruction()
+    assert "flavorful" in rewrite
+    assert "plain factual opener" in rewrite
     config = build_opener_rewrite_config()
     _assert_new_call_shape(config, "user text only")
-    assert description_opener_prompt_clause() in (config.system_instruction or "")
+    assert rewrite in (config.system_instruction or "")
 
 
 def test_load_sale_descriptions_reads_other_lots_in_the_sale(tmp_path: Path) -> None:
