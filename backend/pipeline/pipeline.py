@@ -19,6 +19,7 @@ from google import genai
 from google.genai import types
 
 from app.services.description_openers import description_opener_prompt_clause
+from app.services.listing_titles import auction_title_order_clause
 from pipeline.gemini_schema import fully_audited_manifest_gemini_schema, pydantic_model_to_gemini_schema
 from pipeline.schemas import (
     BrandAuditResult,
@@ -1239,8 +1240,10 @@ def run_brand_audit_pro(
             "legible — they override a generic hero guess.\n"
             "8. Leave confirmed_brand empty only when no readable maker mark exists on any frame or OCR line — "
             "never guess from object type alone.\n"
-            "9. When one primary brand is clearly readable, lead final_auction_title with it for search.\n"
-            "9b. **Jewelry titles:** Brand + metal tone + distinctive form + type + (count). Never pad with "
+            "9. **Title order:** "
+            + auction_title_order_clause()
+            + "\n"
+            + "9b. **Jewelry titles:** metal tone + distinctive form + type + (count), maker at the end unless shoppers search that house. Never pad with "
             "Collection, Statement, Fashion, Assorted, Ft., or Feat. Mixed lots: distinctive piece + count of the rest "
             "('Napier Red Link Bracelet + 3 Beaded Necklaces'). **Liz & Co / Liz Claiborne is not Tiffany & Co** — "
             "do not retitle an '& Co' costume stamp as Tiffany unless the word Tiffany is clearly readable.\n"
@@ -1282,7 +1285,9 @@ def run_brand_audit_pro(
             "4. Emit one verified_inventory row per distinct sellable piece with final_title and confirmed_brand.\n"
             "5. When label/tag images show a maker name, set confirmed_brand on that item.\n"
             "6. Leave confirmed_brand empty when no readable maker mark exists — never guess.\n"
-            "7. When one primary brand is clearly readable on a tag, lead final_auction_title with it for search.\n"
+            "7. **Title order:** "
+            + auction_title_order_clause()
+            + "\n"
             "7b. Jewelry: no Collection/Statement/Fashion/Ft. padding. Liz & Co is not Tiffany & Co.\n"
             "8. Do not use the word 'lot' in final_auction_title or final_professional_description.\n"
             "9. **Ruler / measuring tape:** read the number and put a **Dimensions:** line (with units) in "

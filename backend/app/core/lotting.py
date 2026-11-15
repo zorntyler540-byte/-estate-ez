@@ -5,6 +5,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.services.listing_titles import (
+    brand_leads_search,
+    maker_stays_first,
+    place_brand_for_search,
+    title_contains_brand,
+)
+
 # Field labels that appear on printed/handwritten estate tags. Several of these leaking into an
 # auction title means the model transcribed the tag form instead of composing a listing title.
 _LISTING_TAG_LABELS = frozenset(
@@ -2244,7 +2251,9 @@ def _promote_including_clause(title: str) -> str:
         return title
     if len(included.split()) > 4 or re.match(r"(?i)^(a|an|the|various|assorted|multiple)\b", included):
         return _collapse_title_spaces(f"{rest} + {included}")
-    return _collapse_title_spaces(f"{included} {rest}")
+    if brand_leads_search(included):
+        return _collapse_title_spaces(f"{included} {rest}")
+    return _collapse_title_spaces(f"{rest}, {included}")
 
 
 def scrub_padded_auction_title(title: str) -> str:
@@ -2369,7 +2378,8 @@ def _ensure_branded_auction_title(
     specification_lines: list[str],
 ) -> str:
     """
-    When a resolved maker exists but the title is a generic detail line, rebuild a shopper-facing title.
+    Keep a readable maker on the title. Category and style lead.
+    A brand bidders search, and a firearm maker, stay at the front.
     """
     t = clean_listing_text(title).strip()
     primary = brands[0] if brands else ""
@@ -2378,30 +2388,36 @@ def _ensure_branded_auction_title(
         primary = inferred[0] if inferred else ""
     if not primary:
         return t
-    if brand_appears_in_prose(primary, t) and not _is_low_value_detail_title(t):
-        if t.lower().startswith(primary.lower()[: min(10, len(primary))]):
+    if title_contains_brand(t, primary) and not _is_low_value_detail_title(t):
+        if len(brands) > 1:
             return t
-        return f"{primary} {t}"[:500]
+        return place_brand_for_search(t, primary)[:500]
 
     material = _spec_value_for_label(specification_lines, "material")
     style = _spec_value_for_label(specification_lines, "style").split("/")[0].strip()
     era = _spec_value_for_label(specification_lines, "era")
     garment = _garment_phrase_from_title(t)
 
-    parts: list[str] = [primary]
+    body_parts: list[str] = []
     era_low = era.lower()
     if era and era_low not in ("contemporary", "modern", "current"):
-        parts.append(era)
+        body_parts.append(era)
     if material and material.lower() not in ("", "unknown"):
-        parts.append(material)
+        body_parts.append(material)
     if garment:
-        parts.append(garment)
+        body_parts.append(garment)
     elif style:
-        parts.append(style)
+        body_parts.append(style)
     else:
-        parts.append("Apparel")
-    out = " ".join(p for p in parts if p).strip()
-    return out[:500] if out else t
+        body_parts.append("Apparel")
+    body = " ".join(p for p in body_parts if p).strip()
+    if not body:
+        return t
+    if brand_leads_search(primary) or maker_stays_first(t) or maker_stays_first(body):
+        out = f"{primary} {body}"
+    else:
+        out = f"{body}, {primary}"
+    return out[:500]
 
 
 def _merge_auction_title_for_lot(

@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.description_openers import professional_description_schema_hint
+from app.services.listing_titles import auction_title_schema_hint
 
 PhotoRole = Literal["hero", "item_front", "angle_only", "tape", "unusable"]
 LabelLegibility = Literal["clear", "partial", "none"]
@@ -177,9 +178,10 @@ class FullyAuditedManifest(BaseModel):
     final_auction_title: str = Field(
         default="",
         description=(
-            "Pro-corrected single-line auction title; lead with confirmed brand when readable. Put distinctive "
-            "material/handle/finish before the object name (hook-first), not trailing 'with …'. Jewelry: Brand + "
-            "metal tone + form + type + (count) — no Collection/Statement/Fashion/Assorted/Ft. padding. Liz & Co is "
+            "Pro-corrected single-line auction title. " + auction_title_schema_hint() + " "
+            "Put distinctive material/handle/finish before the object name, not trailing 'with …'. "
+            "Jewelry: metal tone + form + type + (count), maker at the end unless that house is searched — "
+            "no Collection/Statement/Fashion/Assorted/Ft. padding. Liz & Co is "
             "not Tiffany & Co. Compose a clean, "
             "human-readable title — NEVER copy estate-tag field labels (No., STYLE, SIZE, PRICE, COLOR, QTY) or raw "
             "tag OCR into the title; those values belong in final_specification_lines."
