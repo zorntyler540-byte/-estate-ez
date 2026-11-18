@@ -86,6 +86,8 @@ If a phone was installed from an **ad hoc / preview** build instead of TestFligh
 
 **Do not use EAS Update** when you changed native code or added a native dependency (camera, sqlite, expo-updates itself). Those still need `eas build` + `eas submit` + a new TestFlight version.
 
+**What's new copy** is not part of the JS bundle. Edit `backend/app/release_notes.json` and deploy the API. Phones on the release-notes update fetch the latest note. One OTA (runtime `1.1.0`) is required to ship that fetch; later notes do not need `eas update`.
+
 ## Setup (Windows)
 
 **SDK 54** — matches the **App Store Expo Go** app. When you’re ready for newer SDKs / `eas go`, upgrade with `npx expo install expo@^55.0.0 --fix`.

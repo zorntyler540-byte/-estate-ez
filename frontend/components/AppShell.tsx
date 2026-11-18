@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Activity, Briefcase, ClipboardList, FolderOpen, LayoutDashboard, Megaphone, Menu, Monitor, Settings, Store, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { useRegisterWhatsNewShell, WhatsNewNavButton } from "./WhatsNew";
 import {
   isWatcherPlan,
   rememberAccountAccess,
@@ -193,9 +194,23 @@ function ShellNavLinks({ pathname, groups, onNavigate, linkClass = "ct-app-sideb
   );
 }
 
+function useHasSession(pathname: string): boolean {
+  const [hasSession, setHasSession] = useState(false);
+  useEffect(() => {
+    try {
+      setHasSession(Boolean(localStorage.getItem("token")));
+    } catch {
+      setHasSession(false);
+    }
+  }, [pathname]);
+  return hasSession;
+}
+
 export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShellProps) {
   const pathname = usePathname() || "";
   const router = useRouter();
+  const signedIn = useHasSession(pathname);
+  useRegisterWhatsNewShell();
   const [navOpen, setNavOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [access, setAccess] = useState<AccountAccess | null>(null);
@@ -273,6 +288,7 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
         <BrandMark href={homeHref} />
         <nav className="ct-app-sidebar__nav">
           <ShellNavLinks pathname={pathname} groups={groups} />
+          {signedIn ? <WhatsNewNavButton className="ct-app-sidebar__link" /> : null}
         </nav>
       </aside>
 
@@ -342,6 +358,9 @@ export function AppShell({ children, topBar, actions, mobileBottomBar }: AppShel
                 onNavigate={closeNav}
                 linkClass="ct-app-nav-drawer__link"
               />
+              {signedIn ? (
+                <WhatsNewNavButton className="ct-app-nav-drawer__link" onOpen={closeNav} />
+              ) : null}
             </nav>
           </aside>
         </>

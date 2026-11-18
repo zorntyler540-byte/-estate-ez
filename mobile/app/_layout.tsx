@@ -10,13 +10,14 @@ import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "react-native-reanimated";
-import { Alert } from "react-native";
 import { StatusBar } from "expo-status-bar";
 
+import { ReleaseNoteModal } from "@/components/ReleaseNoteModal";
+import { fetchLatestReleaseNote } from "@/lib/api";
 import { getAppValue, setAppValue } from "@/lib/queue/db";
-import { RELEASE_NOTE, releaseNoteToShow } from "@/lib/releaseNote";
+import { RELEASE_NOTE_SEEN_KEY, releaseNoteToShow, type ReleaseNote } from "@/lib/releaseNote";
 import { FONT_FAMILY } from "@/lib/typography";
 // Defines the background upload task at startup — the OS can launch the app just to run it.
 import "@/lib/backgroundUpload";
@@ -71,30 +72,36 @@ export default function RootLayout() {
   );
 }
 
-const RELEASE_NOTE_SEEN_KEY = "release_note_seen";
-
 function RootNav() {
   const { token, ready, sessionReady } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const releaseNoteStarted = useRef(false);
+  const [releaseNote, setReleaseNote] = useState<ReleaseNote | null>(null);
+  const onLogin = segments[0] === "login";
 
   useEffect(() => {
+    if (!token || !sessionReady || onLogin) return;
     if (releaseNoteStarted.current) return;
     releaseNoteStarted.current = true;
+    const accessToken = token;
     void (async () => {
       try {
         const seen = await getAppValue(RELEASE_NOTE_SEEN_KEY);
-        const note = releaseNoteToShow(seen, RELEASE_NOTE);
-        if (!note) return;
-        Alert.alert("What's new", note.text, [
-          { text: "OK", onPress: () => void setAppValue(RELEASE_NOTE_SEEN_KEY, note.key) }
-        ]);
+        const latest = await fetchLatestReleaseNote(accessToken);
+        const note = releaseNoteToShow(seen, latest);
+        if (note) setReleaseNote(note);
       } catch {
-        /* The next cold start tries again. */
+        /* Offline or an older API: stay quiet. The next cold start tries again. */
       }
     })();
-  }, []);
+  }, [token, sessionReady, onLogin]);
+
+  function dismissReleaseNote() {
+    const note = releaseNote;
+    setReleaseNote(null);
+    if (note) void setAppValue(RELEASE_NOTE_SEEN_KEY, note.id).catch(() => undefined);
+  }
 
   useEffect(() => {
     if (!ready) return;
@@ -112,6 +119,7 @@ function RootNav() {
   return (
     <ThemeProvider value={EstateTheme}>
       <StatusBar style="light" />
+      {releaseNote ? <ReleaseNoteModal note={releaseNote} onDismiss={dismissReleaseNote} /> : null}
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: theme.bgElevated },

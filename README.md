@@ -156,7 +156,27 @@ cd backend
 ../backend/.venv/bin/python -m pytest
 ```
 
-No frontend lint/test script is configured. `npm run build` in `frontend/` is the production compile check.
+No frontend lint script is configured. `npm run build` in `frontend/` is the production compile check. Small node tests live next to the modules they cover (`npm run test:release-notes` and the other `test:*` scripts).
+
+## What's new
+
+Franchise owners see a one-time **What's new** dialog on the website and in the phone app. Both read the same file:
+
+`backend/app/release_notes.json`
+
+To publish a note:
+
+1. Add an entry to the `notes` list with a new `id`, a `date` (`YYYY-MM-DD`), a `title`, and `items` (short bullets). Optional `platform` is `web`, `mobile`, or `all` (the default). The newest date is the one that shows. A later entry wins when two notes share a date.
+2. Commit and deploy the API the usual way (Railway). The website picks the note up on the next page load. Phones that already fetch `/release-notes/latest` pick it up on the next cold start.
+3. Do **not** publish an EAS update just to change the wording. The phone stores the dismissed note id in SQLite (`release_note_seen`). The website stores it in `localStorage` under the same key. A new `id` shows once; the same `id` stays hidden.
+
+Seen state stays on the device. There is no database migration.
+
+The phone still needs one JavaScript update (runtime `1.1.0`, production channel) to switch off the old hardcoded sentence. After that update is on the phones, later notes ship with the API only. From `mobile/`:
+
+```bash
+EXPO_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app eas update --channel production
+```
 
 ## Environment variables
 

@@ -11,7 +11,8 @@
     "test:catalog-poll": "node --experimental-strip-types --test lib/catalogPoll.test.ts",
     "test:lot-media": "node --experimental-strip-types --test lib/lotMediaGallery.test.ts lib/lotPhotoThumbLoad.test.ts",
     "test:upload-names": "node --experimental-strip-types --test lib/webUploadNames.test.ts lib/webUploadSession.test.ts lib/uploadResize.test.ts",
-    "test:standard-description": "node --experimental-strip-types --test lib/standardDescription.test.ts"
+    "test:standard-description": "node --experimental-strip-types --test lib/standardDescription.test.ts",
+    "test:release-notes": "node --experimental-strip-types --test lib/releaseNotes.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",
