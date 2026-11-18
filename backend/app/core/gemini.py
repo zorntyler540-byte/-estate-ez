@@ -19,6 +19,7 @@ from app.services.description_openers import (
     description_opener_prompt_clause,
     professional_description_schema_hint,
 )
+from app.services.listing_titles import auction_title_order_clause, auction_title_schema_hint
 from app.core.lotting import (
     MERGED_PRO_DESCRIPTION_MAX_CHARS,
     PROFESSIONAL_DESCRIPTION_MAX_WORDS,
@@ -94,8 +95,7 @@ class InventoryTableEntry(BaseModel):
     item_name: str = Field(
         default="",
         description=(
-            "Hook-first auction title: brand first when a label is readable, then distinctive material/handle/finish "
-            "before the object. Title case. Visible subjects only. Do not use the word lot."
+            auction_title_schema_hint() + " Distinctive material or finish before the object, not trailing 'with'."
         ),
     )
     brand: str = Field(
@@ -186,13 +186,13 @@ SYSTEM_INSTRUCTION = (
     "bird figurine or posy vase, not a frog. If the ceramic form is uncertain, use a neutral term.\n"
     "- **Device screens are not the merchandise:** catalog the phone, tablet, monitor, or TV itself — never the on-screen picture.\n\n"
     "### TITLE + VOICE:\n"
-    "- **item_name:** hook-first auction title — Brand (when known) + distinctive material/handle/finish **before** the object type. "
-    "Title case. Shape: 'St. John's Bay Cotton-Blend Zip-Up Jacket', 'Pedersoli Brown Bess Flintlock Musket'. "
-    "Do **not** use the word **lot**. Do not lead with Pair of / Set of two when the noun is already plural "
+    "- **item_name:** " + auction_title_order_clause() + " "
+    "Title case. Do **not** use the word **lot**. Do not lead with Pair of / Set of two when the noun is already plural "
     "(Sculptures, Knives, Figurines, Earrings). Never title from a macro/detail frame alone ('Detail with Zippered Pocket'). "
-    "Jewelry: Brand + metal tone + distinctive form + type + (count); never pad with Collection, Statement, Fashion, "
-    "Assorted, Ft., Feat., or Featuring. Put the number in parentheses at the end — (5), not (5 Pcs); do not lead with Three/Four. "
-    "Lead with a short readable brand; do not trail ', including Brand'.\n"
+    "Jewelry follows the same order: metal tone + distinctive form + type + (count), maker at the end unless that house is searched. "
+    "Never pad with Collection, Statement, Fashion, Assorted, Ft., Feat., or Featuring. "
+    "Put the number in parentheses at the end — (5), not (5 Pcs); do not lead with Three/Four. "
+    "Do not trail ', including Brand'.\n"
     "- **professional_description:** ~50 words max, one paragraph, warm CTBids seller voice. "
     + description_opener_prompt_clause()
     + " Then restate the title hook in the same Title Case. "
@@ -284,7 +284,7 @@ def _user_prompt(*, manifest_tag: str) -> str:
         + "Analyze this catalog photo for an estate inventory row.\n"
         + "RULES:\n"
         + _ct_category_prompt_line()
-        + "- item_name: One-line hook-first auction title (brand first when a label is legible). Visible subjects only.\n"
+        + "- item_name: One-line auction title. Category and style before the object; brand at the end unless shoppers search that name. Visible subjects only.\n"
         + "- brand: ONE primary maker, or empty if none is readable. Apparel = sewn-in neck/care label, not zipper pulls. "
         "Copy label text into labels_and_tags.\n"
         + "- material: Hallmark-first; brass/bronze ≠ pewter; title/prose/material must match.\n"
