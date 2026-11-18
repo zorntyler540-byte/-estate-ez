@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.description_openers import professional_description_schema_hint
+
 PhotoRole = Literal["hero", "item_front", "angle_only", "tape", "unusable"]
 LabelLegibility = Literal["clear", "partial", "none"]
 PhotoQuality = Literal["sharp", "ok", "blur"]
@@ -185,12 +187,9 @@ class FullyAuditedManifest(BaseModel):
     )
     final_professional_description: str = Field(
         default="",
-        description=(
-            "Pro-corrected lot overview — warm CTBids seller voice (~50 words, one paragraph). Open with a short flair "
-            "clause, then immediately restate the title hook (material/handle/finish + object) in natural words. "
-            "Not 'This is a…', a feature checklist, or a full repeat of the auction title. Vary adjectives — do not overuse handsome; prefer specific "
-            "visual details. Exact sizes and marks belong in final_specification_lines; weave size casually in prose if needed."
-        ),
+        description=professional_description_schema_hint()
+        + " Not a feature checklist or a full repeat of the auction title. "
+        "Vary adjectives — do not overuse handsome. Weave size casually in prose if needed.",
     )
     final_specification_lines: list[str] = Field(
         default_factory=list,

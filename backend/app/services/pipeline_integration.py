@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import settings
+from app.services.description_openers import maybe_rewrite_description_opener
 from app.core.gemini import analyze_path_with_retries, verify_tape_sku
 from app.core.lotting import (
     LotOutput,
@@ -626,6 +627,8 @@ def run_single_lot_pipeline(
     emit: EmitFn | None = None,
     should_cancel: Callable[[], bool] | None = None,
     pre_triage_rows: list[dict[str, Any]] | None = None,
+    sibling_descriptions: Callable[[], list[str]] | None = None,
+    sale_id: str | None = None,
 ) -> tuple[LotOutput, dict[str, Any]]:
     """
     Stage 1 triage + selection, capped Flash listing, then Pro proofreads title/brands/items.
@@ -865,6 +868,17 @@ def run_single_lot_pipeline(
     )
 
     _inject_measurement_specs_from_triage(lot, triage_rows)
+
+    # Opener check reads sibling listings at this moment. It does not lock the sale,
+    # so other lots in the fan-out keep authoring in parallel.
+    before_desc = lot.professional_description or ""
+    lot.professional_description = maybe_rewrite_description_opener(
+        before_desc,
+        sibling_descriptions=sibling_descriptions,
+        title=lot.auction_title or "",
+        sale_id=sale_id,
+    )
+    pipeline_result["description_opener_rewritten"] = (lot.professional_description or "") != before_desc
 
     est_in, est_out = _estimate_pipeline_tokens(
         len(entries),
