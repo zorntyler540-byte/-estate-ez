@@ -55,7 +55,9 @@ Copy its **`DATABASE_URL`**. The API accepts `postgres://` and normalizes it for
 | `CATALOG_MAX_QUEUED_JOBS_PER_ACCOUNT` | Optional (default `25`). Caps receiving+queued catalog jobs per account. Per-lot jobs the server splits out of a batch do not count. |
 | `CATALOG_MAX_PHOTOS_PER_ACCOUNT_PER_DAY` | Optional (default `2000`). Caps photos cataloged or queued per account per UTC day (`GET /jobs/quota` shows usage and `resets_at`; the 429 carries `Retry-After`). |
 | `CATALOG_MAX_PHOTOS_PER_JOB` | Optional (default `250`). Caps stills in one multi-lot batch job (checked up front from `expected_photos`). Single-lot jobs and each split lot stay at 40. |
-| `CATALOG_BATCH_FANOUT` | Optional (default `true`). After triage a multi-lot batch queues one single-lot job per tape-SKU lot. |
+| `CATALOG_BATCH_FANOUT` | Optional (default `true`). After triage a multi-lot batch queues one single-lot job per lot, at every photo count. |
+| `CATALOG_DIVIDER_CHECK_CONCURRENCY` | Optional (default `6`). In-flight Flash checks for ambiguous blank-divider frames. Near-uniform white frames split without a call. |
+| `PIPELINE_TRIAGE_PARALLEL` | Optional (default `6`, max 8). Photos triaged at once inside one catalog job. Set `2` if a 4 GB worker OOMs during triage. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional (default 43200 = 30 days, max 129600 = 90 days). Lower for tighter security (e.g. `1440`). |
 | `META_APP_ID` / `META_APP_SECRET` | Optional. Facebook Page posting. Leave unset to hide Connect/Post in the dashboard. See **§9 Facebook Page**. |
 | `META_OAUTH_REDIRECT_URI` | API callback, e.g. `https://<your-api-domain>/integrations/facebook/oauth/callback`. Must match the Meta app exactly. |
@@ -179,7 +181,7 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
 | Worker | 4 GB | Isolated children exit after each job; idle parent should stay under 300 MB. Peak child RSS on a 3-photo lot exceeded 1.2 GB. RSS cap 3000 MB + 1280px working images. |
 | Postgres | host default | Do not bump this for cataloging |
 
-Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, keep `PIPELINE_TRIAGE_PARALLEL=2` and `PIPELINE_WORKING_MAX_EDGE=1280` (defaults). `WORKER_ISOLATE_JOBS=true` is the default. A child that still dies is re-queued with a `[catalog-crash N/3]` marker; after `WORKER_CHILD_CRASH_RETRIES` it is marked failed (`Worker child crashed N times`) and `/jobs/stuck` surfaces it. Retries skip photos already on lots in that sale and reuse unlinked leftover Photo rows so Gemini is not billed twice and the daily photo cap is not double-counted.
+Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, set `PIPELINE_TRIAGE_PARALLEL=2` and keep `PIPELINE_WORKING_MAX_EDGE=1280`. `WORKER_ISOLATE_JOBS=true` is the default. A child that still dies is re-queued with a `[catalog-crash N/3]` marker; after `WORKER_CHILD_CRASH_RETRIES` it is marked failed (`Worker child crashed N times`) and `/jobs/stuck` surfaces it. Retries skip photos already on lots in that sale and reuse unlinked leftover Photo rows so Gemini is not billed twice and the daily photo cap is not double-counted.
 
 **Multiple worker replicas:** 2 replicas is enough for ~5 franchises (`WORKER_MAX_CONCURRENT_JOBS=3` each). Claiming uses `FOR UPDATE SKIP LOCKED` plus the existing per-job advisory lock. Gemini RPM/concurrency is shared via Postgres so two replicas cannot double the API-key budget. Do not run 3+ replicas until you raise `GEMINI_GLOBAL_CONCURRENCY` / Flash+Pro RPM env vars — they default to ~50% of current pre-Vertex paid limits.
 
