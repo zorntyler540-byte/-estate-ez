@@ -6643,7 +6643,7 @@ export default function DashboardPage() {
     const n = ids.length;
     if (
       !window.confirm(
-        `Add photos that are not already on ${n} CT Seller listing${n === 1 ? "" : "s"}?\n\nPhotos already on those items stay. New photos go on the end. Videos on the lot are sent to the media tab. SKU tape stays off CT Bids.`
+        `Add photos that are not already on ${n} CT Seller listing${n === 1 ? "" : "s"}?\n\nPhotos already on those items stay, except pictures replaced since posting (such as an AI background), which are updated. New photos go on the end. Videos on the lot are sent to the media tab. SKU tape stays off CT Bids.`
       )
     ) {
       return;

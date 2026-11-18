@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -84,6 +85,122 @@ def search_tags_for_lot_row(lot: Lot) -> list[str]:
 def ctseller_upload_name(original_name: object, fallback: str) -> str:
     stem = Path(str(original_name or "")).stem.strip()
     return (stem or fallback)[:80]
+
+
+# Stored on Photo.ctseller_sent_token when the catalog bytes change after a CT Seller upload.
+CTSELLER_SENT_STALE = "*"
+
+
+def catalog_file_token(path: Path) -> str:
+    """Short content hash of a catalog file. Compared with ``Photo.ctseller_sent_token``."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:32]
+
+
+def mark_ctseller_photo_stale(row: object) -> None:
+    """The catalog bytes changed. The next CT Seller photo update must send this frame again."""
+    setattr(row, "ctseller_sent_token", CTSELLER_SENT_STALE)
+
+
+def _sent_token(photo: object) -> str:
+    return str(getattr(photo, "ctseller_sent_token", None) or "").strip()
+
+
+def photo_replaced_since_ctseller_upload(photo: object, token: str | None) -> bool:
+    """True when this gallery file is not the bytes last uploaded under the same name.
+
+    A plain-background save with no recorded upload, a stale marker, or a different
+    content hash all count. A matching hash stays, including after that plain background
+    was already sent.
+    """
+    sent = _sent_token(photo)
+    if sent == CTSELLER_SENT_STALE:
+        return True
+    if sent and token and sent != token:
+        return True
+    if bool(getattr(photo, "plain_bg_saved", False)):
+        if token and sent == token:
+            return False
+        return True
+    return False
+
+
+def _photo_file_token(photo: object) -> str | None:
+    try:
+        path = resolve_catalog_storage_path(getattr(photo, "storage_path", None))
+    except Exception:  # noqa: BLE001
+        return None
+    if path is None or not path.is_file():
+        return None
+    try:
+        return catalog_file_token(path)
+    except OSError:
+        return None
+
+
+def _named_photo_needs_ctseller_refresh(photo: object) -> bool:
+    """Same-name frame whose file changed since the CT Seller upload. Missing files stay put."""
+    sent = _sent_token(photo)
+    plain = bool(getattr(photo, "plain_bg_saved", False))
+    if sent != CTSELLER_SENT_STALE and not sent and not plain:
+        return False
+    token = _photo_file_token(photo)
+    if token is None:
+        _LOG.warning(
+            "CT Seller photo refresh skipped; file missing photo=%s",
+            getattr(photo, "id", None),
+        )
+        return False
+    return photo_replaced_since_ctseller_upload(photo, token)
+
+
+def _image_rows_by_upload_name(rows: list[dict]) -> dict[str, list[dict]]:
+    allowed = set(ctseller_image_ids_to_replace(rows))
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        try:
+            image_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if image_id not in allowed:
+            continue
+        key = ctseller_upload_name(row.get("name"), "").lower()
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(row)
+    return grouped
+
+
+def _row_image_id(row: dict) -> int | None:
+    try:
+        return int(row.get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _min_display_order(rows: list[dict]) -> int | None:
+    orders: list[int] = []
+    for row in rows:
+        raw = row.get("displayorder", row.get("display_order"))
+        try:
+            orders.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return min(orders) if orders else None
+
+
+def _unique_ints(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def listing_photos_missing_on_ctseller(listing_photos: list[Photo], rows: list[dict]) -> list[Photo]:
@@ -197,6 +314,8 @@ def _upload_listing_photos(
     phase: PhaseFn,
     order_start: int = 1,
     make_cover: bool = True,
+    display_orders: list[int] | None = None,
+    cover_photo_id: str | None = None,
 ) -> int:
     """Upload listing photos onto a CT Seller item. Returns how many landed."""
     uploaded = 0
@@ -218,14 +337,24 @@ def _upload_listing_photos(
         try:
             raw = jpeg_bytes_for_ctseller_post(path)
             name = ctseller_upload_name(ph.original_name or path.name, f"image{idx + 1}")
+            if display_orders is not None and idx < len(display_orders):
+                display_order = display_orders[idx]
+            else:
+                display_order = order_start + idx
+            if cover_photo_id:
+                is_display = str(getattr(ph, "id", "")) == str(cover_photo_id)
+            else:
+                is_display = make_cover and idx == 0
+            token = catalog_file_token(path)
             with post_lock:
                 client.add_item_image(
                     item_id=item_id,
                     image_bytes=raw,
                     name=name,
-                    display_order=order_start + idx,
-                    is_display_image=make_cover and idx == 0,
+                    display_order=display_order,
+                    is_display_image=is_display,
                 )
+            setattr(ph, "ctseller_sent_token", token)
             return True
         except (OSError, CTSellerError) as exc:
             _LOG.warning("CT Seller photo upload failed lot=%s photo=%s: %s", lot.id, ph.id, exc)
@@ -262,8 +391,14 @@ def add_lot_photos_on_ctseller(
     lot: Lot,
     client: CTSellerClient,
     on_phase: PhaseFn | None = None,
+    replace: bool = False,
 ) -> LotPostToCTSellerOut:
-    """Add gallery photos that are not already on the CT Seller item. Does not remove photos or create an item."""
+    """Add gallery photos that are not already on the CT Seller item.
+
+    A same-name still whose file changed since posting (plain background, or a different
+    content hash / stale marker) is deleted and uploaded again. ``replace`` deletes every
+    still image and uploads the gallery in order. Videos are never removed. Does not create an item.
+    """
 
     def phase(msg: str) -> None:
         if on_phase:
@@ -285,13 +420,49 @@ def add_lot_photos_on_ctseller(
     local_videos = _listing_videos_for_lot(db, lot)
     if not listing_photos and not local_videos:
         raise HTTPException(status_code=400, detail="This lot has no photos to send to CT Seller.")
+    if replace and not listing_photos:
+        raise HTTPException(status_code=400, detail="This lot has no photos to send to CT Seller.")
 
     phase("reading CT Seller photos")
     existing = client.list_item_images(int(item_id))
-    to_add = listing_photos_missing_on_ctseller(listing_photos, existing) if listing_photos else []
-    videos = listing_videos_missing_on_ctseller(local_videos, existing)
+    by_name = _image_rows_by_upload_name(existing)
+    videos = [] if replace else listing_videos_missing_on_ctseller(local_videos, existing)
     remote_sale_id = int(getattr(lot, "ctseller_sale_id", None) or 0)
-    if not to_add and not videos:
+
+    drop_ids: list[int] = []
+    uploads: list[tuple[Photo, int]] = []
+    if replace:
+        drop_ids = ctseller_image_ids_to_replace(existing)
+        uploads = [(photo, index + 1) for index, photo in enumerate(listing_photos)]
+    else:
+        missing = listing_photos_missing_on_ctseller(listing_photos, existing) if listing_photos else []
+        missing_ids = {id(photo) for photo in missing}
+        refreshed: list[tuple[Photo, int | None]] = []
+        for index, photo in enumerate(listing_photos):
+            if id(photo) in missing_ids:
+                continue
+            key = ctseller_upload_name(getattr(photo, "original_name", None), f"image{index + 1}").lower()
+            rows = by_name.get(key) or []
+            if not rows or not _named_photo_needs_ctseller_refresh(photo):
+                continue
+            refreshed.append((photo, _min_display_order(rows)))
+            drop_ids.extend(ctseller_image_ids_to_replace(rows))
+        drop_ids = _unique_ints(drop_ids)
+        drop_set = set(drop_ids)
+        kept_rows = [row for row in existing if _row_image_id(row) not in drop_set]
+        next_order = next_ctseller_display_order(kept_rows)
+        used_orders: set[int] = set()
+        for photo, order in refreshed:
+            if order is None or order in used_orders:
+                order = next_order
+                next_order += 1
+            used_orders.add(order)
+            uploads.append((photo, order))
+        for photo in missing:
+            uploads.append((photo, next_order))
+            next_order += 1
+
+    if not uploads and not videos:
         return LotPostToCTSellerOut(
             lot_id=lot.id,
             ctseller_item_id=int(item_id),
@@ -301,37 +472,52 @@ def add_lot_photos_on_ctseller(
             ctseller_posted_at=getattr(lot, "ctseller_posted_at", None),
         )
 
-    order_start = next_ctseller_display_order(existing)
+    if drop_ids:
+        phase("removing old photos")
+        client.delete_item_images(int(item_id), drop_ids)
+
+    cover_id = None
+    if listing_photos and any(getattr(photo, "id", None) == listing_photos[0].id for photo, _order in uploads):
+        cover_id = str(listing_photos[0].id)
     uploaded = 0
-    if to_add:
+    if uploads:
         uploaded = _upload_listing_photos(
             client=client,
             lot=lot,
             item_id=int(item_id),
-            listing_photos=to_add,
+            listing_photos=[photo for photo, _order in uploads],
             phase=phase,
-            order_start=order_start,
-            make_cover=not ctseller_image_ids_to_replace(existing),
+            make_cover=False,
+            display_orders=[order for _photo, order in uploads],
+            cover_photo_id=cover_id,
         )
-        total = len(to_add)
+        total = len(uploads)
         if uploaded < total:
-            raise HTTPException(
-                status_code=502,
-                detail=(
+            if drop_ids:
+                detail = (
+                    f"Sent {uploaded} of {total} photos to CT Seller item {item_id}. "
+                    "Older copies of the replaced photos were removed. Click Add photos again."
+                )
+            else:
+                detail = (
                     f"Sent {uploaded} of {total} new photos to CT Seller item {item_id}. "
                     "Photos already on that item are still there. Click Add photos again."
-                ),
-            )
+                )
+            raise HTTPException(status_code=502, detail=detail)
 
     videos_uploaded, video_note = (0, None)
     if videos:
+        if uploads:
+            video_start = max(order for _photo, order in uploads) + 1
+        else:
+            video_start = next_ctseller_display_order(existing)
         videos_uploaded, video_note = _upload_listing_videos(
             client=client,
             lot=lot,
             item_id=int(item_id),
             videos=videos,
             phase=phase,
-            order_start=order_start + len(to_add),
+            order_start=video_start,
         )
 
     if uploaded or videos_uploaded:

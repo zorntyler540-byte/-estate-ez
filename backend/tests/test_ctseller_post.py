@@ -254,10 +254,11 @@ def _photo_db(photos: list, lot_status: str = "Sold"):
 def test_add_photos_keeps_the_ones_already_there(tmp_path, monkeypatch) -> None:
     from fastapi import HTTPException
 
-    from app.services.ctseller_post import add_lot_photos_on_ctseller
+    from app.services.ctseller_post import add_lot_photos_on_ctseller, catalog_file_token
 
     jpeg = tmp_path / "a.jpg"
     jpeg.write_bytes(b"jpeg")
+    sent = catalog_file_token(jpeg)
     client = _FakeClient()
     existing = [
         {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
@@ -288,8 +289,21 @@ def test_add_photos_keeps_the_ones_already_there(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("app.services.ctseller_post.lot_is_held_from_ctseller", lambda lot: True)
 
     photos = [
-        SimpleNamespace(id="ph1", storage_path="a.jpg", original_name="dresser.jpg", photo_role="item"),
-        SimpleNamespace(id="ph2", storage_path="b.jpg", original_name="drawer.jpg", photo_role="detail"),
+        SimpleNamespace(
+            id="ph1",
+            storage_path="a.jpg",
+            original_name="dresser.jpg",
+            photo_role="item",
+            plain_bg_saved=True,
+            ctseller_sent_token=sent,
+        ),
+        SimpleNamespace(
+            id="ph2",
+            storage_path="b.jpg",
+            original_name="drawer.jpg",
+            photo_role="detail",
+            plain_bg_saved=False,
+        ),
         SimpleNamespace(id="ph3", storage_path="c.jpg", original_name="added.jpg", photo_role="item"),
     ]
     db, lot = _photo_db(photos)
@@ -335,6 +349,199 @@ def test_add_photos_keeps_the_ones_already_there(tmp_path, monkeypatch) -> None:
     except HTTPException as exc:
         assert exc.status_code == 400
     assert "delete" not in client.order
+
+
+def test_add_photos_reuploads_plain_bg_same_name(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller_post import add_lot_photos_on_ctseller, catalog_file_token
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"plain-hero")
+    client = _FakeClient()
+    client.deleted = []
+    existing = [
+        {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
+        {"id": 11, "type": "video", "name": "clip.mp4", "displayorder": 2},
+        {"id": 12, "type": "image", "name": "drawer.jpg", "displayorder": 3},
+    ]
+
+    def list_item_images(item_id: int):
+        assert item_id == 8801
+        return existing
+
+    def delete_item_images(item_id: int, image_ids: list[int]) -> None:
+        client.order.append("delete")
+        client.deleted.append((item_id, list(image_ids)))
+
+    def add_item_image(**kwargs) -> None:
+        client.order.append("image")
+        client.added.append(kwargs)
+
+    client.list_item_images = list_item_images
+    client.delete_item_images = delete_item_images
+    client.add_item_image = add_item_image
+    client.added = []
+    monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", lambda _p: jpeg)
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+
+    hero = SimpleNamespace(
+        id="ph1",
+        storage_path="a.jpg",
+        original_name="dresser.jpg",
+        photo_role="item",
+        plain_bg_saved=True,
+    )
+    kept = SimpleNamespace(
+        id="ph2",
+        storage_path="b.jpg",
+        original_name="drawer.jpg",
+        photo_role="detail",
+        plain_bg_saved=False,
+        ctseller_sent_token=catalog_file_token(jpeg),
+    )
+    photos = [hero, kept]
+    db, lot = _photo_db(photos)
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert out.photos_uploaded == 1
+    assert client.deleted == [(8801, [10])]
+    assert [row["name"] for row in client.added] == ["dresser"]
+    assert client.added[0]["is_display_image"] is True
+    assert client.added[0]["display_order"] == 1
+    assert hero.ctseller_sent_token == catalog_file_token(jpeg)
+    assert "create" not in client.order
+    db.commit.assert_called()
+
+    existing[:] = [row for row in existing if row["id"] != 10]
+    existing.append({"id": 14, "type": "image", "name": "dresser", "displayorder": 1})
+    client.deleted.clear()
+    client.added.clear()
+    client.order.clear()
+    db.commit.reset_mock()
+    again = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert again.photos_uploaded == 0
+    assert client.deleted == []
+    assert client.added == []
+    db.commit.assert_not_called()
+
+
+def test_add_photos_reuploads_when_sent_token_differs(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller_post import CTSELLER_SENT_STALE, add_lot_photos_on_ctseller, catalog_file_token
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"rotated-bytes")
+    client = _FakeClient()
+    client.deleted = []
+    client.added = []
+    existing = [
+        {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
+        {"id": 21, "type": "image", "name": "side", "displayorder": 4},
+        {"id": 11, "type": "video", "name": "clip.mp4", "displayorder": 5},
+    ]
+
+    def delete_item_images(item_id: int, image_ids: list[int]) -> None:
+        client.deleted.append((item_id, list(image_ids)))
+
+    client.list_item_images = lambda item_id: existing
+    client.delete_item_images = delete_item_images
+    client.add_item_image = lambda **kwargs: client.added.append(kwargs)
+    monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", lambda _p: jpeg)
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+
+    changed = SimpleNamespace(
+        id="ph-hash",
+        storage_path="a.jpg",
+        original_name="dresser.jpg",
+        photo_role="item",
+        plain_bg_saved=False,
+        ctseller_sent_token="f" * 32,
+    )
+    stale = SimpleNamespace(
+        id="ph-stale",
+        storage_path="b.jpg",
+        original_name="side.jpg",
+        photo_role="detail",
+        plain_bg_saved=False,
+        ctseller_sent_token=CTSELLER_SENT_STALE,
+    )
+    db, lot = _photo_db([changed, stale])
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client)
+    assert out.photos_uploaded == 2
+    assert client.deleted == [(8801, [10, 21])]
+    by_name = {row["name"]: row for row in client.added}
+    assert by_name["dresser"]["is_display_image"] is True
+    assert by_name["dresser"]["display_order"] == 1
+    assert by_name["side"]["is_display_image"] is False
+    assert by_name["side"]["display_order"] == 4
+    assert changed.ctseller_sent_token == catalog_file_token(jpeg)
+    assert stale.ctseller_sent_token == catalog_file_token(jpeg)
+    assert 11 not in client.deleted[0][1]
+
+
+def test_replace_photos_deletes_stills_and_sets_display_image(tmp_path, monkeypatch) -> None:
+    from app.services.ctseller_post import add_lot_photos_on_ctseller, catalog_file_token
+
+    jpeg = tmp_path / "a.jpg"
+    jpeg.write_bytes(b"gallery")
+    client = _FakeClient()
+    client.deleted = []
+    client.added = []
+    client.videos = []
+    existing = [
+        {"id": 10, "type": "image", "name": "dresser", "displayorder": 1},
+        {"id": 11, "type": "video", "name": "clip.mp4", "displayorder": 2},
+        {"id": 12, "type": "image", "name": "drawer", "displayorder": 3},
+    ]
+    client.list_item_images = lambda item_id: existing
+    client.delete_item_images = lambda item_id, image_ids: client.deleted.append((item_id, list(image_ids)))
+    client.add_item_image = lambda **kwargs: client.added.append(kwargs)
+    client.add_item_video = lambda **kwargs: client.videos.append(kwargs)
+    monkeypatch.setattr("app.services.ctseller_post.resolve_catalog_storage_path", lambda _p: jpeg)
+    monkeypatch.setattr("app.services.ctseller_post.jpeg_bytes_for_ctseller_post", lambda path: b"jpeg")
+    monkeypatch.setattr("app.services.ctseller_post.photos_for_ctbids_listing", lambda photos: photos)
+
+    hero = SimpleNamespace(
+        id="ph1",
+        storage_path="a.jpg",
+        original_name="dresser.jpg",
+        photo_role="item",
+        plain_bg_saved=False,
+        ctseller_sent_token=catalog_file_token(jpeg),
+    )
+    detail = SimpleNamespace(
+        id="ph2",
+        storage_path="b.jpg",
+        original_name="drawer.jpg",
+        photo_role="detail",
+        plain_bg_saved=False,
+        ctseller_sent_token=catalog_file_token(jpeg),
+    )
+    videos = [SimpleNamespace(id="v1", storage_path="clip.mp4", original_name="clip.mp4")]
+    db, lot = _photo_db([hero, detail])
+    photo_query = db.query.side_effect
+
+    def query_with_videos(model):
+        if getattr(model, "__name__", "") == "LotVideo":
+            q = MagicMock()
+            q.filter.return_value = q
+            q.order_by.return_value = q
+            q.all.return_value = videos
+            return q
+        return photo_query(model)
+
+    db.query.side_effect = query_with_videos
+    out = add_lot_photos_on_ctseller(db=db, lot=lot, client=client, replace=True)
+    assert out.photos_uploaded == 2
+    assert out.videos_uploaded == 0
+    assert out.ctseller_item_id == 8801
+    assert client.deleted == [(8801, [10, 12])]
+    assert client.videos == []
+    by_name = {row["name"]: row for row in client.added}
+    assert by_name["dresser"]["is_display_image"] is True
+    assert by_name["dresser"]["display_order"] == 1
+    assert by_name["drawer"]["is_display_image"] is False
+    assert by_name["drawer"]["display_order"] == 2
+    assert "create" not in client.order
 
 
 def test_add_does_not_touch_a_tape_only_lot(monkeypatch) -> None:
@@ -445,6 +652,73 @@ def test_photo_refresh_skips_auction_lookup(monkeypatch) -> None:
     client.sale_detail.assert_not_called()
     client.list_areas.assert_not_called()
     client.list_item_images.assert_called()
+
+
+def test_sale_photos_only_forwards_replace(monkeypatch) -> None:
+    from app.ctseller_post_tasks import _run_sale_post
+
+    seen: dict[str, object] = {}
+    client = MagicMock()
+    client.list_item_images.return_value = []
+    account = SimpleNamespace(id="acct")
+    lot = SimpleNamespace(id="lot1", sku="JL102", account_id="acct", ctseller_item_id=55)
+
+    class _DB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def query(self, model):
+            name = getattr(model, "__name__", "")
+            q = MagicMock()
+            if name == "Account":
+                q.filter.return_value.first.return_value = account
+            else:
+                q.filter.return_value.first.return_value = lot
+            return q
+
+        def expire_all(self):
+            return None
+
+    def fake_add(**kwargs):
+        seen["replace"] = kwargs.get("replace")
+        return SimpleNamespace(ctseller_item_id=55, photos_uploaded=2, videos_uploaded=0, video_note=None)
+
+    monkeypatch.setattr("app.ctseller_post_tasks.SessionLocal", lambda: _DB())
+    monkeypatch.setattr("app.main._ctseller_client_for_account", lambda *a, **k: client)
+    monkeypatch.setattr("app.ctseller_post_tasks.add_lot_photos_on_ctseller", fake_add)
+    _run_sale_post(
+        account_id="acct",
+        sale_id="sale1",
+        lot_ids=["lot1"],
+        skus={"lot1": "JL102"},
+        remote_sale_id=0,
+        force=False,
+        photos_only=True,
+        replace=True,
+    )
+    assert seen["replace"] is True
+
+
+def test_ctseller_photos_replace_flag_defaults_off() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.schemas import LotCtSellerPhotosIn, SaleCtSellerPhotosIn
+
+    assert LotCtSellerPhotosIn().replace is False
+    assert LotCtSellerPhotosIn(replace=True).replace is True
+    assert SaleCtSellerPhotosIn(lot_ids=["lot1"]).replace is False
+    assert SaleCtSellerPhotosIn(lot_ids=["lot1"], replace=True).replace is True
+
+    client = TestClient(app)
+    empty = client.post("/lots/missing/ctseller-photos")
+    flagged = client.post("/lots/missing/ctseller-photos", json={"replace": True})
+    assert empty.status_code != 422
+    assert flagged.status_code != 422
+    assert empty.status_code == flagged.status_code
 
 
 def test_listing_videos_missing_skips_name_or_stem() -> None:

@@ -108,6 +108,7 @@ from app.schemas import (
     LotOut,
     LotPostToCTSellerIn,
     LotPostToCTSellerOut,
+    LotCtSellerPhotosIn,
     LotSearchTagsOut,
     LotMoveIn,
     LotBulkMoveIn,
@@ -3715,10 +3716,16 @@ def post_sale_lots_to_ctseller(
 @app.post("/lots/{lot_id}/ctseller-photos", response_model=LotPostToCTSellerOut)
 def update_lot_photos_on_ctseller(
     lot_id: str,
+    payload: LotCtSellerPhotosIn | None = None,
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LotPostToCTSellerOut:
-    """Add gallery photos that are not already on this lot's CT Seller item. Does not create a new item."""
+    """Add gallery photos missing from this lot's CT Seller item, or replace every still.
+
+    Same-name photos whose files changed since posting are deleted and uploaded again.
+    ``replace`` refreshes every still image and leaves videos in place. Does not create an item.
+    """
+    body = payload or LotCtSellerPhotosIn()
     lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
@@ -3757,6 +3764,7 @@ def update_lot_photos_on_ctseller(
         remote_sale_id=int(remote_sale_id),
         force=False,
         photos_only=True,
+        replace=body.replace,
     )
     return LotPostToCTSellerOut(
         lot_id=lot.id,
@@ -3775,7 +3783,11 @@ def update_sale_lot_photos_on_ctseller(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SalePostToCTSellerOut:
-    """Add gallery photos that are not already on these posted CT Seller items."""
+    """Add gallery photos that are not already on these posted CT Seller items.
+
+    Photos replaced since posting are refreshed. ``replace`` swaps every still image
+    and leaves videos on the existing items.
+    """
     sale = _sale_for_user(sale_id, current, db)
     account = db.query(Account).filter(Account.id == current.account_id).first()
     if not account:
@@ -3837,6 +3849,7 @@ def update_sale_lot_photos_on_ctseller(
                 remote_sale_id=int(remote_sale_id),
                 force=False,
                 photos_only=True,
+                replace=bool(payload.replace),
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -5128,6 +5141,9 @@ async def replace_lot_photo(
         row.storage_path = storage_path
         if stor_name:
             row.original_name = Path(stor_name).name
+        from app.services.ctseller_post import mark_ctseller_photo_stale
+
+        mark_ctseller_photo_stale(row)
         db.commit()
         db.refresh(row)
     finally:
@@ -5170,6 +5186,8 @@ def rotate_lot_photos(
     else:
         targets = existing
 
+    from app.services.ctseller_post import mark_ctseller_photo_stale
+
     jpeg_q = int(settings.catalog_upload_jpeg_quality)
     rotated = 0
     failed = 0
@@ -5196,6 +5214,7 @@ def rotate_lot_photos(
             row.storage_path = storage_path
             stem = Path(row.original_name or "photo").stem or "photo"
             row.original_name = f"{stem}.jpg"
+            mark_ctseller_photo_stale(row)
             rotated += 1
         except Exception as exc:  # noqa: BLE001
             failed += 1

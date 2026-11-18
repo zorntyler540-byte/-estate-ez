@@ -519,6 +519,36 @@ def test_client_falls_back_to_password_when_refresh_fails(tmp_path) -> None:
     assert unseal_secret(account.ctseller_access_token_enc) == "access-login"
 
 
+def test_replaced_catalog_jpeg_purges_ctseller_cache(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from app.catalog_storage import persist_catalog_photo, resolve_catalog_storage_path
+    from app.services.ctseller import IMAGE_MAX_EDGE, jpeg_bytes_for_ctseller_post
+    from app.services.ctseller_post import CTSELLER_SENT_STALE
+    from app.services.plain_background import write_replaced_catalog_jpeg
+
+    monkeypatch.setattr("app.catalog_storage._BACKEND_DIR", tmp_path)
+    src = tmp_path / "hero.jpg"
+    Image.new("RGB", (80, 60), (20, 40, 80)).save(src, format="JPEG", quality=85)
+    photo_id, key = persist_catalog_photo("acct-1", src, photo_id="pid-hero")
+    dest = resolve_catalog_storage_path(key)
+    jpeg_bytes_for_ctseller_post(dest)
+    cache = dest.with_name(f"{dest.stem}.ctseller.{IMAGE_MAX_EDGE}.jpg")
+    assert cache.is_file()
+    row = SimpleNamespace(id=photo_id, storage_path=key, original_name="hero.jpg", ctseller_sent_token="abc")
+    replacement = tmp_path / "next.jpg"
+    Image.new("RGB", (80, 60), (200, 200, 200)).save(replacement, format="JPEG", quality=85)
+    write_replaced_catalog_jpeg("acct-1", row, replacement.read_bytes())
+    assert not cache.is_file()
+    assert row.ctseller_sent_token == CTSELLER_SENT_STALE
+    assert row.original_name == "hero.jpg"
+    fresh = resolve_catalog_storage_path(row.storage_path)
+    assert fresh.is_file()
+    assert jpeg_bytes_for_ctseller_post(fresh) != b""
+
+
 def test_jpeg_bytes_for_ctseller_post_caches_small_file(tmp_path) -> None:
     from io import BytesIO
 

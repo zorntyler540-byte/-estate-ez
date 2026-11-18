@@ -628,10 +628,23 @@ class SalePostToCTSellerOut(BaseModel):
     results: list[SalePostToCTSellerLotResult]
 
 
+class LotCtSellerPhotosIn(BaseModel):
+    """Update photos on the CT Seller item already posted. Does not create an item.
+
+    ``replace`` deletes every still image on that item and uploads the gallery again.
+    """
+
+    replace: bool = False
+
+
 class SaleCtSellerPhotosIn(BaseModel):
-    """Replace photos on lots already posted to CT Seller. lot_ids is required."""
+    """Update photos on lots already posted to CT Seller. lot_ids is required.
+
+    ``replace`` deletes still images on each item and uploads that lot's gallery again.
+    """
 
     lot_ids: list[str] = Field(min_length=1, max_length=200)
+    replace: bool = False
 
 
 class SalePostToCTSellerStatusOut(BaseModel):

@@ -98,6 +98,7 @@ def start_sale_post_in_background(
     remote_sale_id: int,
     force: bool,
     photos_only: bool = False,
+    replace: bool = False,
 ) -> None:
     ordered = [x for x in lot_ids if (x or "").strip()]
     if not ordered:
@@ -106,6 +107,12 @@ def start_sale_post_in_background(
         existing = _sale_runs.get(sale_id)
         if existing and existing.get("active"):
             raise RuntimeError("ctseller_post_already_running")
+        if photos_only and replace:
+            opening_phase = "replacing photos"
+        elif photos_only:
+            opening_phase = "adding photos"
+        else:
+            opening_phase = "starting"
         _sale_runs[sale_id] = {
             "active": True,
             "account_id": account_id,
@@ -119,10 +126,11 @@ def start_sale_post_in_background(
             "queued": len(ordered),
             "current_id": None,
             "current_sku": None,
-            "current_phase": "adding photos" if photos_only else "starting",
+            "current_phase": opening_phase,
             "results": [],
             "force": force,
             "photos_only": photos_only,
+            "replace": bool(replace),
             "finished_at": None,
         }
 
@@ -136,6 +144,7 @@ def start_sale_post_in_background(
                 remote_sale_id=int(remote_sale_id),
                 force=force,
                 photos_only=photos_only,
+                replace=replace,
             )
         except Exception:
             _LOG.error("CT Seller sale post crashed sale_id=%s\n%s", sale_id, traceback.format_exc())
@@ -201,6 +210,7 @@ def _run_sale_post(
     remote_sale_id: int,
     force: bool,
     photos_only: bool = False,
+    replace: bool = False,
 ) -> None:
     from app.main import _ctseller_client_for_account
 
@@ -265,7 +275,13 @@ def _run_sale_post(
 
         for lot_id in lot_ids:
             sku = skus.get(lot_id)
-            _set_phase(sale_id, lot_id, sku, "adding photos" if photos_only else "creating item")
+            if photos_only and replace:
+                lot_phase = "replacing photos"
+            elif photos_only:
+                lot_phase = "adding photos"
+            else:
+                lot_phase = "creating item"
+            _set_phase(sale_id, lot_id, sku, lot_phase)
             lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == account_id).first()
             if lot is None:
                 _append_result(
@@ -288,6 +304,7 @@ def _run_sale_post(
                         lot=lot,
                         client=client,
                         on_phase=lambda msg, sid=sale_id, lid=lot_id, sk=sku: _set_phase(sid, lid, sk, msg),
+                        replace=replace,
                     )
                 else:
                     out = post_one_lot_to_ctseller(
