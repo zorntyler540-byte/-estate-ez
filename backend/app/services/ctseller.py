@@ -805,14 +805,39 @@ class CTSellerClient:
         return out
 
     def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
-        """Set ``reserveprice`` on an existing item without re-posting photos."""
+        """Set ``reserveprice`` on an existing item without re-posting photos.
+
+        Item detail omits ``itemtypeid``. CT Seller rejects an update that lacks it
+        ("Not found : Update key or data missing"), which is why a reserve saved here
+        never appeared on an already-posted item. Bid result fields are read-only and
+        are not sent back.
+        """
+        detail: dict[str, Any] = {}
         try:
-            row = self.item_detail(int(item_id))
+            fetched = self.item_detail(int(item_id))
+            if isinstance(fetched, dict):
+                detail = fetched
         except CTSellerError:
-            row = {"id": int(item_id)}
-        if not isinstance(row, dict):
-            row = {}
+            detail = {}
+        skip = {
+            "currentbid",
+            "highbid",
+            "winningbid",
+            "soldprice",
+            "currentbidamount",
+            "bidcount",
+        }
+        row: dict[str, Any] = {}
+        for key, value in detail.items():
+            if key in skip or isinstance(value, (dict, list)):
+                continue
+            row[key] = value
         row["id"] = int(item_id)
+        raw_type = row.get("itemtypeid")
+        try:
+            row["itemtypeid"] = int(raw_type) if raw_type not in (None, "") else 2
+        except (TypeError, ValueError):
+            row["itemtypeid"] = 2
         row["reserveprice"] = format_ctseller_reserve_price(reserve_price)
         return self._put_raw("/item/update", {"data": [row]})
 

@@ -168,7 +168,14 @@ def test_update_item_reserve_puts_merged_detail() -> None:
 
     def fake_detail(item_id: int) -> dict:
         assert item_id == 88
-        return {"id": 88, "SKU": "001", "title": "Lamp", "reserveprice": ""}
+        return {
+            "id": 88,
+            "SKU": "001",
+            "title": "Lamp",
+            "reserveprice": "",
+            "currentbid": 4,
+            "highbid": 4,
+        }
 
     putted: list[tuple[str, dict]] = []
 
@@ -182,7 +189,26 @@ def test_update_item_reserve_puts_merged_detail() -> None:
     row = putted[0][1]["data"][0]
     assert row["id"] == 88
     assert row["SKU"] == "001"
+    assert row["title"] == "Lamp"
+    assert row["itemtypeid"] == 2
     assert row["reserveprice"] == 12.0
+    assert "currentbid" not in row
+    assert "highbid" not in row
+
+
+def test_update_item_reserve_keeps_existing_item_type() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_put(path: str, payload: dict) -> dict:
+        assert payload["data"][0]["itemtypeid"] == 3
+        assert payload["data"][0]["reserveprice"] == ""
+        return {"status": "success"}
+
+    with (
+        patch.object(client, "item_detail", lambda item_id: {"id": item_id, "itemtypeid": "3"}),
+        patch.object(client, "_put_raw", fake_put),
+    ):
+        client.update_item_reserve(item_id=9, reserve_price=None)
 
 
 def test_build_item_payload_blank_tax_when_sale_has_none() -> None:

@@ -29,6 +29,7 @@ from app.services.ctseller import (
 from app.services.listing_channels import is_facebook_listing_channel
 from app.services.photo_roles import photos_for_ctbids_listing
 from app.services.search_tags import parse_search_tags_json, search_tags_for_lot_fields
+from app.services.standard_description import description_for_ctseller
 
 _LOG = logging.getLogger(__name__)
 
@@ -611,7 +612,7 @@ def post_one_lot_to_ctseller(
         location_id=location_id,
         sku=sku,
         title=lot.auction_title or sku,
-        description=lot.professional_description or "",
+        description=description_for_ctseller(db, lot),
         category=(lot.ct_category or "").strip() or "Household Goods Other",
         condition=(lot.condition_text or "").strip() or "GOOD",
         starting_price=lot.starting_price,

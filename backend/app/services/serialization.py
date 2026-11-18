@@ -291,6 +291,7 @@ def lot_to_schema(
     *,
     has_thumbnail: bool = False,
     many_photos_review: bool = False,
+    posting_description_suffix: str = "",
 ) -> LotOut:
     spec_lines = json.loads(row.specification_lines_json or "[]")
     review_reason = listing_quality_issue(
@@ -333,5 +334,6 @@ def lot_to_schema(
         audience_hold=bool(getattr(row, "audience_hold", False)),
         audience=_audience_payload_with_share_links(row),
         engagement=engagement_out_for_lot(row),
+        posting_description_suffix=posting_description_suffix or "",
     )
 

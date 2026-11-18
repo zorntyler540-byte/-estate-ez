@@ -17,6 +17,7 @@ type Me = {
   plan_code?: string;
   feature_analytics?: boolean;
   feature_facebook?: boolean;
+  standard_description?: string;
 };
 
 type SavedSuggestion = {
@@ -106,6 +107,10 @@ export default function AccountPage() {
   const [selfPasswordBusy, setSelfPasswordBusy] = useState(false);
   const [selfPasswordMsg, setSelfPasswordMsg] = useState("");
   const [selfPasswordErr, setSelfPasswordErr] = useState("");
+  const [standardDescription, setStandardDescription] = useState("");
+  const [standardDescriptionBusy, setStandardDescriptionBusy] = useState(false);
+  const [standardDescriptionMsg, setStandardDescriptionMsg] = useState("");
+  const [standardDescriptionErr, setStandardDescriptionErr] = useState("");
   const [ctSellerConnected, setCtSellerConnected] = useState(false);
   const [ctSellerUsername, setCtSellerUsername] = useState("");
   const [ctSellerUserInput, setCtSellerUserInput] = useState("");
@@ -163,6 +168,7 @@ export default function AccountPage() {
           return;
         }
         setMe(row);
+        setStandardDescription(row.standard_description || "");
         const watcher = isWatcherPlan(row.plan_code);
         if (!watcher) {
           void apiFetch("/integrations/ctseller", t)
@@ -638,6 +644,41 @@ export default function AccountPage() {
       setTeamError(e instanceof Error ? e.message : "Could not reset password");
     } finally {
       setResetBusyId("");
+    }
+  }
+
+  async function saveStandardDescription(applyToUnposted: boolean) {
+    if (!token) return;
+    setStandardDescriptionBusy(true);
+    setStandardDescriptionMsg("");
+    setStandardDescriptionErr("");
+    try {
+      const res = (await apiFetch("/account/listing-defaults", token, {
+        method: "PATCH",
+        body: JSON.stringify({
+          standard_description: standardDescription,
+          apply_to_unposted: applyToUnposted
+        })
+      })) as { standard_description?: string; lots_updated?: number };
+      const saved = res.standard_description || "";
+      setStandardDescription(saved);
+      setMe((prev) => (prev ? { ...prev, standard_description: saved } : prev));
+      const updated = res.lots_updated ?? 0;
+      if (applyToUnposted) {
+        setStandardDescriptionMsg(
+          updated
+            ? `Saved. Added to ${updated} unposted lot${updated === 1 ? "" : "s"}. Posted lots stay as they are.`
+            : "Saved. No unposted lots needed a change. Sales with their own note were left alone."
+        );
+      } else if (saved) {
+        setStandardDescriptionMsg("Saved. Future CT Seller posts add this note. Posted lots stay as they are.");
+      } else {
+        setStandardDescriptionMsg("Cleared. Future posts will not add an account note.");
+      }
+    } catch (e) {
+      setStandardDescriptionErr(e instanceof Error ? e.message : "Could not save the standard description");
+    } finally {
+      setStandardDescriptionBusy(false);
     }
   }
 
@@ -1141,6 +1182,48 @@ export default function AccountPage() {
           {suggestionBusy ? "Sending…" : "Send to team"}
         </button>
       </section>
+      ) : null}
+      {me?.role?.toLowerCase() === "owner" ? (
+        <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
+          <h2 className="ct-section-title" style={{ marginTop: 0 }}>
+            Standard description
+          </h2>
+          <p className="ct-lead" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.95rem" }}>
+            Added at the end of every lot when it is posted to CT Seller — for example, “Reserve is $5”.
+            It is not written by the AI. A sale can use a different note. A note already in the description
+            is not added twice.
+          </p>
+          {standardDescriptionMsg ? <div className="ct-banner ct-banner--success">{standardDescriptionMsg}</div> : null}
+          {standardDescriptionErr ? <div className="ct-banner ct-banner--error">{standardDescriptionErr}</div> : null}
+          <textarea
+            className="ct-textarea"
+            rows={3}
+            maxLength={4000}
+            placeholder="Reserve is $5"
+            value={standardDescription}
+            disabled={standardDescriptionBusy}
+            onChange={(e) => setStandardDescription(e.target.value)}
+            aria-label="Standard description for every lot"
+          />
+          <div className="ct-row ct-row--gap-lg" style={{ marginTop: "0.75rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="ct-btn ct-btn--primary"
+              disabled={standardDescriptionBusy}
+              onClick={() => void saveStandardDescription(false)}
+            >
+              {standardDescriptionBusy ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              disabled={standardDescriptionBusy}
+              onClick={() => void saveStandardDescription(true)}
+            >
+              Save and add to unposted lots
+            </button>
+          </div>
+        </section>
       ) : null}
       {me?.role?.toLowerCase() === "owner" && !watcherAccount ? (
         <section className="ct-card ct-card--padded" style={{ marginTop: "1.25rem" }}>
