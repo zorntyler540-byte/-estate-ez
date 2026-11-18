@@ -875,6 +875,17 @@ SPLIT_TRIAGE_SIDECAR = ".split_triage.json"
 _CAP_TAIL_MIN = 12
 
 
+def batch_should_fan_out(lot_count: int, photo_count: int = 0) -> bool:
+    """Queue one catalog job per lot whenever a batch has more than one lot.
+
+    ``photo_count`` does not choose the path. Uploads under and over 100 photos both fan out
+    into the bulk lane. A single lot stays inside this job, and ``CATALOG_BATCH_FANOUT=false``
+    restores the inline loop.
+    """
+    _ = photo_count
+    return bool(settings.catalog_batch_fanout) and int(lot_count) > 1
+
+
 def cap_lot_segments(
     segments: list[list[tuple[Path, str]]], cap: int | None = CTBIDS_MAX_PHOTOS_PER_LOT
 ) -> list[tuple[list[tuple[Path, str]], int, int]]:
@@ -1071,7 +1082,7 @@ def _process_job_batch_pipeline(
     segments = [entries for entries, _part, _parts in lots]
     parts_by_seg = {i: (part, parts) for i, (_e, part, parts) in enumerate(lots)}
 
-    if settings.catalog_batch_fanout and len(lots) > 1:
+    if batch_should_fan_out(len(lots), total_photos):
         triage_rows = {key: row for _path, key, row in ordered}
         job.analyzed_photos = int(total_photos)
         job.failed_photos = 0

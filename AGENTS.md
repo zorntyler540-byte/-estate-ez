@@ -73,7 +73,9 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   pipeline. Keep `CATALOG_JOB_MAX_CONCURRENT=1` per franchise for single-lot uploads; website batch
   work has its own lane (`CATALOG_BULK_MAX_CONCURRENT`, default 2). After triage a multi-lot batch
   is split into per-lot single-lot jobs (`parent_job_id`, folder `<batch>.lotNNN-<token>`, triage
-  rows carried in `.split_triage.json`); lots over 40 photos become review-flagged parts. Gemini HTTP is capped cross-process
+  rows carried in `.split_triage.json`) at every photo count — there is no under-100 sequential
+  path. Lots over 40 photos become review-flagged parts. Stage-1 triage runs
+  `PIPELINE_TRIAGE_PARALLEL` photos at a time (default 6). Gemini HTTP is capped cross-process
   (`GEMINI_GLOBAL_CONCURRENCY` + per-model RPM). Railway Metrics **Sum** view adds every replica.
   Isolated-child OOM/crash is capped (`WORKER_CHILD_CRASH_RETRIES`, default 3) and listed by
   `/jobs/stuck`. Parent RSS kill (`WORKER_CHILD_RSS_MB=3000`; 1200 is too low for a 3-photo lot)
@@ -194,13 +196,16 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   deterministic sort (it does not re-call Gemini). Do not bring back naive hero-first-only
   reordering or a separate “Fix photo order” capture-order reset.
 - **Blank divider photos split batch uploads without tape** (`app/services/lot_dividers.py`).
- In Choose folder / Choose photos batches, a frame is a divider when a small Flash call
- (`check_lot_divider`) sees it with the photos before and after it and says so. That call runs
- when Stage-1 triage sets `is_lot_divider` or the frame is low-detail, including a creased or
- shadowed white sheet that fails the strict edge test. The strict Pillow check is only the
- fallback when the call fails, and only together with the triage flag. The frame is left out of
- every lot. Each candidate logs a `divider candidate` line. That double check is why this is not the removed Gemini-only
- `lot_boundary_blank_page` (it skipped real white-plate frames). Repeated/leading/trailing dividers make no empty lots. A different tape number starts a
+ In Choose folder / Choose photos batches, a near-uniform white sheet or covered/black lens is a
+ divider from a local pixel check (no Flash call). Ambiguous frames — triage `is_lot_divider`, or
+ low-detail but not uniform, including a creased or shadowed sheet — get a Flash neighbour check
+ (`check_lot_divider`). Those checks run concurrently (`CATALOG_DIVIDER_CHECK_CONCURRENCY`, default
+ 6). There is no per-batch cap: a divider past the old 40-check limit, or sitting where a 40- or
+ 100-photo cut would fall, still splits the batch. Batches are not pre-split at 100 photos, so
+ divider neighbours are the real previous and next frames. The strict Pillow edge test is only the
+ fallback when the Flash call fails, and only together with the triage flag. The frame is left out of
+ every lot. Each candidate logs a `divider candidate` line. A white plate or a figurine on a backdrop is not uniform enough for the pixel check, so it still needs the neighbour call — the removed Gemini-only
+ `lot_boundary_blank_page` skipped those frames. Repeated/leading/trailing dividers make no empty lots. A different tape number starts a
  lot. A photo of the tape or the tape roll starts the next lot once the current lot has item
  shots, even when the handwritten number matches the previous lot. The tape check records
  that with ``dedicated_tape_photo``. A number the double-check rejects still splits when the

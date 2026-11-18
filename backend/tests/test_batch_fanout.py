@@ -20,7 +20,7 @@ from app.job_queue import claim_next_fair_job
 from app.main import app
 from app.models import JobStatus, ProcessingJob
 from app.services import processing
-from app.services.processing import SPLIT_TRIAGE_SIDECAR, cap_lot_segments
+from app.services.processing import SPLIT_TRIAGE_SIDECAR, batch_should_fan_out, cap_lot_segments
 
 
 def _session(tmp_path: Path):
@@ -143,6 +143,134 @@ def test_split_is_all_or_nothing(tmp_path: Path, monkeypatch) -> None:
         assert parent.status == JobStatus.processing
         assert db.query(ProcessingJob).filter(ProcessingJob.parent_job_id.isnot(None)).count() == 0
     assert sorted(p.name for p in folder.parent.iterdir()) == ["batch-1"]
+
+
+def test_upload_size_does_not_choose_sequential_cataloging(monkeypatch) -> None:
+    """Under 100 photos and over 100 photos take the same per-lot path."""
+    monkeypatch.setattr("app.config.settings.catalog_batch_fanout", True)
+    assert batch_should_fan_out(4, photo_count=24)
+    assert batch_should_fan_out(8, photo_count=90)
+    assert batch_should_fan_out(12, photo_count=150)
+    assert not batch_should_fan_out(1, photo_count=24)
+    assert not batch_should_fan_out(1, photo_count=150)
+    monkeypatch.setattr("app.config.settings.catalog_batch_fanout", False)
+    assert not batch_should_fan_out(4, photo_count=24)
+
+
+def _paint(path: Path, color: tuple[int, int, int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (80, 60), color).save(path, "JPEG", quality=85)
+
+
+def _run_divider_upload(
+    tmp_path: Path, monkeypatch, name: str, colors: list[tuple[int, int, int]]
+) -> list[list[int]]:
+    """Real pixel dividers, mocked triage. Returns each child lot's photo indexes."""
+    Session = _session(tmp_path)
+    rels = [f"web-{name}-{i:04d}.jpg" for i in range(len(colors))]
+    folder = tmp_path / "uploads" / "acct-1" / name
+    paths = []
+    for rel, color in zip(rels, colors):
+        path = folder / rel
+        _paint(path, color)
+        paths.append(path)
+    monkeypatch.setattr("app.services.lot_dividers.check_divider_in_context", lambda *_a: False)
+    monkeypatch.setattr(
+        processing,
+        "triage_ordered_photo_batch",
+        lambda photos, **_k: [
+            (p, p.name, {"filename": p.name, "is_lot_divider": False, "photo_role": "item_front"})
+            for p in photos
+        ],
+    )
+
+    def no_inline(*_a, **_k):
+        raise AssertionError("multi-lot uploads fan out; lots are not cataloged inside the batch job")
+
+    monkeypatch.setattr(processing, "run_single_lot_pipeline", no_inline)
+    with Session() as db:
+        parent = _parent(db, folder, id=f"parent-{name}")
+        processing._process_job_batch_pipeline(db, parent, paths, folder)
+        db.refresh(parent)
+        assert parent.status == JobStatus.completed
+        kids = db.query(ProcessingJob).filter(ProcessingJob.parent_job_id == parent.id).all()
+        lots: list[list[int]] = []
+        for kid in kids:
+            assert kid.single_lot_mode and kid.status == JobStatus.queued
+            indexes = sorted(
+                int(p.name.removesuffix(".jpg").rsplit("-", 1)[1])
+                for p in Path(kid.input_folder).glob("*.jpg")
+            )
+            lots.append(indexes)
+        return lots
+
+
+def test_small_upload_white_dividers_use_parallel_lot_jobs(tmp_path: Path, monkeypatch) -> None:
+    white = (248, 248, 246)
+    item = (40, 90, 160)
+    colors = [item] * 4 + [white] + [item] * 4 + [white] + [item] * 4
+    lots = _run_divider_upload(tmp_path, monkeypatch, "small", colors)
+    assert sorted(lots) == [[0, 1, 2, 3], [5, 6, 7, 8], [10, 11, 12, 13]]
+
+
+def test_150_photo_upload_splits_on_dividers_including_boundaries(tmp_path: Path, monkeypatch) -> None:
+    white = (248, 248, 246)
+    item = (40, 90, 160)
+    n = 150
+    dividers = {i for i in range(n) if i % 3 == 2}
+    dividers.update({40, 100})
+    assert len(dividers) > 40 and 100 in dividers
+    colors = [white if i in dividers else item for i in range(n)]
+    lots = _run_divider_upload(tmp_path, monkeypatch, "big", colors)
+    owned: list[int] = []
+    lot_of: dict[int, int] = {}
+    for lot_i, indexes in enumerate(lots):
+        assert indexes
+        assert not any(i in dividers for i in indexes)
+        assert max(indexes) - min(indexes) == len(indexes) - 1
+        for i in indexes:
+            lot_of[i] = lot_i
+        owned.extend(indexes)
+    assert 100 not in lot_of
+    # Index 100 is a divider (and 101 is too, on the every-third pattern). The item
+    # shots on either side of that boundary must not land in the same lot.
+    before = max(i for i in lot_of if i < 100)
+    after = min(i for i in lot_of if i > 100)
+    assert before == 99
+    assert lot_of[before] != lot_of[after]
+    assert sorted(owned) == [i for i in range(n) if i not in dividers]
+
+
+def test_small_upload_uses_parallel_lot_jobs(tmp_path: Path, monkeypatch) -> None:
+    """A batch under 100 photos with several lots queues one job per lot."""
+    Session = _session(tmp_path)
+    n = 24
+    folder, paths = _batch_folder(tmp_path, [f"web-small-{i:04d}.jpg" for i in range(n)])
+    monkeypatch.setattr(
+        processing,
+        "triage_ordered_photo_batch",
+        lambda photos, **_k: [(p, p.name, {"filename": p.name}) for p in photos],
+    )
+
+    def four_lots(_folder, ordered, **_k):
+        size = len(ordered) // 4
+        return [[(p, k) for p, k, _r in ordered[i * size : (i + 1) * size]] for i in range(4)]
+
+    monkeypatch.setattr(processing, "_segment_batch_lots_by_tape", four_lots)
+
+    def no_inline(*_a, **_k):
+        raise AssertionError("a small multi-lot upload must fan out, not catalog lots inline")
+
+    monkeypatch.setattr(processing, "run_single_lot_pipeline", no_inline)
+    with Session() as db:
+        parent = _parent(db, folder)
+        processing._process_job_batch_pipeline(db, parent, paths, folder)
+        db.refresh(parent)
+        assert parent.status == JobStatus.completed
+        kids = db.query(ProcessingJob).filter(ProcessingJob.parent_job_id == parent.id).all()
+        assert len(kids) == 4
+        assert all(k.single_lot_mode and k.status == JobStatus.queued for k in kids)
+        assert sorted(len(list(Path(k.input_folder).glob("*.jpg"))) for k in kids) == [6, 6, 6, 6]
 
 
 def test_batch_pipeline_fans_out_instead_of_cataloging_inline(tmp_path: Path, monkeypatch) -> None:

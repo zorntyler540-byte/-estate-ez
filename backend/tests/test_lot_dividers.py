@@ -10,7 +10,14 @@ from PIL import Image, ImageDraw
 
 from app.config import settings
 from app.services import lot_dividers
-from app.services.lot_dividers import find_lot_dividers, frame_edge_fractions, frame_looks_blank, is_lot_divider
+from app.services.lot_dividers import (
+    find_lot_dividers,
+    frame_blank_probe,
+    frame_edge_fractions,
+    frame_is_confident_blank,
+    frame_looks_blank,
+    is_lot_divider,
+)
 from app.services.processing import _segment_batch_lots_by_tape
 from pipeline.schemas import PhotoTriageResult
 
@@ -255,6 +262,163 @@ def test_triage_flag_on_a_real_photo_needs_the_neighbour_check(tmp_path: Path, m
 def test_context_unavailable_falls_back_to_triage_flag(tmp_path: Path) -> None:
     _folder, ordered = _batch(tmp_path, list("iibidi"))
     assert {p.name for p in find_lot_dividers(ordered)} == {"web-b1-0005.jpg"}
+
+
+def _flat_white(path: Path) -> Path:
+    Image.new("RGB", (80, 60), (248, 248, 246)).save(path, "JPEG", quality=85)
+    return path
+
+
+def _busy_thumb(path: Path, seed: int) -> Path:
+    rng = random.Random(seed)
+    im = Image.new("RGB", (64, 48), (90, 70, 50))
+    draw = ImageDraw.Draw(im)
+    for _ in range(8):
+        x, y = rng.randint(0, 48), rng.randint(0, 32)
+        draw.rectangle(
+            (x, y, x + 14, y + 12),
+            fill=tuple(rng.randint(0, 255) for _ in range(3)),
+            outline=(0, 0, 0),
+        )
+    im.save(path, "JPEG", quality=70)
+    return path
+
+
+def _divider_indexes(n: int = 150) -> set[int]:
+    """More than 40 separators, including the old 40-photo cap and a 100-photo boundary."""
+    indexes = {i for i in range(n) if i % 3 == 2}
+    indexes.update({40, 100})
+    return indexes
+
+
+def _expected_segments(n: int, dividers: set[int]) -> list[list[int]]:
+    segments: list[list[int]] = []
+    current: list[int] = []
+    for i in range(n):
+        if i in dividers:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(i)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def test_flat_white_is_a_divider_without_a_model_or_triage_flag(tmp_path: Path, monkeypatch) -> None:
+    path = _flat_white(tmp_path / "white.jpg")
+    assert frame_is_confident_blank(frame_blank_probe(path))
+    assert is_lot_divider(path, _row(path.name, divider=False))
+    called = {"n": 0}
+
+    def boom(*_a):
+        called["n"] += 1
+        return False
+
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", boom)
+    folder, ordered = _batch(tmp_path, list("iii"))
+    white = ordered[1][0]
+    _flat_white(white)
+    ordered[1] = (white, white.name, _row(white.name, divider=False))
+    assert find_lot_dividers(ordered) == {white}
+    assert called["n"] == 0
+    assert _names(_segment_batch_lots_by_tape(folder, ordered)) == [[1], [3]]
+
+
+def test_flat_white_dividers_split_150_photos_including_boundaries(tmp_path: Path, monkeypatch) -> None:
+    """150 frames, >40 white dividers, including indexes 40 and 100. No model, no dropped cut."""
+    n = 150
+    dividers = _divider_indexes(n)
+    assert len(dividers) > 40 and 40 in dividers and 100 in dividers
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    ordered = []
+    for i in range(n):
+        path = folder / f"web-batch-{i:04d}.jpg"
+        if i in dividers:
+            _flat_white(path)
+            row = _row(path.name, divider=False)
+        else:
+            _busy_thumb(path, i)
+            row = _row(path.name, divider=False)
+        ordered.append((path, path.name, row))
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", lambda *_a: False)
+    found = find_lot_dividers(ordered)
+    assert {p.name for p in found} == {ordered[i][0].name for i in dividers}
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [[int(p.stem.rsplit("-", 1)[1]) for p, _k in seg] for seg in segments] == _expected_segments(
+        n, dividers
+    )
+    # The 40-photo part cap must not glue the frames on either side of a divider back together.
+    from app.services.processing import cap_lot_segments
+
+    for entries, _part, _parts in cap_lot_segments(segments):
+        indexes = [int(p.stem.rsplit("-", 1)[1]) for p, _k in entries]
+        assert not any(i in dividers for i in indexes)
+        assert max(indexes) - min(indexes) == len(indexes) - 1
+
+
+def test_more_than_forty_ambiguous_dividers_are_all_checked(tmp_path: Path, monkeypatch) -> None:
+    """Ambiguous frames past the old cap of 40 still get a neighbour check, including index 100."""
+    n = 150
+    dividers = _divider_indexes(n)
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    ordered = []
+    for i in range(n):
+        path = folder / f"web-batch-{i:04d}.jpg"
+        _busy_thumb(path, i + 1)
+        ordered.append((path, path.name, _row(path.name, divider=i in dividers)))
+    assert not frame_is_confident_blank(frame_blank_probe(ordered[100][0]))
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    def fake(path, before, after):
+        seen.append((path.name, before.name if before else None, after.name if after else None))
+        return path.name in {ordered[i][0].name for i in dividers}
+
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", fake)
+    found = find_lot_dividers(ordered)
+    assert len(seen) > 40
+    assert {ordered[i][0].name for i in dividers} <= {name for name, _b, _a in seen}
+    boundary = ordered[100][0].name
+    assert (boundary, ordered[99][0].name, ordered[101][0].name) in seen
+    assert {p.name for p in found} == {ordered[i][0].name for i in dividers}
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [[int(p.stem.rsplit("-", 1)[1]) for p, _k in seg] for seg in segments] == _expected_segments(
+        n, dividers
+    )
+
+
+def test_ambiguous_divider_checks_run_concurrently(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    monkeypatch.setattr(settings, "catalog_divider_check_concurrency", 4)
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    ordered = []
+    for i in range(12):
+        path = folder / f"web-batch-{i:04d}.jpg"
+        _busy_thumb(path, i + 3)
+        ordered.append((path, path.name, _row(path.name, divider=True)))
+    inflight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def fake(_path, _before, _after):
+        nonlocal inflight, peak
+        with lock:
+            inflight += 1
+            peak = max(peak, inflight)
+        time.sleep(0.03)
+        with lock:
+            inflight -= 1
+        return False
+
+    monkeypatch.setattr(lot_dividers, "check_divider_in_context", fake)
+    assert find_lot_dividers(ordered) == set()
+    assert peak >= 2
 
 
 def test_triage_schema_has_divider_flag_defaulting_false() -> None:

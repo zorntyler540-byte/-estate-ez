@@ -112,11 +112,18 @@ class Settings(BaseSettings):
     # splits into), so phone / single-lot uploads never wait behind a 250-photo folder.
     catalog_bulk_max_concurrent: int = Field(default=2, ge=1, le=6, alias="CATALOG_BULK_MAX_CONCURRENT")
     # After triage, a multi-lot batch queues one single-lot job per tape-SKU lot instead of
-    # cataloging every lot inside the batch job.
+    # cataloging every lot inside the batch job. Not gated on photo count: a 20-photo upload
+    # and a 150-photo upload both fan out when they contain more than one lot.
     catalog_batch_fanout: bool = Field(default=True, alias="CATALOG_BATCH_FANOUT")
     # Batch uploads without SKU tape: a blank divider frame (blank page, empty wall, covered lens)
-    # ends the current lot. Needs both the triage flag and a near-featureless image.
+    # ends the current lot. Near-uniform frames split from pixels alone; ambiguous frames get a
+    # concurrent Flash neighbour check. There is no per-batch cap on those checks.
     catalog_divider_splits: bool = Field(default=True, alias="CATALOG_DIVIDER_SPLITS")
+    # In-flight Flash neighbour checks while a batch is split into lots. Gemini's global
+    # slot still caps HTTP. 1 restores one-at-a-time checks.
+    catalog_divider_check_concurrency: int = Field(
+        default=6, ge=1, le=16, alias="CATALOG_DIVIDER_CHECK_CONCURRENCY"
+    )
     # One worker process may run this many isolated catalog jobs at once (child-process pool).
     worker_max_concurrent_jobs: int = Field(default=3, ge=1, le=8, alias="WORKER_MAX_CONCURRENT_JOBS")
     # After this many isolated-child deaths (OOM / SIGKILL) the job is marked failed, not re-queued.
@@ -162,7 +169,8 @@ class Settings(BaseSettings):
         default=80, ge=40, le=95, alias="PIPELINE_WORKING_JPEG_QUALITY"
     )
     # How many full photos are decoded for triage at once (each decode is tens of MB).
-    pipeline_triage_parallel: int = Field(default=2, ge=1, le=8, alias="PIPELINE_TRIAGE_PARALLEL")
+    # 2 left every batch waiting on nearly serial Flash calls before per-lot fan-out.
+    pipeline_triage_parallel: int = Field(default=6, ge=1, le=8, alias="PIPELINE_TRIAGE_PARALLEL")
     # Dedicated worker: run each catalog job in a child process so RSS drops when it exits.
     worker_isolate_jobs: bool = Field(default=True, alias="WORKER_ISOLATE_JOBS")
     # Parallel CT Seller photo upload (download/resize/POST). Keep modest — unofficial API + 2 GB API RAM.

@@ -1391,7 +1391,7 @@ def _run_parallel_triage(
     """Stage 1 — parallel per-photo triage (order-independent)."""
     triage: list[dict[str, Any]] = []
     try:
-        parallel_cap = max(1, min(8, int(os.environ.get("PIPELINE_TRIAGE_PARALLEL", "2"))))
+        parallel_cap = max(1, min(8, int(os.environ.get("PIPELINE_TRIAGE_PARALLEL", "6"))))
     except ValueError:
         parallel_cap = 2
     max_workers = min(parallel_cap, max(1, len(user_images_dict)))
