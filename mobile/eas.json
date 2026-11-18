@@ -21,6 +21,20 @@
       "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_BASE": "https://caringtransitions-ai-production.up.railway.app"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
+    "android-apk": {
+      "distribution": "internal",
+      "channel": "production",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://caringtransitions-ai-production.up.railway.app"
+      },
+      "android": {
+        "buildType": "apk"
       }
     }
   },
@@ -28,6 +42,10 @@
     "production": {
       "ios": {
         "ascAppId": "6797701659"
+      },
+      "android": {
+        "track": "internal",
+        "releaseStatus": "completed"
       }
     }
   }

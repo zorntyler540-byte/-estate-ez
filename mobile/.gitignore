@@ -40,3 +40,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Play Console / Firebase keys (upload to EAS; never commit)
+google-services.json
+google-service-account.json

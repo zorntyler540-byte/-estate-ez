@@ -7,6 +7,16 @@
     "icon": "./assets/images/icon.png",
     "scheme": "caringtransitions",
     "userInterfaceStyle": "dark",
+    "androidStatusBar": {
+      "backgroundColor": "#070708",
+      "barStyle": "light-content",
+      "translucent": true
+    },
+    "androidNavigationBar": {
+      "backgroundColor": "#070708",
+      "barStyle": "light-content",
+      "enforceContrast": true
+    },
     "runtimeVersion": "1.1.0",
     "updates": {
       "url": "https://u.expo.dev/dfb4d2a5-1b94-449c-bc28-43466a46803d",
@@ -34,10 +44,23 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "com.google.android.gms.permission.AD_ID"
       ],
       "package": "com.caringtransitions.capture",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "bundler": "metro",
@@ -73,7 +96,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#070708"
         }
-      ]
+      ],
+      "./plugins/withAndroidCapture"
     ],
     "experiments": {
       "typedRoutes": true

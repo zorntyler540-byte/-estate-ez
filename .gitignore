@@ -60,6 +60,9 @@ backend/data/uploads/
 *.pem
 *.key
 *.p12
+mobile/google-services.json
+mobile/google-service-account.json
+**/google-service-account*.json
 
 # OS / IDE
 .DS_Store

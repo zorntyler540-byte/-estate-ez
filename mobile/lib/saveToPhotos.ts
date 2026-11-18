@@ -13,11 +13,18 @@ export type LibrarySaver = {
   ensureWritePermission?: () => Promise<boolean>;
 };
 
-export function librarySaveNote(result: LibrarySaveResult): string | null {
+export function librarySaveNote(result: LibrarySaveResult, platform: SavePlatform = "ios"): string | null {
+  const place = platform === "android" ? "Gallery" : null;
   if (result === "denied") {
+    if (place === "Gallery") {
+      return "This shot is in the Queue. To also keep a copy in Gallery, allow adding photos in Settings.";
+    }
     return "This shot is in the Queue. To also keep a copy in Photos, allow adding photos in Settings.";
   }
   if (result === "failed") {
+    if (place === "Gallery") {
+      return "This shot is in the Queue. A copy could not be saved to Gallery.";
+    }
     return "This shot is in the Queue. A copy could not be saved to the Photos app.";
   }
   return null;
@@ -98,10 +105,17 @@ async function defaultSaver(platform: SavePlatform): Promise<LibrarySaver | null
   if (!mod) return null;
   return {
     async ensureWritePermission() {
-      const current = await mod.getPermissionsAsync(true, ["photo", "video"]);
-      if (current.granted) return true;
-      const next = await mod.requestPermissionsAsync(true, ["photo", "video"]);
-      return Boolean(next.granted);
+      // Write-only. Read/photo permissions stay off the manifest so Play does not
+      // treat a gallery backup as broad photo access. API 29+ can insert with none.
+      try {
+        const current = await mod.getPermissionsAsync(true);
+        if (current.granted) return true;
+        const next = await mod.requestPermissionsAsync(true);
+        return Boolean(next.granted);
+      } catch (error) {
+        if (isLibraryPermissionError(error)) return false;
+        return true;
+      }
     },
     async save(uri: string) {
       await mod.saveToLibraryAsync(uri);

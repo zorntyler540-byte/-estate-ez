@@ -58,6 +58,9 @@ void (async () => {
   }, "ios");
   assert(broken === "failed", "other errors stay failed");
   assert(librarySaveNote(broken)?.includes("Photos app"), "failed note");
+  assert(librarySaveNote("failed", "android")?.includes("Gallery"), "android names Gallery");
+  assert(librarySaveNote("denied", "android")?.includes("Gallery"), "android denial names Gallery");
+  assert(librarySaveNote("denied", "ios")?.includes("Photos"), "ios denial names Photos");
 
   console.log("saveToPhotos.selftest ok");
 })().catch((e) => {

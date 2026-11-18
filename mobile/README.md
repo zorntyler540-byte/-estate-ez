@@ -50,6 +50,35 @@ eas submit --platform ios --latest
 
 Sign in with your **Apple Developer** Apple ID when prompted. After Apple processes the build (~10–15 min), open [App Store Connect](https://appstoreconnect.apple.com) → your app → **TestFlight**, add Internal Testers (or invite by email). Employees install the **TestFlight** app and accept the invite — no Developer Mode, no per-device rebuilds.
 
+## Android (Google Play)
+
+Same app as the iPhone build: package `com.caringtransitions.capture`, version `1.1.0`, production update channel. Sign-in, sales, camera, video, queue, and sync are the shared screens. Expo SDK 54 targets Android 16 (API 36), which is what Play requires for new apps and updates.
+
+Import uses the Android photo picker (no photo-library permission). A backup copy of each shot is saved to Gallery. Video asks for the microphone; if it is denied, the clip still records without sound.
+
+### Sideload APK (before the Play listing is approved)
+
+```powershell
+cd mobile
+eas build --platform android --profile android-apk
+```
+
+Open the finished build’s install link on the Android phone. The first install needs “Install unknown apps” for the browser. This APK listens to the **production** channel, so later JS updates match the iPhones.
+
+### Play internal testing
+
+1. [Play Console](https://play.google.com/console) → **Create app** → name **Estate-EZ Capture**. The package is `com.caringtransitions.capture` (set in `app.json`, not typed again at upload).
+2. Create a Google Cloud service account with Play Console access, download its JSON key once, and upload that key under the Expo project’s **Credentials → Android → Google Service Account**. Do not commit the JSON.
+3. Play also needs a privacy-policy URL, screenshots, the data-safety form (camera, microphone, photos, account email), and a content rating before any track can go out. Camera and microphone are used to catalog the signed-in sale. Photos are not read from the library; the picker hands over only the pictures the person chooses.
+
+```powershell
+cd mobile
+eas build --platform android --profile production
+eas submit --platform android --profile production --latest
+```
+
+`production` builds an Android App Bundle (`.aab`). Submit puts it on the **internal** testing track. Add testers in Play Console, then promote that release to production in the console when the listing is done.
+
 ## Push a JS-only fix (EAS Update) — no new TestFlight build
 
 Use this when the change is only JavaScript/TypeScript (Queue screen, sync logic, copy). The phones already have the native app from TestFlight; this just swaps the JS bundle.
@@ -80,7 +109,7 @@ eas update --channel production --message "Queue: review all photos in taken ord
 1. `eas login` — browser or email/password for Expo (`vtz1900` / owner in `app.json`).
 2. `eas update --channel production` — TestFlight builds listen to the **`production`** channel (see `eas.json`). `EXPO_PUBLIC_API_BASE` is **required**: without it (or with a localhost / non-https value from `.env`) `eas update` stops with an error before publishing anything.
 3. Wait until the command prints a URL on expo.dev. That means phones can download it.
-4. On each iPhone: **fully quit** Estate-EZ Capture (swipe up from the app switcher) and open it again. Updates check on launch (`ON_LOAD` in `app.json`).
+4. On each phone: **fully quit** Estate-EZ Capture (swipe it away from the recent-apps list) and open it again. Updates check on launch (`ON_LOAD` in `app.json`). Android installs from the Play internal track or the `android-apk` profile use this same **production** channel.
 
 If a phone was installed from an **ad hoc / preview** build instead of TestFlight, use `--channel preview` with the same explicit `EXPO_PUBLIC_API_BASE`.
 
