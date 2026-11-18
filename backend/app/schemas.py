@@ -1104,12 +1104,23 @@ class RotateLotPhotosOut(BaseModel):
 class PlainBackgroundIn(BaseModel):
     """Place the piece on a flat color.
 
-    ``hero_only`` uses AI on any lot and changes the listing hero alone.
-    Without it, the call stays a local cutout limited to Janet JL furniture lots.
+    ``hero_only`` uses AI on any lot. With no ``photo_id`` it changes the listing
+    hero alone (current website and mobile callers). ``photo_id`` picks one catalog
+    photo on that lot instead. Without ``hero_only``, the call stays a local cutout
+    limited to Janet JL furniture lots, and ``photo_id`` is ignored.
     """
 
     color: Literal["studio", "white", "gray"] = "studio"
     hero_only: bool = False
+    photo_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="With hero_only, AI-edit this catalog photo. It must belong to the lot. Omitted keeps the listing hero. Ignored when hero_only is false.",
+    )
+    make_cover: bool = Field(
+        default=False,
+        description="After a successful hero_only edit, move that photo to the front and mark it the listing hero when the frame can be a cover.",
+    )
     photo_ids: list[str] | None = Field(
         default=None,
         max_length=PLAIN_BG_MAX_PHOTOS,

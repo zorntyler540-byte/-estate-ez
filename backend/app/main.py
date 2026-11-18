@@ -5427,15 +5427,17 @@ def plain_background_lot_photos(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PlainBackgroundOut:
-    """Janet lots: cut photos onto a flat color. hero_only: AI edits the listing cover. Originals can be restored."""
+    """Janet lots: cut photos onto a flat color. hero_only: AI edits one photo. Originals can be restored."""
     import subprocess
 
     from app.services.plain_background import (
         PLAIN_BG_CHUNK,
+        _cover_sort_key,
         discard_plain_bg_original,
         ensure_plain_bg_original,
         listing_hero_photo,
         lot_is_janet_furniture,
+        promote_photo_to_lot_cover,
         render_plain_backgrounds,
     )
 
@@ -5453,11 +5455,20 @@ def plain_background_lot_photos(
     if not existing:
         raise HTTPException(status_code=400, detail="This lot has no catalog photos.")
     if hero_only:
-        hero = listing_hero_photo(existing)
-        if hero is None:
-            raise HTTPException(status_code=400, detail="This lot has no hero photo to place on a color.")
-        targets = [hero]
-        notes = ["AI replaced only the listing hero background. Other photos stay as shot."]
+        chosen_id = (body.photo_id or "").strip()
+        if chosen_id:
+            by_id = {p.id: p for p in existing}
+            chosen = by_id.get(chosen_id)
+            if chosen is None:
+                raise HTTPException(status_code=400, detail="Photo id not on this lot")
+            targets = [chosen]
+            notes = ["AI replaced the background on the selected photo. Other photos stay as shot."]
+        else:
+            hero = listing_hero_photo(existing)
+            if hero is None:
+                raise HTTPException(status_code=400, detail="This lot has no hero photo to place on a color.")
+            targets = [hero]
+            notes = ["AI replaced only the listing hero background. Other photos stay as shot."]
     else:
         want = list(dict.fromkeys(body.photo_ids or []))
         targets, notes = _plain_bg_targets(existing, want or None)
@@ -5542,6 +5553,11 @@ def plain_background_lot_photos(
             status_code=503,
             detail=errors[-1] if errors else "Background cutout failed",
         )
+    if hero_only and body.make_cover and updated == 1 and targets:
+        cover_note = promote_photo_to_lot_cover(existing, targets[0])
+        notes.append(cover_note or "That photo is now the lot cover.")
+        db.commit()
+        existing.sort(key=_cover_sort_key)
     for row in existing:
         db.refresh(row)
     return PlainBackgroundOut(
