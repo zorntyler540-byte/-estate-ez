@@ -137,7 +137,11 @@ from app.schemas import (
     SalePostToCTSellerOut,
     SalePostToCTSellerStatusOut,
     FillSkusIn,
+    ListingDefaultsIn,
+    ListingDefaultsOut,
     SaleReservePriceIn,
+    SaleStandardDescriptionIn,
+    SaleStandardDescriptionOut,
     SaleReservePriceLotResult,
     SaleReservePriceOut,
     SaleUpdate,
@@ -215,6 +219,12 @@ from app.services.ctseller_posted import (
     posted_auction_counts,
     posted_outcome_counts,
     refresh_lot_ctseller_sale_ids,
+)
+from app.services.standard_description import (
+    apply_standard_description_to_unposted,
+    normalize_standard_description,
+    resolve_standard_description,
+    suffixes_by_sale,
 )
 from app.services import job_events
 from app.services.lot_moves import move_lots_to_sale
@@ -358,7 +368,7 @@ async def _db_pool_timeout_handler(_request: Request, _exc: SATimeoutError) -> J
     )
 
 
-def _sale_out(row: Sale) -> SaleOut:
+def _sale_out(row: Sale, account: Account | None = None) -> SaleOut:
     return SaleOut(
         id=row.id,
         account_id=row.account_id,
@@ -367,6 +377,8 @@ def _sale_out(row: Sale) -> SaleOut:
         closed_at=row.closed_at,
         ctseller_sale_id=getattr(row, "ctseller_sale_id", None),
         ctseller_reserve_price=getattr(row, "ctseller_reserve_price", None),
+        standard_description=getattr(row, "standard_description", None),
+        posting_description_suffix=resolve_standard_description(row, account),
         created_at=row.created_at,
     )
 
@@ -632,7 +644,13 @@ def _lot_out_for_id(db: Session, account_id: str, lot_id: str) -> LotOut:
     has = lot_id in lot_ids_with_linked_photos(db, account_id, [lot_id])
     peer = sale_lot_photo_counts(db, row.sale_id, account_id)
     many = photo_count_is_sale_outlier(row.photo_count, peer)
-    out = lot_to_schema(row, has_thumbnail=has, many_photos_review=many)
+    suffix = suffixes_by_sale(db, account_id, {row.sale_id}).get(row.sale_id, "")
+    out = lot_to_schema(
+        row,
+        has_thumbnail=has,
+        many_photos_review=many,
+        posting_description_suffix=suffix,
+    )
     video_n = (
         db.query(func.count())
         .select_from(LotVideo)
@@ -988,6 +1006,9 @@ def me(current: User = Depends(get_current_user), db: Session = Depends(get_db))
         plan_code=plan_code,
         feature_analytics=feature_analytics,
         feature_facebook=feature_facebook,
+        standard_description=normalize_standard_description(
+            getattr(account, "standard_description", None)
+        ),
     )
 
 
@@ -2052,9 +2073,10 @@ def _inventory_counts_by_sale(db: Session, account_id: str) -> dict[str, tuple[i
 
 def _sales_out(db: Session, rows: list[Sale], account_id: str) -> list[SaleOut]:
     counts = _inventory_counts_by_sale(db, account_id)
+    account = db.query(Account).filter(Account.id == account_id).first()
     listed: list[SaleOut] = []
     for row in rows:
-        item = _sale_out(row)
+        item = _sale_out(row, account)
         lot_n, job_n, active_n = counts.get(row.id, (0, 0, 0))
         item.lot_count = lot_n
         item.job_count = job_n
@@ -2417,7 +2439,8 @@ def create_sale(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _sale_out(row)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    return _sale_out(row, account)
 
 
 @app.patch("/sales/{sale_id}", response_model=SaleOut)
@@ -2443,7 +2466,8 @@ def update_sale(
         row.ctseller_reserve_price = float(payload.ctseller_reserve_price)
     db.commit()
     db.refresh(row)
-    return _sale_out(row)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    return _sale_out(row, account)
 
 
 _SALE_COVER_SLOT_LABELS = (
@@ -2840,6 +2864,107 @@ def fill_lot_skus(
     }
 
 
+def _http_detail(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, str):
+        return detail
+    return "CT Seller request failed"
+
+
+def _push_lot_reserve_to_ctseller(
+    db: Session,
+    account: Account,
+    *,
+    item_id: int,
+    reserve_price: float | None,
+) -> None:
+    """Write ``reserveprice`` on an existing CT Seller item. Raises CTSellerError or HTTPException."""
+    client = _ctseller_client_for_account(account, db, probe=False)
+    try:
+        client.update_item_reserve(item_id=int(item_id), reserve_price=reserve_price)
+    except CTSellerError as exc:
+        if exc.status_code not in (401, 403):
+            raise
+        client = _ctseller_client_for_account(account, db, force=True, probe=False)
+        client.update_item_reserve(item_id=int(item_id), reserve_price=reserve_price)
+
+
+def _normalize_reserve_price(raw: float | None) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+@app.patch("/account/listing-defaults", response_model=ListingDefaultsOut)
+def update_account_listing_defaults(
+    payload: ListingDefaultsIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ListingDefaultsOut:
+    """Owner-set note appended to every CT Seller description, unless a sale overrides it."""
+    _require_owner(current)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    previous = normalize_standard_description(getattr(account, "standard_description", None))
+    new_text = normalize_standard_description(payload.standard_description)
+    account.standard_description = new_text or None
+    db.add(account)
+    lots_updated = 0
+    if payload.apply_to_unposted:
+        lots_updated = apply_standard_description_to_unposted(
+            db,
+            account_id=current.account_id,
+            new_text=new_text,
+            previous_text=previous,
+            inherit_only=True,
+        )
+    db.commit()
+    return ListingDefaultsOut(standard_description=new_text, lots_updated=lots_updated)
+
+
+@app.post("/sales/{sale_id}/standard-description", response_model=SaleStandardDescriptionOut)
+def set_sale_standard_description(
+    sale_id: str,
+    payload: SaleStandardDescriptionIn,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleStandardDescriptionOut:
+    """Optional per-sale note. Null override inherits the account default."""
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+    sale = _sale_for_user(sale_id, current, db)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    previous = resolve_standard_description(sale, account)
+    if payload.inherit_account:
+        sale.standard_description = None
+    else:
+        sale.standard_description = normalize_standard_description(payload.standard_description)
+    db.add(sale)
+    new_text = resolve_standard_description(sale, account)
+    lots_updated = 0
+    if payload.apply_to_unposted:
+        lots_updated = apply_standard_description_to_unposted(
+            db,
+            account_id=current.account_id,
+            new_text=new_text,
+            previous_text=previous,
+            sale_id=sale.id,
+        )
+    db.commit()
+    db.refresh(sale)
+    return SaleStandardDescriptionOut(
+        sale_id=sale.id,
+        standard_description=sale.standard_description,
+        posting_description_suffix=new_text,
+        lots_updated=lots_updated,
+    )
+
+
 @app.post("/sales/{sale_id}/reserve-price", response_model=SaleReservePriceOut)
 def set_sale_reserve_price(
     sale_id: str,
@@ -2887,17 +3012,35 @@ def set_sale_reserve_price(
     posted_skipped = 0
     if payload.push_posted:
         posted_lots = [lot for lot in lots if lot.ctseller_item_id]
+        posted_skipped = len(lots) - len(posted_lots)
         if posted_lots:
             account = db.query(Account).filter(Account.id == current.account_id).first()
             if not account:
                 raise HTTPException(status_code=404, detail="Account not found")
+            connect_error = ""
             try:
-                client = _ctseller_client_for_account(account, db, probe=False)
+                _ctseller_client_for_account(account, db, probe=False)
             except CTSellerError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                connect_error = str(exc)
+            except HTTPException as exc:
+                connect_error = _http_detail(exc)
             for lot in posted_lots:
+                if connect_error:
+                    posted_failed += 1
+                    results.append(
+                        SaleReservePriceLotResult(
+                            lot_id=lot.id,
+                            sku=lot.sku,
+                            ok=False,
+                            error=connect_error,
+                            ctseller_item_id=int(lot.ctseller_item_id) if lot.ctseller_item_id else None,
+                        )
+                    )
+                    continue
                 try:
-                    client.update_item_reserve(
+                    _push_lot_reserve_to_ctseller(
+                        db,
+                        account,
                         item_id=int(lot.ctseller_item_id),
                         reserve_price=resolve_lot_reserve_price(lot, sale),
                     )
@@ -2911,25 +3054,6 @@ def set_sale_reserve_price(
                         )
                     )
                 except CTSellerError as exc:
-                    if exc.status_code in (401, 403):
-                        try:
-                            client = _ctseller_client_for_account(account, db, force=True)
-                            client.update_item_reserve(
-                                item_id=int(lot.ctseller_item_id),
-                                reserve_price=resolve_lot_reserve_price(lot, sale),
-                            )
-                            posted_updated += 1
-                            results.append(
-                                SaleReservePriceLotResult(
-                                    lot_id=lot.id,
-                                    sku=lot.sku,
-                                    ok=True,
-                                    ctseller_item_id=int(lot.ctseller_item_id),
-                                )
-                            )
-                            continue
-                        except CTSellerError as retry_exc:
-                            exc = retry_exc
                     posted_failed += 1
                     results.append(
                         SaleReservePriceLotResult(
@@ -2940,7 +3064,6 @@ def set_sale_reserve_price(
                             ctseller_item_id=int(lot.ctseller_item_id) if lot.ctseller_item_id else None,
                         )
                     )
-        posted_skipped = len(lots) - len(posted_lots)
 
     return SaleReservePriceOut(
         sale_id=sale.id,
@@ -3979,12 +4102,14 @@ def list_lots(
     lot_ids = [r.id for r in rows]
     thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     counts = [r.photo_count for r in rows]
+    suffixes = suffixes_by_sale(db, current.account_id, {r.sale_id for r in rows})
     return [
         _lot_out_with_runtime(
             lot_to_schema(
                 r,
                 has_thumbnail=r.id in thumb_ids,
                 many_photos_review=photo_count_is_sale_outlier(r.photo_count, counts),
+                posting_description_suffix=suffixes.get(r.sale_id, ""),
             ),
             r,
         )
@@ -5602,13 +5727,11 @@ def update_lot(
         )
     if patch.starting_price is not None:
         row.starting_price = patch.starting_price
+    reserve_changed = False
     if "reserve_price" in patch.model_fields_set:
-        raw = patch.reserve_price
-        if raw is None:
-            row.reserve_price = None
-        else:
-            value = float(raw)
-            row.reserve_price = value if value > 0 else None
+        new_reserve = _normalize_reserve_price(patch.reserve_price)
+        reserve_changed = _normalize_reserve_price(row.reserve_price) != new_reserve
+        row.reserve_price = new_reserve
     if patch.condition_text is not None:
         from app.services.ctseller_conditions import canonicalize_ct_condition
 
@@ -5628,7 +5751,28 @@ def update_lot(
     recompute_sku_sanity_flags_for_sale(db, row.sale_id, current.account_id)
     db.commit()
     db.refresh(row)
-    return _lot_out_for_id(db, current.account_id, lot_id)
+    reserve_warning: str | None = None
+    if reserve_changed and row.ctseller_item_id:
+        account = db.query(Account).filter(Account.id == current.account_id).first()
+        sale = db.query(Sale).filter(Sale.id == row.sale_id, Sale.account_id == current.account_id).first()
+        if account is None:
+            reserve_warning = "Reserve saved here. Account was not found, so CT Seller was not updated."
+        else:
+            try:
+                _push_lot_reserve_to_ctseller(
+                    db,
+                    account,
+                    item_id=int(row.ctseller_item_id),
+                    reserve_price=resolve_lot_reserve_price(row, sale),
+                )
+            except CTSellerError as exc:
+                reserve_warning = f"Reserve saved here. CT Seller was not updated: {exc}"
+            except HTTPException as exc:
+                reserve_warning = f"Reserve saved here. CT Seller was not updated: {_http_detail(exc)}"
+    out = _lot_out_for_id(db, current.account_id, lot_id)
+    if reserve_warning:
+        out = out.model_copy(update={"ctseller_reserve_warning": reserve_warning})
+    return out
 
 
 @app.post("/lots/{lot_id}/search-tags/suggest", response_model=LotSearchTagsOut)
@@ -6842,8 +6986,14 @@ def export_json(
     lot_ids = [r.id for r in rows]
     thumb_ids = lot_ids_with_linked_photos(db, current.account_id, lot_ids)
     many_map = photo_count_outlier_by_lot_id(rows)
+    suffixes = suffixes_by_sale(db, current.account_id, {r.sale_id for r in rows})
     return [
-        lot_to_schema(r, has_thumbnail=r.id in thumb_ids, many_photos_review=many_map.get(r.id, False))
+        lot_to_schema(
+            r,
+            has_thumbnail=r.id in thumb_ids,
+            many_photos_review=many_map.get(r.id, False),
+            posting_description_suffix=suffixes.get(r.sale_id, ""),
+        )
         for r in rows
     ]
 

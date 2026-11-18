@@ -46,8 +46,8 @@ def test_fresh_database_upgrade_matches_models(tmp_path):
     assert schema_check.schema_problems(engine) == []
 
 
-def test_head_revision_is_0056():
-    assert schema_check.alembic_head_revisions() == {"0056_photo_ctseller_sent_token"}
+def test_head_revision_is_0057():
+    assert schema_check.alembic_head_revisions() == {"0057_standard_description"}
 
 
 def test_0050_adds_objects_only_startup_used_to_create(tmp_path):

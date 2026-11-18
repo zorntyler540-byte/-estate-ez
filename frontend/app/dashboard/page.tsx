@@ -29,6 +29,8 @@ import { PhotoAddsPanel, photoAddsFromResponse, type PhotoAddLot } from "../../c
 import { ClientSaleAccess } from "../../components/ClientSaleAccess";
 import { SaleCoverPhotos } from "../../components/SaleCoverPhotos";
 import { SaleReservePrice } from "../../components/SaleReservePrice";
+import { SaleStandardDescription } from "../../components/SaleStandardDescription";
+import { appendStandardDescription } from "../../lib/standardDescription";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
@@ -1073,6 +1075,8 @@ type Sale = {
   created_at: string;
   ctseller_sale_id?: number | null;
   ctseller_reserve_price?: number | null;
+  standard_description?: string | null;
+  posting_description_suffix?: string;
 };
 
 type AdminAccount = {
@@ -1230,6 +1234,7 @@ type Lot = {
   completed_at: string | null;
   starting_price: number | null;
   reserve_price?: number | null;
+  posting_description_suffix?: string;
   condition_text: string;
   photo_count: number;
   has_thumbnail: boolean;
@@ -1318,6 +1323,10 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
       typeof (row as { reserve_price?: unknown }).reserve_price === "number"
         ? (row as { reserve_price: number }).reserve_price
         : null,
+    posting_description_suffix:
+      typeof (row as { posting_description_suffix?: unknown }).posting_description_suffix === "string"
+        ? (row as { posting_description_suffix: string }).posting_description_suffix
+        : "",
     photo_count: typeof row.photo_count === "number" ? row.photo_count : Number(row.photo_count) || 0,
     has_thumbnail: Boolean(row.has_thumbnail),
     created_at: row.created_at ?? "",
@@ -1337,8 +1346,8 @@ function normalizeStreamedLot(row: LiveLotRowPayload): Lot {
   };
 }
 
-function lotDescriptionPreview(text: string, maxLen = 140): string {
-  const collapsed = (text || "").replace(/\s+/g, " ").trim();
+function lotDescriptionPreview(text: string, maxLen = 140, suffix?: string | null): string {
+  const collapsed = appendStandardDescription(text, suffix).replace(/\s+/g, " ").trim();
   if (!collapsed) return "";
   if (collapsed.length <= maxLen) return collapsed;
   return `${collapsed.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
@@ -2302,6 +2311,7 @@ export default function DashboardPage() {
   const inventoryLoadId = useRef(0);
   const [token, setToken] = useState<string>(readStoredToken);
   const [accountRole, setAccountRole] = useState("");
+  const [accountStandardDescription, setAccountStandardDescription] = useState("");
   const isAccountOwner = isOwnerRole(accountRole);
   const [sales, setSales] = useState<Sale[]>([]);
   const [selectedSaleId, setSelectedSaleId] = useState<string>(readStoredSaleId);
@@ -3238,7 +3248,12 @@ export default function DashboardPage() {
           router.replace("/client");
           return;
         }
-        if (!cancelled) setAccountRole(role);
+        if (!cancelled) {
+          setAccountRole(role);
+          setAccountStandardDescription(
+            String((data as { standard_description?: string }).standard_description || "")
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setAccountRole("");
@@ -8843,6 +8858,7 @@ export default function DashboardPage() {
           />
         ) : null}
         {selectedSaleId && token ? (
+          <>
           <SaleReservePrice
             saleId={selectedSaleId}
             token={token}
@@ -8856,7 +8872,16 @@ export default function DashboardPage() {
               sku: lot.sku,
               auction_title: lot.auction_title,
               reserve_price: lot.reserve_price,
-              ctseller_item_id: lot.ctseller_item_id
+              ctseller_item_id: lot.ctseller_item_id,
+              ctseller_sale_id: lot.ctseller_sale_id
+            }))}
+            catalogLots={lots.map((lot) => ({
+              id: lot.id,
+              sku: lot.sku,
+              auction_title: lot.auction_title,
+              reserve_price: lot.reserve_price,
+              ctseller_item_id: lot.ctseller_item_id,
+              ctseller_sale_id: lot.ctseller_sale_id
             }))}
             auctions={reserveAuctionOptions}
             ctsellerSaleId={pickedCtBidsSaleId > 0 ? pickedCtBidsSaleId : null}
@@ -8870,7 +8895,14 @@ export default function DashboardPage() {
             pullBusy={ctSellerPostedRefreshBusy}
             listBusy={auctionReserveBusy}
             onPullFromCtSeller={() => refreshPostedCtBidsSales()}
-            onApplied={({ lotUpdates }) => {
+            onApplied={({ saleDefault, lotUpdates }) => {
+              if (saleDefault !== undefined && selectedSaleId) {
+                setSales((prev) =>
+                  prev.map((sale) =>
+                    sale.id === selectedSaleId ? { ...sale, ctseller_reserve_price: saleDefault } : sale
+                  )
+                );
+              }
               if (lotUpdates.length) {
                 const byId = new Map(lotUpdates.map((row) => [row.id, row.reserve_price]));
                 setLots((prev) =>
@@ -8882,6 +8914,34 @@ export default function DashboardPage() {
               }
             }}
           />
+          <SaleStandardDescription
+            saleId={selectedSaleId}
+            token={token}
+            accountDefault={accountStandardDescription}
+            saleOverride={
+              selectedSale && "standard_description" in selectedSale
+                ? (selectedSale.standard_description ?? null)
+                : null
+            }
+            unpostedCount={lots.filter((lot) => !lot.ctseller_item_id && !lot.ctseller_posted_at).length}
+            disabled={ctSellerBulkBusy || busyProcessing}
+            onSaved={({ standard_description, posting_description_suffix, lotsUpdated }) => {
+              setSales((prev) =>
+                prev.map((sale) =>
+                  sale.id === selectedSaleId
+                    ? { ...sale, standard_description, posting_description_suffix }
+                    : sale
+                )
+              );
+              setLots((prev) =>
+                prev.map((lot) =>
+                  lot.sale_id === selectedSaleId ? { ...lot, posting_description_suffix } : lot
+                )
+              );
+              if (lotsUpdated > 0) setDataReloadNonce((n) => n + 1);
+            }}
+          />
+          </>
         ) : null}
       </header>
       <PhotoAddsPanel
@@ -8964,8 +9024,10 @@ export default function DashboardPage() {
                   {lot.sku || "—"}
                 </Badge>
                 <div className="ct-lot-mobile-card__title">{lot.auction_title || "—"}</div>
-                {lot.professional_description.trim() ? (
-                  <p className="ct-lot-mobile-card__desc">{lotDescriptionPreview(lot.professional_description, 150)}</p>
+                {lotDescriptionPreview(lot.professional_description, 150, lot.posting_description_suffix) ? (
+                  <p className="ct-lot-mobile-card__desc">
+                    {lotDescriptionPreview(lot.professional_description, 150, lot.posting_description_suffix)}
+                  </p>
                 ) : null}
                 <div className="ct-lot-mobile-card__meta">
                   <span className="ct-lot-mobile-card__meta-item">
@@ -9184,8 +9246,10 @@ export default function DashboardPage() {
                 title={(lot.auction_title || "").trim() || lot.professional_description || undefined}
               >
                 <div className="ct-lots-table__title-text">{lot.auction_title || "—"}</div>
-                {lot.professional_description.trim() ? (
-                  <div className="ct-lots-table__desc">{lotDescriptionPreview(lot.professional_description)}</div>
+                {lotDescriptionPreview(lot.professional_description, 140, lot.posting_description_suffix) ? (
+                  <div className="ct-lots-table__desc">
+                    {lotDescriptionPreview(lot.professional_description, 140, lot.posting_description_suffix)}
+                  </div>
                 ) : null}
               </td>
               <td className="ct-lots-table__price">

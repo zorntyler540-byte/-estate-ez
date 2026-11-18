@@ -40,6 +40,8 @@ class Sale(Base):
     ctseller_cover_photo_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Hidden CT Seller reserve applied to lots in this sale when posting (and as the apply-all default).
     ctseller_reserve_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # NULL inherits the account standard description. A string, including "", overrides it.
+    standard_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -74,6 +76,8 @@ class Account(Base):
     )
     # IANA zone for Push-calendar slot times, caption close times, and click days. NULL = Pacific.
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Verbatim note appended to CT Seller descriptions. Empty/NULL adds nothing.
+    standard_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["User"]] = relationship(back_populates="account")

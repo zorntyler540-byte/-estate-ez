@@ -51,6 +51,7 @@ class UserSummary(BaseModel):
     plan_code: str = "beta_free"
     feature_analytics: bool = True
     feature_facebook: bool = True
+    standard_description: str = ""
 
 
 class TeamMemberCreate(BaseModel):
@@ -342,6 +343,9 @@ class SaleOut(BaseModel):
     closed_at: datetime | None = None
     ctseller_sale_id: int | None = None
     ctseller_reserve_price: float | None = None
+    # NULL inherits the account note. A string, including "", is this sale's override.
+    standard_description: str | None = None
+    posting_description_suffix: str = ""
     created_at: datetime
     lot_count: int = 0
     job_count: int = 0
@@ -438,6 +442,10 @@ class LotOut(BaseModel):
     audience_hunt_phase: str | None = None
     audience: dict | None = None
     engagement: "EngagementOut | None" = None
+    # Account/sale note that CT Seller posts append. Empty when there is none.
+    posting_description_suffix: str = ""
+    # Set on PATCH when the lot is already on CT Seller and the reserve push failed.
+    ctseller_reserve_warning: str | None = None
 
 
 class LotUpdate(BaseModel):
@@ -732,6 +740,31 @@ class FillSkusIn(BaseModel):
     """First number for lots in this sale that have no SKU yet. Example: 1001 or DK1001."""
 
     start: str = Field(min_length=1, max_length=40)
+
+
+class ListingDefaultsIn(BaseModel):
+    standard_description: str = Field(default="", max_length=4000)
+    apply_to_unposted: bool = False
+
+
+class ListingDefaultsOut(BaseModel):
+    standard_description: str
+    lots_updated: int = 0
+
+
+class SaleStandardDescriptionIn(BaseModel):
+    """``inherit_account`` clears the sale override. Otherwise the string is the override."""
+
+    standard_description: str | None = Field(default=None, max_length=4000)
+    inherit_account: bool = False
+    apply_to_unposted: bool = False
+
+
+class SaleStandardDescriptionOut(BaseModel):
+    sale_id: str
+    standard_description: str | None = None
+    posting_description_suffix: str = ""
+    lots_updated: int = 0
 
 
 class SaleReservePriceIn(BaseModel):

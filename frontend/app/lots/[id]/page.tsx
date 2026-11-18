@@ -21,6 +21,7 @@ import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
 import { photosForEditorGrid } from "../../../lib/lotMediaGallery";
 import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
+import { appendStandardDescription, suffixAlreadyPresent } from "../../../lib/standardDescription";
 
 function ctSellerMediaCounts(photos?: number | null, videos?: number | null): string {
   const parts: string[] = [];
@@ -157,6 +158,8 @@ type Lot = {
   search_tags: string[];
   starting_price: number | null;
   reserve_price?: number | null;
+  posting_description_suffix?: string;
+  ctseller_reserve_warning?: string | null;
   condition_text: string;
   is_completed: boolean;
   photo_count: number;
@@ -1149,9 +1152,14 @@ export default function LotDetailPage() {
           is_completed: lot.is_completed
         })
       });
-      setLot(updated);
+      const saved = updated as Lot;
+      setLot(saved);
       setListingDirty(false);
-      toast.success("Listing saved.");
+      if (saved.ctseller_reserve_warning) {
+        toast.error(saved.ctseller_reserve_warning);
+      } else {
+        toast.success("Listing saved.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -3044,6 +3052,19 @@ export default function LotDetailPage() {
                   value={lot.professional_description}
                   onChange={(e) => updateListingFields({ professional_description: e.target.value })}
                 />
+                {lot.posting_description_suffix?.trim() ? (
+                  <div className="ct-listing-post-preview">
+                    <p className="ct-listing-post-preview__label">Posted to CT Seller</p>
+                    <p className="ct-listing-post-preview__body">
+                      {appendStandardDescription(lot.professional_description, lot.posting_description_suffix)}
+                    </p>
+                    <p className="ct-listing-post-preview__note">
+                      {suffixAlreadyPresent(lot.professional_description, lot.posting_description_suffix)
+                        ? "The standard note is already in this description, so it is not added twice."
+                        : `Standard note added on post: ${lot.posting_description_suffix.trim()}`}
+                    </p>
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -3098,8 +3119,8 @@ export default function LotDetailPage() {
                     />
                   </div>
                   <p className="ct-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.82rem", lineHeight: 1.4 }}>
-                    Loaded from CT Seller when you Check CT Bids sales / Load from CT Seller. Saving
-                    here also writes the lot, and bulk apply can push to CT Seller.
+                    Saved with the listing and sent when you post. If this lot is already on CT Seller,
+                    saving pushes the new reserve there too.
                   </p>
                 </div>
                 <div>
