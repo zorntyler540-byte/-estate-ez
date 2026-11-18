@@ -29,6 +29,24 @@ def test_sku_prefix_and_janet_furniture_gate() -> None:
     assert not lot_is_janet_furniture("MS12", "Furniture", "Oak dresser")
 
 
+def test_promote_photo_to_lot_cover_moves_the_frame_and_demotes_the_old_hero() -> None:
+    from app.services.plain_background import promote_photo_to_lot_cover
+
+    tape = SimpleNamespace(id="tape", sort_order=0, photo_role="tape", shows_measuring_scale=False)
+    detail = SimpleNamespace(id="detail", sort_order=1, photo_role="angle_only", shows_measuring_scale=False)
+    hero = SimpleNamespace(id="hero", sort_order=2, photo_role="hero", shows_measuring_scale=False)
+    measure = SimpleNamespace(id="measure", sort_order=3, photo_role="item_front", shows_measuring_scale=True)
+    photos = [tape, detail, hero, measure]
+    blocked = promote_photo_to_lot_cover(photos, measure)
+    assert blocked and "cover" in blocked.lower()
+    assert measure.sort_order == 3
+    note = promote_photo_to_lot_cover(photos, detail)
+    assert note is None
+    assert detail.sort_order == 0 and detail.photo_role == "hero"
+    assert hero.photo_role == "item_front" and hero.sort_order == 2
+    assert tape.sort_order == 1 and tape.photo_role == "tape"
+
+
 def test_listing_hero_skips_tape_and_prefers_the_hero_role() -> None:
     photos = [
         SimpleNamespace(original_name="tape.jpg", photo_role="tape", shows_measuring_scale=False),
@@ -350,6 +368,66 @@ def test_plain_background_endpoint_is_jl_furniture_only(tmp_path, monkeypatch) -
                 assert abs(pixel[0] - pixel[1]) < 20 and pixel[0] > 200
         with Image.open(resolve_catalog_storage_path(key_b)) as im:
             assert im.getpixel((2, 2))[2] > 150
+
+        missing = client.post(
+            "/lots/lot-ms/photos/plain-background",
+            json={"color": "white", "hero_only": True, "photo_id": "photo-a"},
+        )
+        assert missing.status_code == 400, missing.text
+        assert "not on this lot" in missing.text.lower()
+
+        chosen = client.post(
+            "/lots/lot-ms/photos/plain-background",
+            json={"color": "white", "hero_only": True, "photo_id": "photo-c"},
+        )
+        assert chosen.status_code == 200, chosen.text
+        chosen_body = chosen.json()
+        assert chosen_body["updated"] == 1
+        assert any("selected" in note.lower() for note in chosen_body["notes"])
+        assert calls["hero"] == 2
+        with Image.open(resolve_catalog_storage_path(key_c)) as im:
+            pixel = im.getpixel((2, 2))
+            assert abs(pixel[0] - pixel[1]) < 20 and pixel[0] > 200
+        with Image.open(resolve_catalog_storage_path(key_f)) as im:
+            assert im.getpixel((2, 2))[2] > 150
+        from app.services.ctseller_post import CTSELLER_SENT_STALE
+
+        saved = Session()
+        try:
+            row_c = saved.get(Photo, "photo-c")
+            assert row_c is not None
+            assert row_c.plain_bg_saved is True
+            assert row_c.ctseller_sent_token == CTSELLER_SENT_STALE
+            assert row_c.photo_role == "item_front"
+        finally:
+            saved.close()
+
+        covered = client.post(
+            "/lots/lot-ms/photos/plain-background",
+            json={"color": "gray", "hero_only": True, "photo_id": "photo-c", "make_cover": True},
+        )
+        assert covered.status_code == 200, covered.text
+        covered_body = covered.json()
+        assert covered_body["updated"] == 1
+        assert any("cover" in note.lower() for note in covered_body["notes"])
+        assert covered_body["photos"][0]["id"] == "photo-c"
+        assert covered_body["photos"][0]["photo_role"] == "hero"
+        assert covered_body["photos"][1]["id"] == "photo-f"
+        assert covered_body["photos"][1]["photo_role"] == "item_front"
+        assert calls["hero"] == 3
+
+        tape_cover = client.post(
+            "/lots/lot-bg/photos/plain-background",
+            json={"color": "white", "hero_only": True, "photo_id": "photo-b", "make_cover": True},
+        )
+        assert tape_cover.status_code == 200, tape_cover.text
+        tape_body = tape_cover.json()
+        assert tape_body["updated"] == 1
+        assert any("stay off the cover" in note.lower() for note in tape_body["notes"])
+        roles = {photo["id"]: (photo["sort_order"], photo["photo_role"]) for photo in tape_body["photos"]}
+        assert roles["photo-a"][0] == 0
+        assert roles["photo-b"][0] == 1
+        assert roles["photo-b"][1] == "tape"
     finally:
         app.dependency_overrides.clear()
         db.close()

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArrowRightLeft, ChevronDown, ChevronUp, GitMerge, GripVertical, ImagePlus, LayoutList, Loader2, Paintbrush, RotateCcw, RotateCw, Save, Trash2 } from "lucide-react";
+import { AiBackgroundDialog, type AiBackgroundColor } from "../../../components/AiBackgroundDialog";
 import { LotPhotoThumb } from "../../../components/LotPhotoThumb";
 import { LotPhotoViewer } from "../../../components/LotPhotoViewer";
 import { LotThumbnail } from "../../../components/LotThumbnail";
@@ -18,6 +19,7 @@ import { SegmentedTabs } from "../../../components/ui/tabs";
 import { useToast, type ToastTone } from "../../../components/ui/toast";
 import { FacebookPagePostModal } from "../../../components/FacebookPagePostModal";
 import { API_BASE, apiFetch, apiUploadFiles } from "../../../lib/api";
+import { defaultAiBackgroundPhoto, photoCanBeLotCover } from "../../../lib/aiBackground";
 import { photosForEditorGrid } from "../../../lib/lotMediaGallery";
 import { isOwnerRole } from "../../../lib/roles";
 import { sortBySku } from "../../../lib/skuSort";
@@ -108,12 +110,7 @@ function isJanetFurnitureLot(row: {
 }
 
 function listingHeroPhoto(photos: LotPhoto[]): LotPhoto | null {
-  const eligible = photos.filter((photo) => {
-    const role = (photo.photo_role || "").toLowerCase();
-    if (role === "tape" || role === "unusable" || photo.shows_measuring_scale) return false;
-    return true;
-  });
-  return eligible.find((photo) => (photo.photo_role || "").toLowerCase() === "hero") || eligible[0] || null;
+  return defaultAiBackgroundPhoto(photos);
 }
 
 function listingRoleBadge(photo: LotPhoto): string | null {
@@ -341,6 +338,10 @@ export default function LotDetailPage() {
   const [plainBgNote, setPlainBgNote] = useState("");
   const [heroBgNote, setHeroBgNote] = useState("");
   const [plainBgColor, setPlainBgColor] = useState<"studio" | "white" | "gray">("studio");
+  const [aiBgOpen, setAiBgOpen] = useState(false);
+  const [aiBgPhotoId, setAiBgPhotoId] = useState<string | null>(null);
+  const [aiBgColor, setAiBgColor] = useState<AiBackgroundColor>("white");
+  const [aiBgMakeCover, setAiBgMakeCover] = useState(false);
   const [saleLots, setSaleLots] = useState<SaleLotOption[]>([]);
   const [saleName, setSaleName] = useState("");
   const [catalogSales, setCatalogSales] = useState<MoveSaleOption[]>([]);
@@ -794,24 +795,39 @@ export default function LotDetailPage() {
     }
   }
 
-  async function applyHeroBackground() {
+  function openAiBackground() {
+    const stills = photosForEditorGrid(catalogPhotos);
+    const hero = listingHeroPhoto(stills);
+    setAiBgPhotoId(hero?.id || stills[0]?.id || null);
+    setAiBgMakeCover(false);
+    setHeroBgNote("");
+    setAiBgOpen(true);
+  }
+
+  async function applyHeroBackground(photoId?: string, makeCover = false) {
     if (!lot || !token) return;
-    const hero = listingHeroPhoto(catalogPhotos);
+    const stills = photosForEditorGrid(catalogPhotos);
+    const hero = photoId ? stills.find((photo) => photo.id === photoId) || null : listingHeroPhoto(stills);
     if (!hero) {
-      setHeroBgNote("This lot has no hero photo to place on a color.");
-      setError("This lot has no hero photo to place on a color.");
+      setHeroBgNote("This lot has no photo to place on a color.");
+      setError("This lot has no photo to place on a color.");
       return;
     }
     setPlainBgBusy(true);
     setError("");
-    setHeroBgNote("Asking AI to replace the hero background…");
+    setHeroBgNote("Replacing the background…");
     try {
       const res = (await apiFetch(
         `/lots/${encodeURIComponent(lot.id)}/photos/plain-background`,
         token,
         {
           method: "POST",
-          body: JSON.stringify({ color: plainBgColor, hero_only: true })
+          body: JSON.stringify({
+            color: aiBgColor,
+            hero_only: true,
+            photo_id: hero.id,
+            make_cover: makeCover
+          })
         }
       )) as {
         updated: number;
@@ -825,14 +841,14 @@ export default function LotDetailPage() {
       setThumbCacheBust((prev) => ({ ...prev, [hero.id]: bustAt }));
       const problems = [...(res.notes || []), ...(res.errors || [])].filter(Boolean);
       if (res.updated) {
-        setHeroBgNote(problems[0] || "AI updated the hero. Other photos stay as shot.");
+        setHeroBgNote(problems.join(" ") || "AI updated this photo. Other photos stay as shot.");
       } else {
-        const message = problems.join(" · ") || "The hero stayed as shot.";
+        const message = problems.join(" · ") || "This photo stayed as shot.";
         setHeroBgNote(message);
         setError(message);
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Could not place a color behind the hero";
+      const message = e instanceof Error ? e.message : "Could not place a color behind the photo";
       setHeroBgNote(message);
       setError(message);
     } finally {
@@ -2100,6 +2116,18 @@ export default function LotDetailPage() {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="ez-accent border-primary/40 bg-primary/10 hover:bg-primary/20"
+                onClick={openAiBackground}
+                disabled={plainBgBusy || showAiRegenProgress || saving || !catalogPhotos.length}
+                title="Replace the room behind one photo with a plain AI background"
+              >
+                <Paintbrush size={16} aria-hidden />
+                AI background
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => void regenerateListingWithAi()}
                 disabled={showAiRegenProgress || saving || !catalogPhotos.length}
                 aria-busy={showAiRegenProgress}
@@ -2250,6 +2278,19 @@ export default function LotDetailPage() {
                   ? "Limit reached"
                   : "Add photos"}
             </Button>
+            {catalogPhotos.length > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="ez-accent border-primary/40 bg-primary/10 hover:bg-primary/20"
+                disabled={plainBgBusy || batchRotating || addPhotosBusy || showAiRegenProgress}
+                onClick={openAiBackground}
+                title="Replace the room behind one photo with a plain AI background"
+              >
+                <Paintbrush size={16} aria-hidden />
+                {plainBgBusy && aiBgOpen ? "Replacing background…" : "AI background"}
+              </Button>
+            ) : null}
             {catalogPhotos.length > 1 ? (
               <Button
                 type="button"
@@ -2360,52 +2401,21 @@ export default function LotDetailPage() {
                   <Paintbrush size={20} strokeWidth={1.75} />
                 </span>
                 <div className="ct-upload-option__text">
-                  <span className="ct-upload-option__title">Hero background</span>
+                  <span className="ct-upload-option__title">AI background</span>
                   <span className="ct-upload-option__desc">
                     {heroBgNote
                       ? heroBgNote
-                      : "Optional. AI keeps the piece and replaces only the room behind the listing hero. On the sales page, AI on first photos does that for every lot. Detail, tape, and measurement photos stay as shot."}
+                      : "Pick any gallery photo. AI keeps the piece and replaces the room with Warm, White, or Gray. You can make that photo the cover. On the sales page, AI on first photos does the first photo of every lot."}
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
-                  {(
-                    [
-                      ["studio", "#f3f0ea", "Warm"],
-                      ["white", "#ffffff", "White"],
-                      ["gray", "#e2e2e5", "Gray"]
-                    ] as const
-                  ).map(([id, swatch, label]) => (
-                    <Button
-                      key={`hero-${id}`}
-                      type="button"
-                      variant={plainBgColor === id ? "default" : "outline"} className="ct-upload-option__btn"
-                      disabled={plainBgBusy}
-                      onClick={() => setPlainBgColor(id)}
-                      title={label}
-                    >
-                      <span
-                        aria-hidden
-                        style={{
-                          display: "inline-block",
-                          width: 12,
-                          height: 12,
-                          borderRadius: 2,
-                          background: swatch,
-                          border: "1px solid rgba(0,0,0,0.25)",
-                          marginRight: 6,
-                          verticalAlign: "-1px"
-                        }}
-                      />
-                      {label}
-                    </Button>
-                  ))}
                   <Button
                     type="button"
                     variant="default" className="ct-upload-option__btn"
                     disabled={plainBgBusy || batchRotating || addPhotosBusy}
-                    onClick={() => void applyHeroBackground()}
+                    onClick={openAiBackground}
                   >
-                    {plainBgBusy ? "Working…" : "Apply with AI"}
+                    {plainBgBusy && aiBgOpen ? "Replacing background…" : "Choose a photo"}
                   </Button>
                   {catalogPhotos.some((photo) => photo.plain_background) ? (
                     <Button
@@ -2512,10 +2522,11 @@ export default function LotDetailPage() {
                   Click the image for crop and other edits in the full viewer.
                 </li>
                 <li>
-                  <strong>Hero background</strong> is optional. AI keeps the piece and replaces the room with Warm,
-                  White, or Gray. On this page that is the listing hero. On the sales page,{" "}
-                  <strong>AI on first photos</strong> does the first photo of every lot. Tape and measurement photos
-                  stay as shot. Restore original puts the saved photo back.
+                  <strong>AI background</strong> opens the gallery so you can pick one photo. AI keeps the piece and
+                  replaces the room with Warm, White, or Gray. The current cover is selected first. Check{" "}
+                  <strong>Make this the lot cover</strong> to move that photo to the front. On the sales page,{" "}
+                  <strong>AI on first photos</strong> does the first photo of every lot. Restore original puts the
+                  saved photo back. Add photos to CT Seller sends a replaced photo again.
                 </li>
                 <li>
                   <strong>Shift+click</strong> a checkbox to select a range; <strong>Ctrl or ⌘+click</strong> to toggle
@@ -3828,6 +3839,37 @@ export default function LotDetailPage() {
         </div>
       ) : null}
       </div>
+      {aiBgOpen && lot && token ? (
+        <AiBackgroundDialog
+          lotId={lot.id}
+          token={token}
+          photos={photosForEditorGrid(catalogPhotos)}
+          coverId={listingHeroPhoto(photosForEditorGrid(catalogPhotos))?.id ?? null}
+          selectedId={aiBgPhotoId}
+          color={aiBgColor}
+          makeCover={aiBgMakeCover}
+          busy={plainBgBusy}
+          note={heroBgNote}
+          cacheBust={thumbCacheBust}
+          onSelect={(photoId) => {
+            setAiBgPhotoId(photoId);
+            const photo = catalogPhotos.find((row) => row.id === photoId);
+            if (!photo || !photoCanBeLotCover(photo)) setAiBgMakeCover(false);
+          }}
+          onColor={setAiBgColor}
+          onMakeCover={setAiBgMakeCover}
+          onApply={() => {
+            const photo = catalogPhotos.find((row) => row.id === aiBgPhotoId);
+            void applyHeroBackground(aiBgPhotoId || undefined, Boolean(photo && aiBgMakeCover && photoCanBeLotCover(photo)));
+          }}
+          onRestore={() => {
+            if (aiBgPhotoId) void restorePlainBackground([aiBgPhotoId], true);
+          }}
+          onClose={() => {
+            if (!plainBgBusy) setAiBgOpen(false);
+          }}
+        />
+      ) : null}
       {facebookPostOpen && lot && token ? (
         <FacebookPagePostModal
           token={token}

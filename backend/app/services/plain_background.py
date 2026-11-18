@@ -110,6 +110,43 @@ def first_website_photo(photos: list) -> object | None:
     return None
 
 
+def _cover_sort_key(photo: object) -> tuple:
+    created = getattr(photo, "created_at", None)
+    stamp = created.timestamp() if hasattr(created, "timestamp") else 0
+    return (int(getattr(photo, "sort_order", 0) or 0), stamp, str(getattr(photo, "id", "")))
+
+
+def photo_can_be_lot_cover(photo: object) -> bool:
+    """SKU tape, unusable, and measuring-tape frames stay off the listing cover."""
+    from app.services.photo_roles import is_hero_eligible_photo_role, is_sku_tape_photo_role
+
+    role = getattr(photo, "photo_role", None)
+    if is_sku_tape_photo_role(role) or not is_hero_eligible_photo_role(role):
+        return False
+    return not bool(getattr(photo, "shows_measuring_scale", False))
+
+
+def promote_photo_to_lot_cover(photos: list, target: object) -> str | None:
+    """Move ``target`` to the front and mark it the listing hero.
+
+    Returns a note when the frame cannot be the cover. Other hero roles become
+    item shots so the dashboard and the lot page agree on one cover.
+    """
+    from app.services.photo_roles import normalize_catalog_photo_role
+
+    if not photo_can_be_lot_cover(target):
+        return "SKU tape and measurement photos stay off the cover."
+    ordered = sorted(photos, key=_cover_sort_key)
+    rest = [photo for photo in ordered if getattr(photo, "id", None) != getattr(target, "id", None)]
+    target.sort_order = 0
+    target.photo_role = "hero"
+    for index, photo in enumerate(rest, start=1):
+        photo.sort_order = index
+        if normalize_catalog_photo_role(getattr(photo, "photo_role", None)) == "hero":
+            photo.photo_role = "item_front"
+    return None
+
+
 def plain_bg_edit_source_bytes(storage_path: str | None, current: Path) -> bytes:
     """Bytes to edit. A saved original wins so a second color starts from the real photo."""
     side = plain_bg_sidecar_path(storage_path)

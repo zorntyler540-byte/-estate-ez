@@ -9164,7 +9164,7 @@ export default function DashboardPage() {
               dir={lotsSortDir}
               onToggle={() => toggleLotsSort("photos")}
             />
-            <th scope="col">Details</th>
+            <th scope="col" className="ct-lots-table__details">Details</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
@@ -9307,25 +9307,27 @@ export default function DashboardPage() {
                   </Badge>
                 ) : null}
               </td>
-              <td className="ct-lots-table__row-actions">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="ez-accent border-primary/40 bg-primary/10 hover:bg-primary/20"
-                  asChild
-                >
-                  <Link
-                    href={`/lots/${lot.id}#listing-details`}
-                    onClick={rememberDashboardScrollBeforeLotDetails}
-                    title={
-                      (photoHealthMissing[lot.id] ?? 0) > 0
-                        ? "Photos missing on server — open to re-upload"
-                        : undefined
-                    }
+              <td className="ct-lots-table__details">
+                <div className="ct-lots-table__row-actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ct-lots-table__details-btn ez-accent border-primary/40 bg-primary/10 hover:bg-primary/20"
+                    asChild
                   >
-                    Details
-                  </Link>
-                </Button>
+                    <Link
+                      href={`/lots/${lot.id}#listing-details`}
+                      onClick={rememberDashboardScrollBeforeLotDetails}
+                      title={
+                        (photoHealthMissing[lot.id] ?? 0) > 0
+                          ? "Photos missing on server — open to re-upload"
+                          : undefined
+                      }
+                    >
+                      Details
+                    </Link>
+                  </Button>
+                </div>
               </td>
               <td>
                 <RowOverflowMenu label={`Actions for ${lot.sku || lot.auction_title || "lot"}`}>
