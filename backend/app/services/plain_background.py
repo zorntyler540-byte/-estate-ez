@@ -134,6 +134,9 @@ def write_replaced_catalog_jpeg(account_id: str, row: object, body: bytes) -> No
         row.storage_path = storage_path
         stem = Path(getattr(row, "original_name", None) or "photo").stem or "photo"
         row.original_name = f"{stem}.jpg"
+        from app.services.ctseller_post import mark_ctseller_photo_stale
+
+        mark_ctseller_photo_stale(row)
     finally:
         tmp_path.unlink(missing_ok=True)
 

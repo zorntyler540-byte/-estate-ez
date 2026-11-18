@@ -61,9 +61,13 @@ def test_purge_catalog_photo_thumbs_removes_local_siblings(tmp_path, monkeypatch
     dest = resolve_catalog_storage_path(key)
     thumb = dest.with_name(f"{Path(dest.name).stem}.thumb.220.jpg")
     thumb.write_bytes(b"stale")
+    seller_cache = dest.with_name(f"{Path(dest.name).stem}.ctseller.1600.jpg")
+    seller_cache.write_bytes(b"stale-ct")
     assert thumb.is_file()
+    assert seller_cache.is_file()
     purge_catalog_photo_thumbs(key)
     assert not thumb.is_file()
+    assert not seller_cache.is_file()
     assert dest.is_file()
     assert photo_id == "pid-rot"
 

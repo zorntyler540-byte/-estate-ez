@@ -346,7 +346,7 @@ export default function LotDetailPage() {
   const [ctSellerConditions, setCtSellerConditions] = useState<CTSellerCondition[]>([]);
   const [ctSellerPickId, setCtSellerPickId] = useState("");
   const [ctSellerPostBusy, setCtSellerPostBusy] = useState(false);
-  const [ctSellerPostMode, setCtSellerPostMode] = useState<"" | "post" | "photos">("");
+  const [ctSellerPostMode, setCtSellerPostMode] = useState<"" | "post" | "photos" | "replace">("");
   const [ctSellerMsg, setCtSellerMsg] = useState("");
   const [ctSellerErr, setCtSellerErr] = useState("");
   const [facebookConfigured, setFacebookConfigured] = useState(false);
@@ -1276,22 +1276,26 @@ export default function LotDetailPage() {
     }
   }
 
-  async function updatePhotosOnCtSeller() {
+  async function updatePhotosOnCtSeller(replace = false) {
     if (!lot?.ctseller_item_id) return;
+    const itemLabel = `CT Seller item #${lot.ctseller_item_id}`;
     if (
       !window.confirm(
-        "Add photos from this gallery that are not already on the CT Seller item? Photos already on that item stay. Videos on this lot are sent to the media tab. SKU tape stays off CT Bids."
+        replace
+          ? `Replace every still photo on ${itemLabel} with this gallery?\n\nThe CT Seller item stays the same. Photos are removed and uploaded again in gallery order, and the first photo becomes the cover. Videos on CT Seller are left alone. SKU tape stays off CT Bids.`
+          : "Add photos from this gallery that are not already on the CT Seller item? Photos already there stay, except ones replaced since posting (such as an AI background), which are updated. Videos on this lot are sent to the media tab. SKU tape stays off CT Bids."
       )
     ) {
       return;
     }
     setCtSellerPostBusy(true);
-    setCtSellerPostMode("photos");
+    setCtSellerPostMode(replace ? "replace" : "photos");
     setCtSellerErr("");
     setCtSellerMsg("");
     try {
       const res = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/ctseller-photos`, token, {
-        method: "POST"
+        method: "POST",
+        ...(replace ? { body: JSON.stringify({ replace: true }) } : {})
       })) as {
         ctseller_item_id?: number | null;
         photos_uploaded: number;
@@ -1300,7 +1304,11 @@ export default function LotDetailPage() {
         queued?: boolean;
       };
       if (res.queued && lot.sale_id) {
-        setCtSellerMsg("Adding photos to the CT Seller item already posted…");
+        setCtSellerMsg(
+          replace
+            ? "Replacing photos on the CT Seller item already posted…"
+            : "Adding photos to the CT Seller item already posted…"
+        );
         let active = true;
         let lastErr = "";
         while (active) {
@@ -1324,7 +1332,7 @@ export default function LotDetailPage() {
           };
           const row = (st.results || []).find((r) => r.lot_id === lot.id);
           if (st.current_phase) {
-            setCtSellerMsg(`Adding photos… ${st.current_phase}`);
+            setCtSellerMsg(`${replace ? "Replacing" : "Adding"} photos… ${st.current_phase}`);
           }
           if (row?.ok) {
             const itemId = row.ctseller_item_id || lot.ctseller_item_id;
@@ -1343,11 +1351,19 @@ export default function LotDetailPage() {
             }
             const added = ctSellerMediaCounts(count, videos);
             const videoNote = (row.video_note || "").trim();
-            setCtSellerMsg(
-              added
-                ? `Added ${added} on CT Seller item #${itemId}${videoNote ? ` ${videoNote}` : ""}`
-                : `Those photos and videos are already on CT Seller item #${itemId}`
-            );
+            if (replace) {
+              setCtSellerMsg(
+                count > 0
+                  ? `Replaced ${count} photo${count === 1 ? "" : "s"} on CT Seller item #${itemId}`
+                  : `No still photos were replaced on CT Seller item #${itemId}`
+              );
+            } else {
+              setCtSellerMsg(
+                added
+                  ? `Added ${added} on CT Seller item #${itemId}${videoNote ? ` ${videoNote}` : ""}`
+                  : `Those photos and videos are already on CT Seller item #${itemId}`
+              );
+            }
             active = false;
             break;
           }
@@ -2141,6 +2157,25 @@ export default function LotDetailPage() {
                   {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos to CT Seller"}
                 </Button>
               ) : null}
+              {lot.ctseller_item_id ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    secondaryTabTouched.current = true;
+                    setSecondaryTab("seller");
+                    void updatePhotosOnCtSeller(true);
+                  }}
+                  disabled={ctSellerPostBusy || showAiRegenProgress}
+                  aria-busy={ctSellerPostBusy && ctSellerPostMode === "replace"}
+                  title={`Replace still photos on CT Seller item #${lot.ctseller_item_id}. The item stays. Videos stay.`}
+                >
+                  {ctSellerPostBusy && ctSellerPostMode === "replace"
+                    ? "Replacing photos…"
+                    : "Replace photos on CT Seller"}
+                </Button>
+              ) : null}
               {facebookConfigured && isAccountOwner ? (
                 <Button
                   type="button"
@@ -2498,7 +2533,7 @@ export default function LotDetailPage() {
               {catalogPhotos.filter((p) => p.added_later).length === 1 ? " was" : "s were"} added after
               this lot was first cataloged. Those frames are marked Added.
               {lot.ctseller_item_id
-                ? " Add photos to CT Seller to put them on the listing already posted."
+                ? " Add photos to CT Seller to put them on the listing already posted. A photo replaced since posting, such as an AI background, is sent again."
                 : ""}
             </p>
           ) : null}
@@ -3534,8 +3569,9 @@ export default function LotDetailPage() {
             Post this lot straight to seller.ctbids.com. Connect your Seller login on{" "}
             <Link href="/account">Account</Link>, pick the matching CTBids auction, then post. SKU-tape
             photos stay in this gallery and stay off CT Bids. Add photos puts gallery pictures that are
-            not already on the CT Seller item onto that listing. Photos already there stay. Post as new
-            item creates another listing.
+            not already on the CT Seller item onto that listing, and refreshes a picture when its file
+            changed after posting. Replace photos swaps every still image on that item for this gallery.
+            Videos stay. Post as new item creates another listing.
           </p>
           {audienceHeld ? (
             <div className="ct-banner ct-banner--warning">
@@ -3599,6 +3635,17 @@ export default function LotDetailPage() {
                 title={`Add photos that are not already on CT Seller item #${lot.ctseller_item_id}`}
               >
                 {ctSellerPostBusy && ctSellerPostMode === "photos" ? "Adding photos…" : "Add photos"}
+              </Button>
+            ) : null}
+            {lot.ctseller_item_id ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void updatePhotosOnCtSeller(true)}
+                disabled={ctSellerPostBusy}
+                title={`Replace still photos on CT Seller item #${lot.ctseller_item_id}. The item stays. Videos stay.`}
+              >
+                {ctSellerPostBusy && ctSellerPostMode === "replace" ? "Replacing photos…" : "Replace photos"}
               </Button>
             ) : null}
             <Button
