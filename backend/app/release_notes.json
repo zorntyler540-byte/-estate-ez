@@ -1,0 +1,18 @@
+{
+  "comment": "Newest date is what the website and phone show. Add an entry, deploy the API. Do not publish an EAS update just to change this text. See README: What's new.",
+  "notes": [
+    {
+      "id": "2026-11-18-uploads-photos-listings",
+      "date": "2026-11-18",
+      "title": "Updates for your next sale",
+      "platform": "all",
+      "items": [
+        "Big uploads now split lots correctly at white divider sheets, and smaller uploads process faster (lots run in parallel).",
+        "Add photos to CT Seller now updates photos you changed, like the AI white-background cover. The new Replace photos on CT Seller button refreshes all photos on the listing.",
+        "Set reserve works again and sends your reserve to CT Seller, including listings already posted.",
+        "Standard description (Account → Standard description) adds the same line to every listing, like 'Reserve is $5'. Sales can override it, and Add to unposted applies it to lots not yet posted.",
+        "Listing descriptions use more varied openers, and titles put the brand at the end unless it's the main search term."
+      ]
+    }
+  ]
+}

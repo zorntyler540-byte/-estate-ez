@@ -1,23 +1,64 @@
 /**
- * One plain-language sentence for the next app open. Change this text when a fix ships.
- * The phone shows it once in a "What's new" popup. The same sentence belongs in `eas update --message`.
+ * What's new comes from GET /release-notes/latest. The phone stores the note id
+ * in app_kv (`release_note_seen`) and shows that id once. Edit the JSON in the
+ * API and deploy — do not hardcode a new sentence here.
  */
-export const RELEASE_NOTE =
-  "Bulk upload clears as soon as the photos are in the Queue, so you can start another batch. On the camera, the shots you just took show under the photo count.";
 
-const SEEN_PREFIX = "note-";
+export type ReleaseNote = {
+  id: string;
+  date: string;
+  title: string;
+  items: string[];
+};
 
-export function releaseNoteKey(note: string): string {
-  let hash = 0;
-  for (let i = 0; i < note.length; i++) hash = (hash * 31 + note.charCodeAt(i)) >>> 0;
-  return `${SEEN_PREFIX}${hash.toString(16)}`;
+export const RELEASE_NOTE_SEEN_KEY = "release_note_seen";
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+
+export function formatReleaseNoteDate(date: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  if (!match) return date;
+  const month = MONTHS[Number(match[2]) - 1];
+  if (!month) return date;
+  return `${month} ${Number(match[3])}, ${match[1]}`;
 }
 
-/** Null when the note is blank or this phone already dismissed this exact text. */
-export function releaseNoteToShow(seenKey: string | null, note: string): { key: string; text: string } | null {
-  const text = note.trim();
-  if (!text) return null;
-  const key = releaseNoteKey(text);
-  if (seenKey === key) return null;
-  return { key, text };
+export function parseReleaseNote(value: unknown): ReleaseNote | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const id = typeof row.id === "string" ? row.id.trim() : "";
+  const title = typeof row.title === "string" ? row.title.trim() : "";
+  const date = typeof row.date === "string" ? row.date.trim() : "";
+  const items = Array.isArray(row.items)
+    ? row.items.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    : [];
+  if (!id || !title || items.length === 0) return null;
+  return { id, date, title, items };
+}
+
+export function parseReleaseNoteLatest(data: unknown): ReleaseNote | null {
+  if (!data || typeof data !== "object") return null;
+  return parseReleaseNote((data as { note?: unknown }).note);
+}
+
+/** Null when there is no note, or this phone already dismissed this id. */
+export function releaseNoteToShow(seenId: string | null | undefined, note: ReleaseNote | null): ReleaseNote | null {
+  if (!note) return null;
+  const id = note.id.trim();
+  if (!id || note.items.length === 0) return null;
+  if ((seenId ?? "").trim() === id) return null;
+  return note;
 }

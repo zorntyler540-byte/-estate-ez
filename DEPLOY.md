@@ -219,6 +219,14 @@ Postgres backups and photo storage protect **different things**:
 
 Same as local: edit code → commit → push → the host rebuilds/redeploys. Run new **Alembic** migrations when you add them (`upgrade head` already runs on API container start).
 
+**What's new notes** live in `backend/app/release_notes.json`. Edit that file and deploy the API. The website and the phone read `GET /release-notes/latest`. Do not publish an EAS update just to change the note text. One phone update is required the first time, so the app starts fetching notes (runtime `1.1.0`). From `mobile/`:
+
+```bash
+EXPO_PUBLIC_API_BASE=https://caringtransitions-ai-production.up.railway.app eas update --channel production
+```
+
+See the README section "What's new".
+
 ---
 
 ## 8. Security checklist (production API)

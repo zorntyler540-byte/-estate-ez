@@ -1,5 +1,6 @@
 import { ApiError, parseApiError } from "./apiError";
 import { API_BASE, apiUrl } from "./config";
+import { parseReleaseNoteLatest, type ReleaseNote } from "./releaseNote";
 import { refreshSessionIfPossible } from "./sessionBridge";
 import { teamActivityQuery } from "./teamActivity";
 import { videoMimeType } from "./mediaKind";
@@ -116,6 +117,14 @@ export type AuthMe = {
 
 export async function getAuthMe(token: string): Promise<AuthMe> {
   return apiFetch<AuthMe>("/auth/me", token);
+}
+
+/** Newest What's new note for the phone. Short timeout so a cold start is not stuck offline. */
+export async function fetchLatestReleaseNote(token: string): Promise<ReleaseNote | null> {
+  const data = await apiFetch<unknown>("/release-notes/latest?platform=mobile", token, {
+    signal: abortSignalFor(8_000)
+  });
+  return parseReleaseNoteLatest(data);
 }
 
 export type TeamActivityPhotoTime = {

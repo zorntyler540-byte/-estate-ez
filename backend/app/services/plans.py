@@ -26,6 +26,8 @@ _ALWAYS = {
     ("GET", "/auth/me"),
     ("PATCH", "/auth/password"),
     ("POST", "/auth/logout-all"),
+    ("GET", "/release-notes"),
+    ("GET", "/release-notes/latest"),
     # Reading CT Seller status and removing the stored login stay open even
     # when the Push queue switch is off.
     ("GET", "/integrations/ctseller"),

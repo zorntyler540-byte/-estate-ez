@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
+import { useWhatsNew } from "../../components/WhatsNew";
 import { apiFetch } from "../../lib/api";
 import { isWatcherPlan, rememberAccountAccess } from "../../lib/plans";
 import { accountRoleLabel, isClientRole } from "../../lib/roles";
@@ -72,6 +73,7 @@ function instagramLink(status: InstagramLink): InstagramLink {
 
 export default function AccountPage() {
   const router = useRouter();
+  const { openWhatsNew } = useWhatsNew();
   const [token, setToken] = useState("");
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState("");
@@ -748,13 +750,16 @@ export default function AccountPage() {
           <h1 className="ct-page-title" style={{ marginBottom: "0.35rem" }}>
             Account
           </h1>
-          <p className="ct-subtitle" style={{ margin: 0 }}>
+          <p className="ct-subtitle" style={{ margin: "0 0 0.45rem" }}>
             {watcherAccount
               ? "Auction Watcher account. Catalog, AI, and CT Seller stay off."
               : me?.role?.toLowerCase() === "owner"
                 ? "Who you are in the app, password, feedback, and teammates. Catalog counts are on the Team tab."
                 : "Who you are in the app, password, and feedback."}
           </p>
+          <button type="button" className="ct-whats-new-inline" onClick={openWhatsNew}>
+            What's new
+          </button>
         </div>
       </header>
 

@@ -43,6 +43,9 @@ def _auth(token: str) -> dict[str, str]:
 
 def test_watcher_route_feature_allowlist() -> None:
     assert watcher_route_feature("GET", "/auth/me") == "always"
+    assert watcher_route_feature("GET", "/release-notes") == "always"
+    assert watcher_route_feature("GET", "/release-notes/latest") == "always"
+    assert watcher_route_feature("POST", "/release-notes") is None
     assert watcher_route_feature("GET", "/engagement/sales") == "analytics"
     assert watcher_route_feature("GET", "/engagement/sales/4401") == "analytics"
     assert watcher_route_feature("GET", "/engagement/sales/4401/calendar") == "analytics"

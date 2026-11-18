@@ -184,6 +184,7 @@ services with separate, ephemeral disks**. Non-obvious rules that keep uploads f
   `production` EAS profile has the URL in `eas.json`; `preview` / `development` must be given
   one explicitly. A release bundle that somehow lacks it shows an "App setup error" on sign-in
   and makes no requests.
+- **What's new notes** live in `backend/app/release_notes.json` (newest `date`, optional `platform` `web`|`mobile`|`all`). `GET /release-notes/latest` serves them to the website (`localStorage` key `release_note_seen`) and the phone (`app_kv` key `release_note_seen`, shown once per note id). Publish by editing the file and deploying the API. Do not hardcode a new sentence in `mobile/lib/releaseNote.ts`, and do not ship an EAS update only to change note text. The phone still needs the one JS update that switched it from the hardcoded string to this endpoint (runtime `1.1.0`).
 - **Mobile Queue photo review is capture order.** Queue and capture-session preview walk
   `lot_photos.sort_order` (the order shots were taken). That is independent of website listing
   sort. Do not reorder queue thumbs for listing presentation.

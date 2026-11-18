@@ -33,6 +33,7 @@ from app.engagement_routes import router as engagement_router
 from app.click_routes import router as click_router
 from app.facebook_routes import router as facebook_router
 from app.ops_routes import router as ops_router
+from app.release_notes_routes import router as release_notes_router
 from app.auth import (
     bump_token_version,
     create_access_token,
@@ -353,6 +354,7 @@ app.include_router(engagement_router)
 app.include_router(facebook_router)
 app.include_router(click_router)
 app.include_router(ops_router)
+app.include_router(release_notes_router)
 _LOG = logging.getLogger("app.main")
 
 
