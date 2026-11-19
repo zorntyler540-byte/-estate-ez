@@ -15,12 +15,15 @@ type Props = {
   accountDefault: string;
   saleOverride: string | null;
   unpostedCount: number;
+  lotCount: number;
+  postedCount: number;
   disabled?: boolean;
   onSaved?: (next: {
     standard_description: string | null;
     posting_description_suffix: string;
     lotsUpdated: number;
   }) => void;
+  onDescriptionsUpdated?: (websiteUpdated: number) => void;
 };
 
 export function SaleStandardDescription({
@@ -29,8 +32,11 @@ export function SaleStandardDescription({
   accountDefault,
   saleOverride,
   unpostedCount,
+  lotCount,
+  postedCount,
   disabled,
-  onSaved
+  onSaved,
+  onDescriptionsUpdated
 }: Props) {
   const inheriting = saleOverride == null;
   const [useOverride, setUseOverride] = useState(!inheriting);
@@ -89,6 +95,61 @@ export function SaleStandardDescription({
       }
     } catch (e) {
       setErr(e instanceof Error ? parseApiErrorMessage(e.message) : "Could not save the standard description");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateDescriptions = async () => {
+    if (!token || !saleId || lotCount < 1) return;
+    const postedNote =
+      postedCount > 0
+        ? `${postedCount} already on CT Seller will be updated there too.`
+        : "None of these lots are on CT Seller yet, so only the website descriptions change.";
+    if (
+      !window.confirm(
+        `Update the description on all ${lotCount} lot${lotCount === 1 ? "" : "s"} in this sale?\n\nThe standard note is written onto each description. ${postedNote}`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      const res = (await apiFetch(`/sales/${encodeURIComponent(saleId)}/description/publish`, token, {
+        method: "POST"
+      })) as {
+        lots_total?: number;
+        website_updated?: number;
+        ctseller_updated?: number;
+        ctseller_skipped?: number;
+        ctseller_failed?: number;
+        errors?: string[];
+      };
+      const websiteUpdated = res.website_updated ?? 0;
+      const sellerUpdated = res.ctseller_updated ?? 0;
+      const sellerFailed = res.ctseller_failed ?? 0;
+      onDescriptionsUpdated?.(websiteUpdated);
+      const parts = [
+        websiteUpdated
+          ? `Updated ${websiteUpdated} description${websiteUpdated === 1 ? "" : "s"} on the website.`
+          : "Website descriptions were already up to date."
+      ];
+      if (sellerUpdated) {
+        parts.push(`Updated ${sellerUpdated} on CT Seller.`);
+      } else if ((res.ctseller_skipped ?? 0) > 0 && !sellerFailed) {
+        parts.push("No posted CT Seller listings needed a change.");
+      }
+      setMsg(parts.join(" "));
+      if (sellerFailed) {
+        const detail = (res.errors || []).filter(Boolean).slice(0, 2).join(" ");
+        setErr(
+          `${sellerFailed} CT Seller update${sellerFailed === 1 ? "" : "s"} failed${detail ? `: ${detail}` : "."}`
+        );
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? parseApiErrorMessage(e.message) : "Could not update descriptions");
     } finally {
       setBusy(false);
     }
@@ -153,6 +214,15 @@ export function SaleStandardDescription({
           title="Writes the note onto lots that are not on CT Seller yet"
         >
           {effective ? `Add to ${unpostedCount} unposted` : `Remove from ${unpostedCount} unposted`}
+        </button>
+        <button
+          type="button"
+          className="ct-btn"
+          disabled={disabled || busy || !saleId || lotCount < 1}
+          onClick={() => void updateDescriptions()}
+          title="Writes the current note onto every lot, and updates lots already posted to CT Seller"
+        >
+          {busy ? "Updating…" : "Update descriptions"}
         </button>
       </div>
       {msg ? <div className="ct-banner ct-banner--success">{msg}</div> : null}

@@ -140,6 +140,9 @@ from app.schemas import (
     FillSkusIn,
     ListingDefaultsIn,
     ListingDefaultsOut,
+    LotDescriptionPublishIn,
+    LotDescriptionPublishOut,
+    SaleDescriptionPublishOut,
     SaleReservePriceIn,
     SaleStandardDescriptionIn,
     SaleStandardDescriptionOut,
@@ -222,6 +225,7 @@ from app.services.ctseller_posted import (
     refresh_lot_ctseller_sale_ids,
 )
 from app.services.standard_description import (
+    append_standard_description,
     apply_standard_description_to_unposted,
     normalize_standard_description,
     resolve_standard_description,
@@ -2999,6 +3003,179 @@ def set_sale_standard_description(
         standard_description=sale.standard_description,
         posting_description_suffix=new_text,
         lots_updated=lots_updated,
+    )
+
+
+def _description_with_standard_note(lot: Lot, suffix: str) -> tuple[str, bool]:
+    """Append the current standard note when it is not already in the description."""
+    text = append_standard_description(lot.professional_description or "", suffix)
+    changed = (lot.professional_description or "").rstrip() != text
+    if changed:
+        lot.professional_description = text
+    return text, changed
+
+
+def _push_lot_description_to_ctseller(
+    db: Session,
+    account: Account,
+    *,
+    item_id: int,
+    description: str,
+) -> None:
+    """Write ``description`` on an existing CT Seller item."""
+    client = _ctseller_client_for_account(account, db, probe=False)
+    try:
+        client.update_item_description(item_id=int(item_id), description=description)
+    except CTSellerError as exc:
+        if exc.status_code not in (401, 403):
+            raise
+        client = _ctseller_client_for_account(account, db, force=True, probe=False)
+        client.update_item_description(item_id=int(item_id), description=description)
+
+
+@app.post("/lots/{lot_id}/description/publish", response_model=LotDescriptionPublishOut)
+def publish_lot_description(
+    lot_id: str,
+    payload: LotDescriptionPublishIn | None = None,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LotDescriptionPublishOut:
+    """Write the standard note onto this lot and send that description to CT Seller when posted."""
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+    lot = db.query(Lot).filter(Lot.id == lot_id, Lot.account_id == current.account_id).first()
+    if lot is None:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    sale = _sale_for_user(lot.sale_id, current, db) if lot.sale_id else None
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    if payload is not None and payload.professional_description is not None:
+        lot.professional_description = payload.professional_description
+    suffix = resolve_standard_description(sale, account)
+    text, website_updated = _description_with_standard_note(lot, suffix)
+    if website_updated:
+        db.add(lot)
+        db.commit()
+        db.refresh(lot)
+    if not lot.ctseller_item_id:
+        return LotDescriptionPublishOut(
+            lot_id=lot.id,
+            description=text,
+            website_updated=website_updated,
+            ctseller_skipped=True,
+        )
+    if not text.strip():
+        return LotDescriptionPublishOut(
+            lot_id=lot.id,
+            description=text,
+            website_updated=website_updated,
+            ctseller_skipped=True,
+            error="No description to send.",
+        )
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        _push_lot_description_to_ctseller(
+            db,
+            account,
+            item_id=int(lot.ctseller_item_id),
+            description=text,
+        )
+    except CTSellerError as exc:
+        return LotDescriptionPublishOut(
+            lot_id=lot.id,
+            description=text,
+            website_updated=website_updated,
+            error=f"CT Seller was not updated: {exc}",
+        )
+    except HTTPException as exc:
+        return LotDescriptionPublishOut(
+            lot_id=lot.id,
+            description=text,
+            website_updated=website_updated,
+            error=f"CT Seller was not updated: {_http_detail(exc)}",
+        )
+    return LotDescriptionPublishOut(
+        lot_id=lot.id,
+        description=text,
+        website_updated=website_updated,
+        ctseller_updated=True,
+    )
+
+
+@app.post("/sales/{sale_id}/description/publish", response_model=SaleDescriptionPublishOut)
+def publish_sale_descriptions(
+    sale_id: str,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SaleDescriptionPublishOut:
+    """Write the standard note onto every lot in the sale and update posted CT Seller items."""
+    if is_client_role(current.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CLIENT_UPLOAD_DETAIL)
+    sale = _sale_for_user(sale_id, current, db)
+    account = db.query(Account).filter(Account.id == current.account_id).first()
+    suffix = resolve_standard_description(sale, account)
+    lots = (
+        db.query(Lot)
+        .filter(Lot.account_id == current.account_id, Lot.sale_id == sale.id)
+        .order_by(Lot.sku.asc(), Lot.created_at.asc(), Lot.id.asc())
+        .all()
+    )
+    website_updated = 0
+    ready: list[tuple[Lot, str]] = []
+    for lot in lots:
+        text, changed = _description_with_standard_note(lot, suffix)
+        if changed:
+            db.add(lot)
+            website_updated += 1
+        ready.append((lot, text))
+    if website_updated:
+        db.commit()
+    posted = [(lot, text) for lot, text in ready if lot.ctseller_item_id and text.strip()]
+    skipped = len(lots) - len(posted)
+    updated = 0
+    failed = 0
+    errors: list[str] = []
+    connect_error = ""
+    if posted:
+        if account is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        try:
+            _ctseller_client_for_account(account, db, probe=False)
+        except CTSellerError as exc:
+            connect_error = str(exc)
+        except HTTPException as exc:
+            connect_error = _http_detail(exc)
+        for lot, text in posted:
+            label = (lot.sku or lot.auction_title or lot.id).strip()
+            if connect_error:
+                failed += 1
+                if len(errors) < 8:
+                    errors.append(f"{label}: {connect_error}")
+                continue
+            try:
+                _push_lot_description_to_ctseller(
+                    db,
+                    account,
+                    item_id=int(lot.ctseller_item_id),
+                    description=text,
+                )
+                updated += 1
+            except CTSellerError as exc:
+                failed += 1
+                if len(errors) < 8:
+                    errors.append(f"{label}: {exc}")
+            except HTTPException as exc:
+                failed += 1
+                if len(errors) < 8:
+                    errors.append(f"{label}: {_http_detail(exc)}")
+    return SaleDescriptionPublishOut(
+        sale_id=sale.id,
+        lots_total=len(lots),
+        website_updated=website_updated,
+        ctseller_updated=updated,
+        ctseller_skipped=skipped,
+        ctseller_failed=failed,
+        errors=errors,
     )
 
 

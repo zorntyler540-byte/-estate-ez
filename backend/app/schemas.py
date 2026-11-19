@@ -774,6 +774,31 @@ class SaleStandardDescriptionOut(BaseModel):
     lots_updated: int = 0
 
 
+class LotDescriptionPublishIn(BaseModel):
+    """Current description from the lot page. Omitted uses the saved description."""
+
+    professional_description: str | None = Field(default=None, max_length=20000)
+
+
+class LotDescriptionPublishOut(BaseModel):
+    lot_id: str
+    description: str
+    website_updated: bool = False
+    ctseller_updated: bool = False
+    ctseller_skipped: bool = False
+    error: str = ""
+
+
+class SaleDescriptionPublishOut(BaseModel):
+    sale_id: str
+    lots_total: int = 0
+    website_updated: int = 0
+    ctseller_updated: int = 0
+    ctseller_skipped: int = 0
+    ctseller_failed: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
 class SaleReservePriceIn(BaseModel):
     reserve_price: float | None = Field(default=None, ge=0, le=1_000_000)
     apply_to_lots: bool = True

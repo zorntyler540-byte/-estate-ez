@@ -804,13 +804,11 @@ class CTSellerClient:
             next_key = str(nxt)
         return out
 
-    def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
-        """Set ``reserveprice`` on an existing item without re-posting photos.
+    def _item_update_fields(self, item_id: int) -> dict[str, Any]:
+        """Current item fields CT Seller will accept on PUT /item/update.
 
-        Item detail omits ``itemtypeid``. CT Seller rejects an update that lacks it
-        ("Not found : Update key or data missing"), which is why a reserve saved here
-        never appeared on an already-posted item. Bid result fields are read-only and
-        are not sent back.
+        Item detail omits ``itemtypeid``. CT Seller rejects an update that lacks it.
+        Bid result fields are read-only and are not sent back.
         """
         detail: dict[str, Any] = {}
         try:
@@ -838,7 +836,21 @@ class CTSellerClient:
             row["itemtypeid"] = int(raw_type) if raw_type not in (None, "") else 2
         except (TypeError, ValueError):
             row["itemtypeid"] = 2
+        return row
+
+    def update_item_reserve(self, *, item_id: int, reserve_price: float | None) -> dict[str, Any]:
+        """Set ``reserveprice`` on an existing item without re-posting photos."""
+        row = self._item_update_fields(item_id)
         row["reserveprice"] = format_ctseller_reserve_price(reserve_price)
+        return self._put_raw("/item/update", {"data": [row]})
+
+    def update_item_description(self, *, item_id: int, description: str) -> dict[str, Any]:
+        """Replace the item description without re-posting photos."""
+        text = (description or "").strip()
+        if not text:
+            raise CTSellerError("Description is empty")
+        row = self._item_update_fields(item_id)
+        row["description"] = text
         return self._put_raw("/item/update", {"data": [row]})
 
     def list_sale_images(self, *, sale_id: int) -> list[dict[str, Any]]:
