@@ -9013,6 +9013,8 @@ export default function DashboardPage() {
                 : null
             }
             unpostedCount={lots.filter((lot) => !lot.ctseller_item_id && !lot.ctseller_posted_at).length}
+            lotCount={lots.length}
+            postedCount={lots.filter((lot) => lot.ctseller_item_id || lot.ctseller_posted_at).length}
             disabled={ctSellerBulkBusy || busyProcessing}
             onSaved={({ standard_description, posting_description_suffix, lotsUpdated }) => {
               setSales((prev) =>
@@ -9028,6 +9030,9 @@ export default function DashboardPage() {
                 )
               );
               if (lotsUpdated > 0) setDataReloadNonce((n) => n + 1);
+            }}
+            onDescriptionsUpdated={(websiteUpdated) => {
+              if (websiteUpdated > 0) setDataReloadNonce((n) => n + 1);
             }}
           />
           </>

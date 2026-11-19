@@ -196,6 +196,30 @@ def test_update_item_reserve_puts_merged_detail() -> None:
     assert "highbid" not in row
 
 
+def test_update_item_description_puts_merged_detail() -> None:
+    client = CTSellerClient(access_token="tok")
+
+    def fake_put(path: str, payload: dict) -> dict:
+        assert path == "/item/update"
+        row = payload["data"][0]
+        assert row["id"] == 88
+        assert row["title"] == "Lamp"
+        assert row["itemtypeid"] == 2
+        assert row["description"] == "Oak chair.\n\nPickup Saturday."
+        assert "currentbid" not in row
+        return {"status": "success"}
+
+    with (
+        patch.object(
+            client,
+            "item_detail",
+            lambda item_id: {"id": item_id, "title": "Lamp", "description": "Oak chair.", "currentbid": 4},
+        ),
+        patch.object(client, "_put_raw", fake_put),
+    ):
+        client.update_item_description(item_id=88, description="Oak chair.\n\nPickup Saturday.")
+
+
 def test_update_item_reserve_keeps_existing_item_type() -> None:
     client = CTSellerClient(access_token="tok")
 
