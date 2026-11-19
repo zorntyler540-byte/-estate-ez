@@ -3029,7 +3029,7 @@ select.ct-input option {
 }
 
 .ct-table--admin {
-  min-width: 980px;
+  min-width: 1180px;
   width: 100%;
   table-layout: fixed;
 }
@@ -3043,22 +3043,37 @@ select.ct-input option {
 
 .ct-table--admin th:nth-child(1),
 .ct-table--admin td:nth-child(1) {
-  width: 20rem;
+  width: 14rem;
+}
+
+.ct-table--admin td:nth-child(1) .ct-muted {
+  overflow-wrap: anywhere;
 }
 
 .ct-table--admin th:nth-child(2),
 .ct-table--admin td:nth-child(2) {
-  width: 13rem;
+  width: 16rem;
 }
 
 .ct-table--admin th:nth-child(3),
 .ct-table--admin td:nth-child(3) {
+  width: 12rem;
+}
+
+.ct-table--admin th:nth-child(4),
+.ct-table--admin td:nth-child(4) {
   width: 6rem;
 }
 
-.ct-table--admin th:nth-child(5),
-.ct-table--admin td:nth-child(5) {
-  width: 4.25rem;
+.ct-table--admin th:nth-child(6),
+.ct-table--admin td:nth-child(6) {
+  width: 4.5rem;
+}
+
+@media (max-width: 768px) {
+  .ct-dash-admin-table.ct-dashboard-table-desktop {
+    display: block;
+  }
 }
 
 .ct-table--lots tbody tr {

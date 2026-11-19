@@ -2335,6 +2335,8 @@ export default function DashboardPage() {
   const [adminSortKey, setAdminSortKey] = useState<AdminSortKey>("name");
   const [adminSortDir, setAdminSortDir] = useState<SortDir>("asc");
   const [adminNameDraftById, setAdminNameDraftById] = useState<Record<string, string>>({});
+  const [adminEmailDraftById, setAdminEmailDraftById] = useState<Record<string, string>>({});
+  const [adminPasswordDraftById, setAdminPasswordDraftById] = useState<Record<string, string>>({});
   const [adminPlanDraftById, setAdminPlanDraftById] = useState<Record<string, string>>({});
   const [adminAnalyticsDraftById, setAdminAnalyticsDraftById] = useState<Record<string, boolean>>({});
   const [adminFacebookDraftById, setAdminFacebookDraftById] = useState<Record<string, boolean>>({});
@@ -3552,6 +3554,9 @@ export default function DashboardPage() {
       setAdminLoadAttempted(false);
       setAdminAccounts([]);
       setAdminPlanDraftById({});
+      setAdminNameDraftById({});
+      setAdminEmailDraftById({});
+      setAdminPasswordDraftById({});
       setAdminAnalyticsDraftById({});
       setAdminFacebookDraftById({});
       setAdminError("");
@@ -3569,15 +3574,19 @@ export default function DashboardPage() {
         setIsMasterAdmin(true);
         const drafts: Record<string, string> = {};
         const nameDrafts: Record<string, string> = {};
+        const emailDrafts: Record<string, string> = {};
         const analyticsDrafts: Record<string, boolean> = {};
         const facebookDrafts: Record<string, boolean> = {};
         arr.forEach((a) => {
           drafts[a.id] = a.plan_code || "beta_free";
           nameDrafts[a.id] = a.name || "";
+          emailDrafts[a.id] = a.owner_email || "";
           analyticsDrafts[a.id] = a.feature_analytics !== false;
           facebookDrafts[a.id] = a.feature_facebook !== false;
         });
         setAdminNameDraftById(nameDrafts);
+        setAdminEmailDraftById(emailDrafts);
+        setAdminPasswordDraftById({});
         setAdminPlanDraftById(drafts);
         setAdminAnalyticsDraftById(analyticsDrafts);
         setAdminFacebookDraftById(facebookDrafts);
@@ -3600,6 +3609,8 @@ export default function DashboardPage() {
           setIsMasterAdmin(false);
           setAdminAccounts([]);
           setAdminNameDraftById({});
+          setAdminEmailDraftById({});
+          setAdminPasswordDraftById({});
           setAdminPlanDraftById({});
           setAdminUsage(null);
           return;
@@ -6290,15 +6301,19 @@ export default function DashboardPage() {
       setAdminAccounts(rows);
       const drafts: Record<string, string> = {};
       const nameDrafts: Record<string, string> = {};
+      const emailDrafts: Record<string, string> = {};
       const analyticsDrafts: Record<string, boolean> = {};
       const facebookDrafts: Record<string, boolean> = {};
       rows.forEach((a) => {
         drafts[a.id] = a.plan_code || "beta_free";
         nameDrafts[a.id] = a.name || "";
+        emailDrafts[a.id] = a.owner_email || "";
         analyticsDrafts[a.id] = a.feature_analytics !== false;
         facebookDrafts[a.id] = a.feature_facebook !== false;
       });
       setAdminNameDraftById(nameDrafts);
+      setAdminEmailDraftById(emailDrafts);
+      setAdminPasswordDraftById({});
       setAdminPlanDraftById(drafts);
       setAdminAnalyticsDraftById(analyticsDrafts);
       setAdminFacebookDraftById(facebookDrafts);
@@ -6327,6 +6342,8 @@ export default function DashboardPage() {
       name?: string;
       feature_analytics?: boolean;
       feature_facebook?: boolean;
+      owner_email?: string;
+      password?: string;
     }
   ) {
     if (!token) return;
@@ -6354,7 +6371,22 @@ export default function DashboardPage() {
         ...prev,
         [accountId]: updated.name || prev[accountId] || ""
       }));
-      addToast(`Saved account settings for ${updated.name || "this account"}.`, "success");
+      setAdminEmailDraftById((prev) => ({
+        ...prev,
+        [accountId]: updated.owner_email || ""
+      }));
+      if (body.password) {
+        setAdminPasswordDraftById((prev) => ({ ...prev, [accountId]: "" }));
+      }
+      const loginSaved = body.owner_email !== undefined || body.password !== undefined;
+      addToast(
+        loginSaved
+          ? body.password
+            ? `Saved the login for ${updated.name || "this account"}. They sign in with ${updated.owner_email || "that email"} and the new password.`
+            : `Saved the login email for ${updated.name || "this account"}.`
+          : `Saved account settings for ${updated.name || "this account"}.`,
+        "success"
+      );
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : "Could not update account");
     } finally {
@@ -6405,6 +6437,16 @@ export default function DashboardPage() {
       await apiFetch(`/admin/accounts/${encodeURIComponent(accountId)}`, token, { method: "DELETE" });
       setAdminAccounts((prev) => prev.filter((a) => a.id !== accountId));
       setAdminNameDraftById((prev) => {
+        const next = { ...prev };
+        delete next[accountId];
+        return next;
+      });
+      setAdminEmailDraftById((prev) => {
+        const next = { ...prev };
+        delete next[accountId];
+        return next;
+      });
+      setAdminPasswordDraftById((prev) => {
         const next = { ...prev };
         delete next[accountId];
         return next;
@@ -7692,7 +7734,7 @@ export default function DashboardPage() {
         <section className="ct-dash-panel ct-dash-admin" aria-label="Master admin">
           <h2 className="ct-dash-panel__title">Master admin</h2>
           <p className="ct-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "54rem" }}>
-            Create a franchise login here, or change one that already exists. Full catalog keeps every tool. Auction Watcher only uses the Push queue and Facebook posting, and those two switches can be turned off.
+            Create a franchise login here, or change one that already exists. Each row shows the email they sign in with. Passwords are stored hashed, so the current one cannot be shown — type a new password to replace it. Full catalog keeps every tool. Auction Watcher only uses the Push queue and Facebook posting, and those two switches can be turned off.
           </p>
           {isMasterAdmin ? (
             <form
@@ -7925,6 +7967,7 @@ export default function DashboardPage() {
                       dir={adminSortDir}
                       onToggle={() => toggleAdminSort("name")}
                     />
+                    <th>Login</th>
                     <DashboardSortHeader
                       label="Plan"
                       active={adminSortKey === "plan"}
@@ -7950,7 +7993,7 @@ export default function DashboardPage() {
                   {adminLoading && filteredAdminAccounts.length === 0
                     ? Array.from({ length: 4 }).map((_, idx) => (
                         <tr key={`admin-skel-${idx}`} className="ct-row-skeleton">
-                          <td colSpan={5}>
+                          <td colSpan={6}>
                             <div className="ct-skeleton-lines">
                               <span className="ct-skeleton-line is-wide" />
                               <span className="ct-skeleton-line" />
@@ -7965,6 +8008,11 @@ export default function DashboardPage() {
                     const analyticsOn = adminAnalyticsDraftById[a.id] ?? a.feature_analytics !== false;
                     const facebookOn = adminFacebookDraftById[a.id] ?? a.feature_facebook !== false;
                     const nameDraft = adminNameDraftById[a.id] ?? a.name ?? "";
+                    const emailDraft = adminEmailDraftById[a.id] ?? a.owner_email ?? "";
+                    const passwordDraft = adminPasswordDraftById[a.id] ?? "";
+                    const emailChanged = emailDraft.trim().toLowerCase() !== (a.owner_email || "").toLowerCase();
+                    const passwordReady = passwordDraft.length === 0 || passwordDraft.length >= 8;
+                    const loginDirty = (emailChanged && emailDraft.trim().length > 3) || passwordDraft.length >= 8;
                     const knownPlan = draft === "beta_free" || draft === "watcher";
                     const usage = adminUsage?.by_account.find((u) => u.account_id === a.id) || null;
                     return (
@@ -7972,26 +8020,67 @@ export default function DashboardPage() {
                         <td>
                           <input
                             className="ct-input"
-                            style={{ width: 220, fontWeight: 600 }}
+                            style={{ width: "100%", fontWeight: 600 }}
                             value={nameDraft}
                             onChange={(e) =>
                               setAdminNameDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
                             }
                             disabled={busy}
                           />
-                          {a.owner_email ? (
-                            <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
-                              {a.owner_email}
-                            </div>
-                          ) : null}
                           <div className="ct-muted" style={{ fontSize: "0.8rem" }}>
                             {a.id}
                           </div>
                         </td>
                         <td>
+                          <label className="ct-label" htmlFor={`admin-login-email-${a.id}`}>
+                            Login email
+                          </label>
+                          <input
+                            id={`admin-login-email-${a.id}`}
+                            className="ct-input"
+                            type="email"
+                            style={{ width: "100%", marginBottom: "0.45rem" }}
+                            value={emailDraft}
+                            autoComplete="off"
+                            disabled={busy}
+                            onChange={(e) =>
+                              setAdminEmailDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
+                            }
+                          />
+                          <label className="ct-label" htmlFor={`admin-login-password-${a.id}`}>
+                            New password
+                          </label>
+                          <input
+                            id={`admin-login-password-${a.id}`}
+                            className="ct-input"
+                            type="text"
+                            style={{ width: "100%", marginBottom: "0.45rem" }}
+                            value={passwordDraft}
+                            placeholder="Leave blank to keep"
+                            autoComplete="new-password"
+                            disabled={busy}
+                            onChange={(e) =>
+                              setAdminPasswordDraftById((prev) => ({ ...prev, [a.id]: e.target.value }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="ct-btn ct-btn--primary"
+                            disabled={busy || !loginDirty || !passwordReady}
+                            onClick={() =>
+                              void patchAdminAccount(a.id, {
+                                owner_email: emailDraft.trim().toLowerCase(),
+                                ...(passwordDraft.length >= 8 ? { password: passwordDraft } : {})
+                              })
+                            }
+                          >
+                            {busy ? "Saving…" : "Save login"}
+                          </button>
+                        </td>
+                        <td>
                           <select
                             className="ct-input"
-                            style={{ width: 180, marginBottom: "0.45rem" }}
+                            style={{ width: "100%", marginBottom: "0.45rem" }}
                             value={draft}
                             aria-label={`Plan for ${a.name}`}
                             onChange={(e) =>
@@ -8101,7 +8190,7 @@ export default function DashboardPage() {
                   })}
                   {filteredAdminAccounts.length === 0 && !adminLoading ? (
                     <tr>
-                      <td colSpan={5} className="ct-muted">
+                      <td colSpan={6} className="ct-muted">
                         No accounts match that search.
                       </td>
                     </tr>

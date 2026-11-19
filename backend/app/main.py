@@ -1481,20 +1481,27 @@ def pull_team_ctseller_history(
     )
 
 
-def _admin_account_out(db: Session, row: Account) -> AdminAccountOut:
-    owner_email = (
-        db.query(User.email)
-        .filter(User.account_id == row.id, User.role == "owner")
-        .order_by(User.created_at.asc())
-        .scalar()
+def _account_login_user(db: Session, account_id: str) -> User | None:
+    """Owner login for an account, or the earliest user when no owner role is set."""
+    owner = (
+        db.query(User)
+        .filter(User.account_id == account_id, User.role == "owner")
+        .order_by(User.created_at.asc(), User.id.asc())
+        .first()
     )
-    if not owner_email:
-        owner_email = (
-            db.query(User.email)
-            .filter(User.account_id == row.id)
-            .order_by(User.created_at.asc())
-            .scalar()
-        )
+    if owner is not None:
+        return owner
+    return (
+        db.query(User)
+        .filter(User.account_id == account_id)
+        .order_by(User.created_at.asc(), User.id.asc())
+        .first()
+    )
+
+
+def _admin_account_out(db: Session, row: Account) -> AdminAccountOut:
+    login = _account_login_user(db, row.id)
+    owner_email = login.email if login is not None else None
     user_count = db.query(func.count()).select_from(User).filter(User.account_id == row.id).scalar() or 0
     sale_count = db.query(func.count()).select_from(Sale).filter(Sale.account_id == row.id).scalar() or 0
     lot_count = db.query(func.count()).select_from(Lot).filter(Lot.account_id == row.id).scalar() or 0
@@ -1582,6 +1589,34 @@ def admin_update_account(
         row.feature_analytics = bool(payload.feature_analytics)
     if payload.feature_facebook is not None:
         row.feature_facebook = bool(payload.feature_facebook)
+    if payload.owner_email is not None or payload.password is not None:
+        login = _account_login_user(db, row.id)
+        if login is None:
+            raise HTTPException(status_code=400, detail="This account has no login to update")
+        if payload.owner_email is not None:
+            email = str(payload.owner_email).strip().lower()
+            if email != (login.email or "").strip().lower():
+                if login.id == current.id:
+                    if not is_master_admin_email(email):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="That would remove your master admin sign-in. Change a franchise login instead.",
+                        )
+                elif is_reserved_master_admin_email(email):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This email is reserved and cannot be used to register.",
+                    )
+                taken = db.query(User).filter(User.email == email, User.id != login.id).first()
+                if taken is not None:
+                    raise HTTPException(status_code=400, detail="Email already exists")
+                login.email = email
+        if payload.password is not None:
+            try:
+                login.password_hash = hash_password(payload.password)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            bump_token_version(login)
     db.commit()
     db.refresh(row)
     return _admin_account_out(db, row)

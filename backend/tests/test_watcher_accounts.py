@@ -585,3 +585,110 @@ def test_master_admin_can_create_full_and_watcher_accounts(tmp_path, monkeypatch
         assert "push@example.com" in emails
     finally:
         _clear()
+
+
+def test_master_admin_can_change_account_login(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "master_admin_emails", "")
+    monkeypatch.setattr(settings, "allow_open_registration", True)
+    client, Session = _client(tmp_path, monkeypatch)
+    try:
+        admin = client.post(
+            "/auth/register",
+            json={"account_name": "Estate-EZ", "email": "boss@example.com", "password": "password1"},
+        )
+        assert admin.status_code == 200, admin.text
+        monkeypatch.setattr(settings, "master_admin_emails", "boss@example.com")
+        admin_headers = _auth(admin.json()["access_token"])
+
+        created = client.post(
+            "/admin/accounts",
+            headers=admin_headers,
+            json={
+                "name": "Oak Street",
+                "email": "oak@example.com",
+                "password": "franchise1",
+                "plan_code": "beta_free",
+            },
+        )
+        assert created.status_code == 201, created.text
+        account_id = created.json()["id"]
+        assert created.json()["owner_email"] == "oak@example.com"
+        assert "password" not in created.json()
+
+        stranger = client.post(
+            "/auth/register",
+            json={"account_name": "Other", "email": "other@example.com", "password": "password1"},
+        )
+        assert stranger.status_code == 200, stranger.text
+        denied = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=_auth(stranger.json()["access_token"]),
+            json={"password": "notallowed"},
+        )
+        assert denied.status_code == 403
+
+        short = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=admin_headers,
+            json={"password": "short"},
+        )
+        assert short.status_code == 422
+
+        duplicate = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=admin_headers,
+            json={"owner_email": "other@example.com"},
+        )
+        assert duplicate.status_code == 400
+        assert "already exists" in duplicate.json()["detail"].lower()
+
+        reserved = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=admin_headers,
+            json={"owner_email": "boss@example.com"},
+        )
+        assert reserved.status_code == 400
+
+        changed = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=admin_headers,
+            json={"owner_email": "oak.desk@example.com", "password": "new-franchise"},
+        )
+        assert changed.status_code == 200, changed.text
+        body = changed.json()
+        assert body["owner_email"] == "oak.desk@example.com"
+        assert "password" not in body
+
+        old_login = client.post(
+            "/auth/login",
+            json={"email": "oak@example.com", "password": "franchise1"},
+        )
+        assert old_login.status_code == 401
+        new_login = client.post(
+            "/auth/login",
+            json={"email": "oak.desk@example.com", "password": "new-franchise"},
+        )
+        assert new_login.status_code == 200, new_login.text
+
+        kept = client.patch(
+            f"/admin/accounts/{account_id}",
+            headers=admin_headers,
+            json={"owner_email": "oak.desk@example.com"},
+        )
+        assert kept.status_code == 200, kept.text
+        still = client.post(
+            "/auth/login",
+            json={"email": "oak.desk@example.com", "password": "new-franchise"},
+        )
+        assert still.status_code == 200, still.text
+
+        db = Session()
+        user = db.query(User).filter(User.email == "oak.desk@example.com").one()
+        assert user.account_id == account_id
+        assert user.role == "owner"
+        assert int(user.token_version or 0) >= 1
+        db.close()
+    finally:
+        _clear()

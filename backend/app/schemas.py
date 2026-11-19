@@ -248,6 +248,13 @@ class AdminAccountUpdateIn(BaseModel):
     plan_code: str | None = Field(default=None, min_length=2, max_length=40)
     feature_analytics: bool | None = None
     feature_facebook: bool | None = None
+    owner_email: EmailStr | None = None
+    password: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=72,
+        description="Replace the owner login password. Omitted leaves the current password.",
+    )
 
 
 class AdminAccountCreateIn(BaseModel):
