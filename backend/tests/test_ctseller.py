@@ -60,7 +60,9 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["quantity"] == 1
     assert item["itemstatus"] == "Pending"
     assert item["itemreceiptmethod"] == {"pickup": True, "delivery": False, "shipping": False}
-    assert item["specialtyshippeditems"] is False
+    assert "specialtyshippeditems" not in item
+    assert "goal" not in item
+    assert "valuation" not in item
 
 
 def test_build_item_payload_kitchen_area() -> None:
@@ -119,10 +121,11 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["itemreceiptmethod"]["shipping"] is True
     assert item["width"] is None
     assert item["buynowprice"] is None
-    assert item["goal"] is None
-    assert item["valuation"] is None
-    assert item["fragilityscore"] is None
-    assert item["specialtyshippeditems"] is False
+    assert item["material"] == "Plastic"
+    assert "goal" not in item
+    assert "valuation" not in item
+    assert "fragilityscore" not in item
+    assert "specialtyshippeditems" not in item
 
 
 def test_build_item_payload_includes_reserve_price() -> None:
@@ -169,7 +172,6 @@ def test_build_item_payload_nulls_blank_prices_and_sends_quantity() -> None:
     assert item["buyerspremium"] == 15.0
     assert item["SKU"] == "1000"
     assert item["itemreceiptmethod"] == {"pickup": True, "delivery": False, "shipping": False}
-    assert item["specialtyshippeditems"] is False
     for key in (
         "reserveprice",
         "buynowprice",
@@ -179,10 +181,10 @@ def test_build_item_payload_nulls_blank_prices_and_sends_quantity() -> None:
         "weight",
         "shippingfee",
         "handlingfee",
-        "goal",
-        "valuation",
     ):
         assert item[key] is None, key
+    for key in ("goal", "valuation", "fragilityscore", "material", "specialtyshippeditems"):
+        assert key not in item, key
 
 
 def test_build_item_payload_blank_reserve_when_missing() -> None:

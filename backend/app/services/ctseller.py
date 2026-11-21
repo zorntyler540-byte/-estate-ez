@@ -1552,6 +1552,9 @@ def build_item_payload(
     # is not met" and no field name. Quantity is one lot. Specialty shipping is a checkbox.
     # The seller form forces isshippable false on save. Shipping is only the receipt-method
     # flag. isshippable true with null weight and fees is rejected as missing required data.
+    # The March 2026 seller app deleted blank goal and valuation and did not send material,
+    # fragility, or specialty shipping. The Nov 20 app sends those as null, and item/add
+    # rejects that null data (SKU 3003, 3:45 PM PT). Leave them off unless they have a value.
     out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
@@ -1583,10 +1586,8 @@ def build_item_payload(
         "weight": None,
         "shippingfee": None,
         "handlingfee": None,
-        "goal": None,
-        "valuation": None,
-        "fragilityscore": None,
-        "material": (material or "").strip() or None,
-        "specialtyshippeditems": False,
     }
+    material_out = (material or "").strip()
+    if material_out:
+        out["material"] = material_out
     return out
