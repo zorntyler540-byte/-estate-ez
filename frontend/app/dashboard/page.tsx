@@ -82,6 +82,7 @@ import {
   stagedUploadRelOrNull
 } from "../../lib/stagedUploadPath";
 import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import { commitArrangement, resetArrangement } from "../../lib/commitArrangement";
 import { sortFilesBeforeUploadNames } from "../../lib/sortUploadFiles";
 import {
   assignUploadNames,
@@ -1922,6 +1923,8 @@ type FolderPickPreview = {
   skippedCount: number;
   /** When true, this upload is processed as one catalog lot (one SKU row) for every photo. */
   singleLotMode?: boolean;
+  /** Staff arranged the lots. Cataloging keeps those groups. */
+  arrangementLocked?: boolean;
 };
 
 type SingleLotStagingApply = { pick: FolderPickPreview; droppedFromCap: number };
@@ -5453,6 +5456,7 @@ export default function DashboardPage() {
         const built = await createDisplayThumbUrls(stableFiles);
         setFolderPick((p) => {
           if (!p || p.singleLotMode || p.folderLabel !== label) return p;
+          if (p.arrangementLocked) return p;
           if (p.imageFiles.length !== imageFiles.length) return p;
           return {
             ...p,
@@ -8623,8 +8627,31 @@ export default function DashboardPage() {
                 labelOf={(file) => stagedUploadRelOrNull(file) || file.name}
                 singleLot={folderPick.singleLotMode === true}
                 inheritSku={inheritSkuFromSubfolder}
+                arrangementLocked={folderPick.arrangementLocked === true}
                 onOpen={(index) => {
                   if (!uploading) setStagingViewerIndex(index);
+                }}
+                onCommitArrangement={(state) => {
+                  const omitted = state.omitted
+                    .map((index) => folderPick.thumbUrls[index])
+                    .filter((url): url is string => Boolean(url));
+                  if (omitted.length) revokeObjectUrls(omitted);
+                  const committed = commitArrangement(folderPick.imageFiles, folderPick.thumbUrls, state);
+                  setFolderPick((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          imageFiles: committed.files,
+                          thumbUrls: committed.thumbs,
+                          arrangementLocked: true
+                        }
+                      : prev
+                  );
+                }}
+                onResetArrangement={() => {
+                  const files = folderPick.imageFiles;
+                  resetArrangement(files);
+                  setFolderPick((prev) => (prev ? { ...prev, arrangementLocked: false } : prev));
                 }}
               />
             ) : null}

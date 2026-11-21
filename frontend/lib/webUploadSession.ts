@@ -45,6 +45,11 @@ export function inheritUploadName(from: File, to: File): void {
   if (name) uploadNames.set(to, name);
 }
 
+/** Drop assigned ``web-`` names so the next upload numbers the current order and paths. */
+export function forgetUploadNames(files: readonly File[]): void {
+  for (const file of files) uploadNames.delete(file);
+}
+
 export function webUploadBatchOf(name: string): string | null {
   const m = WEB_BATCH.exec(name.replace(/\\/g, "/"));
   return m ? m[1]!.toLowerCase() : null;

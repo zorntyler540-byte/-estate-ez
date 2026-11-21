@@ -7,7 +7,9 @@ import { apiFetch, apiUploadFiles } from "../../lib/api";
 import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
 import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import { commitArrangement, resetArrangement } from "../../lib/commitArrangement";
 import { sortFilesBeforeUploadNames } from "../../lib/sortUploadFiles";
+import { stagedUploadRelOrNull } from "../../lib/stagedUploadPath";
 import { UploadSortPreview } from "../../components/UploadSortPreview";
 import {
   assignUploadNames,
@@ -47,6 +49,7 @@ export default function ClientUploadPage() {
   const [sku, setSku] = useState("");
   const [bulk, setBulk] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  const [arranged, setArranged] = useState(false);
   const uploadSessionRef = useRef<WebUploadSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -161,8 +164,10 @@ export default function ClientUploadPage() {
           return;
         }
       }
-      const ordered = sortFilesBeforeUploadNames(files, (file) => Boolean(uploadNameOf(file)));
-      const names = assignUploadNames(session, ordered, (f) => f.name);
+      const ordered = arranged
+        ? files
+        : sortFilesBeforeUploadNames(files, (file) => Boolean(uploadNameOf(file)));
+      const names = assignUploadNames(session, ordered, (file) => stagedUploadRelOrNull(file) || file.name);
       const ready = await resizeJpegsForUpload(ordered, { concurrency: 2 });
       const form = new FormData();
       form.append("sale_id", me.assigned_sale_id);
@@ -317,6 +322,7 @@ export default function ClientUploadPage() {
                   disabled={busy}
                   onChange={(e) => {
                     uploadSessionRef.current = null;
+                    setArranged(false);
                     setFiles(sortFilesBeforeUploadNames(Array.from(e.target.files || [])));
                   }}
                 />
@@ -327,7 +333,22 @@ export default function ClientUploadPage() {
                       : `Choose up to ${MAX_PHOTOS} photos for one lot.`
                     : `${files.length} photo${files.length === 1 ? "" : "s"} selected. Review how they split into lots, then upload.`}
                 </p>
-                {files.length > 1 ? <UploadSortPreview files={files} singleLot={!bulk} /> : null}
+                {files.length > 1 ? (
+                  <UploadSortPreview
+                    files={files}
+                    singleLot={!bulk}
+                    arrangementLocked={arranged}
+                    onCommitArrangement={(state) => {
+                      const committed = commitArrangement(files, undefined, state);
+                      setFiles(committed.files);
+                      setArranged(true);
+                    }}
+                    onResetArrangement={() => {
+                      resetArrangement(files);
+                      setArranged(false);
+                    }}
+                  />
+                ) : null}
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"

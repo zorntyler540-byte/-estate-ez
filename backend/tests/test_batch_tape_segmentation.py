@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.services.processing import _segment_batch_lots_by_tape
+from app.services.processing import _segment_batch_lots_by_tape, segment_arranged_lots
 
 
 def _row(filename: str, marking: str | None = None) -> dict:
@@ -207,3 +207,39 @@ def test_segment_splits_on_subfolder(tmp_path: Path) -> None:
     ]
     segments = _segment_batch_lots_by_tape(folder, ordered)
     assert len(segments) == 2
+
+
+def test_arranged_lots_ignore_tape_and_stay_grouped(tmp_path: Path) -> None:
+    folder = tmp_path / "batch"
+    lot_a = folder / "arranged" / "lot-1"
+    lot_b = folder / "arranged" / "lot-2"
+    lot_a.mkdir(parents=True)
+    lot_b.mkdir(parents=True)
+    first = lot_a / "a.jpg"
+    second = lot_a / "b.jpg"
+    third = lot_b / "c.jpg"
+    for path in (first, second, third):
+        path.write_bytes(b"jpg")
+    ordered = [
+        (first, first.name, _row(first.name, "100")),
+        (second, second.name, _row(second.name, "200")),
+        (third, third.name, _row(third.name, "200")),
+    ]
+    segments = segment_arranged_lots(folder, ordered)
+    assert segments is not None
+    assert [[p.name for p, _ in seg] for seg in segments] == [["a.jpg", "b.jpg"], ["c.jpg"]]
+
+
+def test_mixed_arranged_paths_fall_back_to_the_normal_split(tmp_path: Path) -> None:
+    folder = tmp_path / "batch"
+    arranged = folder / "arranged" / "lot-1"
+    arranged.mkdir(parents=True)
+    kept = arranged / "a.jpg"
+    plain = folder / "b.jpg"
+    kept.write_bytes(b"jpg")
+    plain.write_bytes(b"jpg")
+    ordered = [
+        (kept, kept.name, _row(kept.name)),
+        (plain, plain.name, _row(plain.name)),
+    ]
+    assert segment_arranged_lots(folder, ordered) is None

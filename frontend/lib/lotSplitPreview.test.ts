@@ -66,6 +66,7 @@ test("summary names the lots, blank sheets, and the tape caveat", () => {
   );
   assert.match(lotSplitSummary({ lotCount: 1, dividerCount: 0, checkingBlank: true }), /Checking blank sheets/);
   assert.match(lotSplitSummary({ lotCount: 1, dividerCount: 0, singleLot: true }), /stay one lot/);
+  assert.match(lotSplitSummary({ lotCount: 2, dividerCount: 0, arranged: true }), /2 lots you arranged/);
 });
 
 test("uniform paper is a blank sheet and a two-tone frame is not", () => {
