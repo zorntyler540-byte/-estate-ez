@@ -1178,6 +1178,45 @@ def _field_types(payload: Any) -> str:
     return ",".join(parts) or "-"
 
 
+_SNAPSHOT_KEYS = (
+    "category",
+    "area",
+    "condition",
+    "tax",
+    "buyerspremium",
+    "istaxable",
+    "isshippable",
+    "itemtypeid",
+    "startingprice",
+    "quantity",
+    "locationid",
+    "itemstatus",
+    "itemreceiptmethod",
+    "SKU",
+    "title",
+)
+
+
+def _item_add_snapshot(payload: Any) -> str:
+    """Sale-level values from a failed item/add. Description text is omitted."""
+    snap: dict[str, Any] = {}
+    for row in _payload_rows(payload):
+        for key in _SNAPSHOT_KEYS:
+            if key not in row:
+                continue
+            value = row.get(key)
+            if isinstance(value, str) and len(value) > 80:
+                value = value[:80] + "…"
+            snap[key] = value
+        desc = row.get("description")
+        if isinstance(desc, str):
+            snap["description_len"] = len(desc)
+    try:
+        return json.dumps(snap, default=str, ensure_ascii=False)
+    except TypeError:
+        return str(snap)
+
+
 def _first_payload_value(payload: Any, *keys: str) -> str:
     for row in _payload_rows(payload):
         for key in keys:
@@ -1256,7 +1295,7 @@ def _log_ctseller_write_failure(
         body_text = str(body)
     body_text = _redact_text(body_text)[:_LOG_BODY_MAX]
     logger.warning(
-        "CT Seller write failed method=%s path=%s sku=%s sale_id=%s ct_auction_id=%s blank_keys=%s fields=%s status=%s body=%s",
+        "CT Seller write failed method=%s path=%s sku=%s sale_id=%s ct_auction_id=%s blank_keys=%s fields=%s snapshot=%s status=%s body=%s",
         method.upper(),
         path,
         sku,
@@ -1264,6 +1303,7 @@ def _log_ctseller_write_failure(
         auction or "-",
         ",".join(blank) or "-",
         _field_types(payload),
+        _item_add_snapshot(payload),
         getattr(resp, "status_code", None) or exc.status_code or "-",
         body_text,
     )
@@ -1467,6 +1507,9 @@ def build_item_payload(
         }
     else:
         irm = {"pickup": True, "delivery": False, "shipping": False}
+    # A receipt method with every flag false fails item/add. Pickup is the sale default.
+    if not any(irm.values()):
+        irm["pickup"] = True
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
@@ -1497,7 +1540,6 @@ def build_item_payload(
     bp_out = _number_or_none(buyers_premium)
     # SPA requires tax % when the item is taxable; copy sale-level tax when present.
     is_taxable = tax_out is not None
-    ships = bool(irm.get("shipping"))
     reserve = format_ctseller_reserve_price(reserve_price)
     reserve_out = float(reserve) if isinstance(reserve, (int, float)) and reserve > 0 else None
 
@@ -1508,6 +1550,8 @@ def build_item_payload(
     # numbers, receipt method as an object, and blank prices/dimensions as null.
     # Empty strings fail with "The required field data for the requested operation
     # is not met" and no field name. Quantity is one lot. Specialty shipping is a checkbox.
+    # The seller form forces isshippable false on save. Shipping is only the receipt-method
+    # flag. isshippable true with null weight and fees is rejected as missing required data.
     out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
@@ -1522,7 +1566,7 @@ def build_item_payload(
         "itemtypeid": 2,  # Auction (same as SPA-created lots)
         "startingprice": price,
         "istaxable": is_taxable,
-        "isshippable": ships,
+        "isshippable": False,
         "isfeatured": False,
         "ispublic": True,
         "itemreceiptmethod": irm,

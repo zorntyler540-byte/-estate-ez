@@ -112,7 +112,8 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["tax"] == 8.875
     assert item["buyerspremium"] == 15.0
     assert item["istaxable"] is True
-    assert item["isshippable"] is True
+    # Seller form forces isshippable false. Shipping stays on the receipt method.
+    assert item["isshippable"] is False
     assert item["material"] == "Plastic"
     assert item["quantity"] == 1
     assert item["itemreceiptmethod"]["shipping"] is True
