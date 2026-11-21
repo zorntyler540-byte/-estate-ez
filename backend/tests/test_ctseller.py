@@ -57,6 +57,7 @@ def test_build_item_payload_strips_category_group() -> None:
     # Leaf "Lamps" is not a /category/list name; fall back to group "Lighting".
     assert item["category"] == "Lighting"
     assert item["startingprice"] == 5.0
+    assert item["quantity"] == 1
     assert item["itemstatus"] == "Pending"
     assert isinstance(item["itemreceiptmethod"], str)
     assert "pickup" in item["itemreceiptmethod"]
@@ -113,7 +114,11 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["istaxable"] is True
     assert item["isshippable"] is True
     assert item["material"] == "Plastic"
-    assert item["width"] == ""
+    assert item["quantity"] == 1
+    assert "width" not in item
+    assert "buynowprice" not in item
+    assert "goal" not in item
+    assert "valuation" not in item
     assert item["fragilityscore"] is None
 
 
@@ -132,6 +137,43 @@ def test_build_item_payload_includes_reserve_price() -> None:
     )
     assert item["startingprice"] == 1.0
     assert item["reserveprice"] == 25.0
+    assert item["quantity"] == 1
+    assert item["id"] is None
+    assert item["itemtypeid"] == 2
+
+
+def test_build_item_payload_omits_blank_prices_and_sends_quantity() -> None:
+    """SKU 1000 item/add: quantity 1, no empty numeric strings, id null, type 2."""
+    item = build_item_payload(
+        sale_id=50050,
+        location_id=7,
+        sku="1000",
+        title="Logitech G-Series Backlit Gaming Keyboard",
+        description="Backlit keyboard",
+        category="Electronics",
+        condition="GOOD",
+        starting_price=None,
+        item_receipt_method=None,
+        reserve_price=0,
+    )
+    assert item["id"] is None
+    assert item["itemtypeid"] == 2
+    assert item["quantity"] == 1
+    assert item["startingprice"] == 1.0
+    assert item["SKU"] == "1000"
+    for key in (
+        "reserveprice",
+        "buynowprice",
+        "width",
+        "height",
+        "length",
+        "weight",
+        "shippingfee",
+        "handlingfee",
+        "goal",
+        "valuation",
+    ):
+        assert key not in item, key
 
 
 def test_build_item_payload_blank_reserve_when_missing() -> None:
@@ -146,7 +188,7 @@ def test_build_item_payload_blank_reserve_when_missing() -> None:
         starting_price=1.0,
         item_receipt_method=None,
     )
-    assert item["reserveprice"] == ""
+    assert "reserveprice" not in item
 
 
 def test_format_and_resolve_reserve_price() -> None:
