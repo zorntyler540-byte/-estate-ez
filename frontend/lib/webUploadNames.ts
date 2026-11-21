@@ -4,7 +4,7 @@
  *
  * Camera names (``IMG_1234.JPG``, iOS ``image.jpg``) repeat across phones and picker sessions,
  * so the server never treats them as a photo's identity. ``<batch>`` is random per staged batch
- * and ``NNNN`` is the pick order, so a name is unique across the sale, a retried chunk is
+ * and ``NNNN`` is the staged order (natural filename order for a new pick), so a name is unique across the sale, a retried chunk is
  * recognized as the same photo, and the server's name sort keeps pick order.
  * Must match ``backend/app/services/upload_names.py``.
  */

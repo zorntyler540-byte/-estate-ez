@@ -51,8 +51,9 @@ export function webUploadBatchOf(name: string): string | null {
 }
 
 /**
- * Stable upload name for every file, in array (pick) order. Files that already carry a name
- * from this session keep it; new files get the next sequence numbers.
+ * Stable upload name for every file, in array order. Sort a new pick first
+ * (``sortFilesBeforeUploadNames``). Files that already carry a name from this
+ * session keep it; new files get the next sequence numbers.
  */
 export function assignUploadNames(
   session: WebUploadSession,

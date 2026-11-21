@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import io
 import json
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,9 +80,18 @@ def _ctseller_partkey(body: dict[str, Any]) -> str:
 class CTSellerError(Exception):
     """Raised when CT Seller returns an error or unexpected payload."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        response_body: Any = None,
+        blank_keys: list[str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.response_body = response_body
+        self.blank_keys = list(blank_keys or [])
 
 
 def _fernet_key() -> bytes:
@@ -921,38 +932,32 @@ class CTSellerClient:
         ) from last_exc
 
     def _delete_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.access_token:
-            raise CTSellerError("Not signed in to CT Seller", status_code=401)
-        resp = self.session.delete(
-            f"{SELLER_API}{path}",
-            data=json.dumps(payload),
-            timeout=self.timeout,
-        )
-        return self._parse_seller_response(resp)
+        return self._write_raw("delete", path, payload)
 
     def _put_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.access_token:
-            raise CTSellerError("Not signed in to CT Seller", status_code=401)
-        resp = self.session.put(
-            f"{SELLER_API}{path}",
-            data=json.dumps(payload),
-            timeout=self.timeout,
-        )
-        return self._parse_seller_response(resp)
+        return self._write_raw("put", path, payload)
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
         body = self._post_raw(path, payload)
         return body.get("data")
 
     def _post_raw(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._write_raw("post", path, payload)
+
+    def _write_raw(self, method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.access_token:
             raise CTSellerError("Not signed in to CT Seller", status_code=401)
-        resp = self.session.post(
+        send = getattr(self.session, method)
+        resp = send(
             f"{SELLER_API}{path}",
             data=json.dumps(payload),
             timeout=self.timeout,
         )
-        return self._parse_seller_response(resp)
+        try:
+            return self._parse_seller_response(resp)
+        except CTSellerError as exc:
+            _log_ctseller_write_failure(method=method, path=path, payload=payload, resp=resp, exc=exc)
+            raise
 
     def _parse_seller_response(self, resp: requests.Response) -> dict[str, Any]:
         if resp.status_code in (401, 403):
@@ -970,8 +975,10 @@ class CTSellerClient:
             raise CTSellerError("CT Seller returned unexpected payload")
         # Some endpoints put errors in message with HTTP 200
         status = body.get("status")
-        if status and status not in ("success", "ok", True) and body.get("message"):
-            raise CTSellerError(_coerce_message(body.get("message")) or "CT Seller error")
+        if status and status not in ("success", "ok", True):
+            text = _failure_message(body)
+            if text or body.get("message"):
+                raise CTSellerError(text or "CT Seller error")
         return body
 
 
@@ -982,10 +989,10 @@ def _message_from_response(resp: requests.Response) -> str:
     try:
         body = resp.json()
     except Exception:  # noqa: BLE001
-        return text[:300]
+        return _redact_text(text)[:2000]
     if isinstance(body, dict):
-        return _coerce_message(body.get("message")) or text[:300]
-    return text[:300]
+        return _failure_message(body) or _redact_text(text)[:2000]
+    return _coerce_message(body) or _redact_text(text)[:2000]
 
 
 def _is_retryable_seller_error(exc: CTSellerError) -> bool:
@@ -1007,16 +1014,232 @@ def _friendly_cover_upload_error(exc: CTSellerError) -> str:
 
 
 def _coerce_message(message: Any) -> str:
+    """Join every CT message, keeping field names when CT sends a list of them."""
+    seen: list[str] = []
+    for part in _message_parts(message):
+        if part not in seen:
+            seen.append(part)
+    return "; ".join(seen)
+
+
+def _message_parts(message: Any) -> list[str]:
     if message is None:
-        return ""
+        return []
     if isinstance(message, str):
-        return message.strip()
-    if isinstance(message, list) and message:
-        first = message[0]
-        if isinstance(first, dict):
-            return str(first.get("message") or first.get("msg") or first).strip()
-        return str(first).strip()
-    return str(message).strip()
+        text = message.strip()
+        return [text] if text else []
+    if isinstance(message, list):
+        out: list[str] = []
+        for item in message:
+            out.extend(_message_parts(item))
+        return out
+    if isinstance(message, dict):
+        field_name = str(message.get("field") or message.get("name") or message.get("key") or "").strip()
+        texts: list[str] = []
+        for key in ("message", "msg", "error"):
+            if key in message:
+                texts.extend(_message_parts(message.get(key)))
+        if not texts:
+            return [field_name] if field_name else []
+        if field_name:
+            return [f"{field_name}: {text}" for text in texts]
+        return texts
+    text = str(message).strip()
+    return [text] if text else []
+
+
+def _looks_like_field_errors(data: Any) -> bool:
+    if isinstance(data, dict):
+        return any(key in data for key in ("field", "message", "msg", "error"))
+    if isinstance(data, list) and data:
+        return all(
+            isinstance(item, str) or (isinstance(item, dict) and any(key in item for key in ("field", "message", "msg", "error")))
+            for item in data
+        )
+    return False
+
+
+def _failure_message(body: Any) -> str:
+    """User-facing text: every message and field name CT returned."""
+    if not isinstance(body, dict):
+        return _coerce_message(body)
+    chunks: list[Any] = [body.get("message")]
+    for key in ("errors", "error", "fieldErrors", "fields"):
+        if key in body:
+            chunks.append(body.get(key))
+    data = body.get("data")
+    if _looks_like_field_errors(data):
+        chunks.append(data)
+    return _coerce_message(chunks)
+
+
+class _WriteLogCtx:
+    def __init__(
+        self,
+        *,
+        sale_id: str | None = None,
+        ct_auction_id: int | None = None,
+        sku: str | None = None,
+    ) -> None:
+        self.sale_id = sale_id
+        self.ct_auction_id = ct_auction_id
+        self.sku = sku
+
+
+_write_log_ctx: contextvars.ContextVar[_WriteLogCtx | None] = contextvars.ContextVar(
+    "ctseller_write_log",
+    default=None,
+)
+
+_SECRET_KEY = re.compile(r"(password|token|authorization|secret|otp|mfa|cookie|bearer|refresh)", re.IGNORECASE)
+_BULK_KEY = re.compile(r"(image|content|filedata|photo)", re.IGNORECASE)
+_BEARER_TEXT = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{8,}")
+_JWT_TEXT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_LOG_BODY_MAX = 4000
+
+
+def enter_ctseller_write_log(
+    *,
+    sale_id: str | None = None,
+    ct_auction_id: int | None = None,
+    sku: str | None = None,
+) -> contextvars.Token:
+    """Remember Estate-EZ sale id / CT auction id for the next CT write log line."""
+    return _write_log_ctx.set(_WriteLogCtx(sale_id=sale_id, ct_auction_id=ct_auction_id, sku=sku))
+
+
+def reset_ctseller_write_log(token: contextvars.Token) -> None:
+    _write_log_ctx.reset(token)
+
+
+def set_ctseller_write_sku(sku: str | None) -> None:
+    ctx = _write_log_ctx.get()
+    if ctx is not None:
+        ctx.sku = (sku or "").strip() or None
+
+
+def _is_blank_payload_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if value == [] or value == {}:
+        return True
+    return False
+
+
+def _payload_rows(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    return []
+
+
+def blank_payload_keys(payload: Any) -> list[str]:
+    """Names of item fields we sent empty. Secret-looking keys are omitted."""
+    found: list[str] = []
+    for row in _payload_rows(payload):
+        for key, value in row.items():
+            name = str(key)
+            if _SECRET_KEY.search(name):
+                continue
+            if _is_blank_payload_value(value) and name not in found:
+                found.append(name)
+    return found
+
+
+def _first_payload_value(payload: Any, *keys: str) -> str:
+    for row in _payload_rows(payload):
+        for key in keys:
+            raw = row.get(key)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if text:
+                return text
+    return ""
+
+
+def _redact_text(text: str) -> str:
+    text = _BEARER_TEXT.sub(r"\1[redacted]", text)
+    return _JWT_TEXT.sub("[redacted]", text)
+
+
+def _scrub_for_log(value: Any, depth: int = 0) -> Any:
+    if depth > 6:
+        return "…"
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if _SECRET_KEY.search(name):
+                out[name] = "[redacted]"
+            elif _BULK_KEY.search(name):
+                out[name] = "[omitted]"
+            else:
+                out[name] = _scrub_for_log(item, depth + 1)
+        return out
+    if isinstance(value, list):
+        return [_scrub_for_log(item, depth + 1) for item in value[:40]]
+    if isinstance(value, str):
+        text = _redact_text(value)
+        if len(text) > 500:
+            return text[:500] + "…"
+        return text
+    return value
+
+
+def _response_body_for_log(resp: requests.Response | None) -> Any:
+    if resp is None:
+        return None
+    try:
+        parsed = resp.json()
+    except Exception:  # noqa: BLE001
+        parsed = None
+    if parsed is not None:
+        return _scrub_for_log(parsed)
+    return _redact_text(resp.text or "")[:_LOG_BODY_MAX]
+
+
+def _log_ctseller_write_failure(
+    *,
+    method: str,
+    path: str,
+    payload: dict[str, Any],
+    resp: requests.Response | None,
+    exc: CTSellerError,
+) -> None:
+    """Log a CT write failure. Never includes credentials, tokens, or image bytes."""
+    ctx = _write_log_ctx.get()
+    sku = _first_payload_value(payload, "SKU", "sku") or (ctx.sku if ctx else "") or "-"
+    estate_sale_id = (ctx.sale_id if ctx and ctx.sale_id else "") or "-"
+    auction = _first_payload_value(payload, "saleid", "sale_id")
+    if not auction and ctx and ctx.ct_auction_id is not None:
+        auction = str(ctx.ct_auction_id)
+    blank = blank_payload_keys(payload)
+    body = _response_body_for_log(resp)
+    exc.blank_keys = blank
+    exc.response_body = body
+    try:
+        body_text = body if isinstance(body, str) else json.dumps(body, default=str, ensure_ascii=False)
+    except TypeError:
+        body_text = str(body)
+    body_text = _redact_text(body_text)[:_LOG_BODY_MAX]
+    logger.warning(
+        "CT Seller write failed method=%s path=%s sku=%s sale_id=%s ct_auction_id=%s blank_keys=%s status=%s body=%s",
+        method.upper(),
+        path,
+        sku,
+        estate_sale_id,
+        auction or "-",
+        ",".join(blank) or "-",
+        getattr(resp, "status_code", None) or exc.status_code or "-",
+        body_text,
+    )
 
 
 def format_ctseller_reserve_price(raw: float | None) -> float | str:

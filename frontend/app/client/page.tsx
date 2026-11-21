@@ -7,9 +7,12 @@ import { apiFetch, apiUploadFiles } from "../../lib/api";
 import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
 import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import { sortFilesBeforeUploadNames } from "../../lib/sortUploadFiles";
+import { UploadSortPreview } from "../../components/UploadSortPreview";
 import {
   assignUploadNames,
   newWebUploadSession,
+  uploadNameOf,
   webClientDraftId,
   type WebUploadSession
 } from "../../lib/webUploadSession";
@@ -158,8 +161,9 @@ export default function ClientUploadPage() {
           return;
         }
       }
-      const names = assignUploadNames(session, files, (f) => f.name);
-      const ready = await resizeJpegsForUpload(files, { concurrency: 2 });
+      const ordered = sortFilesBeforeUploadNames(files, (file) => Boolean(uploadNameOf(file)));
+      const names = assignUploadNames(session, ordered, (f) => f.name);
+      const ready = await resizeJpegsForUpload(ordered, { concurrency: 2 });
       const form = new FormData();
       form.append("sale_id", me.assigned_sale_id);
       form.append("inherit_sku_from_subfolder", "false");
@@ -282,7 +286,7 @@ export default function ClientUploadPage() {
                 </div>
                 {bulk ? (
                   <p className="ct-muted" style={{ marginTop: 0 }}>
-                    Pick the photos in order. A tape-roll photo, or a blank sheet, empty wall, or floor, starts the
+                    Photos are ordered by filename. A tape-roll photo, or a blank sheet, empty wall, or floor, starts the
                     next lot.
                   </p>
                 ) : (
@@ -313,7 +317,7 @@ export default function ClientUploadPage() {
                   disabled={busy}
                   onChange={(e) => {
                     uploadSessionRef.current = null;
-                    setFiles(Array.from(e.target.files || []));
+                    setFiles(sortFilesBeforeUploadNames(Array.from(e.target.files || [])));
                   }}
                 />
                 <p className="ct-muted" style={{ marginTop: "0.45rem" }}>
@@ -321,8 +325,9 @@ export default function ClientUploadPage() {
                     ? bulk
                       ? `Choose up to ${BULK_MAX_PHOTOS} photos. They are split into lots on the server.`
                       : `Choose up to ${MAX_PHOTOS} photos for one lot.`
-                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected.`}
+                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected. Review how they split into lots, then upload.`}
                 </p>
+                {files.length > 1 ? <UploadSortPreview files={files} singleLot={!bulk} /> : null}
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"

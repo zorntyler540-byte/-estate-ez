@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from app.db import SessionLocal
 from app.models import Account, Lot
-from app.services.ctseller import CTSellerError
+from app.services.ctseller import CTSellerError, enter_ctseller_write_log, reset_ctseller_write_log, set_ctseller_write_sku
 from app.services.ctseller_post import add_lot_photos_on_ctseller, post_one_lot_to_ctseller
 
 _LOG = logging.getLogger(__name__)
@@ -212,6 +212,33 @@ def _run_sale_post(
     photos_only: bool = False,
     replace: bool = False,
 ) -> None:
+    log_token = enter_ctseller_write_log(sale_id=sale_id, ct_auction_id=int(remote_sale_id))
+    try:
+        _run_sale_post_logged(
+            account_id=account_id,
+            sale_id=sale_id,
+            lot_ids=lot_ids,
+            skus=skus,
+            remote_sale_id=remote_sale_id,
+            force=force,
+            photos_only=photos_only,
+            replace=replace,
+        )
+    finally:
+        reset_ctseller_write_log(log_token)
+
+
+def _run_sale_post_logged(
+    *,
+    account_id: str,
+    sale_id: str,
+    lot_ids: list[str],
+    skus: dict[str, str | None],
+    remote_sale_id: int,
+    force: bool,
+    photos_only: bool = False,
+    replace: bool = False,
+) -> None:
     from app.main import _ctseller_client_for_account
 
     with SessionLocal() as db:
@@ -275,6 +302,7 @@ def _run_sale_post(
 
         for lot_id in lot_ids:
             sku = skus.get(lot_id)
+            set_ctseller_write_sku(sku)
             if photos_only and replace:
                 lot_phase = "replacing photos"
             elif photos_only:

@@ -32,6 +32,7 @@ import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { SaleStandardDescription } from "../../components/SaleStandardDescription";
 import { appendStandardDescription } from "../../lib/standardDescription";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
+import { UploadSortPreview } from "../../components/UploadSortPreview";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
 import { Badge } from "../../components/ui/badge";
@@ -81,6 +82,7 @@ import {
   stagedUploadRelOrNull
 } from "../../lib/stagedUploadPath";
 import { resizeJpegsForUpload } from "../../lib/uploadResize";
+import { sortFilesBeforeUploadNames } from "../../lib/sortUploadFiles";
 import {
   assignUploadNames,
   decideResume,
@@ -2402,6 +2404,7 @@ export default function DashboardPage() {
   const [ctSellerBulkBusy, setCtSellerBulkBusy] = useState(false);
   const [ctSellerBulkMsg, setCtSellerBulkMsg] = useState("");
   const [ctSellerBulkErr, setCtSellerBulkErr] = useState("");
+  const [ctSellerLotErrors, setCtSellerLotErrors] = useState<Record<string, { sku: string; message: string }>>({});
   /** Lots checked for selective CT Seller post (empty = post all unposted). */
   const [ctSellerPostSelected, setCtSellerPostSelected] = useState<Set<string>>(() => new Set());
   const [facebookConfigured, setFacebookConfigured] = useState(false);
@@ -5092,7 +5095,7 @@ export default function DashboardPage() {
       void resumeInlineLotCameraAfterNativePicker();
       return;
     }
-    const imageFiles = Array.from(list).filter(isCatalogImageFile);
+    const imageFiles = sortFilesBeforeUploadNames(Array.from(list).filter(isCatalogImageFile));
     if (lotCameraNativeInputRef.current) lotCameraNativeInputRef.current.value = "";
     if (!imageFiles.length) {
       void resumeInlineLotCameraAfterNativePicker();
@@ -5353,7 +5356,11 @@ export default function DashboardPage() {
     const pickMode = uploadPickModeRef.current;
     uploadPickModeRef.current = "batch";
     const all = Array.from(list);
-    const imageFiles = all.filter(isCatalogImageFile);
+    // FileList order is not filename order past ~100 files. Number web-NNNN from this
+    // order, before HEIC conversion drops webkitRelativePath. Named resumes are not sorted.
+    const imageFiles = sortFilesBeforeUploadNames(all.filter(isCatalogImageFile), (file) =>
+      Boolean(uploadNameOf(file))
+    );
     if (!imageFiles.length) {
       if (folderInputRef.current) folderInputRef.current.value = "";
       if (photosInputRef.current) photosInputRef.current.value = "";
@@ -6520,6 +6527,57 @@ export default function DashboardPage() {
     }
   }
 
+  function noteCtSellerOutcome(
+    rows: Array<{
+      lot_id: string;
+      ok: boolean;
+      skipped?: boolean;
+      error?: string | null;
+      sku?: string | null;
+      video_note?: string | null;
+    }>,
+    failSamples: string[],
+    videoNotes: string[]
+  ) {
+    setCtSellerLotErrors((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const row of rows) {
+        if (row.ok) {
+          if (next[row.lot_id]) {
+            delete next[row.lot_id];
+            changed = true;
+          }
+          if (row.video_note && videoNotes.length < 3) {
+            const sample = `${row.sku || row.lot_id}: ${row.video_note}`;
+            if (!videoNotes.includes(sample)) videoNotes.push(sample);
+          }
+          continue;
+        }
+        if (row.skipped || !row.error || row.error === "queued") continue;
+        const message = row.error;
+        const sku = row.sku || "";
+        const had = next[row.lot_id];
+        if (!had || had.message !== message || had.sku !== sku) {
+          next[row.lot_id] = { sku, message };
+          changed = true;
+        }
+        const sample = `${sku || row.lot_id}: ${message}`;
+        if (!failSamples.includes(sample)) failSamples.push(sample);
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  function clearCtSellerLotErrors(ids: string[]) {
+    setCtSellerLotErrors((prev) => {
+      if (!ids.some((id) => prev[id])) return prev;
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+  }
+
   async function bulkPostSaleToCtSeller() {
     if (!token || !selectedSaleId) return;
     const pick = Number(ctSellerPickId || selectedSale?.ctseller_sale_id || "");
@@ -6550,9 +6608,11 @@ export default function DashboardPage() {
     }
     setCtSellerBulkBusy(true);
     setCtSellerBulkErr("");
+    clearCtSellerLotErrors(idsToPost);
     setCtSellerBulkMsg(useSelection ? `Queueing ${targetCount} selected…` : "Queueing bulk post…");
     const postedIds = new Set<string>();
     const failSamples: string[] = [];
+    const videoNotes: string[] = [];
     const applyRows = (
       rows: Array<{
         lot_id: string;
@@ -6579,14 +6639,8 @@ export default function DashboardPage() {
             )
           );
         }
-        if (row.ok && row.video_note && failSamples.length < 3) {
-          const sample = `${row.sku || row.lot_id}: ${row.video_note}`;
-          if (!failSamples.includes(sample)) failSamples.push(sample);
-        } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
-          const sample = `${row.sku || row.lot_id}: ${row.error}`;
-          if (!failSamples.includes(sample)) failSamples.push(sample);
-        }
       }
+      noteCtSellerOutcome(rows, failSamples, videoNotes);
     };
     try {
       const kick = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/post-to-ctseller`, token, {
@@ -6622,7 +6676,8 @@ export default function DashboardPage() {
             (kick.skipped ? ` — ${kick.skipped} skipped` : "") +
             "."
         );
-        if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+        const early = [...failSamples, ...videoNotes];
+        if (early.length) setCtSellerBulkErr(early.join("\n"));
         return;
       }
       setCtSellerBulkMsg(`Queued ${kick.queued} lot(s). Uploading photos in the background…`);
@@ -6684,8 +6739,9 @@ export default function DashboardPage() {
           return next;
         });
       }
-      if (failSamples.length) {
-        setCtSellerBulkErr(failSamples.join(" · "));
+      const finishedNotes = [...failSamples, ...videoNotes];
+      if (finishedNotes.length) {
+        setCtSellerBulkErr(finishedNotes.join("\n"));
       }
       setDataReloadNonce((n) => n + 1);
     } catch (e) {
@@ -6707,8 +6763,10 @@ export default function DashboardPage() {
     }
     setCtSellerBulkBusy(true);
     setCtSellerBulkErr("");
+    clearCtSellerLotErrors(ids);
     setCtSellerBulkMsg("Adding photos…");
     const failSamples: string[] = [];
+    const videoNotes: string[] = [];
     const noteRows = (
       rows: Array<{
         lot_id: string;
@@ -6728,14 +6786,8 @@ export default function DashboardPage() {
             prev.map((l) => (l.id === row.lot_id ? { ...l, ctseller_posted_at: new Date().toISOString() } : l))
           );
         }
-        if (row.ok && row.video_note && failSamples.length < 3) {
-          const sample = `${row.sku || row.lot_id}: ${row.video_note}`;
-          if (!failSamples.includes(sample)) failSamples.push(sample);
-        } else if (!row.ok && !row.skipped && row.error && row.error !== "queued" && failSamples.length < 3) {
-          const sample = `${row.sku || row.lot_id}: ${row.error}`;
-          if (!failSamples.includes(sample)) failSamples.push(sample);
-        }
       }
+      noteCtSellerOutcome(rows, failSamples, videoNotes);
     };
     try {
       const kick = (await apiFetch(`/sales/${encodeURIComponent(selectedSaleId)}/ctseller-photos`, token, {
@@ -6758,7 +6810,8 @@ export default function DashboardPage() {
       noteRows(kick.results || []);
       if ((kick.queued || 0) < 1) {
         setCtSellerBulkMsg(`Nothing queued` + (kick.skipped ? ` — ${kick.skipped} skipped` : "") + ".");
-        if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+        const early = [...failSamples, ...videoNotes];
+        if (early.length) setCtSellerBulkErr(early.join("\n"));
         return;
       }
       setCtSellerBulkMsg(`Adding photos on ${kick.queued} lot(s)…`);
@@ -6812,7 +6865,8 @@ export default function DashboardPage() {
           );
         }
       }
-      if (failSamples.length) setCtSellerBulkErr(failSamples.join(" · "));
+      const finishedNotes = [...failSamples, ...videoNotes];
+      if (finishedNotes.length) setCtSellerBulkErr(finishedNotes.join("\n"));
       setDataReloadNonce((n) => n + 1);
     } catch (e) {
       setCtSellerBulkMsg("");
@@ -8229,7 +8283,7 @@ export default function DashboardPage() {
               <div className="ct-dash-upload__desktop">
                 <h2 className="ct-dash-panel__title">Upload photos</h2>
                 <p className="ct-upload-intro">
-                  Add images for the selected sale. Review thumbnails, then upload.
+                  Add images for the selected sale. Review how the photos split into lots, then upload.
                 </p>
 
                 <div className="ct-upload-options" role="group" aria-label="Select photos">
@@ -8263,7 +8317,7 @@ export default function DashboardPage() {
                     <div className="ct-upload-option__text">
                       <span className="ct-upload-option__title">Choose photos</span>
                       <span className="ct-upload-option__desc">
-                        Pick files in order; a new estate tape SKU or a blank divider photo starts the next lot.
+                        Ordered by filename (camera timestamps and IMG_9 before IMG_10). A new estate tape SKU or a blank divider photo starts the next lot.
                       </span>
                     </div>
                     <button
@@ -8446,6 +8500,9 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+                {folderPick.imageFiles.length > 1
+                  ? "The groups below are the lots from folders and blank sheets. "
+                  : ""}
                 {folderPick.singleLotMode
                   ? "Tap Upload to send — this box clears right away so you can photograph the next lot while catalog runs"
                   : "Staged photos stay until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)"}
@@ -8491,6 +8548,9 @@ export default function DashboardPage() {
                         url={url || null}
                         label={folderPick.imageFiles[i]?.name ?? `Photo ${i + 1}`}
                       />
+                      <span className="ct-staging-thumb-index" aria-hidden>
+                        {i + 1}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -8556,6 +8616,18 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
+            {folderPick.imageFiles.length > 1 ? (
+              <UploadSortPreview
+                files={folderPick.imageFiles}
+                thumbUrls={folderPick.thumbUrls}
+                labelOf={(file) => stagedUploadRelOrNull(file) || file.name}
+                singleLot={folderPick.singleLotMode === true}
+                inheritSku={inheritSkuFromSubfolder}
+                onOpen={(index) => {
+                  if (!uploading) setStagingViewerIndex(index);
+                }}
+              />
+            ) : null}
             <div className="ct-row ct-row--gap-lg">
               <button
                 type="button"
@@ -9033,6 +9105,15 @@ export default function DashboardPage() {
           </>
         ) : null}
       </header>
+      {Object.keys(ctSellerLotErrors).length > 0 ? (
+        <div className="ct-banner ct-banner--error" role="alert">
+          {Object.entries(ctSellerLotErrors).map(([id, row]) => (
+            <p key={id} style={{ margin: "0.2rem 0" }}>
+              <strong>{row.sku || "Lot"}:</strong> {row.message}
+            </p>
+          ))}
+        </div>
+      ) : null}
       <PhotoAddsPanel
         lots={photoAdds}
         updateBusy={ctSellerBulkBusy}
@@ -9139,6 +9220,11 @@ export default function DashboardPage() {
                   {lot.audience_hold ? (
                     <span className="ct-lot-mobile-card__meta-item" title="Held from CT Seller posting — skipped on bulk CT Seller post">
                       Held
+                    </span>
+                  ) : null}
+                  {ctSellerLotErrors[lot.id] ? (
+                    <span className="ct-lot-mobile-card__meta-item ct-lot-mobile-card__meta-item--error">
+                      {ctSellerLotErrors[lot.id].message}
                     </span>
                   ) : null}
                   {lot.condition_text ? (
@@ -9446,6 +9532,15 @@ export default function DashboardPage() {
                 </RowOverflowMenu>
               </td>
             </tr>
+            {ctSellerLotErrors[lot.id] ? (
+              <tr>
+                <td colSpan={10}>
+                  <span className="ct-lots-table__post-error">
+                    <strong>{lot.sku || "Lot"}:</strong> {ctSellerLotErrors[lot.id].message}
+                  </span>
+                </td>
+              </tr>
+            ) : null}
             </Fragment>
           ))}
         </tbody>
