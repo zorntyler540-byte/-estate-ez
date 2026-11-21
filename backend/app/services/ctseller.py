@@ -1152,6 +1152,32 @@ def blank_payload_keys(payload: Any) -> list[str]:
     return found
 
 
+def _field_types(payload: Any) -> str:
+    """Compact key:type list for a failed write. No values, secrets, or image bytes."""
+    parts: list[str] = []
+    for row in _payload_rows(payload):
+        for key, value in row.items():
+            name = str(key)
+            if _SECRET_KEY.search(name) or _BULK_KEY.search(name):
+                continue
+            if value is None:
+                kind = "null"
+            elif isinstance(value, bool):
+                kind = "bool"
+            elif isinstance(value, (int, float)):
+                kind = "num"
+            elif isinstance(value, str):
+                kind = "blank" if not value.strip() else "str"
+            elif isinstance(value, dict):
+                kind = "obj"
+            elif isinstance(value, list):
+                kind = "list"
+            else:
+                kind = type(value).__name__
+            parts.append(f"{name}:{kind}")
+    return ",".join(parts) or "-"
+
+
 def _first_payload_value(payload: Any, *keys: str) -> str:
     for row in _payload_rows(payload):
         for key in keys:
@@ -1230,13 +1256,14 @@ def _log_ctseller_write_failure(
         body_text = str(body)
     body_text = _redact_text(body_text)[:_LOG_BODY_MAX]
     logger.warning(
-        "CT Seller write failed method=%s path=%s sku=%s sale_id=%s ct_auction_id=%s blank_keys=%s status=%s body=%s",
+        "CT Seller write failed method=%s path=%s sku=%s sale_id=%s ct_auction_id=%s blank_keys=%s fields=%s status=%s body=%s",
         method.upper(),
         path,
         sku,
         estate_sale_id,
         auction or "-",
         ",".join(blank) or "-",
+        _field_types(payload),
         getattr(resp, "status_code", None) or exc.status_code or "-",
         body_text,
     )
@@ -1443,21 +1470,19 @@ def build_item_payload(
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
-    # CT Seller stores receipt method as a JSON string on items (see /item/detail).
-    if isinstance(item_receipt_method, str) and item_receipt_method.strip().startswith("{"):
-        irm_out = item_receipt_method.strip()
-    else:
-        irm_out = json.dumps(irm, separators=(",", ":"))
+    # Item detail returns receipt method as a JSON string. item/add expects the object
+    # the seller form posts: {pickup, delivery, shipping}.
 
     area_out = (area or "").strip() or infer_ct_area(cat, allowed_areas)
 
-    def _pct(raw: float | str | None) -> str:
+    def _number_or_none(raw: float | str | None) -> float | None:
+        """Seller form parseFloat: a number, or null when the field is blank."""
         if raw is None or raw == "":
-            return ""
+            return None
         try:
-            return f"{float(raw):.3f}"
+            return float(raw)
         except (TypeError, ValueError):
-            return ""
+            return None
 
     tag_evidence = f"{title or ''} {description or ''}"
     if isinstance(tag, (list, tuple)):
@@ -1468,19 +1493,21 @@ def build_item_payload(
             evidence=tag_evidence,
         )
 
-    tax_out = _pct(tax)
-    bp_out = _pct(buyers_premium)
+    tax_out = _number_or_none(tax)
+    bp_out = _number_or_none(buyers_premium)
     # SPA requires tax % when the item is taxable; copy sale-level tax when present.
-    is_taxable = bool(tax_out)
+    is_taxable = tax_out is not None
     ships = bool(irm.get("shipping"))
     reserve = format_ctseller_reserve_price(reserve_price)
+    reserve_out = float(reserve) if isinstance(reserve, (int, float)) and reserve > 0 else None
 
     # ``id: null`` and ``itemtypeid`` 2 are required on create, or CT Seller returns
     # "Not found : Update key or data missing".
-    # Empty strings on numeric fields make item/add return
-    # "The required field data for the requested operation is not met" with no field
-    # name (SKU 1000, auction 50050). Quantity is one lot. Optional prices, dimensions,
-    # fees, goal, and valuation are omitted unless they have a value.
+    # SKU 1000 item/add still 400'd after quantity was 1 and empty price strings were
+    # omitted (3:33 PM PT Nov 21). The seller form posts tax and buyers premium as
+    # numbers, receipt method as an object, and blank prices/dimensions as null.
+    # Empty strings fail with "The required field data for the requested operation
+    # is not met" and no field name. Quantity is one lot. Specialty shipping is a checkbox.
     out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
@@ -1498,16 +1525,24 @@ def build_item_payload(
         "isshippable": ships,
         "isfeatured": False,
         "ispublic": True,
-        "itemreceiptmethod": irm_out,
+        "itemreceiptmethod": irm,
         "closingorder": 999,
         "tag": tag_out,
         "quantity": 1,
         "tax": tax_out,
         "buyerspremium": bp_out,
+        "reserveprice": reserve_out,
+        "buynowprice": None,
+        "width": None,
+        "height": None,
+        "length": None,
+        "weight": None,
+        "shippingfee": None,
+        "handlingfee": None,
+        "goal": None,
+        "valuation": None,
         "fragilityscore": None,
         "material": (material or "").strip() or None,
-        "specialtyshippeditems": "",
+        "specialtyshippeditems": False,
     }
-    if isinstance(reserve, (int, float)) and reserve > 0:
-        out["reserveprice"] = float(reserve)
     return out
