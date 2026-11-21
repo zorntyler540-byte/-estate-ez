@@ -17,7 +17,8 @@ from app.release_notes import (
     load_release_notes,
 )
 
-SHIPPED_ID = "2026-11-18-uploads-photos-listings"
+SHIPPED_WEB_ID = "2026-11-21-upload-order-lot-split"
+SHIPPED_MOBILE_ID = "2026-11-18-uploads-photos-listings"
 
 
 def _write(path, notes: list[dict]) -> None:
@@ -30,17 +31,17 @@ def test_shipped_note_is_the_newest_for_both_clients() -> None:
     web = latest_release_note("web")
     mobile = latest_release_note("mobile")
     assert web is not None and mobile is not None
-    assert web.id == SHIPPED_ID
-    assert mobile.id == SHIPPED_ID
-    assert web.platform == "all"
+    assert web.id == SHIPPED_WEB_ID
+    assert web.platform == "web"
+    assert mobile.id == SHIPPED_MOBILE_ID
     blob = " ".join(web.items).lower()
-    assert "white divider" in blob
-    assert "lots run in parallel" in blob
-    assert "replace photos on ct seller" in blob
-    assert "set reserve works again" in blob
-    assert "standard description" in blob
-    assert "add to unposted" in blob
-    assert "brand at the end" in blob
+    assert "img_9 before img_10" in blob
+    assert "split into lots" in blob
+    assert "blank sheet" in blob
+    assert "post to ct seller fails" in blob
+    previous = " ".join(mobile.items).lower()
+    assert "white divider" in previous
+    assert "lots run in parallel" in previous
 
 
 def test_platform_filter_date_order_and_skipped_entries(tmp_path) -> None:
@@ -165,15 +166,15 @@ def test_authenticated_latest_and_list(tmp_path, monkeypatch) -> None:
         assert latest.status_code == 200, latest.text
         assert "private" in latest.headers.get("cache-control", "")
         body = latest.json()
-        assert body["note"]["id"] == SHIPPED_ID
+        assert body["note"]["id"] == SHIPPED_WEB_ID
         assert body["note"]["items"]
         mobile = client.get("/release-notes/latest?platform=mobile", headers=headers)
         assert mobile.status_code == 200
-        assert mobile.json()["note"]["id"] == SHIPPED_ID
+        assert mobile.json()["note"]["id"] == SHIPPED_MOBILE_ID
         listed = client.get("/release-notes", headers=headers)
         assert listed.status_code == 200
         ids = [row["id"] for row in listed.json()["notes"]]
-        assert ids[0] == SHIPPED_ID
+        assert ids[0] == SHIPPED_WEB_ID
         rejected = client.get("/release-notes/latest?platform=desktop", headers=headers)
         assert rejected.status_code == 422
     finally:
