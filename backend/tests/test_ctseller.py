@@ -56,6 +56,7 @@ def test_build_item_payload_strips_category_group() -> None:
     assert item["area"] == "Living Room"  # Lighting → living-space default
     # Leaf "Lamps" is not a /category/list name; fall back to group "Lighting".
     assert item["category"] == "Lighting"
+    assert item["categoryGroup"] == "Household Goods"
     assert item["startingprice"] == 5.0
     assert item["quantity"] == 1
     assert item["itemstatus"] == "Pending"
@@ -63,6 +64,27 @@ def test_build_item_payload_strips_category_group() -> None:
     assert "specialtyshippeditems" not in item
     assert "goal" not in item
     assert "valuation" not in item
+
+
+def test_build_item_payload_sends_category_group() -> None:
+    """Seller form sends the parent group. Glassware lives under Household Goods."""
+    item = build_item_payload(
+        sale_id=50050,
+        location_id=527,
+        sku="3003",
+        title="Amethyst Glass Decanter Set",
+        description="Decanter",
+        category="Glassware",
+        condition="VERY GOOD",
+        starting_price=None,
+        item_receipt_method={"pickup": True, "delivery": False, "shipping": True},
+        tax=8.38,
+        buyers_premium=20,
+    )
+    assert item["category"] == "Glassware"
+    assert item["categoryGroup"] == "Household Goods"
+    assert item["area"] == "Kitchen & Dining"
+    assert item["shippingfee"] == 0.0
 
 
 def test_build_item_payload_kitchen_area() -> None:

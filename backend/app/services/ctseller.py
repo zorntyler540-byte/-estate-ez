@@ -30,6 +30,7 @@ from app.config import settings
 from app.services.ctseller_categories import (
     CT_SELLER_CATEGORY_DEFAULT,
     canonicalize_ct_category,
+    ct_category_group,
     infer_ct_area,
 )
 from app.services.ctseller_conditions import canonicalize_ct_condition
@@ -1513,6 +1514,7 @@ def build_item_payload(
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
+    category_group = ct_category_group(cat)
     # Item detail returns receipt method as a JSON string. item/add expects the object
     # the seller form posts: {pickup, delivery, shipping}.
 
@@ -1592,5 +1594,7 @@ def build_item_payload(
     material_out = (material or "").strip()
     if material_out:
         out["material"] = material_out
+    if category_group:
+        out["categoryGroup"] = category_group
     # id must stay null. Every other null is blank data CT Seller rejects.
     return {key: value for key, value in out.items() if value is not None or key == "id"}
