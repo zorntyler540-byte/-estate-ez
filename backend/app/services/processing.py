@@ -638,13 +638,21 @@ def _apply_inherit_sku_from_subfolder_name(
 
 
 def _subfolder_batch_key(job_folder: Path, photo_path: Path) -> str:
-    """First path segment under the job folder; empty string = file lives directly in job root."""
+    """Lot folder under the job folder.
+
+    ``035/a.jpg`` is ``035``. A website folder pick stores ``Sale/035/a.jpg`` because
+    the chosen folder is the first segment; the lot folder is the next one (``035``),
+    so ``035`` and ``036`` still split and can be used as the lot number. A file with
+    no directory is ``""``.
+    """
     try:
         rel = photo_path.resolve().relative_to(job_folder.resolve())
-    except ValueError:
+    except (OSError, ValueError):
         return ""
-    parts = rel.parts
-    return parts[0] if len(parts) > 1 else ""
+    parts = rel.parts[:-1]
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0] if parts else ""
 
 
 def _finalize_open_lot(

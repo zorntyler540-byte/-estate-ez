@@ -177,6 +177,22 @@ def test_later_tape_photo_of_the_same_number_starts_a_lot(tmp_path: Path) -> Non
     assert [p.name for p, _ in segments[1]] == ["a2.jpg"]
 
 
+def test_segment_splits_lot_folders_inside_the_picked_folder(tmp_path: Path) -> None:
+    """Choose folder stores ``Sale/035/…``. The picked name is not the lot folder."""
+    folder = tmp_path / "batch"
+    sale = folder / "Sale"
+    (sale / "035").mkdir(parents=True)
+    (sale / "036").mkdir(parents=True)
+    first = sale / "035" / "a.jpg"
+    second = sale / "036" / "b.jpg"
+    ordered = [
+        (first, first.name, _row(first.name)),
+        (second, second.name, _row(second.name)),
+    ]
+    segments = _segment_batch_lots_by_tape(folder, ordered)
+    assert [[p.name for p, _ in seg] for seg in segments] == [["a.jpg"], ["b.jpg"]]
+
+
 def test_segment_splits_on_subfolder(tmp_path: Path) -> None:
     folder = tmp_path / "batch"
     sub_a = folder / "035"

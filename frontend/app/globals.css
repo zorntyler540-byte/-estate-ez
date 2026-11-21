@@ -1785,6 +1785,28 @@ a.ct-btn:hover {
   border-bottom: 1px solid var(--ct-border);
 }
 
+.ct-sort-preview__lot {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.4rem 0.45rem;
+  background: var(--ct-bg-elevated);
+  color: var(--ct-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-bottom: 1px solid var(--ct-border);
+}
+
+.ct-sort-preview__lot--divider {
+  color: var(--ct-text-muted);
+  font-weight: 600;
+  background: var(--ct-surface);
+}
+
+.ct-sort-preview__row--divider {
+  opacity: 0.8;
+}
+
 .ct-sort-preview__row {
   display: flex;
   align-items: center;

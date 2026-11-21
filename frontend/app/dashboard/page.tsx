@@ -8283,7 +8283,7 @@ export default function DashboardPage() {
               <div className="ct-dash-upload__desktop">
                 <h2 className="ct-dash-panel__title">Upload photos</h2>
                 <p className="ct-upload-intro">
-                  Add images for the selected sale. Review the numbered catalog order, then upload.
+                  Add images for the selected sale. Review how the photos split into lots, then upload.
                 </p>
 
                 <div className="ct-upload-options" role="group" aria-label="Select photos">
@@ -8501,7 +8501,7 @@ export default function DashboardPage() {
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
                 {folderPick.imageFiles.length > 1
-                  ? "The numbered list is the order cataloging uses. "
+                  ? "The groups below are the lots from folders and blank sheets. "
                   : ""}
                 {folderPick.singleLotMode
                   ? "Tap Upload to send — this box clears right away so you can photograph the next lot while catalog runs"
@@ -8622,6 +8622,7 @@ export default function DashboardPage() {
                 thumbUrls={folderPick.thumbUrls}
                 labelOf={(file) => stagedUploadRelOrNull(file) || file.name}
                 singleLot={folderPick.singleLotMode === true}
+                inheritSku={inheritSkuFromSubfolder}
                 onOpen={(index) => {
                   if (!uploading) setStagingViewerIndex(index);
                 }}

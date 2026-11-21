@@ -325,7 +325,7 @@ export default function ClientUploadPage() {
                     ? bulk
                       ? `Choose up to ${BULK_MAX_PHOTOS} photos. They are split into lots on the server.`
                       : `Choose up to ${MAX_PHOTOS} photos for one lot.`
-                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected. Review the catalog order, then upload.`}
+                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected. Review how they split into lots, then upload.`}
                 </p>
                 {files.length > 1 ? <UploadSortPreview files={files} singleLot={!bulk} /> : null}
                 <button

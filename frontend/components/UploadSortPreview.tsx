@@ -2,7 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { isHeicLikeFile } from "../lib/heicConvert";
-import { buildUploadOrderPreview, type UploadSortable } from "../lib/sortUploadFiles";
+import { confidentBlankFile, lotSplitSummary, previewLotSplits } from "../lib/lotSplitPreview";
+import { buildUploadOrderPreview, type UploadOrderRow, type UploadSortable } from "../lib/sortUploadFiles";
 
 type PreviewProps<T extends UploadSortable> = {
   files: readonly T[];
@@ -10,8 +11,10 @@ type PreviewProps<T extends UploadSortable> = {
   thumbUrls?: readonly (string | null | undefined)[];
   /** Path the sort used (folder-relative when the picker provided one). */
   labelOf?: (file: T) => string;
-  /** All photos stay one catalog lot; the list is still the order cataloging sees. */
+  /** All photos stay one catalog lot. */
   singleLot?: boolean;
+  /** Digit-named folders (``035``) become the lot number. */
+  inheritSku?: boolean;
   onOpen?: (index: number) => void;
 };
 
@@ -42,25 +45,65 @@ function useObjectThumbUrls(files: readonly UploadSortable[], enabled: boolean):
   return urls;
 }
 
+function useBlankDividers(files: readonly UploadSortable[], enabled: boolean): {
+  dividers: ReadonlySet<number>;
+  checking: boolean;
+} {
+  const [dividers, setDividers] = useState<ReadonlySet<number>>(new Set());
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    if (!enabled) {
+      setDividers(new Set());
+      setChecking(false);
+      return;
+    }
+    let cancelled = false;
+    setChecking(true);
+    setDividers(new Set());
+    void (async () => {
+      const found = new Set<number>();
+      for (let index = 0; index < files.length; index += 1) {
+        if (cancelled) return;
+        const file = files[index];
+        if (file instanceof File && (await confidentBlankFile(file))) found.add(index);
+        if (index % 6 === 5 && !cancelled) setDividers(new Set(found));
+      }
+      if (!cancelled) {
+        setDividers(new Set(found));
+        setChecking(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, files]);
+  return { dividers, checking };
+}
+
 /**
- * Numbered order the catalog pipeline will see, shown before Upload sends the batch.
- * Thumbnails make a blank divider sheet visible between the groups it splits.
+ * Lot groups cataloging will start with, shown before Upload.
+ * Folders and blank sheets split the list. Tape numbers are still read later.
  */
 export function UploadSortPreview<T extends UploadSortable>({
   files,
   thumbUrls,
   labelOf,
   singleLot = false,
+  inheritSku = false,
   onOpen
 }: PreviewProps<T>) {
   const titleId = useId();
   const listRef = useRef<HTMLOListElement>(null);
   const generated = useObjectThumbUrls(files, thumbUrls == null);
   const thumbs = thumbUrls ?? generated;
-  const preview = buildUploadOrderPreview(
-    files,
-    labelOf ? (file) => labelOf(file as T) : undefined
+  const preview = buildUploadOrderPreview(files, labelOf ? (file) => labelOf(file as T) : undefined);
+  const { dividers, checking } = useBlankDividers(files, !singleLot && files.length > 1);
+  const splits = previewLotSplits(
+    preview.rows.map((row) => row.label),
+    { dividerIndexes: dividers, singleLot, inheritSku }
   );
+  const lotCount = splits.filter((split) => split.kind === "lot").length;
+  const dividerCount = splits.filter((split) => split.kind === "divider").length;
 
   if (files.length < 2) return null;
 
@@ -68,19 +111,53 @@ export function UploadSortPreview<T extends UploadSortable>({
     listRef.current?.querySelector(`[data-sort-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
+  function renderRow(row: UploadOrderRow, divider: boolean) {
+    const raw = thumbs[row.index];
+    const thumb = raw === "" ? undefined : raw;
+    const position = String(row.index + 1).padStart(files.length >= 100 ? 4 : 2, "0");
+    return (
+      <div
+        key={row.index}
+        className={`ct-sort-preview__row${row.backwards ? " ct-sort-preview__row--backwards" : ""}${
+          divider ? " ct-sort-preview__row--divider" : ""
+        }`}
+        data-sort-index={row.index}
+        title={
+          divider
+            ? "Blank sheet. It separates lots and is not cataloged."
+            : row.backwards && row.earlierIndex != null
+              ? `Camera time is earlier than row ${row.earlierIndex + 1} (${row.earlierLeaf})`
+              : row.label
+        }
+      >
+        <span className="ct-sort-preview__n">{position}</span>
+        {onOpen ? (
+          <button
+            type="button"
+            className="ct-sort-preview__thumb"
+            aria-label={`Preview ${row.leaf}`}
+            onClick={() => onOpen(row.index)}
+          >
+            <PreviewThumb url={thumb} />
+          </button>
+        ) : (
+          <span className="ct-sort-preview__thumb" aria-hidden>
+            <PreviewThumb url={thumb} />
+          </span>
+        )}
+        <span className="ct-sort-preview__name">{row.leaf}</span>
+      </div>
+    );
+  }
+
   return (
     <section className="ct-sort-preview" aria-labelledby={titleId}>
       <div className="ct-sort-preview__head">
         <h3 id={titleId} className="ct-sort-preview__title">
-          Catalog order
+          Lot split
         </h3>
         <p className="ct-muted ct-sort-preview__lead">
-          {files.length} photos
-          {preview.folderCount > 1 ? ` in ${preview.folderCount} folders` : ""}
-          {preview.first && preview.last ? `, from ${preview.first} to ${preview.last}` : ""}.{" "}
-          {singleLot
-            ? "These stay one lot. Cataloging still sees them in this sequence."
-            : "Cataloging uses this sequence. A new tape number or a blank divider photo starts the next lot."}
+          {lotSplitSummary({ lotCount, dividerCount, singleLot, checkingBlank: checking })}
         </p>
       </div>
       {preview.note ? (
@@ -99,38 +176,28 @@ export function UploadSortPreview<T extends UploadSortable>({
         </div>
       ) : null}
       <ol ref={listRef} className="ct-sort-preview__list">
-        {preview.rows.map((row) => {
-          const raw = thumbs[row.index];
-          const thumb = raw === "" ? undefined : raw;
-          const position = String(row.index + 1).padStart(files.length >= 100 ? 4 : 2, "0");
+        {splits.map((split) => {
+          if (split.kind === "divider") {
+            const row = preview.rows[split.index];
+            if (!row) return null;
+            return (
+              <li key={`divider-${split.index}`} className="ct-sort-preview__item">
+                <div className="ct-sort-preview__lot ct-sort-preview__lot--divider">Divider · left out</div>
+                {renderRow(row, true)}
+              </li>
+            );
+          }
+          const count = split.indexes.length;
           return (
-            <li key={row.index} className="ct-sort-preview__item" data-sort-index={row.index}>
-              {row.showDir ? <div className="ct-sort-preview__dir">{row.dir}</div> : null}
-              <div
-                className={`ct-sort-preview__row${row.backwards ? " ct-sort-preview__row--backwards" : ""}`}
-                title={
-                  row.backwards && row.earlierIndex != null
-                    ? `Camera time is earlier than row ${row.earlierIndex + 1} (${row.earlierLeaf})`
-                    : row.label
-                }
-              >
-                <span className="ct-sort-preview__n">{position}</span>
-                {onOpen ? (
-                  <button
-                    type="button"
-                    className="ct-sort-preview__thumb"
-                    aria-label={`Preview ${row.leaf}`}
-                    onClick={() => onOpen(row.index)}
-                  >
-                    <PreviewThumb url={thumb} />
-                  </button>
-                ) : (
-                  <span className="ct-sort-preview__thumb" aria-hidden>
-                    <PreviewThumb url={thumb} />
-                  </span>
-                )}
-                <span className="ct-sort-preview__name">{row.leaf}</span>
+            <li key={`lot-${split.lotNumber}`} className="ct-sort-preview__item">
+              <div className="ct-sort-preview__lot">
+                Lot {split.lotNumber}
+                {split.sku ? ` · ${split.sku}` : ""} · {count} photo{count === 1 ? "" : "s"}
               </div>
+              {split.indexes.map((index) => {
+                const row = preview.rows[index];
+                return row ? renderRow(row, false) : null;
+              })}
             </li>
           );
         })}
