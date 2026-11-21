@@ -111,7 +111,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 )}
               >
                 <Icon size={16} aria-hidden className={cn("mt-0.5 shrink-0", toneIconClass[toast.tone])} />
-                <p className="m-0 flex-1 leading-snug">{toast.message}</p>
+                <p className="m-0 flex-1 whitespace-pre-wrap leading-snug">{toast.message}</p>
                 <button
                   type="button"
                   className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-foreground"

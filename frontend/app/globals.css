@@ -3220,6 +3220,16 @@ select.ct-input option {
   color: var(--ct-error);
 }
 
+.ct-lots-table__post-error {
+  display: block;
+  padding: 0.35rem 0.75rem 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ct-error);
+  white-space: normal;
+}
+
 .ct-lots-table__photo-added {
   display: block;
   margin-top: 0.15rem;

@@ -836,3 +836,93 @@ def test_account_connect_keeps_the_code_in_the_browser(tmp_path, monkeypatch) ->
         db.close()
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_coerce_message_joins_every_field() -> None:
+    from app.services.ctseller import _coerce_message, _failure_message
+
+    message = [
+        {"field": "quantity", "message": "The required field data for the requested operation is not met"},
+        {"field": "buynowprice", "message": "Buy now price is invalid"},
+    ]
+    assert _coerce_message(message) == (
+        "quantity: The required field data for the requested operation is not met; "
+        "buynowprice: Buy now price is invalid"
+    )
+    assert _coerce_message("  hello  ") == "hello"
+    assert _coerce_message(None) == ""
+    assert _coerce_message(["one", "two"]) == "one; two"
+    full = _failure_message(
+        {
+            "status": "failed",
+            "message": "The required field data for the requested operation is not met",
+            "data": message,
+        }
+    )
+    assert "quantity:" in full
+    assert "buynowprice:" in full
+    assert "The required field data for the requested operation is not met" in full
+
+
+def test_item_add_failure_logs_body_blank_keys_and_not_secrets(caplog) -> None:
+    import logging
+
+    import pytest
+
+    from app.services.ctseller import enter_ctseller_write_log, reset_ctseller_write_log
+
+    caplog.set_level(logging.WARNING)
+    client = CTSellerClient(access_token="super-secret-access-token-xyz")
+    payload = {
+        "data": {
+            "SKU": "TG12",
+            "saleid": 4451,
+            "title": "Lamp",
+            "quantity": "",
+            "buynowprice": "",
+            "reserveprice": "",
+            "password": "hunter2-password",
+            "image": "IMAGEBYTES-not-a-real-photo-zzzz",
+        }
+    }
+    body = {
+        "status": "failed",
+        "accessToken": "leaked-response-token",
+        "image": "IMAGEBYTES-not-a-real-photo-zzzz",
+        "message": [
+            {"field": "quantity", "message": "The required field data for the requested operation is not met"},
+            {"field": "buynowprice", "message": "Buy now price is invalid"},
+        ],
+    }
+
+    class _Resp:
+        status_code = 400
+        text = json.dumps(body)
+
+        def json(self):
+            return body
+
+    client.session.post = lambda *args, **kwargs: _Resp()  # type: ignore[method-assign]
+    token = enter_ctseller_write_log(sale_id="sale-abc", ct_auction_id=4451, sku="TG12")
+    try:
+        with pytest.raises(CTSellerError) as caught:
+            client._post_raw("/item/add", payload)
+    finally:
+        reset_ctseller_write_log(token)
+
+    err = caught.value
+    assert "quantity:" in str(err)
+    assert "buynowprice:" in str(err)
+    assert err.blank_keys == ["quantity", "buynowprice", "reserveprice"]
+    log = caplog.text
+    assert "path=/item/add" in log
+    assert "sku=TG12" in log
+    assert "sale_id=sale-abc" in log
+    assert "ct_auction_id=4451" in log
+    assert "blank_keys=quantity,buynowprice,reserveprice" in log
+    assert "The required field data for the requested operation is not met" in log
+    assert "Buy now price is invalid" in log
+    assert "super-secret-access-token-xyz" not in log
+    assert "hunter2-password" not in log
+    assert "IMAGEBYTES-not-a-real-photo-zzzz" not in log
+    assert "leaked-response-token" not in log
