@@ -32,6 +32,7 @@ import { SaleReservePrice } from "../../components/SaleReservePrice";
 import { SaleStandardDescription } from "../../components/SaleStandardDescription";
 import { appendStandardDescription } from "../../lib/standardDescription";
 import { MoveLotsToSale } from "../../components/MoveLotsToSale";
+import { UploadSortPreview } from "../../components/UploadSortPreview";
 import { AppShell } from "../../components/AppShell";
 import { ShellActions } from "../../components/ShellActions";
 import { Badge } from "../../components/ui/badge";
@@ -8282,7 +8283,7 @@ export default function DashboardPage() {
               <div className="ct-dash-upload__desktop">
                 <h2 className="ct-dash-panel__title">Upload photos</h2>
                 <p className="ct-upload-intro">
-                  Add images for the selected sale. Review thumbnails, then upload.
+                  Add images for the selected sale. Review the numbered catalog order, then upload.
                 </p>
 
                 <div className="ct-upload-options" role="group" aria-label="Select photos">
@@ -8499,6 +8500,9 @@ export default function DashboardPage() {
             </div>
             {folderPick.imageFiles.length > 0 ? (
               <p className="ct-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+                {folderPick.imageFiles.length > 1
+                  ? "The numbered list is the order cataloging uses. "
+                  : ""}
                 {folderPick.singleLotMode
                   ? "Tap Upload to send — this box clears right away so you can photograph the next lot while catalog runs"
                   : "Staged photos stay until Gemini has analyzed every upload, then this box clears (catalog may still be building lots)"}
@@ -8544,6 +8548,9 @@ export default function DashboardPage() {
                         url={url || null}
                         label={folderPick.imageFiles[i]?.name ?? `Photo ${i + 1}`}
                       />
+                      <span className="ct-staging-thumb-index" aria-hidden>
+                        {i + 1}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -8609,6 +8616,17 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
+            {folderPick.imageFiles.length > 1 ? (
+              <UploadSortPreview
+                files={folderPick.imageFiles}
+                thumbUrls={folderPick.thumbUrls}
+                labelOf={(file) => stagedUploadRelOrNull(file) || file.name}
+                singleLot={folderPick.singleLotMode === true}
+                onOpen={(index) => {
+                  if (!uploading) setStagingViewerIndex(index);
+                }}
+              />
+            ) : null}
             <div className="ct-row ct-row--gap-lg">
               <button
                 type="button"

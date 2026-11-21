@@ -8,6 +8,7 @@ import { catalogPollIntervalMs } from "../../lib/catalogPoll";
 import { isClientRole, rememberAccountRole } from "../../lib/roles";
 import { resizeJpegsForUpload } from "../../lib/uploadResize";
 import { sortFilesBeforeUploadNames } from "../../lib/sortUploadFiles";
+import { UploadSortPreview } from "../../components/UploadSortPreview";
 import {
   assignUploadNames,
   newWebUploadSession,
@@ -324,8 +325,9 @@ export default function ClientUploadPage() {
                     ? bulk
                       ? `Choose up to ${BULK_MAX_PHOTOS} photos. They are split into lots on the server.`
                       : `Choose up to ${MAX_PHOTOS} photos for one lot.`
-                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected.`}
+                    : `${files.length} photo${files.length === 1 ? "" : "s"} selected. Review the catalog order, then upload.`}
                 </p>
+                {files.length > 1 ? <UploadSortPreview files={files} singleLot={!bulk} /> : null}
                 <button
                   type="button"
                   className="ct-btn ct-btn--primary"
