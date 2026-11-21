@@ -1762,7 +1762,7 @@ a.ct-btn:hover {
   list-style: none;
   margin: 0;
   padding: 0.25rem;
-  max-height: 320px;
+  max-height: 28rem;
   overflow: auto;
   border: 1px solid var(--ct-border);
   border-radius: var(--ct-radius-sm);
@@ -1859,6 +1859,152 @@ button.ct-sort-preview__thumb {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.82rem;
+}
+
+.ct-sort-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.55rem;
+}
+
+.ct-arrange {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 1.25rem 1rem;
+  background: rgba(8, 10, 14, 0.72);
+}
+
+.ct-arrange__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 100%);
+  max-height: 100%;
+  border-radius: 12px;
+  background: var(--ct-bg);
+  border: 1px solid var(--ct-border);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.ct-arrange__head,
+.ct-arrange__foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+}
+
+.ct-arrange__head {
+  border-bottom: 1px solid var(--ct-border);
+}
+
+.ct-arrange__head h2,
+.ct-arrange__lot-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ct-arrange__head p {
+  margin: 0.35rem 0 0;
+  max-width: 46rem;
+}
+
+.ct-arrange__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.75rem 1rem 1rem;
+}
+
+.ct-arrange__lot {
+  margin: 0 0 0.85rem;
+  padding: 0.65rem;
+  border: 1px solid var(--ct-border);
+  border-radius: 10px;
+  background: var(--ct-surface);
+}
+
+.ct-arrange__lot--out {
+  border-style: dashed;
+}
+
+.ct-arrange__lot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.ct-arrange__lot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ct-arrange__cap {
+  margin: 0 0 0.45rem;
+}
+
+.ct-arrange__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 0.55rem;
+}
+
+.ct-arrange__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 0;
+  padding: 0.35rem;
+  border: 1px solid var(--ct-border);
+  border-radius: 8px;
+  background: var(--ct-bg);
+  cursor: grab;
+}
+
+.ct-arrange__thumb {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ct-thumb-placeholder);
+}
+
+.ct-arrange__thumb img,
+.ct-arrange__thumb span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ct-arrange__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.ct-arrange__card select {
+  width: 100%;
+  font-size: 0.75rem;
+}
+
+.ct-arrange__foot {
+  align-items: center;
+  border-top: 1px solid var(--ct-border);
+}
+
+.ct-arrange__foot-actions {
+  display: flex;
+  gap: 0.45rem;
 }
 
 /* Exports */

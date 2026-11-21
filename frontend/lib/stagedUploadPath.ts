@@ -1,5 +1,7 @@
 /** Browser ``File`` after HEIC→JPEG loses ``webkitRelativePath`` — keep the server upload path here. */
 const stagedUploadRel = new WeakMap<File, string>();
+/** Path from before Arrange lots, so Reset can put the automatic split back. */
+const originalUploadRel = new WeakMap<File, string | null>();
 
 export function readSourceUploadRel(file: File): string | null {
   const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim();
@@ -18,6 +20,21 @@ export function getStagedUploadRel(file: File): string {
 /** Server path for a staged file, including a not-yet-converted folder pick's ``webkitRelativePath``. */
 export function stagedUploadRelOrNull(file: File): string | null {
   return stagedUploadRel.get(file) || readSourceUploadRel(file);
+}
+
+/** Remember the path Arrange lots will replace. A second call keeps the first path. */
+export function rememberOriginalUploadRel(file: File): void {
+  if (originalUploadRel.has(file)) return;
+  originalUploadRel.set(file, stagedUploadRel.get(file) || readSourceUploadRel(file));
+}
+
+/** Put back the path from before Arrange lots. */
+export function restoreOriginalUploadRel(file: File): void {
+  if (!originalUploadRel.has(file)) return;
+  const orig = originalUploadRel.get(file);
+  if (orig) stagedUploadRel.set(file, orig);
+  else stagedUploadRel.delete(file);
+  originalUploadRel.delete(file);
 }
 
 /** Unique leaf name within one staging batch (``IMG.jpg``, ``IMG_2.jpg``, …). */

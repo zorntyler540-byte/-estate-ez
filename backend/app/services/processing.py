@@ -655,6 +655,47 @@ def _subfolder_batch_key(job_folder: Path, photo_path: Path) -> str:
     return parts[0] if parts else ""
 
 
+_ARRANGED_LOT_RE = re.compile(r"^lot-(\d+)$")
+
+
+def _arranged_lot_token(job_folder: Path, photo_path: Path) -> str | None:
+    """``arranged/lot-2/photo.jpg`` → ``lot-2``. None when this photo was not arranged."""
+    try:
+        rel = photo_path.resolve().relative_to(job_folder.resolve())
+    except (OSError, ValueError):
+        return None
+    parts = rel.parts[:-1]
+    if len(parts) >= 2 and parts[0] == "arranged" and _ARRANGED_LOT_RE.fullmatch(parts[1]):
+        return parts[1]
+    return None
+
+
+def segment_arranged_lots(
+    folder: Path, ordered: list[tuple[Path, str, dict]]
+) -> list[list[tuple[Path, str]]] | None:
+    """Lots the upload preview arranged.
+
+    Every photo must live under ``arranged/lot-N/``. Those groups are the lots.
+    Tape numbers and blank sheets do not split them again. None when any photo
+    was not arranged, so the caller uses the normal split.
+    """
+    segments: list[list[tuple[Path, str]]] = []
+    current: list[tuple[Path, str]] = []
+    previous: str | None = None
+    for path, key, _row in ordered:
+        token = _arranged_lot_token(folder, path)
+        if token is None:
+            return None
+        if previous is not None and token != previous and current:
+            segments.append(current)
+            current = []
+        current.append((path, key))
+        previous = token
+    if current:
+        segments.append(current)
+    return segments or None
+
+
 def _finalize_open_lot(
     db: Session,
     account_id: str,
@@ -1072,7 +1113,12 @@ def _process_job_batch_pipeline(
         return
 
     divider_paths: list[Path] = []
-    lots = cap_lot_segments(_segment_batch_lots_by_tape(folder, ordered, dividers=divider_paths))
+    arranged = segment_arranged_lots(folder, ordered)
+    if arranged is not None:
+        _LOG.info("batch uses arranged lots job_id=%s lots=%d", job.id, len(arranged))
+        lots = cap_lot_segments(arranged)
+    else:
+        lots = cap_lot_segments(_segment_batch_lots_by_tape(folder, ordered, dividers=divider_paths))
     if divider_paths:
         _LOG.info(
             "batch divider frames job_id=%s dividers=%d lots=%d",

@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { arrangeStateFromIndexes, type ArrangeState } from "../lib/arrangeLots";
 import { isHeicLikeFile } from "../lib/heicConvert";
 import { lotSplitSummary, previewDividerFile, previewLotSplits } from "../lib/lotSplitPreview";
-import { buildUploadOrderPreview, type UploadOrderRow, type UploadSortable } from "../lib/sortUploadFiles";
+import { buildUploadOrderPreview, uploadSortLabel, type UploadOrderRow, type UploadSortable } from "../lib/sortUploadFiles";
+import { stagedUploadRelOrNull } from "../lib/stagedUploadPath";
+import { ArrangeLotsDialog } from "./ArrangeLotsDialog";
 
 type PreviewProps<T extends UploadSortable> = {
   files: readonly T[];
@@ -15,7 +18,12 @@ type PreviewProps<T extends UploadSortable> = {
   singleLot?: boolean;
   /** Digit-named folders (``035``) become the lot number. */
   inheritSku?: boolean;
+  /** Staff already arranged these groups. Blank sheets are not pulled back out. */
+  arrangementLocked?: boolean;
   onOpen?: (index: number) => void;
+  /** Apply an arranged grouping to the staged upload. */
+  onCommitArrangement?: (state: ArrangeState) => void;
+  onResetArrangement?: () => void;
 };
 
 function useObjectThumbUrls(files: readonly UploadSortable[], enabled: boolean): (string | null)[] {
@@ -103,14 +111,25 @@ export function UploadSortPreview<T extends UploadSortable>({
   labelOf,
   singleLot = false,
   inheritSku = false,
-  onOpen
+  arrangementLocked = false,
+  onOpen,
+  onCommitArrangement,
+  onResetArrangement
 }: PreviewProps<T>) {
   const titleId = useId();
   const listRef = useRef<HTMLOListElement>(null);
+  const [arrangeOpen, setArrangeOpen] = useState(false);
   const generated = useObjectThumbUrls(files, thumbUrls == null);
   const thumbs = thumbUrls ?? generated;
-  const preview = buildUploadOrderPreview(files, labelOf ? (file) => labelOf(file as T) : undefined);
-  const { dividers, likely, checking } = useBlankDividers(files, !singleLot && files.length > 1);
+  const preview = buildUploadOrderPreview(files, (file) => {
+    if (labelOf) return labelOf(file as T);
+    if (file instanceof File) return stagedUploadRelOrNull(file) || file.name;
+    return uploadSortLabel(file);
+  });
+  const { dividers, likely, checking } = useBlankDividers(
+    files,
+    !singleLot && !arrangementLocked && files.length > 1
+  );
   const splits = previewLotSplits(
     preview.rows.map((row) => row.label),
     { dividerIndexes: dividers, singleLot, inheritSku }
@@ -173,9 +192,28 @@ export function UploadSortPreview<T extends UploadSortable>({
           Lot split
         </h3>
         <p className="ct-muted ct-sort-preview__lead">
-          {lotSplitSummary({ lotCount, dividerCount, likelyCount, singleLot, checkingBlank: checking })}
+          {lotSplitSummary({
+            lotCount,
+            dividerCount,
+            likelyCount,
+            singleLot,
+            checkingBlank: checking,
+            arranged: arrangementLocked
+          })}
         </p>
       </div>
+      {onCommitArrangement ? (
+        <div className="ct-sort-preview__actions">
+          <button type="button" className="ct-btn" onClick={() => setArrangeOpen(true)}>
+            Arrange lots
+          </button>
+          {arrangementLocked && onResetArrangement ? (
+            <button type="button" className="ct-btn" onClick={onResetArrangement}>
+              Reset automatic split
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {preview.note ? (
         <div className="ct-banner ct-banner--warning ct-sort-preview__warn" role="status">
           <p style={{ margin: 0 }}>{preview.note}</p>
@@ -220,6 +258,22 @@ export function UploadSortPreview<T extends UploadSortable>({
           );
         })}
       </ol>
+      {arrangeOpen && onCommitArrangement ? (
+        <ArrangeLotsDialog
+          rows={preview.rows}
+          thumbs={thumbs}
+          singleLot={singleLot}
+          initial={arrangeStateFromIndexes(
+            splits.flatMap((split) => (split.kind === "lot" ? [{ indexes: split.indexes }] : [])),
+            splits.flatMap((split) => (split.kind === "divider" ? [split.index] : []))
+          )}
+          onClose={() => setArrangeOpen(false)}
+          onUse={(state) => {
+            onCommitArrangement(state);
+            setArrangeOpen(false);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

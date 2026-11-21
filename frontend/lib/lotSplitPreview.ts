@@ -105,7 +105,12 @@ export function lotSplitSummary(options: {
   likelyCount?: number;
   singleLot?: boolean;
   checkingBlank?: boolean;
+  arranged?: boolean;
 }): string {
+  if (options.arranged) {
+    const lots = `${options.lotCount} lot${options.lotCount === 1 ? "" : "s"}`;
+    return `${lots} you arranged. Cataloging keeps these groups.`;
+  }
   if (options.singleLot) return "These photos stay one lot, in this order.";
   const lots = `${options.lotCount} lot${options.lotCount === 1 ? "" : "s"}`;
   const likely = options.likelyCount ?? 0;
