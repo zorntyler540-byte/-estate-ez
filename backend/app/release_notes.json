@@ -2,6 +2,17 @@
   "comment": "Newest date is what the website and phone show. Add an entry, deploy the API. Do not publish an EAS update just to change this text. See README: What's new.",
   "notes": [
     {
+      "id": "2026-11-21-upload-order-lot-split",
+      "date": "2026-11-21",
+      "title": "Check lots before you upload",
+      "platform": "web",
+      "items": [
+        "Choose folder and Choose photos keep filename order, including camera times and IMG_9 before IMG_10, even past 100 photos. Divider sheets stay between the right lots.",
+        "Before Upload, the upload box shows how the photos split into lots. A new folder or a blank sheet starts the next lot, and the blank sheet is left out of the listing. A tape number can still split a group while cataloging.",
+        "When Post to CT Seller fails, the message names the problem and stays on that lot."
+      ]
+    },
+    {
       "id": "2026-11-18-uploads-photos-listings",
       "date": "2026-11-18",
       "title": "Updates for your next sale",
