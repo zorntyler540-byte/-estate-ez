@@ -1473,9 +1473,14 @@ def build_item_payload(
     # SPA requires tax % when the item is taxable; copy sale-level tax when present.
     is_taxable = bool(tax_out)
     ships = bool(irm.get("shipping"))
+    reserve = format_ctseller_reserve_price(reserve_price)
 
-    # Keep this lean: extra null fields are ok, but ``id: null`` and ``itemtypeid`` are required
-    # or CT Seller returns "Not found : Update key or data missing".
+    # ``id: null`` and ``itemtypeid`` 2 are required on create, or CT Seller returns
+    # "Not found : Update key or data missing".
+    # Empty strings on numeric fields make item/add return
+    # "The required field data for the requested operation is not met" with no field
+    # name (SKU 1000, auction 50050). Quantity is one lot. Optional prices, dimensions,
+    # fees, goal, and valuation are omitted unless they have a value.
     out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
@@ -1496,21 +1501,13 @@ def build_item_payload(
         "itemreceiptmethod": irm_out,
         "closingorder": 999,
         "tag": tag_out,
-        "quantity": "",
+        "quantity": 1,
         "tax": tax_out,
         "buyerspremium": bp_out,
-        "reserveprice": format_ctseller_reserve_price(reserve_price),
-        "buynowprice": "",
-        "width": "",
-        "height": "",
-        "length": "",
-        "weight": "",
-        "shippingfee": "",
-        "handlingfee": "",
-        "goal": "",
-        "valuation": "",
         "fragilityscore": None,
         "material": (material or "").strip() or None,
         "specialtyshippeditems": "",
     }
+    if isinstance(reserve, (int, float)) and reserve > 0:
+        out["reserveprice"] = float(reserve)
     return out
