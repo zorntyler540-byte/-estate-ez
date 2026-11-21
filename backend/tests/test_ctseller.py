@@ -119,8 +119,10 @@ def test_build_item_payload_copies_sale_tax_and_premium() -> None:
     assert item["material"] == "Plastic"
     assert item["quantity"] == 1
     assert item["itemreceiptmethod"]["shipping"] is True
-    assert item["width"] is None
-    assert item["buynowprice"] is None
+    assert item["shippingfee"] == 0.0
+    assert item["handlingfee"] == 0.0
+    assert "width" not in item
+    assert "buynowprice" not in item
     assert item["material"] == "Plastic"
     assert "goal" not in item
     assert "valuation" not in item
@@ -182,7 +184,7 @@ def test_build_item_payload_nulls_blank_prices_and_sends_quantity() -> None:
         "shippingfee",
         "handlingfee",
     ):
-        assert item[key] is None, key
+        assert key not in item, key
     for key in ("goal", "valuation", "fragilityscore", "material", "specialtyshippeditems"):
         assert key not in item, key
 
@@ -199,7 +201,7 @@ def test_build_item_payload_blank_reserve_when_missing() -> None:
         starting_price=1.0,
         item_receipt_method=None,
     )
-    assert item["reserveprice"] is None
+    assert "reserveprice" not in item
 
 
 def test_format_and_resolve_reserve_price() -> None:
@@ -276,8 +278,8 @@ def test_build_item_payload_blank_tax_when_sale_has_none() -> None:
         starting_price=1.0,
         item_receipt_method=None,
     )
-    assert item["tax"] is None
-    assert item["buyerspremium"] is None
+    assert "tax" not in item
+    assert "buyerspremium" not in item
     assert item["istaxable"] is False
     assert item["tag"] == ""
 

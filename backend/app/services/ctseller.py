@@ -1555,6 +1555,8 @@ def build_item_payload(
     # The March 2026 seller app deleted blank goal and valuation and did not send material,
     # fragility, or specialty shipping. The Nov 20 app sends those as null, and item/add
     # rejects that null data (SKU 3003, 3:45 PM PT). Leave them off unless they have a value.
+    # Auction 50050 allows shipping. The 3:51 PM PT retry still sent shippingfee and
+    # handlingfee as null. A shippable receipt method needs those as numbers.
     out: dict[str, Any] = {
         "id": None,
         "saleid": int(sale_id),
@@ -1584,10 +1586,11 @@ def build_item_payload(
         "height": None,
         "length": None,
         "weight": None,
-        "shippingfee": None,
-        "handlingfee": None,
+        "shippingfee": 0.0 if irm.get("shipping") or irm.get("delivery") else None,
+        "handlingfee": 0.0 if irm.get("shipping") or irm.get("delivery") else None,
     }
     material_out = (material or "").strip()
     if material_out:
         out["material"] = material_out
-    return out
+    # id must stay null. Every other null is blank data CT Seller rejects.
+    return {key: value for key, value in out.items() if value is not None or key == "id"}
