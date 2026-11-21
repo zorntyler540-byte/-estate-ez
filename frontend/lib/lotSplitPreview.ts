@@ -3,8 +3,9 @@
  *
  * A new folder starts a lot. The folder the user picked is the first path segment
  * (``Sale/035/a.jpg``); the lot folder is the next one (``035``), matching
- * ``_subfolder_batch_key``. A near-uniform blank sheet is a divider and is left out
- * of every lot. Tape numbers are not known until cataloging, so they are not a split here.
+ * ``_subfolder_batch_key``. A blank sheet is a divider and is left out of every lot:
+ * a near-uniform sheet, or ordinary paper that is still low-detail. Tape numbers
+ * are not known until cataloging, so they are not a split here.
  */
 
 export type LotSplit =
@@ -27,6 +28,9 @@ const CONFIDENT_DARK_STDEV = 6;
 const CONFIDENT_DARK_FRACTION = 0.98;
 const CONFIDENT_DARK_CENTER_EDGE = 0.03;
 const CONFIDENT_DARK_FRAME_EDGE = 0.045;
+/** Same cut as ``frame_looks_blank``: a lit sheet of paper, not a busy item. */
+const LOOKS_BLANK_CENTER_EDGE = 0.04;
+const LOOKS_BLANK_FRAME_EDGE = 0.06;
 
 export type BlankProbe = {
   centerEdges: number;
@@ -98,16 +102,24 @@ export function previewLotSplits(
 export function lotSplitSummary(options: {
   lotCount: number;
   dividerCount: number;
+  likelyCount?: number;
   singleLot?: boolean;
   checkingBlank?: boolean;
 }): string {
   if (options.singleLot) return "These photos stay one lot, in this order.";
   const lots = `${options.lotCount} lot${options.lotCount === 1 ? "" : "s"}`;
-  const sheets = options.dividerCount
-    ? `${options.dividerCount} blank sheet${options.dividerCount === 1 ? "" : "s"} left out.`
-    : options.checkingBlank
-      ? "Checking blank sheets."
-      : "No blank sheet found.";
+  const likely = options.likelyCount ?? 0;
+  const sure = Math.max(0, options.dividerCount - likely);
+  let sheets: string;
+  if (options.dividerCount === 0) {
+    sheets = options.checkingBlank ? "Checking blank sheets." : "No blank sheet found.";
+  } else if (likely > 0 && sure === 0) {
+    sheets = `${likely} likely blank sheet${likely === 1 ? "" : "s"} left out.`;
+  } else if (likely > 0) {
+    sheets = `${options.dividerCount} blank sheets left out, ${likely} still to confirm.`;
+  } else {
+    sheets = `${options.dividerCount} blank sheet${options.dividerCount === 1 ? "" : "s"} left out.`;
+  }
   return `${lots} from folders and blank sheets. ${sheets} A new tape number can still start another lot while cataloging.`;
 }
 
@@ -202,6 +214,34 @@ export function frameIsConfidentBlank(probe: BlankProbe | null): boolean {
   return white || dark;
 }
 
+/** Low-detail frame. A phone photo of paper passes; a table of objects does not. */
+export function frameLooksBlank(probe: BlankProbe | null): boolean {
+  if (!probe) return false;
+  return probe.centerEdges <= LOOKS_BLANK_CENTER_EDGE && probe.frameEdges <= LOOKS_BLANK_FRAME_EDGE;
+}
+
+/**
+ * A small item on a seamless light backdrop is also low-detail. Cataloging asks
+ * the model before dropping it. The preview keeps it in the lot.
+ */
+function seamlessBackdropItem(probe: BlankProbe): boolean {
+  return probe.whiteFraction >= 0.9 && probe.stdevLuma >= 18 && probe.centerEdges >= 0.015;
+}
+
+export type DividerKind = "blank" | "likely";
+
+/**
+ * ``blank`` is a near-uniform sheet. ``likely`` is paper with ordinary lighting
+ * (the catalog still confirms it). A busy photo, a white plate, and an item on
+ * a plain backdrop are neither.
+ */
+export function previewDividerKind(probe: BlankProbe | null): DividerKind | null {
+  if (!probe) return null;
+  if (frameIsConfidentBlank(probe)) return "blank";
+  if (frameLooksBlank(probe) && !seamlessBackdropItem(probe)) return "likely";
+  return null;
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -211,17 +251,17 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-/** True when this file is a near-uniform blank sheet or covered lens. HEIC is left for cataloging. */
-export async function confidentBlankFile(file: File): Promise<boolean> {
-  if (typeof document === "undefined") return false;
+/** Blank-sheet kind for one file. HEIC is left for cataloging. */
+export async function previewDividerFile(file: File): Promise<DividerKind | null> {
+  if (typeof document === "undefined") return null;
   const name = file.name || "";
   const type = (file.type || "").toLowerCase();
-  if (type.includes("heic") || type.includes("heif") || /\.heic$|\.heif$/i.test(name)) return false;
+  if (type.includes("heic") || type.includes("heif") || /\.heic$|\.heif$/i.test(name)) return null;
   const url = URL.createObjectURL(file);
   try {
     const image = await loadImage(url);
     const longest = Math.max(image.naturalWidth, image.naturalHeight);
-    if (!longest) return false;
+    if (!longest) return null;
     const scale = Math.min(1, PROBE_EDGE / longest);
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -229,16 +269,16 @@ export async function confidentBlankFile(file: File): Promise<boolean> {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return false;
+    if (!context) return null;
     context.drawImage(image, 0, 0, width, height);
     const pixels = context.getImageData(0, 0, width, height).data;
     const gray = new Uint8ClampedArray(width * height);
     for (let i = 0, pixel = 0; i < pixels.length; i += 4, pixel += 1) {
       gray[pixel] = Math.round(pixels[i]! * 0.299 + pixels[i + 1]! * 0.587 + pixels[i + 2]! * 0.114);
     }
-    return frameIsConfidentBlank(probeFromGray(gray, width, height));
+    return previewDividerKind(probeFromGray(gray, width, height));
   } catch {
-    return false;
+    return null;
   } finally {
     URL.revokeObjectURL(url);
   }

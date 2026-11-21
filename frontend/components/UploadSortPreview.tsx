@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { isHeicLikeFile } from "../lib/heicConvert";
-import { confidentBlankFile, lotSplitSummary, previewLotSplits } from "../lib/lotSplitPreview";
+import { lotSplitSummary, previewDividerFile, previewLotSplits } from "../lib/lotSplitPreview";
 import { buildUploadOrderPreview, type UploadOrderRow, type UploadSortable } from "../lib/sortUploadFiles";
 
 type PreviewProps<T extends UploadSortable> = {
@@ -47,29 +47,42 @@ function useObjectThumbUrls(files: readonly UploadSortable[], enabled: boolean):
 
 function useBlankDividers(files: readonly UploadSortable[], enabled: boolean): {
   dividers: ReadonlySet<number>;
+  likely: ReadonlySet<number>;
   checking: boolean;
 } {
   const [dividers, setDividers] = useState<ReadonlySet<number>>(new Set());
+  const [likely, setLikely] = useState<ReadonlySet<number>>(new Set());
   const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (!enabled) {
       setDividers(new Set());
+      setLikely(new Set());
       setChecking(false);
       return;
     }
     let cancelled = false;
     setChecking(true);
     setDividers(new Set());
+    setLikely(new Set());
     void (async () => {
       const found = new Set<number>();
+      const soft = new Set<number>();
       for (let index = 0; index < files.length; index += 1) {
         if (cancelled) return;
         const file = files[index];
-        if (file instanceof File && (await confidentBlankFile(file))) found.add(index);
-        if (index % 6 === 5 && !cancelled) setDividers(new Set(found));
+        if (file instanceof File) {
+          const kind = await previewDividerFile(file);
+          if (kind) found.add(index);
+          if (kind === "likely") soft.add(index);
+        }
+        if (index % 6 === 5 && !cancelled) {
+          setDividers(new Set(found));
+          setLikely(new Set(soft));
+        }
       }
       if (!cancelled) {
         setDividers(new Set(found));
+        setLikely(new Set(soft));
         setChecking(false);
       }
     })();
@@ -77,7 +90,7 @@ function useBlankDividers(files: readonly UploadSortable[], enabled: boolean): {
       cancelled = true;
     };
   }, [enabled, files]);
-  return { dividers, checking };
+  return { dividers, likely, checking };
 }
 
 /**
@@ -97,13 +110,14 @@ export function UploadSortPreview<T extends UploadSortable>({
   const generated = useObjectThumbUrls(files, thumbUrls == null);
   const thumbs = thumbUrls ?? generated;
   const preview = buildUploadOrderPreview(files, labelOf ? (file) => labelOf(file as T) : undefined);
-  const { dividers, checking } = useBlankDividers(files, !singleLot && files.length > 1);
+  const { dividers, likely, checking } = useBlankDividers(files, !singleLot && files.length > 1);
   const splits = previewLotSplits(
     preview.rows.map((row) => row.label),
     { dividerIndexes: dividers, singleLot, inheritSku }
   );
   const lotCount = splits.filter((split) => split.kind === "lot").length;
   const dividerCount = splits.filter((split) => split.kind === "divider").length;
+  const likelyCount = splits.filter((split) => split.kind === "divider" && likely.has(split.index)).length;
 
   if (files.length < 2) return null;
 
@@ -124,7 +138,9 @@ export function UploadSortPreview<T extends UploadSortable>({
         data-sort-index={row.index}
         title={
           divider
-            ? "Blank sheet. It separates lots and is not cataloged."
+            ? likely.has(row.index)
+              ? "Likely blank sheet. It separates lots and is not cataloged."
+              : "Blank sheet. It separates lots and is not cataloged."
             : row.backwards && row.earlierIndex != null
               ? `Camera time is earlier than row ${row.earlierIndex + 1} (${row.earlierLeaf})`
               : row.label
@@ -157,7 +173,7 @@ export function UploadSortPreview<T extends UploadSortable>({
           Lot split
         </h3>
         <p className="ct-muted ct-sort-preview__lead">
-          {lotSplitSummary({ lotCount, dividerCount, singleLot, checkingBlank: checking })}
+          {lotSplitSummary({ lotCount, dividerCount, likelyCount, singleLot, checkingBlank: checking })}
         </p>
       </div>
       {preview.note ? (
@@ -182,7 +198,9 @@ export function UploadSortPreview<T extends UploadSortable>({
             if (!row) return null;
             return (
               <li key={`divider-${split.index}`} className="ct-sort-preview__item">
-                <div className="ct-sort-preview__lot ct-sort-preview__lot--divider">Divider · left out</div>
+                <div className="ct-sort-preview__lot ct-sort-preview__lot--divider">
+                  {likely.has(split.index) ? "Likely blank sheet · left out" : "Blank sheet · left out"}
+                </div>
                 {renderRow(row, true)}
               </li>
             );
