@@ -13,6 +13,16 @@
       ]
     },
     {
+      "id": "2026-11-21-ct-seller-post",
+      "date": "2026-11-21",
+      "title": "Posting to CT Seller is fixed",
+      "platform": "web",
+      "items": [
+        "CT Seller changed how new listings are saved. Post to CT Seller now sends the same details their form sends, including the category group (Glassware is Household Goods, Decorative Art is Antiques).",
+        "Try posting your unposted lots again. If one still fails, the message stays on that lot."
+      ]
+    },
+    {
       "id": "2026-11-18-uploads-photos-listings",
       "date": "2026-11-18",
       "title": "Updates for your next sale",
