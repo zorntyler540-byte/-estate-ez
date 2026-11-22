@@ -641,6 +641,58 @@ _CT_CATEGORY_GROUP: dict[str, str] = {
 }
 
 
+_live_groups: dict[str, str] | None = None
+_live_groups_tried = False
+
+
+def refresh_ct_category_groups() -> dict[str, str]:
+    """Load subcategory to parent group from CT's current category list.
+
+    GET /category/selection/list. The baked ``_CT_CATEGORY_GROUP`` map is only the
+    fallback when that call fails. It is not the August category-name list.
+    """
+    global _live_groups, _live_groups_tried
+    if _live_groups_tried and _live_groups is not None:
+        return _live_groups
+    _live_groups_tried = True
+    try:
+        import requests
+
+        resp = requests.get(
+            "https://seller.ctbids.com/services/api/v1/category/selection/list",
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Origin": "https://seller.ctbids.com",
+                "Referer": "https://seller.ctbids.com/",
+            },
+        )
+        body = resp.json() if resp.status_code < 400 else {}
+        rows = (body.get("data") or {}).get("data") if isinstance(body, dict) else None
+        out: dict[str, str] = {}
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                group = str(row.get("category") or "").strip()
+                for sel in row.get("selection") or []:
+                    if not isinstance(sel, dict):
+                        continue
+                    leaf = str(sel.get("subcategory") or "").strip()
+                    if leaf and group:
+                        out[leaf] = group
+        _live_groups = out
+    except Exception:
+        _live_groups = {}
+    return _live_groups
+
+
 def ct_category_group(category: str | None) -> str:
     """Parent group for a CT Seller category leaf. Empty when the leaf is unknown."""
-    return _CT_CATEGORY_GROUP.get((category or "").strip(), "")
+    name = (category or "").strip()
+    if not name:
+        return ""
+    live = refresh_ct_category_groups()
+    if name in live:
+        return live[name]
+    return _CT_CATEGORY_GROUP.get(name, "")

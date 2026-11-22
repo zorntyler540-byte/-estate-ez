@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextvars
 import hashlib
+import html
 import io
 import json
 import logging
@@ -1473,6 +1474,17 @@ def _image_to_base64(raw: bytes, *, mime: str = "image/jpeg") -> str:
         return base64.b64encode(raw).decode("ascii")
 
 
+def _seller_description_html(text: str | None) -> str:
+    """Quill wraps each paragraph in <p>, which is what item/add stores."""
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    if raw.lstrip().startswith("<"):
+        return raw
+    blocks = [block.strip() for block in raw.split("\n\n") if block.strip()]
+    return "".join("<p>" + html.escape(block).replace("\n", "<br>") + "</p>" for block in blocks)
+
+
 def build_item_payload(
     *,
     sale_id: int,
@@ -1507,16 +1519,14 @@ def build_item_payload(
             "shipping": bool(item_receipt_method.get("shipping")),
         }
     else:
-        irm = {"pickup": True, "delivery": False, "shipping": False}
-    # A receipt method with every flag false fails item/add. Pickup is the sale default.
+        # Captured seller save (auction 48910, Nov 21): pickup and shipping on.
+        irm = {"pickup": True, "delivery": False, "shipping": True}
     if not any(irm.values()):
-        irm["pickup"] = True
+        irm = {"pickup": True, "delivery": False, "shipping": True}
 
     price = float(starting_price) if starting_price is not None and starting_price > 0 else 1.0
     cat = canonicalize_ct_category(category)
     category_group = ct_category_group(cat)
-    # Item detail returns receipt method as a JSON string. item/add expects the object
-    # the seller form posts: {pickup, delivery, shipping}.
 
     area_out = (area or "").strip() or infer_ct_area(cat, allowed_areas)
 
@@ -1544,42 +1554,32 @@ def build_item_payload(
     is_taxable = tax_out is not None
     reserve = format_ctseller_reserve_price(reserve_price)
     reserve_out = float(reserve) if isinstance(reserve, (int, float)) and reserve > 0 else None
+    material_out = (material or "").strip() or None
 
-    # ``id: null`` and ``itemtypeid`` 2 are required on create, or CT Seller returns
-    # "Not found : Update key or data missing".
-    # SKU 1000 item/add still 400'd after quantity was 1 and empty price strings were
-    # omitted (3:33 PM PT Nov 21). The seller form posts tax and buyers premium as
-    # numbers, receipt method as an object, and blank prices/dimensions as null.
-    # Empty strings fail with "The required field data for the requested operation
-    # is not met" and no field name. Quantity is one lot. Specialty shipping is a checkbox.
-    # The seller form forces isshippable false on save. Shipping is only the receipt-method
-    # flag. isshippable true with null weight and fees is rejected as missing required data.
-    # The March 2026 seller app deleted blank goal and valuation and did not send material,
-    # fragility, or specialty shipping. The Nov 20 app sends those as null, and item/add
-    # rejects that null data (SKU 3003, 3:45 PM PT). Leave them off unless they have a value.
-    # Auction 50050 allows shipping. The 3:51 PM PT retry still sent shippingfee and
-    # handlingfee as null. A shippable receipt method needs those as numbers.
-    out: dict[str, Any] = {
-        "id": None,
-        "saleid": int(sale_id),
+    # Captured seller.ctbids.com item/add body, auction 48910, Nov 21.
+    # No id key. itemtypeid and saleid are strings. quantity and specialty shipping
+    # are empty strings. Blank prices, sizes, goal, valuation, fragility, and material
+    # are null. Description is the editor's <p> HTML.
+    return {
+        "saleid": str(int(sale_id)),
         "locationid": location_id,
         "SKU": (sku or "").strip()[:20],
         "title": (title or "").strip()[:500] or (sku or "Lot"),
-        "description": (description or "").strip(),
+        "description": _seller_description_html(description),
         "category": cat or CT_SELLER_CATEGORY_DEFAULT,
+        "categoryGroup": category_group,
         "area": area_out,
         "condition": canonicalize_ct_condition(condition),
         "itemstatus": "Pending",
-        "itemtypeid": 2,  # Auction (same as SPA-created lots)
+        "itemtypeid": "2",
         "startingprice": price,
         "istaxable": is_taxable,
         "isshippable": False,
         "isfeatured": False,
-        "ispublic": True,
         "itemreceiptmethod": irm,
         "closingorder": 999,
         "tag": tag_out,
-        "quantity": 1,
+        "quantity": "",
         "tax": tax_out,
         "buyerspremium": bp_out,
         "reserveprice": reserve_out,
@@ -1588,13 +1588,11 @@ def build_item_payload(
         "height": None,
         "length": None,
         "weight": None,
-        "shippingfee": 0.0 if irm.get("shipping") or irm.get("delivery") else None,
-        "handlingfee": 0.0 if irm.get("shipping") or irm.get("delivery") else None,
+        "shippingfee": None,
+        "handlingfee": None,
+        "goal": None,
+        "valuation": None,
+        "fragilityscore": None,
+        "material": material_out,
+        "specialtyshippeditems": "",
     }
-    material_out = (material or "").strip()
-    if material_out:
-        out["material"] = material_out
-    if category_group:
-        out["categoryGroup"] = category_group
-    # id must stay null. Every other null is blank data CT Seller rejects.
-    return {key: value for key, value in out.items() if value is not None or key == "id"}
