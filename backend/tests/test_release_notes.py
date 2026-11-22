@@ -17,7 +17,7 @@ from app.release_notes import (
     load_release_notes,
 )
 
-SHIPPED_WEB_ID = "2026-11-21-upload-order-lot-split"
+SHIPPED_WEB_ID = "2026-11-21-ct-seller-post"
 SHIPPED_MOBILE_ID = "2026-11-18-uploads-photos-listings"
 
 
@@ -35,10 +35,9 @@ def test_shipped_note_is_the_newest_for_both_clients() -> None:
     assert web.platform == "web"
     assert mobile.id == SHIPPED_MOBILE_ID
     blob = " ".join(web.items).lower()
-    assert "img_9 before img_10" in blob
-    assert "split into lots" in blob
-    assert "blank sheet" in blob
-    assert "post to ct seller fails" in blob
+    assert "ct seller changed" in blob
+    assert "category group" in blob
+    assert "try posting" in blob
     previous = " ".join(mobile.items).lower()
     assert "white divider" in previous
     assert "lots run in parallel" in previous
