@@ -114,9 +114,9 @@ def test_post_sends_reserve_and_standard_description(monkeypatch) -> None:
     assert out.ctseller_item_id == 77
     item = captured["item"]
     assert item["reserveprice"] == 8.0
-    assert item["description"] == "A silver pitcher.\n\nReserve is $5"
+    assert item["description"] == "<p>A silver pitcher.</p><p>Reserve is $5</p>"
     # The note is not fed back into the description a second time.
-    lot.professional_description = item["description"]
+    lot.professional_description = "A silver pitcher.\n\nReserve is $5"
     lot.ctseller_item_id = None
     post_one_lot_to_ctseller(
         db=db,
@@ -127,7 +127,7 @@ def test_post_sends_reserve_and_standard_description(monkeypatch) -> None:
         item_receipt_method=None,
         allowed_areas=[],
     )
-    assert captured["item"]["description"] == "A silver pitcher.\n\nReserve is $5"
+    assert captured["item"]["description"] == "<p>A silver pitcher.</p><p>Reserve is $5</p>"
 
 
 def _reserve_client(tmp_path, name: str):
