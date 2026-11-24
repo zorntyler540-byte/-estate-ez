@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jarvis</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #04060c;
+      --ink: #d5e4ee;
+      --muted: #7f93a3;
+      --line: rgba(150, 190, 220, 0.28);
+      --topic: #6fd0ff;
+      --file: #7dffa8;
+      --note: #f0c56a;
+      --command: #c9b6ff;
+      --danger: #ffb4a8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background:
+        radial-gradient(900px 520px at 70% 40%, rgba(40, 80, 120, 0.16), transparent 60%),
+        var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      overflow: hidden;
+    }
+    canvas#sky {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    header {
+      position: fixed;
+      top: 18px;
+      left: 22px;
+      z-index: 2;
+      letter-spacing: 0.28em;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    header strong {
+      display: block;
+      color: var(--ink);
+      font-weight: 560;
+      letter-spacing: 0.42em;
+      font-size: 13px;
+    }
+    #orb {
+      position: fixed;
+      right: 36px;
+      top: 50%;
+      transform: translateY(-54%);
+      width: 210px;
+      height: 250px;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+    }
+    .halo {
+      width: 188px;
+      height: 188px;
+      border-radius: 50%;
+      position: relative;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(120, 210, 255, 0.2), transparent 62%);
+    }
+    .halo i {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 1px solid rgba(120, 200, 255, 0.35);
+    }
+    .halo i:nth-child(2) { inset: 16px; border-color: rgba(120, 200, 255, 0.22); }
+    .halo i:nth-child(3) { inset: 34px; border-style: dashed; animation: spin 18s linear infinite; }
+    .core {
+      position: absolute;
+      width: 74px;
+      height: 74px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 40% 35%, #e9fbff, #49b7e8 42%, #0b3a55 78%);
+      box-shadow: 0 0 28px rgba(80, 190, 255, 0.55);
+    }
+    .phase {
+      position: absolute;
+      bottom: 8px;
+      font-size: 11px;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: var(--topic);
+    }
+    #orb[data-phase="listening"] .core {
+      background: radial-gradient(circle at 40% 35%, #e7fff4, #3ddeaf 46%, #0c3b32 78%);
+      box-shadow: 0 0 28px rgba(80, 230, 170, 0.5);
+    }
+    #orb[data-phase="listening"] .phase { color: var(--file); }
+    #orb[data-phase="thinking"] .core {
+      background: radial-gradient(circle at 40% 35%, #fff6df, #e0b15a 46%, #4a3208 78%);
+      box-shadow: 0 0 28px rgba(230, 180, 80, 0.5);
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+    #orb[data-phase="thinking"] .phase { color: var(--note); }
+    #orb[data-phase="speaking"] .core {
+      background: radial-gradient(circle at 40% 35%, #f4eeff, #b7a0f0 46%, #2c2150 78%);
+      box-shadow: 0 0 32px rgba(180, 150, 255, 0.55);
+      animation: pulse 0.7s ease-in-out infinite;
+    }
+    #orb[data-phase="speaking"] .phase { color: var(--command); }
+    #ask {
+      position: fixed;
+      left: 22px;
+      right: 22px;
+      bottom: 16px;
+      z-index: 3;
+    }
+    #notice {
+      margin: 0 0 8px 8px;
+      min-height: 1.2em;
+      color: var(--danger);
+      font-size: 13px;
+    }
+    .bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      border-radius: 999px;
+      background: rgba(8, 14, 22, 0.86);
+      border: 1px solid rgba(150, 190, 220, 0.28);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    }
+    input {
+      flex: 1;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 15px;
+      padding: 8px 14px;
+    }
+    button {
+      border: 1px solid rgba(150, 190, 220, 0.35);
+      background: rgba(20, 36, 52, 0.8);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--topic); }
+    button[aria-pressed="true"] {
+      background: rgba(40, 90, 70, 0.85);
+      border-color: var(--file);
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse {
+      50% { transform: scale(1.06); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="sky"></canvas>
+  <header>
+    <strong>JARVIS</strong>
+    <span id="date"></span>
+  </header>
+  <aside id="orb" data-phase="ready" aria-live="polite">
+    <div class="halo">
+      <i></i><i></i><i></i>
+      <div class="core"></div>
+    </div>
+    <div class="phase" id="phase">ready</div>
+  </aside>
+  <form id="ask">
+    <p id="notice"></p>
+    <div class="bar">
+      <input id="q" name="q" autocomplete="off" placeholder="Ask Jarvis…" />
+      <button type="button" id="mic" aria-label="Listen" aria-pressed="false">Mic</button>
+      <button type="submit">Ask</button>
+    </div>
+  </form>
+  <script>
+    const canvas = document.getElementById("sky");
+    const ctx = canvas.getContext("2d");
+    const phaseEl = document.getElementById("phase");
+    const orb = document.getElementById("orb");
+    const notice = document.getElementById("notice");
+    const form = document.getElementById("ask");
+    const input = document.getElementById("q");
+    const mic = document.getElementById("mic");
+    const LOGIN = "The agent needs a Cursor login.";
+
+    const colors = { topic: "#6fd0ff", file: "#7dffa8", note: "#f0c56a", command: "#c9b6ff" };
+    const nodes = [];
+    const links = [];
+    let sessionId = "";
+    let continuationToken = "";
+    let streamIndex = 0;
+
+    function apiRoot() {
+      const idx = location.pathname.indexOf("/v1/");
+      return idx >= 0 ? location.pathname.slice(0, idx) : "";
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    function addNode(label, kind, fromLabel) {
+      const existing = nodes.find((node) => node.label === label && node.kind === kind);
+      if (existing) return existing;
+      const node = {
+        label,
+        kind,
+        x: canvas.width * 0.38 + (Math.random() - 0.5) * 220,
+        y: canvas.height * 0.46 + (Math.random() - 0.5) * 180,
+        vx: 0,
+        vy: 0,
+      };
+      nodes.push(node);
+      if (fromLabel) {
+        const from = nodes.find((item) => item.label === fromLabel);
+        if (from) links.push({ a: from, b: node });
+      }
+      return node;
+    }
+
+    addNode("Jarvis", "topic");
+    addNode("Home", "file", "Jarvis");
+    addNode("Notes", "topic", "Jarvis");
+    addNode("Today", "topic", "Jarvis");
+    addNode("Files", "file", "Home");
+    addNode("Commands", "topic", "Jarvis");
+
+    function setPhase(name) {
+      orb.dataset.phase = name;
+      phaseEl.textContent = name;
+    }
+
+    function tick() {
+      const cx = canvas.width * 0.4;
+      const cy = canvas.height * 0.46;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i];
+          const b = nodes[j];
+          let dx = a.x - b.x;
+          let dy = a.y - b.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          const force = 1400 / (dist * dist);
+          dx = (dx / dist) * force;
+          dy = (dy / dist) * force;
+          a.vx += dx;
+          a.vy += dy;
+          b.vx -= dx;
+          b.vy -= dy;
+        }
+      }
+      for (const link of links) {
+        const dx = link.b.x - link.a.x;
+        const dy = link.b.y - link.a.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const force = (dist - 110) * 0.012;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        link.a.vx += fx;
+        link.a.vy += fy;
+        link.b.vx -= fx;
+        link.b.vy -= fy;
+      }
+      for (const node of nodes) {
+        node.vx += (cx - node.x) * 0.004;
+        node.vy += (cy - node.y) * 0.004;
+        node.vx *= 0.78;
+        node.vy *= 0.78;
+        node.x += node.vx;
+        node.y += node.vy;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 1;
+      for (const link of links) {
+        ctx.strokeStyle = "rgba(150, 190, 220, 0.28)";
+        ctx.beginPath();
+        ctx.moveTo(link.a.x, link.a.y);
+        ctx.lineTo(link.b.x, link.b.y);
+        ctx.stroke();
+      }
+      ctx.font = "12px Segoe UI, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      for (const node of nodes) {
+        ctx.fillStyle = colors[node.kind] || "#fff";
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.label === "Jarvis" ? 8 : 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(213, 228, 238, 0.88)";
+        ctx.fillText(node.label, node.x, node.y - 12);
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    document.getElementById("date").textContent = new Date().toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+
+    function growNotes(notes) {
+      if (!Array.isArray(notes)) return;
+      for (const note of notes.slice(-8)) {
+        const text = note && typeof note.text === "string" ? note.text : "";
+        if (!text) continue;
+        addNode(text.slice(0, 28), "note", "Notes");
+      }
+    }
+
+    async function loadNotes() {
+      try {
+        const response = await fetch(apiRoot() + "/v1/tools/remember", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: { action: "list" } }),
+        });
+        if (!response.ok) return;
+        const body = await response.json();
+        growNotes(body && body.result && body.result.notes);
+      } catch {
+        /* The page still loads when the agent is not up. */
+      }
+    }
+    loadNotes();
+
+    function speak(text) {
+      if (!text || !window.speechSynthesis) {
+        setPhase("ready");
+        return;
+      }
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 1;
+      utter.onstart = () => setPhase("speaking");
+      utter.onend = () => setPhase("ready");
+      utter.onerror = () => setPhase("ready");
+      window.speechSynthesis.cancel();
+      setPhase("speaking");
+      window.speechSynthesis.speak(utter);
+    }
+
+    function showLogin() {
+      notice.textContent = LOGIN;
+    }
+
+    async function readStream(id) {
+      const response = await fetch(
+        apiRoot() + "/v1/session/" + encodeURIComponent(id) + "/stream?startIndex=" + streamIndex,
+      );
+      if (!response.ok || !response.body) {
+        showLogin();
+        setPhase("ready");
+        return "";
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let reply = "";
+      let done = false;
+      while (!done) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event;
+          try { event = JSON.parse(line); } catch { continue; }
+          if (typeof event.index === "number") streamIndex = event.index + 1;
+          const data = event.data || {};
+          if (event.type === "message.completed" && data.text) reply = data.text;
+          if (event.type === "turn.completed" && !reply && data.result) reply = data.result;
+          if (event.type === "actions.requested" && Array.isArray(data.calls)) {
+            for (const call of data.calls) {
+              const args = call.arguments || call.args || {};
+              if (call.name === "run" || call.toolName === "run") {
+                const command = args.command || "";
+                if (command) addNode(String(command).slice(0, 28), "command", "Commands");
+              }
+              if ((call.name === "read-path" || call.toolName === "read-path") && args.path) {
+                const base = String(args.path).split("/").filter(Boolean).pop();
+                if (base) addNode(base.slice(0, 28), "file", "Files");
+              }
+            }
+          }
+          if (event.type === "action.result" && data.toolName === "remember") {
+            const output = data.output && data.output.result ? data.output.result : data.output;
+            growNotes(output && output.notes);
+          }
+          if (event.type === "turn.failed" || event.type === "session.failed") {
+            showLogin();
+            done = true;
+          }
+          if (event.type === "turn.completed" || event.type === "session.waiting") {
+            done = true;
+          }
+        }
+      }
+      try { await reader.cancel(); } catch { /* already closed */ }
+      return reply;
+    }
+
+    async function ask(text) {
+      notice.textContent = "";
+      setPhase("thinking");
+      addNode(text.slice(0, 28), "command", "Commands");
+      const root = apiRoot();
+      const first = !sessionId;
+      const url = first
+        ? root + "/v1/session"
+        : root + "/v1/session/" + encodeURIComponent(sessionId);
+      const payload = first
+        ? { message: text }
+        : { message: text, continuationToken };
+      let response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        showLogin();
+        setPhase("ready");
+        return;
+      }
+      if (!response.ok) {
+        showLogin();
+        setPhase("ready");
+        return;
+      }
+      const body = await response.json();
+      sessionId = body.sessionId || sessionId;
+      continuationToken = body.continuationToken || continuationToken;
+      const reply = await readStream(sessionId);
+      if (reply) speak(reply);
+      else setPhase("ready");
+      loadNotes();
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      ask(text);
+    });
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      mic.disabled = true;
+      mic.title = "This browser has no speech recognition.";
+    } else {
+      const recognition = new Recognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.onstart = () => {
+        mic.setAttribute("aria-pressed", "true");
+        setPhase("listening");
+      };
+      recognition.onend = () => {
+        mic.setAttribute("aria-pressed", "false");
+        if (orb.dataset.phase === "listening") setPhase("ready");
+      };
+      recognition.onerror = () => setPhase("ready");
+      recognition.onresult = (event) => {
+        const said = event.results && event.results[0] && event.results[0][0]
+          ? event.results[0][0].transcript
+          : "";
+        if (said) {
+          input.value = said;
+          ask(said);
+        }
+      };
+      mic.addEventListener("click", () => {
+        if (mic.getAttribute("aria-pressed") === "true") {
+          recognition.stop();
+          return;
+        }
+        recognition.start();
+      });
+    }
+  </script>
+</body>
+</html>
