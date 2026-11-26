@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from app.services import api_memory_recycle as recycle
 from app.services.api_memory_recycle import RECYCLE_ZONE, next_recycle_at, start_api_memory_recycle
 
 PT = ZoneInfo("America/Los_Angeles")
@@ -49,3 +52,27 @@ def test_start_is_noop_in_tests() -> None:
 
 def test_recycle_zone_is_pacific() -> None:
     assert RECYCLE_ZONE.key == "America/Los_Angeles"
+
+
+def test_api_recycle_loop_stays_on_exact_3am_without_jitter(monkeypatch) -> None:
+    """Shared scheduling must not add worker jitter to the API exit."""
+    seen: dict[str, object] = {}
+
+    def capture(target: datetime) -> None:
+        seen["target"] = target
+
+    def stop(reason: str) -> None:
+        seen["reason"] = reason
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(recycle, "sleep_until", capture)
+    monkeypatch.setattr(recycle, "exit_for_memory_recycle", stop)
+    with pytest.raises(RuntimeError, match="stop"):
+        recycle._recycle_loop()
+    target = seen["target"]
+    assert isinstance(target, datetime)
+    local = target.astimezone(PT)
+    assert (local.hour, local.minute, local.second, local.microsecond) == (3, 0, 0, 0)
+    assert seen["reason"] == (
+        "Scheduled 3 AM Pacific memory recycle; exiting so the host starts a fresh API process"
+    )

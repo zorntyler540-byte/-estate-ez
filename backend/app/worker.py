@@ -18,6 +18,11 @@ Gemini pipeline. Cap the worker replica at 4 GB.
 
 Railway's default Metrics **Sum** view adds every replica. Two idle replicas at
 100 MB each show as 200 MB. Use **Replica** view to right-size the 4 GB limit.
+
+The parent also recycles at 3:00 AM America/Los_Angeles plus 0–15 minutes of
+jitter (``WORKER_MEMORY_RECYCLE``, default on). It stops claiming, waits for the
+current job (about 10 minutes max), then ``os._exit(1)`` so Railway restarts it.
+``MALLOC_ARENA_MAX=2`` is set on the image before Python starts.
 """
 
 from __future__ import annotations
@@ -305,11 +310,19 @@ def _spawn_social_sweep() -> subprocess.Popen:
     return subprocess.Popen(cmd, env=env, start_new_session=True, close_fds=True)
 
 
-def maybe_social_sweep(state: SocialSweepState, *, isolate: bool, now_mono: float | None = None) -> bool:
+def maybe_social_sweep(
+    state: SocialSweepState,
+    *,
+    isolate: bool,
+    now_mono: float | None = None,
+    allow_start: bool = True,
+) -> bool:
     """Run the auto-approve sweep on a fixed timer, busy or not. Returns True if one started.
 
     Isolated mode spawns ``--social-sweep`` so caption/Gemini/Pillow memory leaves with the
     child and the parent never imports the pipeline. One sweep child at a time.
+
+    ``allow_start=False`` only reaps or kills an existing child (memory-recycle drain).
     """
     now = time.monotonic() if now_mono is None else now_mono
     child = state.child
@@ -327,6 +340,8 @@ def maybe_social_sweep(state: SocialSweepState, *, isolate: bool, now_mono: floa
         except Exception:  # noqa: BLE001
             pass
         state.child = None
+    if not allow_start:
+        return False
     if state.last_mono and now - state.last_mono < SOCIAL_SWEEP_SECONDS:
         return False
     state.last_mono = now
@@ -391,8 +406,12 @@ def maybe_social_publish(
     isolate: bool,
     now_mono: float | None = None,
     due: Callable[[], bool] = _social_publish_due,
+    allow_start: bool = True,
 ) -> bool:
-    """Start a publish drain when jobs are due, busy cataloging or not. One drain child at a time."""
+    """Start a publish drain when jobs are due, busy cataloging or not. One drain child at a time.
+
+    ``allow_start=False`` only reaps or kills an existing child (memory-recycle drain).
+    """
     now = time.monotonic() if now_mono is None else now_mono
     child = state.child
     if child is not None:
@@ -409,6 +428,8 @@ def maybe_social_publish(
         except Exception:  # noqa: BLE001
             pass
         state.child = None
+    if not allow_start:
+        return False
     if state.last_check_mono and now - state.last_check_mono < SOCIAL_PUBLISH_POLL_SECONDS:
         return False
     state.last_check_mono = now
@@ -782,8 +803,56 @@ def _fill_worker_slots(
         started_any = True
 
 
+def _child_alive(proc: subprocess.Popen | None) -> bool:
+    if proc is None:
+        return False
+    try:
+        return proc.poll() is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _worker_has_live_work(
+    *,
+    isolate: bool,
+    children: dict[str, IsolatedChild],
+    social: SocialSweepState,
+    publish: SocialPublishState,
+) -> bool:
+    """Catalog slots plus in-flight social children. Used only while draining for recycle."""
+    if not isolate:
+        return _in_process_running_count() > 0
+    if children:
+        return True
+    return _child_alive(social.child) or _child_alive(publish.child)
+
+
+def _reap_social_children(
+    social: SocialSweepState,
+    publish: SocialPublishState,
+    *,
+    isolate: bool,
+) -> None:
+    """Finish bookkeeping for social children without starting another one."""
+    try:
+        maybe_social_sweep(social, isolate=isolate, allow_start=False)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("social sweep scheduling failed")
+    try:
+        maybe_social_publish(publish, isolate=isolate, allow_start=False)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("social publish scheduling failed")
+
+
 def run_worker_loop(poll_seconds: float | None = None) -> None:
     """Poll Postgres for queued catalog jobs and run up to N of them in this process."""
+    from app.services.api_memory_recycle import (
+        exit_for_memory_recycle,
+        start_worker_memory_recycle,
+        worker_recycle_action,
+        worker_recycle_exit_reason,
+    )
+
     os.environ["WORKER_POLL_LOOP"] = "1"
     interval = _poll_seconds() if poll_seconds is None else poll_seconds
     if not settings.run_catalog_jobs_in_process:
@@ -827,25 +896,54 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
     last_memory_log = 0.0
     heartbeat = HeartbeatWriter(slots=cap)
     _log_worker_memory(label="Boot", children=children)
+    # None in tests and when WORKER_MEMORY_RECYCLE is off. The thread only arms
+    # the gate; this loop refuses new claims and exits between jobs.
+    recycle = start_worker_memory_recycle()
+    recycle_logged = False
     while True:
         heartbeat.maybe_beat(len(children) if isolate else _in_process_running_count())
         if isolate:
             _reap_isolated_children(children)
+        draining = recycle is not None and recycle.draining
+        if draining and isolate:
+            _reap_social_children(social, publish, isolate=isolate)
+        if draining and recycle is not None:
+            expired = recycle.drain_expired()
+            action = worker_recycle_action(
+                draining=True,
+                busy=_worker_has_live_work(
+                    isolate=isolate, children=children, social=social, publish=publish
+                ),
+                drain_expired=expired,
+            )
+            if action == "exit":
+                exit_for_memory_recycle(worker_recycle_exit_reason(drain_expired=expired))
         try:
             freed = _requeue_orphaned_processing()
             if freed:
                 _LOG.info("Re-queued %d orphan processing job(s) before claim", freed)
         except Exception:  # noqa: BLE001
             _LOG.exception("orphan processing reconcile failed")
-        started = _fill_worker_slots(isolate=isolate, children=children, cap=cap)
-        try:
-            maybe_social_sweep(social, isolate=isolate)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("social sweep scheduling failed")
-        try:
-            maybe_social_publish(publish, isolate=isolate)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("social publish scheduling failed")
+        # Re-read so a recycle armed during reconcile cannot claim one more job.
+        draining = recycle is not None and recycle.draining
+        if draining:
+            if not recycle_logged:
+                _LOG.warning(
+                    "Worker memory recycle: not claiming new jobs until in-flight work finishes "
+                    "or the drain wait ends"
+                )
+                recycle_logged = True
+            started = False
+        else:
+            started = _fill_worker_slots(isolate=isolate, children=children, cap=cap)
+            try:
+                maybe_social_sweep(social, isolate=isolate)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("social sweep scheduling failed")
+            try:
+                maybe_social_publish(publish, isolate=isolate)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("social publish scheduling failed")
         if isolate:
             busy = bool(children)
         else:
@@ -856,6 +954,11 @@ def run_worker_loop(poll_seconds: float | None = None) -> None:
             last_memory_log = now
             if not busy:
                 trim_process_memory()
+        if draining:
+            # Stay on the short poll so we exit as soon as the current job ends.
+            # Keep heartbeats above so the API does not treat this replica as dead.
+            time.sleep(0.4 if isolate else 0.5)
+            continue
         if started or busy:
             idle_sweeps = 0
             time.sleep(0.4 if isolate else 0.5)

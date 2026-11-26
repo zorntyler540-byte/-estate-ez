@@ -172,6 +172,7 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
    - `WORKER_CHILD_EXIT_SECONDS=15` — after the job row is saved, the child must `os._exit` even if cleanup hangs
    - `WORKER_CHILD_DONE_KILL_SECONDS=30` — parent SIGKILLs a child still alive after the job is completed/failed
    - `WORKER_POLL_SECONDS=2`
+   - `WORKER_MEMORY_RECYCLE` — default on. Set `false` to skip the nightly process exit described below.
 6. **Memory limits (required for cost):** Railway bills RAM while the replica is sized large. Cataloging used to spike to 20–32 GB. Cap services so one location does not cost ~$10/GB-month:
 
 | Service | Memory limit | Notes |
@@ -182,6 +183,8 @@ By default the **API** runs Gemini catalog jobs in background threads inside the
 | Postgres | host default | Do not bump this for cataloging |
 
 The production API is a single long-lived uvicorn process (Railpack uses the root `Procfile`; keep **one** replica). glibc can keep RSS high after bursts, so the API image and Procfile set `MALLOC_ARENA_MAX=2` (same as the worker). A daemon thread exits the process at **3:00 AM America/Los_Angeles** so Railway starts a fresh one (~brief Alembic + boot outage). The exit code is `1` so a default **On Failure** restart policy still comes back; optionally set the API restart policy to **Always**. Do not add a cron service or extra API processes for this. Set `API_MEMORY_RECYCLE=false` to disable the nightly exit.
+
+The catalog worker (`infra/docker/Dockerfile.worker`, command `python -m app.worker`) sets `MALLOC_ARENA_MAX=2` in the image, before Python starts. Each replica also exits at **3:00 AM America/Los_Angeles** plus a random **0–15 minutes**, so two replicas do not restart on the same second. At that time the process stops claiming catalog jobs and stops starting social sweep/publish children, keeps its heartbeat, and exits with code **1** when in-flight work finishes or after about **10 minutes**, whichever comes first. **Set the worker service restart policy to On Failure or Always.** Exit code 1 is what On Failure restarts. That policy is Railway's default and stops after 10 restarts on a deployment, so **Always** is the setting that keeps a nightly exit coming back. Set `WORKER_MEMORY_RECYCLE=false` to disable the nightly exit. Catalog claims are Postgres rows (`FOR UPDATE SKIP LOCKED`). A job still `processing` when the drain cap hits is re-queued by the next worker: boot reconcile frees orphans whose advisory lock is free once the row is 30 seconds stale, and the steady reconcile uses `WORKER_ORPHAN_PROCESSING_SECONDS` (20 minutes). Isolated children run in their own session and die with the container when Railway restarts the replica. Social posts sit in the durable publish queue and are picked up again after the restart.
 
 Do **not** leave API or worker at 24–32 GB “just in case.” If the 4 GB worker OOMs, set `PIPELINE_TRIAGE_PARALLEL=2` and keep `PIPELINE_WORKING_MAX_EDGE=1280`. `WORKER_ISOLATE_JOBS=true` is the default. A child that still dies is re-queued with a `[catalog-crash N/3]` marker; after `WORKER_CHILD_CRASH_RETRIES` it is marked failed (`Worker child crashed N times`) and `/jobs/stuck` surfaces it. Retries skip photos already on lots in that sale and reuse unlinked leftover Photo rows so Gemini is not billed twice and the daily photo cap is not double-counted.
 

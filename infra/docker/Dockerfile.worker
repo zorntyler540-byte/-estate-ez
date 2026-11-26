@@ -21,6 +21,8 @@ ENV PYTHONUNBUFFERED=1
 ENV RUN_CATALOG_JOBS_IN_PROCESS=true
 # glibc creates one malloc arena per thread; catalog children use thread pools.
 # Two arenas return RSS to the OS after the child exits (see malloc_trim).
+# Set before Python starts. The parent also setdefaults this for child processes.
+# Nightly RSS recycle is WORKER_MEMORY_RECYCLE (see DEPLOY.md).
 ENV MALLOC_ARENA_MAX=2
 
 CMD ["python", "-m", "app.worker"]
