@@ -799,6 +799,9 @@ if _th:
 def startup() -> None:
     warn_if_schema_out_of_date(engine)
     _start_in_process_maintenance()
+    from app.services.api_memory_recycle import start_api_memory_recycle
+
+    start_api_memory_recycle()
 
 
 def _start_in_process_maintenance() -> None:
