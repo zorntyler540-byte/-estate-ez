@@ -328,6 +328,7 @@ export default function LotDetailPage() {
   const [photosError, setPhotosError] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [descPublishBusy, setDescPublishBusy] = useState(false);
   const [listingDirty, setListingDirty] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [thumbCacheBust, setThumbCacheBust] = useState<Record<string, number>>({});
@@ -1148,7 +1149,7 @@ export default function LotDetailPage() {
   }
 
   async function save() {
-    if (!lot) return;
+    if (!lot) return false;
     setSaving(true);
     setError("");
     try {
@@ -1176,10 +1177,58 @@ export default function LotDetailPage() {
       } else {
         toast.success("Listing saved.");
       }
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
+      return false;
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function updateDescription() {
+    if (!lot || !token) return;
+    setDescPublishBusy(true);
+    setError("");
+    try {
+      if (listingDirty) {
+        const saved = await save();
+        if (!saved) return;
+      }
+      const res = (await apiFetch(`/lots/${encodeURIComponent(lot.id)}/description/publish`, token, {
+        method: "POST"
+      })) as {
+        description?: string;
+        website_updated?: boolean;
+        ctseller_updated?: boolean;
+        ctseller_skipped?: boolean;
+        error?: string;
+      };
+      if (typeof res.description === "string") {
+        setLot((prev) => (prev ? { ...prev, professional_description: res.description || "" } : prev));
+        setListingDirty(false);
+      }
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
+      if (res.ctseller_updated) {
+        toast.success(
+          res.website_updated
+            ? "Description updated here and on CT Seller."
+            : "Description updated on CT Seller."
+        );
+      } else {
+        toast.success(
+          res.website_updated
+            ? "Description updated. It will be sent the next time this lot is posted."
+            : "Description is already up to date."
+        );
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the description");
+    } finally {
+      setDescPublishBusy(false);
     }
   }
 
@@ -3076,6 +3125,23 @@ export default function LotDetailPage() {
                     </p>
                   </div>
                 ) : null}
+                <div className="ct-row" style={{ marginTop: "0.75rem", gap: "0.65rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void updateDescription()}
+                    disabled={descPublishBusy || saving || showAiRegenProgress}
+                    aria-busy={descPublishBusy}
+                  >
+                    {descPublishBusy ? "Updating description…" : "Update description"}
+                  </Button>
+                  <p className="ct-muted" style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    Writes the standard note into this description.
+                    {lot.ctseller_item_id
+                      ? " This lot is on CT Seller, so that listing is updated too."
+                      : " It is sent to CT Seller the next time you post."}
+                  </p>
+                </div>
               </div>
             </section>
 

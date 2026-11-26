@@ -228,6 +228,68 @@ def test_account_default_and_sale_override_apply_only_to_unposted(tmp_path) -> N
         app.dependency_overrides.clear()
 
 
+def test_publish_description_updates_website_and_posted_ctseller_items(tmp_path) -> None:
+    client, Session, app, _db = _reserve_client(tmp_path, "desc-publish.db")
+    try:
+        client.patch("/account/listing-defaults", json={"standard_description": "Pickup Saturday."})
+        fake = MagicMock()
+        fake.update_item_description.return_value = {"status": "success"}
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            one = client.post("/lots/lot-posted/description/publish")
+        assert one.status_code == 200, one.text
+        body = one.json()
+        assert body["description"] == "Oak chair.\n\nPickup Saturday."
+        assert body["website_updated"] is True
+        assert body["ctseller_updated"] is True
+        fake.update_item_description.assert_called_once()
+        assert fake.update_item_description.call_args.kwargs["item_id"] == 880
+        assert fake.update_item_description.call_args.kwargs["description"] == "Oak chair.\n\nPickup Saturday."
+
+        fake.reset_mock()
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            again = client.post(
+                "/lots/lot-posted/description/publish",
+                json={"professional_description": "Oak chair.\n\nPickup Saturday."},
+            )
+        assert again.status_code == 200, again.text
+        assert again.json()["website_updated"] is False
+        assert again.json()["ctseller_updated"] is True
+
+        from app.services.ctseller import CTSellerError
+
+        fake.update_item_description.side_effect = CTSellerError("seller rejected description")
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            failed = client.post(
+                "/lots/lot-open/description/publish",
+                json={"professional_description": "Brass lamp, rewired."},
+            )
+        assert failed.status_code == 200, failed.text
+        assert failed.json()["ctseller_skipped"] is True
+        assert failed.json()["ctseller_updated"] is False
+        assert failed.json()["description"] == "Brass lamp, rewired.\n\nPickup Saturday."
+
+        fake.update_item_description.side_effect = CTSellerError("seller rejected description")
+        with patch("app.main._ctseller_client_for_account", return_value=fake):
+            sale = client.post("/sales/sale-sd/description/publish")
+        assert sale.status_code == 200, sale.text
+        summary = sale.json()
+        assert summary["lots_total"] == 2
+        assert summary["ctseller_updated"] == 0
+        assert summary["ctseller_failed"] == 1
+        assert summary["ctseller_skipped"] == 1
+        assert summary["errors"]
+        inner = Session()
+        try:
+            from app.models import Lot
+
+            posted = inner.query(Lot).filter(Lot.id == "lot-posted").one()
+            assert posted.professional_description == "Oak chair.\n\nPickup Saturday."
+        finally:
+            inner.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_blank_sale_override_suppresses_account_note(tmp_path) -> None:
     client, _Session, app, _db = _reserve_client(tmp_path, "std-blank.db")
     try:
